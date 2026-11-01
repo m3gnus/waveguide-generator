@@ -49,9 +49,14 @@ This is not a release announcement or a statement of platform qualification.
   every horn shape supported. Fusion and other CAD export routes keep their own
   stated capability limits.
 
+The solve Mesh section includes an optional **Max surface deviation** control and
+live triangle estimate. New horn designs start **Off**. An explicit setting or
+Off survives formula changes; standalone source disks do not use it. The Mesh
+card reports observed deviation or a labelled bound, without a new mesh-setting
+warning. Explicit minimum sizes take precedence. CAD keeps its existing rule.
+
 ## Pending and excluded from these notes
 
 Custom-profile server support does not expose a profile table or canvas in the
-app, and cloud assembly launchers remain hidden. Tessellation controls and
-maximum surface deviation claims are not included. These are not delivered
-features described by this draft.
+app, and cloud assembly launchers remain hidden. Hard maximum surface deviation
+guarantees are not claimed.

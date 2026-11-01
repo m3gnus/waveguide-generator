@@ -57,3 +57,29 @@ def test_estimate_route_passes_the_optional_setting_to_the_existing_builder(monk
         })
     assert response.status_code == 200
     assert response.json() == {'triangle_count': 1234, 'surface_deviation_mm': 0.3}
+
+
+def test_complex_guide_opt_in_estimate_fits_the_existing_memory_stop(tmp_path):
+    import json
+    from pathlib import Path
+
+    from hornlab_mesher.config_builder import estimate_from_config
+
+    from server.mesh import builder
+    from server.platform.memory import PhysicalMemory
+
+    config = json.loads((Path(__file__).parent / 'fixtures/solve-accuracy-complex-guide.json').read_text())
+    limit = builder.DenseSolverMemoryLimit(
+        bytes=32 * 1024**3, source='physical-memory',
+        physical=PhysicalMemory(bytes=64 * 1024**3, source='sysconf', known=True),
+    )
+
+    def estimate_only(current, *args, **kwargs):
+        return estimate_from_config(current)
+
+    metadata = builder._build_with_memory_stop(
+        config, tmp_path / 'estimate.msh', limit=limit, build_from_config=estimate_only,
+    )
+    assert metadata['meshTriangleEstimate'] < builder._dense_solver_triangle_stop(1, limit=limit)
+    # The known generated mesh is about 12,600 facets, rather than 61,862.
+    assert metadata['meshTriangleEstimate'] < 2 * 12616

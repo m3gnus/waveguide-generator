@@ -18,13 +18,6 @@ from typing import Any
 
 import numpy as np
 
-from hornlab_mesher.tessellation import (
-    _SAGITTA_GRID_SAMPLES,
-    TessellationError,
-    sagitta_background_view as _sagitta_background_view,
-    measure_surface_deviation,
-)
-
 from server.contracts.canonical import canonical_ascii_strict_json
 
 from server.cadlink.wglink_protocol import (
@@ -56,6 +49,19 @@ from server.mesh.integrity import (
     mesh_self_intersection_report,
 )
 from server.platform.temp_session import temporary_directory_root
+
+
+def _sagitta_background_view(gmsh: Any, **kwargs: Any) -> int:
+    # Keep import-only intake paths free of the mesher package's heavy imports.
+    from hornlab_mesher.tessellation import sagitta_background_view
+
+    return sagitta_background_view(gmsh, **kwargs)
+
+
+def measure_surface_deviation(gmsh: Any, **kwargs: Any) -> dict[str, Any]:
+    from hornlab_mesher.tessellation import observe_surface_deviation
+
+    return observe_surface_deviation(gmsh, **kwargs)
 
 
 TAG_NAMESPACE = "wg-import-v1"
@@ -3580,6 +3586,8 @@ def build_imported_mesh(
         if sizing_rule not in {"sagitta", "segments"}:
             raise ImportedMeshError("mesh.sizingRule must be 'sagitta' or 'segments'")
         if sizing_rule == "sagitta":
+            from hornlab_mesher.tessellation import _SAGITTA_GRID_SAMPLES, TessellationError
+
             try:
                 sagitta_view = _sagitta_background_view(
                     gmsh,

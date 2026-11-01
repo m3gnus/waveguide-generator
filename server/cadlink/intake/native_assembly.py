@@ -126,7 +126,7 @@ def check_area(actual, expected):
 
 def verify_faces(gmsh, manifest, assembly, mapped):
     import numpy as np
-    from server.mesh.imported import _parametric_trim_mask
+    from hornlab_mesher.tessellation import parametric_trim_mask
 
     if gmsh.model.getEntities(3):
         raise ValueError("native assembly STEP must be a surface shell")
@@ -141,7 +141,7 @@ def verify_faces(gmsh, manifest, assembly, mapped):
         uv = np.asarray(
             [(u, v) for u in np.linspace(lo[0], hi[0], 9) for v in np.linspace(lo[1], hi[1], 9)]
         )
-        uv = uv[_parametric_trim_mask(gmsh, face, uv.reshape(-1))]
+        uv = uv[parametric_trim_mask(gmsh, face, uv.reshape(-1))]
         if not len(uv):
             raise ValueError("native assembly STEP face has no trimmed samples")
         xyz = np.asarray(gmsh.model.getValue(2, face, uv.reshape(-1))).reshape(-1, 3)

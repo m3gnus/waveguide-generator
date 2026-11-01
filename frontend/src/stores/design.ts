@@ -13,6 +13,8 @@ import type { DesignAssembly } from './assembly';
 export { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | 'LOOKUP' | NativeFamily;
 export const isNativeFamily = (family: DesignFamily): family is NativeFamily => (NATIVE_FAMILIES as readonly string[]).includes(family);
+// A new design stays Off until accuracy sizing is explicitly requested.
+export const DEFAULT_SURFACE_DEVIATION_MM: number | undefined = undefined;
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
 export type DesignLoadSource = 'ordinary' | 'cad-project-switch' | 'autosave-restore';
 export type DesignValue = number | string | boolean | null | { radius: number; segments: number } | number[] | [number, number][] | FreeformPoint[] | CrossSectionStation[];
@@ -293,7 +295,7 @@ const common = {
     // see hornlab_mesher/config_parser.py's ATH-defaults note.
     vertical_offset: 0, quadrants: 1234, wall_thickness: 5, rear_resolution: 40,
     aperture_resolution_scale: 1, max_triangles: 50_000, allow_large_mesh: 0,
-    surface_deviation_mm: 0.3,
+    ...(DEFAULT_SURFACE_DEVIATION_MM === undefined ? {} : { surface_deviation_mm: DEFAULT_SURFACE_DEVIATION_MM }),
   },
   simulation: {
     f1: DEFAULT_SWEEP.startHz, f2: 16_000, num_frequencies: 32,
@@ -634,6 +636,16 @@ function requireLiteralOsseBody(current: DesignDocument): void {
 
 /** Merge a family template with the current document's non-formula state. */
 export function mergeDesignForFamily(current: DesignDocument, family: DesignFamily, options?: { preserveOsseBody: boolean }): DesignDocument {
+  const next = mergeFamilyParameters(current, family, options);
+  if (family === 'SOURCE-DISK' || current.mesh.surface_deviation_mm === undefined) {
+    delete next.mesh.surface_deviation_mm;
+  } else {
+    next.mesh.surface_deviation_mm = current.mesh.surface_deviation_mm;
+  }
+  return next;
+}
+
+function mergeFamilyParameters(current: DesignDocument, family: DesignFamily, options?: { preserveOsseBody: boolean }): DesignDocument {
   if (current.formula === family) return structuredClone(current);
   if (options?.preserveOsseBody && current.formula === 'OSSE' && isNativeFamily(family)) requireLiteralOsseBody(current);
   if (isNativeFamily(family) || isNativeFamily(current.formula)) {
@@ -650,7 +662,6 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
       // retrievable in the store's existing complete-document undo snapshot.
       if (current.formula === 'OSSE') next.s = 0;
       if (options?.preserveOsseBody && current.axial_scale === undefined && next.axial_scale !== undefined) next.axial_scale = current.scale;
-      next.mesh.surface_deviation_mm = current.mesh.surface_deviation_mm;
       for (const key of OSSE_MESH_FIELDS) {
         next.mesh[key] = current.mesh[key];
       }

@@ -68,8 +68,7 @@
       "rear_resolution": 40,
       "aperture_resolution_scale": 1,
       "max_triangles": 50000,
-      "allow_large_mesh": 0,
-      "surface_deviation_mm": 0.3
+      "allow_large_mesh": 0
     },
     "enclosure": {
       "depth": 0,
@@ -161,8 +160,7 @@
       "rear_resolution": 40,
       "aperture_resolution_scale": 1,
       "max_triangles": 50000,
-      "allow_large_mesh": 0,
-      "surface_deviation_mm": 0.3
+      "allow_large_mesh": 0
     },
     "enclosure": {
       "depth": 0,
@@ -246,8 +244,7 @@
       "rear_resolution": 40,
       "aperture_resolution_scale": 1,
       "max_triangles": 50000,
-      "allow_large_mesh": 0,
-      "surface_deviation_mm": 0.3
+      "allow_large_mesh": 0
     },
     "enclosure": {
       "depth": 0,
@@ -321,8 +318,7 @@
       "aperture_resolution_scale": 1,
       "max_triangles": 50000,
       "allow_large_mesh": 0,
-      "mouth_roundover_radius_mm": 25,
-      "surface_deviation_mm": 0.3
+      "mouth_roundover_radius_mm": 25
     },
     "enclosure": {
       "depth": 0,
@@ -396,8 +392,7 @@
       "rear_resolution": 40,
       "aperture_resolution_scale": 1,
       "max_triangles": 50000,
-      "allow_large_mesh": 0,
-      "surface_deviation_mm": 0.3
+      "allow_large_mesh": 0
     },
     "enclosure": {
       "depth": 0,
@@ -475,8 +470,7 @@
       "rear_resolution": 40,
       "aperture_resolution_scale": 1,
       "max_triangles": 50000,
-      "allow_large_mesh": 0,
-      "surface_deviation_mm": 0.3
+      "allow_large_mesh": 0
     },
     "enclosure": {
       "depth": 0,
@@ -623,8 +617,7 @@
       "aperture_resolution_scale": 1,
       "max_triangles": 50000,
       "allow_large_mesh": 0,
-      "mouth_roundover_radius_mm": 25,
-      "surface_deviation_mm": 0.3
+      "mouth_roundover_radius_mm": 25
     },
     "enclosure": {
       "depth": 0,
