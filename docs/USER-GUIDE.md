@@ -97,9 +97,10 @@ Press **Build** to compile a mesh, or **Solve** inside this workspace to build
 the current revision and solve all enabled, driven radiators together. Use the
 design's Simulation settings for the sweep and engine. Ordinary toolbar Solve
 asks you to use Sources and baffle for an assembly. Exterior drivers require a
-supported BEAT coupled solve; other engines use prescribed velocity and show
-a notice. Close the editor to use **Results**, where a completed run shows its
-retained assembly mesh and channel results. Reopen the saved design to edit the assembly;
+supported BEAT coupled solve. Metal-BEM uses prescribed velocity and shows a
+notice; BEMPP cannot solve these compiled assembly meshes. Close the editor to
+use **Results**, where a completed run shows its retained assembly mesh and
+channel results. Reopen the saved design to edit the assembly;
 reopening a run restores its retained mesh and solve setup.
 
 Result curves and run archives use the normal export actions. Assembly

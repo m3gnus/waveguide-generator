@@ -60,8 +60,9 @@ This is not a release announcement or a statement of platform qualification.
   stated capability limits.
 - Solve a design assembly from **Sources and baffle**, rather than ordinary
   toolbar Solve. Coupled exterior drivers require a supported BEAT engine;
-  prescribed-velocity engines show a fallback notice. Assembly geometry export,
-  wiring, boxes and arrays are not part of this first phase.
+  Metal-BEM uses prescribed velocity and shows a fallback notice. BEMPP cannot
+  solve these compiled assembly meshes. Assembly geometry export, wiring,
+  boxes and arrays are not part of this first phase.
 
 ## Pending and excluded from these notes
 
