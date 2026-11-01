@@ -19,6 +19,7 @@ from server.contracts.geometry import (
     quadrants_for_symmetry_planes,
 )
 from server.design.schema import DesignConfig, Expr
+from server.preview.construction import retain_mesher_construction
 from server.preview.translate import design_to_mesher_config
 
 
@@ -204,7 +205,7 @@ def _resolve_symmetry_uncached(design: DesignConfig | Mapping[str, Any]) -> Symm
 
         if validated.formula in NATIVE_FORMULAS:
             return _failed_resolution(f"{validated.formula} requires the full circular mesh domain")
-        config = design_to_mesher_config(validated)
+        config = retain_mesher_construction(design_to_mesher_config(validated))
         mesh = dict(config.get("mesh") or {})
         mesh.update(
             {

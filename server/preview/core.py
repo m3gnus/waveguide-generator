@@ -25,6 +25,7 @@ from server.design.schema import DesignConfig
 from server.integration.mesher_identity import mesher_identity
 from server.platform.gmsh_openmp import pin_gmsh_openmp_initial_thread
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES, FrameError, encode
+from server.preview.construction import retain_mesher_construction
 from server.preview.translate import design_to_mesher_config
 from server.preview.errors import mesher_error_message
 from server.preview import wall_check
@@ -284,10 +285,13 @@ def _cache_relevant_config(config: Mapping[str, Any]) -> Any:
         return config
     if not _PREVIEW_OVERWRITTEN_MESH_FIELDS.intersection(mesh):
         return config
+    # Native preview retains the authored no-shrink construction before LOD
+    # replacement. Key on that same construction before dropping the budgets.
+    config = retain_mesher_construction(config)
     relevant = dict(config)
     relevant["mesh"] = {
         name: value
-        for name, value in mesh.items()
+        for name, value in config["mesh"].items()
         if name not in _PREVIEW_OVERWRITTEN_MESH_FIELDS
     }
     return relevant

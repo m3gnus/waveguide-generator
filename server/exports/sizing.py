@@ -42,6 +42,8 @@ from typing import Any, Callable, Mapping
 
 import numpy as np
 
+from server.preview.construction import retain_mesher_construction
+
 # --- the tolerances, and the one ceiling ---------------------------------
 
 #: Deviation the exported CAD surface may have from the analytic formula.
@@ -214,6 +216,9 @@ def _point_grid(
     The builder snaps the request (angular counts go to a multiple of four,
     among other rules), so the *resolved* counts come back with the points and
     every caller works from those rather than from what it asked for.
+
+    Export config resolution retains authored ATH construction in ``params``
+    before this point; keep those transient keys in every candidate grid.
     """
 
     from hornlab_mesher.config_builder import build_point_grid
@@ -1096,6 +1101,7 @@ def plan_cad_resolution(
 
     from hornlab_mesher.config_builder import build_geometry_params, resolve_geometry
 
+    config = retain_mesher_construction(config)
     resolution = _PROBE_CAD_RESOLUTION_MM
     best: CadPlan | None = None
     for _ in range(_CAD_ATTEMPTS):

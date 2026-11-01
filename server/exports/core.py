@@ -34,6 +34,7 @@ from server.mesh.builder import _solver_mesher_config, _triangles_and_tags
 from server.mesh.child import run_mesh_build
 from server.mesh.gmsh_worker import _preserve_native_windows_path
 from server.platform.temp_session import spawned_directory_root, temporary_directory_root
+from server.preview.construction import retain_mesher_construction
 from server.preview.translate import design_to_mesher_config
 
 if TYPE_CHECKING:
@@ -158,18 +159,37 @@ def _prepared_design(
     return DesignConfig.model_validate(root)
 
 
+def _prepared_mesher_config(
+    design: DesignConfig,
+    *,
+    grid: tuple[int, int] | None = None,
+    profile_sampling: bool = False,
+    solver: bool = False,
+) -> dict[str, Any]:
+    """Freeze authored construction before preparing an export's density."""
+
+    validate_export_segments(design)
+    authored = design_to_mesher_config(design)
+    retained = retain_mesher_construction(authored)
+    prepared = _prepared_design(
+        design,
+        grid=grid,
+        profile_sampling=profile_sampling,
+    )
+    config = _solver_mesher_config(prepared) if solver else design_to_mesher_config(prepared)
+    # Carry only the native owner's added transient data. Restoring authored
+    # fields here would also restore deliberately removed enclosures/rears.
+    config.update({key: value for key, value in retained.items() if key not in authored})
+    return config
+
+
 def _bare_grid_config(
     design: DesignConfig,
     *,
     grid: tuple[int, int] | None = None,
     profile_sampling: bool = False,
 ) -> dict[str, Any]:
-    prepared = _prepared_design(
-        design,
-        grid=grid,
-        profile_sampling=profile_sampling,
-    )
-    config = design_to_mesher_config(prepared)
+    config = _prepared_mesher_config(design, grid=grid, profile_sampling=profile_sampling)
     config["mode"] = "bare"
     config.pop("enclosure", None)
     mesh = config.setdefault("mesh", {})
@@ -349,7 +369,9 @@ def _geometry_params(config: Mapping[str, Any]) -> dict[str, Any]:
 
     from hornlab_mesher.config_builder import build_geometry_params
 
-    params, _, _ = build_geometry_params(dict(config))
+    # _point_grid must refine this construction, not resolve a new wall from
+    # each candidate's angular/axial budgets.
+    params, _, _ = build_geometry_params(retain_mesher_construction(config))
     return params
 
 
@@ -763,6 +785,7 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     if design.formula in NATIVE_FORMULAS:
         return _native_step(design)
     _refuse_ath_step(design)
+    validate_export_segments(design)
     try:
         from hornlab_mesher.cad import write_step_from_config
     except ImportError as exc:
@@ -781,7 +804,7 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     # (The wglink bundle of the same design always did; keeping it here is what
     # stops an ATH-imported design declaring Mesh.Quadrants = 1 or 12 from
     # exporting an unplaced solid alongside a placed bundle.)
-    config = _solver_mesher_config(design, keep_placement=True)
+    config = retain_mesher_construction(_solver_mesher_config(design, keep_placement=True))
     # Corner arcs first, so the sampling search below measures the geometry
     # that will actually be written. Choosing the resolution against the
     # design's own corner count and then building with a different one would
@@ -921,7 +944,9 @@ def binary_stl(
     return bytes(output)
 
 
-def _stl_mesher_config(design: DesignConfig) -> dict[str, Any]:
+def _stl_mesher_config(
+    design: DesignConfig, *, grid: tuple[int, int] | None = None
+) -> dict[str, Any]:
     """The pinned-grid config an STL is meshed from.
 
     ``preserveGrid`` makes the CAD faces *be* the sampled grid cells, so the
@@ -930,7 +955,7 @@ def _stl_mesher_config(design: DesignConfig) -> dict[str, Any]:
     inside tolerance. Both are the export's to choose.
     """
 
-    config = _solver_mesher_config(design)
+    config = _prepared_mesher_config(design, grid=grid, solver=True)
     config.setdefault("mesh", {}).update(
         {"topology": "legacy", "preserveGrid": True, "scaleToMetres": True}
     )
@@ -946,7 +971,7 @@ def _stl_grid_plan(design: DesignConfig) -> tuple[GridPlan, dict[str, Any]]:
     generous ceiling instead, and trims to it rather than refusing.
     """
 
-    params = _geometry_params(_stl_mesher_config(_prepared_design(design)))
+    params = _geometry_params(_stl_mesher_config(design))
     plan = plan_grid(
         params,
         angular=("linear", STL_CHORD_TOLERANCE_MM),
@@ -1024,8 +1049,7 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
             "surfaceTags": tags.astype(int).tolist(), "warnings": [],
         }
     plan, params = _stl_grid_plan(design)
-    prepared = _prepared_design(design, grid=(plan.angular, plan.length))
-    config = _stl_mesher_config(prepared)
+    config = _stl_mesher_config(design, grid=(plan.angular, plan.length))
     element_mm = facet_element_size_mm(params, plan.angular, plan.length)
     config["mesh"].update(
         {
