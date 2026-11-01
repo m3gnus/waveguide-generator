@@ -1,6 +1,6 @@
 # Dependency compatibility
 
-The mesher pin `746c6b1c` declares version 0.2.8 and includes later development
+The mesher pin `38f12f6d` declares version 0.2.8 and includes later development
 changes. It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
 in `general_horn.radii_at_z`.
 `mesh_sizing.py` is unchanged, so CAD Link retains its earlier vendoring provenance.
@@ -112,3 +112,15 @@ equivalence between Metal, BEM++ and BEAT. See
 Engine defaults and saved engine choices are retained. Source and consumer
 checks remain distinct from installed application qualification, Windows
 installed qualification, acoustic performance and manufacturing suitability.
+
+The pin adds one native owner for optional surface-deviation sizing and sampled
+observations, triangle-shape reports and a pre-build density estimate. Horn
+surface deviation defaults to Off; existing CAD sizing retains its rule.
+Explicit minimum sizes remain authoritative. Report failures remain unavailable
+observations and do not trigger remeshing; sampled values are not hard maximum
+guarantees. Full ATH/archive and saved-design identity qualified the final native
+production code. A test-only correction explicitly accommodates the new
+optional None field in a frozen dataclass snapshot; affected checks passed
+without another full run or changes to the captured historical values. The consumer uses this shared
+owner and retains its existing memory admission guard. No OCC triangulation
+fix or triangle-cut limit increase is included.
