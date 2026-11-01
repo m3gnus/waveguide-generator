@@ -13,6 +13,7 @@ from typing import Any
 
 from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig, Expr
+from server.design.source_motion import source_motion
 from server.jobs.models import ImportedGeometrySource, PolarConfig, SolveRequest
 
 from .ground_plane import GroundPlane
@@ -145,15 +146,6 @@ class SolverContext:
             count = max(1, min(401, int(count)))
         quadrants = normalise_quadrants(_number(root.mesh.quadrants, float(FULL_DOMAIN_QUADRANTS)))
 
-        convention = root.source.velocity_convention
-        if convention in {"normal", "axial"}:
-            source_motion = convention
-        else:
-            velocity = _number(root.source.velocity, 1.0)
-            if velocity not in {1.0, 2.0}:
-                raise ValueError("source.velocity must be 1 (normal) or 2 (axial)")
-            source_motion = "axial" if velocity == 2.0 else "normal"
-
         sim_type = 1 if simulation.sim_type == "infinite-baffle" else 2
         return cls(
             design=request.design,
@@ -167,7 +159,7 @@ class SolverContext:
             solver_mode=solver_mode,
             quadrants=quadrants,
             sim_type=sim_type,
-            source_motion=source_motion,
+            source_motion=source_motion(root.source),
             ground_plane=_ground_plane(request),
             polar_config=polar_config_for(request.options.polar_config, sim_type=sim_type),
         )
