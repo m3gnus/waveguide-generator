@@ -2652,6 +2652,7 @@ export function ResultsPanel() {
           ><i/>{RUN_VERDICT_MARKER[primaryVerdict]}</button>
         </span>;
       })}
+      {powerFlags && cadResultMatchesViewport && <button type="button" className="pill result-power-check" data-status={powerFlags.status} aria-expanded={powerOpen} onClick={() => setPowerOpen((value) => !value)}>{powerChipLabel(powerFlags)}</button>}
       {primaryRaw && cadResultMatchesViewport && <ResultViewSwitch result={primaryRaw} view={view} importOrigin={selectedJob?.config_summary.import_origin} onSelect={(next) => resultViewStore.setView(next)}/>}
       {/* How much of the dock is actually comparing. Five of the six default
           charts describe one run by nature, so a comparison that silently
@@ -2711,13 +2712,12 @@ export function ResultsPanel() {
       /> : <button className="btn" disabled title="Select a run to export">Export</button>}
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </>}/>
-    {powerFlags && cadResultMatchesViewport && <div className="result-diagnostics">
-      <button type="button" className="pill result-power-check" data-status={powerFlags.status} aria-expanded={powerOpen} onClick={() => setPowerOpen((value) => !value)}>{powerChipLabel(powerFlags)}</button>
-      {powerOpen && <div role="status" className="result-power-details">
+    {powerFlags && cadResultMatchesViewport && powerOpen && <div className="result-diagnostics">
+      <div role="status" className="result-power-details">
         <b>{shownActiveChannel ?? 'Result'} · {powerHealth ? powerCheckMessage(powerHealth).label : powerChipLabel(powerFlags)}</b>
         {[...powerQualificationDetail(powerFlags, powerChannelName), channelQualificationSummary(shownRaw ?? undefined, powerChannelName)].filter((line): line is string => Boolean(line)).map((line) => <p key={line}>{line}</p>)}
         {powerHealth && <p>{powerCheckMessage(powerHealth).title}</p>}
-      </div>}
+      </div>
     </div>}
     {modelLoad !== 'idle' && <div className="result-model-load" role="status">{modelLoad === 'loading' ? 'Loading run model…' : 'Could not load run model. Try Show this model again.'}</div>}
     {coherenceOpen && primaryJob && primaryVerdict !== 'current' && <AnchoredPanel

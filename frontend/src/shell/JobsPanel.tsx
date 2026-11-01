@@ -1,6 +1,7 @@
 import { isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
+import { engineDisplayName } from '../design/backendSupport';
 import { useRunFilters, runModelKey } from '../jobs/runFilters';
 import { runDocumentName, runOrigin, runSourceLabel, runSourceText } from '../jobs/runIdentity';
 import { RunModelDetails } from './RunModelDetails';
@@ -74,7 +75,8 @@ function metrics(job: JobItem, now: number): string {
   const elapsed = duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now));
   const triangles = job.mesh_stats?.triangle_count;
   const count = job.config_summary.num_frequencies;
-  return [elapsed, triangles ? `${Number(triangles).toLocaleString()} el` : null, count ? `${String(count)} f` : null, String(job.config_summary.engine ?? '')]
+  const engine = String(job.config_summary.engine ?? '');
+  return [elapsed, triangles ? `${Number(triangles).toLocaleString()} tri` : null, count ? `${String(count)} f` : null, engine ? engineDisplayName(engine) : null]
     .filter(Boolean).join(' · ');
 }
 
@@ -254,10 +256,10 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           throat" -- and deliberately does not rename the design. The Design
           name field in Geometry does that. */}
       {selected && !running && !editing && <button className="job-rename" aria-label={`Rename ${displayName}`} title="Rename this run (does not rename the design)" onClick={() => { setRenameError(null); setEditing(true); }}>✎</button>}
+      <time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at ?? job.created_at)}</time>
     </header>
     <div className="job-secondary">
-      <span className="job-source" title={runSourceText(job)}><span className={provenance ? 'pill accent' : undefined}>{provenance || runSourceLabel(job)}</span>{runDocumentName(job) && <span className="job-source-label">· {runDocumentName(job)}</span>}</span>
-      <time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at ?? job.created_at)}</time>
+      <span className="job-source" title={runSourceText(job)}><span className={provenance ? 'pill accent' : undefined}>{provenance || runSourceLabel(job)}</span>{runDocumentName(job) && <span className="job-source-label">· {runDocumentName(job)}</span>}{!expanded && !running && !failed && <span className="job-facts">{metrics(job, now)}</span>}</span>
       <button className={`job-compare${overlaid ? ' on' : ''}`} aria-label={`Compare ${displayName}`} aria-pressed={overlaid}
         disabled={!job.has_results || selected} title={selected ? 'This run is the one being shown' : overlaid ? 'Stop comparing this run' : 'Compare this run against the one on screen'}
         onClick={() => compareSelection.toggleOverlay(job.id)}>{overlaid ? 'Comparing' : 'Compare'}</button>
@@ -373,6 +375,11 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   const models = new Map(runJobs.filter(job => (source === 'all' || runOrigin(job) === source)
     && (!project || job.cad_source?.lineage_id === project)).map(job => [runModelKey(job),
       `${job.cad_source?.document_name ?? job.label ?? 'Model'} · …${runModelKey(job).slice(-10)}`]));
+  // A filter that cannot narrow anything is noise in the densest column of the app.
+  const filtering = source !== 'all' || !!project || !!model || !!query;
+  const showSource = source !== 'all' || new Set(runJobs.map(runOrigin)).size > 1;
+  const showProject = !!project || projects.size > 1;
+  const showModel = !!model || models.size > 1;
   // Clear failed removes failures only: a kept CAD request stored as an error
   // by an earlier release (a prepared one, a question) survives it, so it is
   // not counted either.
@@ -456,18 +463,18 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>
     </div>
     <div className="jobs-filter"><Icon name="search"/><input aria-label="Filter runs" placeholder="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)}/><button className={`jobs-kept-toggle${preferences.minRating > 0 ? ' on' : ''}`} aria-label="Show kept runs only" aria-pressed={preferences.minRating > 0} title="Show kept runs only" onClick={() => preferencesStore.update({ minRating: preferences.minRating > 0 ? 0 : lastMinimumRating.current })}>★</button></div>
-    <div className="jobs-scope-filter">
-      <select aria-label="Run source" value={source} onChange={e => useRunFilters.setState({ source: e.target.value as typeof source, model: '' })}>
+    {(showSource || showProject || showModel || filtering) && <div className="jobs-scope-filter">
+      {showSource && <select aria-label="Run source" value={source} onChange={e => useRunFilters.setState({ source: e.target.value as typeof source, model: '' })}>
         <option value="all">All sources</option><option value="parametric">Parametric</option><option value="mesh-file">Mesh files</option><option value="cadlink">CAD Link</option><option value="assembly">Assembly</option>
-      </select>
-      <select aria-label="Run project" value={project} onChange={e => useRunFilters.setState({ project: e.target.value, model: '' })}>
+      </select>}
+      {showProject && <select aria-label="Run project" value={project} onChange={e => useRunFilters.setState({ project: e.target.value, model: '' })}>
         <option value="">All projects</option>{[...projects].map(([id, name]) => <option key={id} value={id}>{name} · …{id.slice(-6)}</option>)}
-      </select>
-      <select aria-label="Run model" value={model} onChange={e => useRunFilters.setState({ model: e.target.value })}>
+      </select>}
+      {showModel && <select aria-label="Run model" value={model} onChange={e => useRunFilters.setState({ model: e.target.value })}>
         <option value="">All models</option>{[...models].map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-      </select>
-      {(source !== 'all' || project || model || query) && <button className="btn" onClick={() => useRunFilters.setState({ source: 'all', project: '', model: '', query: '' })}>Clear filters</button>}
-    </div>
+      </select>}
+      {filtering && <button className="btn" onClick={() => useRunFilters.setState({ source: 'all', project: '', model: '', query: '' })}>Clear filters</button>}
+    </div>}
     {snapshot.error && <Notice tone="warning" role="status">{RUN_LIST_LOST}</Notice>}
     {runJobs.length === 0 && snapshot.connection === 'connected' && <EmptyState title="No runs yet" detail={project
       ? 'Prepare the CAD model and press Solve to start this project’s first run.'

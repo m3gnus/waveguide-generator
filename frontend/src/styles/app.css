@@ -440,6 +440,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .result-chip > span { overflow: hidden; text-overflow: ellipsis; }
 .result-chip > .result-context-marker { flex: none; padding: 1px 3px; border: 1px solid rgba(var(--acc-rgb), .28); border-radius: var(--r3); background: rgba(var(--acc-rgb), .1); color: var(--acc); font: var(--text-micro) var(--mono); overflow: visible; }
 .result-chip.muted i { border-top: 1px dashed var(--fg2); }
+.result-chip:not(.muted) { color: var(--fg); font-weight: 560; }
 /* One segmented control, not a row of chips: the views are exclusive, and the
    old independent-looking chips read as filters that could be combined. The
    hairline between segments is a border on the group, so a selected segment
@@ -653,6 +654,12 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .job-source { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; overflow: hidden; color: var(--fg3); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
 .job-source > :first-child { flex: none; }
 .job-source-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-facts { overflow: hidden; color: var(--fg3); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.job-facts::before { content: "· "; }
+.job-card > header > time { flex: none; }
+/* Compare and Remove stay reachable without taking a line from every run. */
+.job-card.collapsed:not(:hover):not(:focus-within) .job-compare:not(.on),
+.job-card.collapsed:not(:hover):not(:focus-within) .job-remove { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .run-model-details { margin-top: 6px; color: var(--fg3); font-size: var(--text-micro); }
 .run-model-details dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 8px; }
 .run-model-details dt { color: var(--fg2); }
@@ -1378,16 +1385,16 @@ textarea:disabled { opacity: .48; }
 /* The shared header lets identity and an arbitrary number of bands use the
    available left space, while chart actions retain their intrinsic widths. */
 .results-header { flex-wrap: wrap; overflow-x: visible; gap: 4px 8px; padding-block: 3px; }
-.results-header-identity { display: flex; flex: 1 1 110px; align-items: center; gap: 4px; min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+.results-header-identity { display: flex; flex: 1 1 380px; align-items: center; gap: 4px; min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
 .results-header-controls { display: flex; flex: none; align-items: center; gap: 4px; min-width: max-content; margin-left: auto; }
 .results-header-identity > *, .results-header-controls > * { flex-shrink: 0; }
 .results-header-identity .result-chip-group { min-width: 104px; }
 .result-diagnostics { padding: 3px 8px; border-bottom: 1px solid var(--hair-soft); }
-.result-diagnostics .result-power-check { cursor: pointer; }
+.result-power-check { cursor: pointer; }
 .result-power-details { max-width: 720px; padding: 7px 0; color: var(--fg2); font-size: var(--text-micro); line-height: 1.4; }
 .result-power-details p { margin: 4px 0 0; }
-.result-diagnostics .result-power-check[data-status="qualified"] { border-color: var(--hair-soft); background: none; color: var(--fg2); }
-.result-diagnostics .result-power-check[data-status="unknown"] { border-color: var(--hair-soft); background: none; color: var(--fg2); font-style: italic; }
+.result-power-check[data-status="qualified"] { border-color: var(--hair-soft); background: none; color: var(--fg2); }
+.result-power-check[data-status="unknown"] { border-color: var(--hair-soft); background: none; color: var(--fg2); font-style: italic; }
 .result-unqualified { flex: none; max-width: 46%; overflow: hidden; padding: 0 5px; border: 1px dashed rgba(var(--amber-rgb), .6); border-radius: 3px; background: rgba(var(--amber-rgb), .12); color: var(--amber); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
 .result-model-load { padding: 3px 8px; color: var(--amber); font-size: var(--text-micro); }
 
