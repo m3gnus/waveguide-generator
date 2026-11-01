@@ -213,6 +213,26 @@ ATTENTION_ACTION = "action"
 ATTENTION_FAILED = "failed"
 
 
+def fusion_delivery_state(row: Mapping[str, Any]) -> str | None:
+    """Delivery feedback derived from the existing operation ledger."""
+    if row.get("kind") not in (INSERT_LINK, UPDATE_LINK, REQUEST_RETURN):
+        return None
+    state = row.get("state")
+    if state == RECEIVED:
+        return "waiting"
+    if state == PROCESSING:
+        return "claimed"
+    if state == ACCEPTED:
+        return "applied"
+    if state == REJECTED:
+        return "refused"
+    if state == RECOVERY_REQUIRED:
+        return "uncertain"
+    if state == CANCELLED:
+        return "expired" if row.get("reason") == "expired" else "cancelled"
+    return "uncertain"
+
+
 def effective_reason_code(code: Any, message: Any) -> str:
     """The reason a stored refusal stands for.
 

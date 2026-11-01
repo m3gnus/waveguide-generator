@@ -497,6 +497,7 @@ def test_status_endpoint_hashes_the_design_and_reports_wglink_folder_setup(
         "statusTtlSeconds": 20.0,
         "observationPolicy": None,
         "addinInboxTransfer": False,
+        "wgRequestPickup": None,
         "immutableBundles": False,
         "realizedDimensions": {
             "state": "link_unavailable",

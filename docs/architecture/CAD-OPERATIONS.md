@@ -86,7 +86,11 @@ from importing job admission shims. Subpackage initializers contain only a docst
 - **`destination`** is exactly `{kind, value}`. Its kind is `document`, whose
   value is the active document ID from a fresh version-3 file heartbeat, or
   `new_document`, whose value is the request ID. With no fresh file heartbeat WG
-  requests a new document rather than guessing a stale destination.
+  requests a new document rather than guessing a stale destination. After claiming
+  a `new_document` request, WGLink always creates a separate Design and inserts
+  there, even when a document is open. The original document is untouched. A failed
+  insert leaves the new document open for inspection: close it without saving if
+  empty, or undo or repair partial work before sending again.
 - **Exact targets.** A request that addresses an existing instance (`request_return`,
   `update_link`) names that instance exactly. "The one matching link in this design" is
   not a target. That resolution survives only for legacy single-slot markers, whose rows
@@ -2314,6 +2318,25 @@ without handoff intent also reports `failed`, with reason `not_published`.
   the removal race means Fusion claimed it, so WG leaves its operation unsettled for
   the heartbeat outcome pass.
 
+**Activation.** Pressing **Send to CAD** in WG is the deliberate command. WGLink
+applies it without a second click in Fusion, after startup completes and while
+`ui.activeCommand == "SelectCommand"`. Other Fusion commands are never ended for
+it. With automatic coordination off (the unchanged default), the owner uses a
+two-second file-only poll of `.fusion-handoffs`: an empty folder reads no JSON,
+makes no Fusion call, raises no event and publishes no status. Work is coalesced
+through the existing follow-up event and runs under `command:wg-send`. With
+coordination on, the existing tick serves handoffs; there is no second service.
+Unusable unchanged files are memoized; deferred or temporarily unclaimable requests
+remain eligible. A standby registration never runs this service.
+
+The additive heartbeat capability `diagnostics.activation.wgRequestPickup: 1`
+identifies this behavior; delivery version stays 3. WG distinguishes a command-mode
+last report without this flag (install the updated add-in and restart it) from a
+capable add-in that has not answered (finish the active command or start/restart
+the add-in). Version 0.3.3 reports continue to be read. Return requests remain
+unconsumed with coordination off. WG refuses its return-request route with the
+remedy **Press Send in Fusion**; Fusion-originated Send still uses WG's inbox.
+
 **The add-in** handles each kind in this order:
 
 1. **Take the files in `deliverySequence` order**, then by name. Leave a file without a
@@ -2352,16 +2375,38 @@ continue to require document evidence. Coverage:
 `test_fusion_return.py::test_overwritten_last_request_file_return_settles_after_bound_and_restart`
 and `::test_file_return_timeout_preserves_every_progressing_path`.
 
-**Heartbeat outcome mapping.** WG reads only a fresh heartbeat with
+**Heartbeat outcome mapping.** Live document observations require a fresh heartbeat with
 `deliveryVersion >= 3` from `.fusion-status.json`: the one
 `fusion_status.select_heartbeat` reads, and in a status poll the same one
 the status reports. Document link evidence is considered before every reported
 outcome; an exact `operationId` plus `exportId` settles a mutation as reconciled
 `accepted`. `document.applyingOperation.operationId` settles only Insert/Update as
-`recovery_required`. A missing observation stays `processing`.
+`recovery_required`. The existing backend delivery loop reads outcomes every
+second while requests are pending, including when no browser polls status. Exact
+operation and list reads also settle them. Modern per-request terminal receipts
+in `recentOutcomes` remain usable after the 20-second observation window; a stale
+report supplies no live document or claim evidence. No new store or poller is
+introduced. File disappearance alone never proves pickup: an unconfirmed request
+stays `received`; a correlated `claimed` receipt or exact `lastRequest: running`
+marks it `processing`.
 
-| Add-in field/value at pinned add-in `1887491` | WG result |
+Operation summaries add nullable `fusionDelivery` for outbound requests:
+`waiting` (`received`), `claimed` (`processing`), `applied` (`accepted`),
+`refused` (`rejected`, with `message` and `reason`), `expired`
+(`cancelled`/`expired`), `uncertain` (`recovery_required`), or `cancelled`
+(other cancellations, including an already-current no-op). The existing `state`
+and ledger remain authoritative. `message` gives the waiting remedy and the
+exact terminal refusal reason. Frontend outbound tracking should preserve these
+summaries and show completion only after `fusionDelivery: applied`.
+
+| Add-in field/value (additive receipts coexist with the older pin) | WG result |
 | --- | --- |
+| `recentOutcomes: claimed` | `processing`; correlated pickup evidence |
+| `recentOutcomes: refused` | `rejected` / `adapter_refused`, with retained message |
+| `recentOutcomes: expired` | `cancelled` / `expired` |
+| `recentOutcomes: applied` with exact `exportId` and `documentId` | reconciled `accepted`; receipt retains successful mutation evidence across document switches |
+| `recentOutcomes: alreadyCurrent` | `cancelled` / `adapter_not_started`; the exact target already has the export |
+| `recentOutcomes: failed` | `rejected` / `adapter_failed`, or recovery if already executing |
 | `recentOutcomes: superseded` (`_pending_handoff`) | `cancelled` / `superseded` |
 | `recentOutcomes: discarded` (`_sweep_leftover_claims`) | `cancelled` / `adapter_not_started` |
 | `recentOutcomes: reconciled` (`_apply_pending_handoff`, `_sweep_leftover_claims`) | reconciled `accepted`, using the operation's export identity |
@@ -2375,7 +2420,10 @@ outcome; an exact `operationId` plus `exportId` settles a mutation as reconciled
 | `lastRequest: running` (`_begin_request`) | left `processing` |
 | `lastRequest: requested` (`_submit_to_wg`) | ignored for Fusion-bound rows |
 
-`recentOutcomes` is a 16-item ring. `lastRequest` is one overwritten slot, matched by
+`recentOutcomes` is a 16-item ring, coalesced by channel and request ID. Every
+WG handoff records its claim and replaces it with its result and any refusal
+message, then publishes post-mutation status. It changes only on explicit work,
+so a delayed WG read can record the retained terminal result durably. `lastRequest` is one overwritten slot, matched by
 `correlationId` (the operation ID for WG-produced requests); WG logs its correlation
 and attempt IDs once per change. Missing that slot never proves success; a return
 request with no remaining file activity is bounded as described above.

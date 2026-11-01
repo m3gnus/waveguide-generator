@@ -1,9 +1,9 @@
 """Open archived Fusion files or bring Fusion forward after a CAD-link export.
 
-Send to CAD writes a file; nothing about that reaches a running Fusion. Raising
-its window is the small half of closing that gap -- the add-in's watcher is the
-half that notices the bundle -- and it is the half that has to be harmless: a
-failure here must never turn a written bundle into a failed export.
+Send to CAD publishes a durable request for the add-in's main-thread command
+service. Launching or raising Fusion helps the user reach it; it is no receipt
+that Fusion claimed or applied the request. A launch failure never turns a
+written bundle into a failed export.
 """
 
 from __future__ import annotations

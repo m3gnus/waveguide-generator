@@ -286,6 +286,23 @@ def _read_file_heartbeat(data_dir: Path) -> object:
         return None
 
 
+def last_fusion_heartbeat(data_dir: Path, now: datetime | None = None) -> Mapping[str, Any] | None:
+    """The last valid report, including an old report, never a future timestamp."""
+    checked_at = now or _utc_now()
+    payload = _read_file_heartbeat(data_dir)
+    problem = heartbeat_problem(payload, checked_at)
+    if problem not in (None, (HEARTBEAT_STALE, "updatedAt")) or not isinstance(payload, Mapping):
+        return None
+    updated_at = _timestamp(payload.get("updatedAt"))
+    return payload if updated_at is not None and updated_at <= checked_at else None
+
+
+def wg_request_pickup(payload: Mapping[str, Any] | None) -> int | None:
+    activation = _activation(payload) if payload is not None else None
+    value = activation.get("wgRequestPickup") if activation is not None else None
+    return value if type(value) is int and value >= 1 else None
+
+
 def select_heartbeat(data_dir: Path, now: datetime | None = None) -> SelectedHeartbeat:
     """A fresh file heartbeat and its transport, or none.
 
@@ -666,6 +683,7 @@ def read_fusion_status(
         "statusTtlSeconds": FUSION_STATUS_TTL.total_seconds(),
         "observationPolicy": None,
         "addinInboxTransfer": False,
+        "wgRequestPickup": wg_request_pickup(last_fusion_heartbeat(workspace_root, checked_at)),
         "immutableBundles": False,
     }
     payload, transport = heartbeat if heartbeat is not None else select_heartbeat(workspace_root, checked_at)
@@ -705,6 +723,7 @@ def read_fusion_status(
         "updatedAt": updated_at.isoformat().replace("+00:00", "Z"),
         "observationPolicy": observation_policy(payload),
         "addinInboxTransfer": addin_declares_inbox_transfer(payload),
+        "wgRequestPickup": wg_request_pickup(payload),
         "immutableBundles": type(payload.get("immutableBundles")) is int and payload["immutableBundles"] >= 1,
     }
     delivery = addin_delivery_version(payload)

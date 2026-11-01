@@ -163,7 +163,7 @@ def _channel(row: Mapping[str, Any]) -> str:
     return "returnRequest" if row.get("kind") == REQUEST_RETURN else "handoff"
 
 
-def _recent(heartbeat: Mapping[str, Any], row: Mapping[str, Any]) -> str | None:
+def _recent_record(heartbeat: Mapping[str, Any], row: Mapping[str, Any]) -> Mapping[str, Any] | None:
     operation_id = str(row["operation_id"])
     diagnostics = _object(heartbeat.get("diagnostics")) or {}
     values = diagnostics.get("recentOutcomes")
@@ -176,7 +176,7 @@ def _recent(heartbeat: Mapping[str, Any], row: Mapping[str, Any]) -> str | None:
             and item.get("channel") == _channel(row)
             and item.get("requestId") == operation_id
         ):
-            return _operation_id(item.get("outcome"))
+            return item
     return None
 
 
@@ -212,20 +212,9 @@ def _visible_request(ipc: Path, row: Mapping[str, Any]) -> Path:
     return ipc / directory / f"{row['operation_id']}.json"
 
 
-def _delivery_still_pending(ipc: Path, row: Mapping[str, Any]) -> bool:
-    visible = _visible_request(ipc, row)
-    if visible.exists():
-        return True
-    directory = visible.parent
-    operation_id = str(row["operation_id"])
-    return any(directory.glob(f".{operation_id}.json.*.tmp")) or any(
-        directory.glob(f".wg-withdraw-{operation_id}.json.*.tmp")
-    )
-
-
 #: Outcomes the add-in reports in the file heartbeat diagnostics.
 ADAPTER_OUTCOMES = (
-    "applied", "reconciled", "refused", "superseded", "discarded", "recoveryRequired", "failed",
+    "applied", "reconciled", "expired", "refused", "superseded", "discarded", "recoveryRequired", "failed", "alreadyCurrent",
 )
 _APPLIED_BY_EVIDENCE = "Fusion document evidence confirms this operation applied."
 _RECONCILED = "Fusion reconciled this operation from its document evidence."
@@ -267,6 +256,10 @@ def adapter_outcome(
         }
     if outcome == "refused":
         return REJECTED, "adapter_refused", said("Fusion refused this request.")
+    if outcome == "alreadyCurrent":
+        return CANCELLED, "adapter_not_started", said("The selected Fusion link already has this export; no update was needed.")
+    if outcome == "expired":
+        return CANCELLED, "expired", said("The unstarted Fusion insert expired. Send the model from WG again.")
     if outcome == "superseded":
         return CANCELLED, "superseded", said("Fusion superseded this request before it started.")
     if outcome == "discarded":
@@ -358,18 +351,27 @@ def settle_from_heartbeat(
             changed += value is not None
             continue
 
-        recent = _recent(heartbeat, row)
-        if recent in ("superseded", "discarded") or (row["kind"] == REQUEST_RETURN and recent in {"refused", "failed"}):
-            value = _record_adapter_outcome(store, row, recent)
+        recent_record = _recent_record(heartbeat, row) or {}
+        recent = _operation_id(recent_record.get("outcome"))
+        message = _operation_id(recent_record.get("message"))
+        if (recent in ("superseded", "discarded", "refused", "expired", "alreadyCurrent", "failed")
+                or (row["kind"] == REQUEST_RETURN and recent in {"failed", "applied"})):
+            value = _record_adapter_outcome(store, row, recent, message=message)
+        elif (recent in ("applied", "reconciled") and row["kind"] in MUTATING_KINDS
+              and recent_record.get("exportId") == _export_id(row)
+              and _operation_id(recent_record.get("documentId"))
+              and (expected_document_id is None or recent_record["documentId"] == expected_document_id)):
+            value = _record_adapter_outcome(store, row, recent,
+                        evidence=(operation_id, str(_export_id(row))), message=message)
         elif recent == "reconciled" and row["kind"] in MUTATING_KINDS and _export_id(row) and document_matches:
             value = _record_adapter_outcome(
                 store, row, "reconciled", evidence=(operation_id, str(_export_id(row)))
             )
         elif recent == "recoveryRequired" and row["kind"] in MUTATING_KINDS:
-            value = _record_adapter_outcome(store, row, "recoveryRequired")
+            value = _record_adapter_outcome(store, row, "recoveryRequired", message=message)
         else:
             value = None
-            if recent not in {None, "wgOutdated", "notTaken"}:
+            if recent not in {None, "claimed", "wgOutdated", "notTaken"}:
                 logger.info("Ignoring unknown Fusion outcome %s for %s.", recent, operation_id)
         if value is not None:
             changed += 1
@@ -377,8 +379,9 @@ def settle_from_heartbeat(
 
         last = _last(heartbeat, row)
         last_outcome = _operation_id(last.get("outcome")) if last is not None else None
-        if last_outcome == "refused" or (last_outcome == "failed" and row["kind"] == REQUEST_RETURN):
-            value = _record_adapter_outcome(store, row, last_outcome)
+        if last_outcome in {"refused", "expired", "alreadyCurrent"} or (last_outcome == "failed" and row["kind"] == REQUEST_RETURN):
+            value = _record_adapter_outcome(store, row, last_outcome,
+                                            message=_operation_id(last.get("message")))
             changed += value is not None
             continue
         if last_outcome == "applied" and row["kind"] == REQUEST_RETURN:
@@ -386,7 +389,7 @@ def settle_from_heartbeat(
             changed += value is not None
             continue
 
-        if row["state"] == RECEIVED and not _delivery_still_pending(ipc, row):
+        if row["state"] == RECEIVED and (recent == "claimed" or last_outcome == "running"):
             generation = store.claim(operation_id, int(row["attempt_generation"]))
             changed += generation is not None
         elif row["state"] == PROCESSING:
@@ -395,6 +398,30 @@ def settle_from_heartbeat(
     if changed:
         store.make_durable()
     return changed
+
+
+def settle_reported_outcomes(store: CadLinkStore, data_dir: Path, *,
+                             now: datetime | None = None) -> int:
+    """Record current evidence or retained command receipts, even after 20 seconds."""
+    from server.cadlink.fusion.fusion_status import (
+        heartbeat_problem, last_fusion_heartbeat, wg_request_pickup,
+    )
+    from server.cadlink.ipc import ipc_folder
+    report = last_fusion_heartbeat(data_dir, now)
+    if report is None:
+        return 0
+    if heartbeat_problem(report, now) is not None:
+        if wg_request_pickup(report) is None:
+            return 0  # older add-ins never promised retained per-request receipts
+        diagnostics = _object(report.get("diagnostics")) or {}
+        records = diagnostics.get("recentOutcomes")
+        records = records if isinstance(records, list) else []
+        # An old claim does not prove the adapter is still running. Only
+        # terminal receipts survive the live observation's freshness window.
+        report = {"deliveryVersion": report.get("deliveryVersion"),
+                  "diagnostics": {"recentOutcomes": [item for item in records
+                      if isinstance(item, Mapping) and item.get("outcome") in ADAPTER_OUTCOMES]}}
+    return settle_from_heartbeat(store, report, ipc_folder(data_dir))
 
 
 # Give an old add-in's startup journal reconciliation a bounded grace period.
