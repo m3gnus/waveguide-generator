@@ -600,7 +600,7 @@ def _bundle(tmp_path: Path) -> Path:
 
 def test_read_bundle_rejects_an_incomplete_bundle(tmp_path: Path) -> None:
     (tmp_path / "empty.wglink").mkdir()
-    with pytest.raises(OnshapeAdapterError, match="missing its manifest"):
+    with pytest.raises(OnshapeAdapterError, match="could not read the design it saved"):
         read_bundle(tmp_path / "empty.wglink")
 
 

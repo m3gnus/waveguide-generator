@@ -519,7 +519,7 @@ def test_stale_copy_cannot_silently_fork_the_linked_cad_project(
         snapshot_builder=lambda identity: serialize(advanced, cadlink=identity),
     )
 
-    with pytest.raises(HTTPException, match="older CAD-link registry version") as stale:
+    with pytest.raises(HTTPException, match="older copy of a linked design") as stale:
         service.export_wglink_sync(
             _request(saved, base_name="tritonia.cfg"), store, workspace, "stale"
         )

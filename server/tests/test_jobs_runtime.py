@@ -1077,7 +1077,7 @@ def test_second_runtime_cannot_recover_jobs_owned_by_live_runtime(
         second = JobRuntime(JobStore(database))
         await first.start()
         try:
-            with pytest.raises(JobConflictError, match="already owns"):
+            with pytest.raises(JobConflictError, match="Another copy of WG"):
                 await second.start()
         finally:
             await first.shutdown()
@@ -2093,7 +2093,7 @@ def test_a_failure_without_text_still_gets_an_error_message(tmp_path: Path) -> N
         row = await runtime.get_job(job_id)
         assert row["status"] == "error"
         assert row["error_message"].strip()
-        assert "EOFError" in row["error_message"]
+        assert "recorded the problem" in row["error_message"]
         await runtime.shutdown()
 
     asyncio.run(scenario())

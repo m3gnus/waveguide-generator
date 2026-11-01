@@ -156,7 +156,7 @@ def test_a_delivery_accepted_before_the_lane_ran_is_still_one_job(h: JobsHarness
 def test_a_cad_solve_cannot_be_accepted_without_a_preparation_host(h: JobsHarness) -> None:
     h.runtime.configure_cad_preparation(None)
     _received(h)
-    with pytest.raises(JobConflictError, match="no CAD preparation is configured"):
+    with pytest.raises(JobConflictError, match="cannot prepare CAD models"):
         _accept_direct(h)
     assert h.jobs_store.list_jobs(limit=50)[1] == 0
 
@@ -521,7 +521,7 @@ def test_solve_again_refuses_what_it_should_and_retry_reaches_it(h: JobsHarness)
     bound = _row(h, preparing)
     assert bound["status"] == "queued"
     # A job that has a request is retried as any job is, never "solved again".
-    with pytest.raises(JobConflictError, match="already has a solve request"):
+    with pytest.raises(JobConflictError, match="has already started"):
         h._loop.run(h.runtime.solve_cad_again(preparing))
     # A return WG rejected as invalid is not solved again: it is sent again from CAD.
     bundle_path, _manifest = _write_return(h.workspace, "moved.wgreturn", step=b"moved")
