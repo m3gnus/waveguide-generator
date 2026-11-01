@@ -5952,7 +5952,7 @@
       "step": 0.05,
       "precision": 3,
       "options": [],
-      "description": "Target maximum distance between the solve mesh and the designed surface. Smaller values add triangles on curved surfaces. Off restores the existing throat and mouth sizing rule."
+      "description": "Target maximum distance between the solve mesh and the CAD surface it is built from, which is itself a fit to the horn formula. A target, not a guarantee: explicit minimum sizes still apply. Smaller values add triangles on curved surfaces. Off keeps the throat and mouth sizing rule."
     },
     {
       "id": "schema-gap.max_edge",

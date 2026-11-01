@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
+import { readsPlain } from './httpError';
 import { postSolverMesh, SolverMeshTooLarge, solverMeshDesignKey, type SolverMeshResult } from './solverMesh';
 
 const result: SolverMeshResult = {
@@ -77,7 +78,9 @@ describe('postSolverMesh', () => {
     } }), { status: 409, headers: { 'Content-Type': 'application/json' } });
     await expect(postSolverMesh('{}', fetcher)).rejects.toMatchObject({
       name: 'SolverMeshTooLarge', triangles: 22001, limit: 22000, meshCacheKey: 'a'.repeat(64),
+      message: 'This mesh has 22,001 triangles, above the limit of 22,000 for the part WG solves. Raise Max surface deviation or a mesh resolution in Simulation › Mesh, or press Solve to choose.',
     } satisfies Partial<SolverMeshTooLarge>);
+    expect(readsPlain((await postSolverMesh('{}', fetcher).catch((error: Error) => error) as Error).message)).toBe(true);
   });
 });
 

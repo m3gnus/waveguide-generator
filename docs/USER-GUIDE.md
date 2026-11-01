@@ -130,16 +130,31 @@ the file, and WG says so at the export.
 
 ### Optional solve surface deviation
 
-In **Simulation → Mesh**, **Max surface deviation** starts **Off** for every
-new horn design. Enter a value in millimetres to refine curved surfaces. Clearing
-it restores the existing resolution rule. The setting survives formula changes;
-the standalone source disk does not use it. CAD keeps its existing 0.15 mm rule.
+In **Simulation → Mesh → Surface accuracy**, **Max surface deviation** starts
+**Off** for every new horn design. Enter a value in millimetres to refine curved
+surfaces. Clearing it restores the existing resolution rule. The setting survives
+formula changes; the standalone source disk does not use it. CAD keeps its existing
+0.15 mm rule.
 
-The live triangle estimate helps assess the cost before building. In the measured
-rollback examples, enabling 0.3 mm grew the mesh about seven to eight times.
-Explicit minimum mesh sizes still apply, so the achieved deviation can exceed
-the requested value. The viewport Mesh card reports the achieved sampled value
-or a labelled geometric bound; an unavailable observation stays unavailable.
+The target is measured against the CAD surface the solve mesh is built from, which
+is itself a fit to the horn formula. It is a target, not a guarantee: explicit
+minimum mesh sizes still apply, so the achieved deviation can exceed it.
+
+The live triangle estimate below the control shows the cost before building, and
+with a target set it compares against the same design Off. Treat it as a rough
+floor: it reads low with a target set, often by half or more. In the measured
+rollback examples a target took about seven to eight times the triangles and about
+2.8 times the memory.
+
+The on-screen preview is not the solve mesh, so its note does not change with this
+control. Switch the viewport to **Mesh** to build the solve mesh. Its report gives
+the target it was built to, the solved triangles and two measurements:
+
+- **Deviation** reads *at least* when it is the highest of the sampled triangles,
+  because the true peak can be higher. It reads *at most* when it is a bound across
+  the whole mesh, and *not measured* when no observation exists.
+- **Element shape** is the worst 1% of triangles, where 1 is equilateral and lower
+  is more stretched.
 
 ### Mesh settings for Fusion models
 

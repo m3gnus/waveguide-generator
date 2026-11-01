@@ -78,6 +78,13 @@ describe('complete parameter registry', () => {
     expect(section.groups!.find((group) => group.title === 'Limits and checks')!.fieldOrder).toContain('control.meshValidation');
   });
 
+  it('says what the deviation target is measured against', () => {
+    const field = PARAMETER_REGISTRY.find((candidate) => candidate.id === 'mesh.surface_deviation_mm')!;
+    expect(field.description).toContain('CAD surface');
+    expect(field.description).not.toContain('designed surface');
+    expect(field.description).toContain('not a guarantee');
+  });
+
   it('uses Frequency sweep help in parametric mode and preserves legacy catalog help', () => {
     for (const id of ['simulation.f1', 'simulation.f2', 'simulation.num_frequencies']) {
       const editor = PARAMETER_REGISTRY.find((field) => field.id === id)!;

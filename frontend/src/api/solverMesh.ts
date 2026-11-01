@@ -83,7 +83,7 @@ export async function postSolverMesh(
         && 'triangles' in value && typeof value.triangles === 'number'
         && 'limit' in value && typeof value.limit === 'number'
         && 'mesh_cache_key' in value && typeof value.mesh_cache_key === 'string') {
-        throw new SolverMeshTooLarge('This mesh is larger than the solve limit.', value.triangles, value.limit, value.mesh_cache_key);
+        throw new SolverMeshTooLarge(`This mesh has ${value.triangles.toLocaleString()} triangles, above the limit of ${value.limit.toLocaleString()} for the part WG solves. Raise Max surface deviation or a mesh resolution in Simulation › Mesh, or press Solve to choose.`, value.triangles, value.limit, value.mesh_cache_key);
       }
     }
     throw new Error(await detail(response));
