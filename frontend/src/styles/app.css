@@ -753,6 +753,11 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 }
 .settings-dialog > header { display: flex; align-items: flex-start; padding: 12px 16px 12px; border-bottom: 1px solid var(--hair); }
 .settings-dialog h2 { margin: 0; color: var(--fg); font-size: var(--text-head); }.settings-dialog header p { margin: 2px 0 0; color: var(--fg3); font-size: var(--text-micro); }.dialog-close { width: 26px; height: 26px; margin-left: auto; border-radius: var(--r3); background: transparent; color: var(--fg2); font-size: 18px; }.dialog-close:hover { background: var(--ov3); color: var(--fg); }
+.settings-layout { display: grid; grid-template-columns: 148px minmax(0, 1fr); min-height: 0; }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-right: 1px solid var(--hair-soft); overflow-y: auto; }
+.settings-nav button { min-height: 28px; padding: 4px 8px; border-radius: var(--r3); background: transparent; color: var(--fg2); font-size: var(--text-base); text-align: left; }
+.settings-nav button:hover, .settings-nav button:focus-visible { background: var(--ov3); color: var(--fg); }
+@media (max-width: 640px) { .settings-layout { grid-template-columns: minmax(0, 1fr); } .settings-nav { display: none; } }
 .settings-scroll {
   min-height: 0;
   max-height: none;
@@ -767,7 +772,12 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .log-dialog-messages:empty { display: none; }.log-dialog-messages p { margin: 0; }.log-dialog-limit { color: var(--amber); font-size: var(--text-micro); }
 .job-log-content { grid-row: 3; min-height: 0; margin: 0; overflow: auto; padding: 12px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--surface-panel); color: var(--fg2); font: var(--text-micro) var(--mono); line-height: 1.5; white-space: pre-wrap; }
 .settings-theme { padding: 12px 16px; border-bottom: 1px solid var(--hair-soft); }.settings-theme h3 { margin: 0 0 6px; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; text-transform: uppercase; }.settings-theme-options { display: flex; gap: 6px; }.settings-theme-options button { display: flex; align-items: center; gap: 6px; padding: 4px 8px; }.settings-theme-options button.on { border-color: rgba(var(--acc-rgb), .45); color: var(--acc); }.settings-theme-options svg { width: 13px; }
-.workspace-settings-path { overflow: hidden; margin: 0 0 8px; color: var(--fg); font-family: var(--mono); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
+.workspace-settings-path { margin: 0 0 8px; color: var(--fg); font-family: var(--mono); font-size: var(--text-micro); overflow-wrap: anywhere; }
+.cad-settings-capture { min-width: 0; }
+.cad-settings-capture .ui-check { align-items: flex-start; }
+.cad-settings-capture .ui-check small { display: block; color: var(--fg3); font-size: var(--text-micro); white-space: normal; }
+.cad-setup-guide { margin-top: 8px; }
+.cad-setup-guide > summary { width: max-content; color: var(--acc); font-size: var(--text-micro); cursor: pointer; }
 .cad-settings .ui-field { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(200px, 1fr); align-items: center; gap: 12px; color: var(--fg2); }
 .cad-settings-note { margin: 7px 0 0; color: var(--fg3); font-size: var(--text-micro); }
 .workspace-settings-path.not-selected { color: var(--amber); font-family: var(--ui); }
@@ -1103,7 +1113,7 @@ textarea:disabled { opacity: .48; }
 
 .statusbar { padding-inline: 12px; background: var(--surface-panel); font-size: var(--text-micro); }
 
-.settings-dialog { width: min(760px, calc(100vw - 36px)); border-radius: var(--r); }
+.settings-dialog { width: min(880px, calc(100vw - 36px)); border-radius: var(--r); }
 .settings-dialog > header { align-items: center; min-height: 64px; padding: 12px 16px; }
 .settings-dialog h2 { font-size: var(--text-head); }
 .settings-dialog header p { font-size: var(--text-base); }

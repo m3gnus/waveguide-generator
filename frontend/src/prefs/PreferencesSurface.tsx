@@ -94,7 +94,7 @@ function ResultsPreferencesContent({ showFolders = true }: { showFolders?: boole
           The server reads this preference itself, at startup and after every
           job (server/jobs/retention.py). */}
       <label className="ui-check"><input type="checkbox" checked={preferences.autoCleanupResults} onChange={(event) => preferencesStore.update({ autoCleanupResults: event.target.checked })}/>Clean up old results automatically</label>
-      <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed jobs</label>
+      <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed runs</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-save solve mesh to Runs folder</label>
     </div>
     {/* The two retentions must not be left to be discovered: results in the
@@ -112,7 +112,7 @@ function ResultsPreferencesContent({ showFolders = true }: { showFolders?: boole
       <legend>Automatic export formats</legend>
       <p id={autoFormatsNoteId} className="preferences-section-copy">{preferences.autoExportOnComplete
         ? 'Used for automatic export.'
-        : 'Auto-export is off, so these formats are not used. Turn on “Auto-export completed jobs” to choose them.'}{preferences.archiveRunsOnComplete ? ' Archived runs get their own set of files, independent of these choices.' : ' Run archiving is off.'}</p>
+        : 'Auto-export is off, so these formats are not used. Turn on “Auto-export completed runs” to choose them.'}{preferences.archiveRunsOnComplete ? ' Archived runs get their own set of files, independent of these choices.' : ' Run archiving is off.'}</p>
       {preferences.autoExportOnComplete && !preferences.autoExportFormats.length && <Notice tone="error" role="alert">Choose at least one automatic format. Auto-export is enabled but will not write any files.</Notice>}
       {EXPORT_FORMATS.map(({ id, label }) => <label key={id} className="ui-check"><input type="checkbox" aria-label={`Automatic export: ${label}`} aria-describedby={autoFormatsNoteId} disabled={!preferences.autoExportOnComplete} checked={preferences.autoExportFormats.includes(id)} onChange={() => preferencesStore.toggleAutoExportFormat(id)}/>{label}</label>)}
     </fieldset>

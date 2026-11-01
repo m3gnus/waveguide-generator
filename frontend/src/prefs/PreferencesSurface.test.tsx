@@ -49,7 +49,7 @@ describe('preferences surfaces', () => {
     expect(host.textContent).not.toContain('VACS');
     expect(host.textContent).toContain('Preferred manual export formats');
     expect(host.textContent).toContain('Automatic export formats');
-    expect(host.textContent).toContain('Auto-export completed jobs');
+    expect(host.textContent).toContain('Auto-export completed runs');
     expect(host.textContent).toContain('Auto-save solve mesh to Runs folder');
     const contourNames = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
       .find((input) => input.parentElement?.textContent?.includes('Show contour names'))!;
@@ -162,7 +162,7 @@ describe('preferences surfaces', () => {
   it('edits manual and automatic formats independently and warns about an empty enabled auto list', async () => {
     await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
     const autoToggle = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes('Auto-export completed jobs'))!;
+      .find((input) => input.parentElement?.textContent?.includes('Auto-export completed runs'))!;
     act(() => autoToggle.click());
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('will not write any files');
     expect(host.textContent).toContain('Used for automatic export.');

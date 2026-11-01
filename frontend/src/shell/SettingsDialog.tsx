@@ -1,5 +1,6 @@
 import { Notice } from './Notice';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { cadWorkspace } from '../stores/cadWorkspace';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
 import { getAclRepairStatus, type AclRepairRootStatus } from '../api/aclRepair';
 import {
@@ -282,6 +283,9 @@ function CadSettings() {
   const onshapeOffered = useOnshapeAvailable();
   const [onshapeSetup, setOnshapeSetup] = useState<OnshapeConnection | null>(null);
   const rememberOnshapeConnection = useCallback((connection: OnshapeConnection) => setOnshapeSetup(connection), []);
+  // Setup is a once-only walk; a connected user comes here for the folder or the theme.
+  const fusion = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot).fusionStatus;
+  const connected = onshape ? !!onshapeSetup?.reachable : !!fusion?.running && fusion.cadFolderConfigured !== false;
   return <section id="settings-cad" className="settings-theme cad-settings" aria-labelledby="settings-cad-title" tabIndex={-1}>
     <h3 id="settings-cad-title">CAD Link</h3>
     {onshapeOffered && <label className="ui-field">CAD application<select
@@ -295,6 +299,8 @@ function CadSettings() {
     <p className="cad-settings-note">{onshape
       ? 'WG connects directly to your Onshape account. No local exchange folder or add-in is needed.'
       : 'WG connects through the Waveguide Generator add-in in Fusion and one local exchange folder. Complete these steps once; the add-in then opens and updates designs from the CAD Link panel.'}</p>
+    <details className="cad-setup-guide" open={!connected}>
+    <summary>{connected ? 'Connected. Show the setup steps' : 'Setup steps'}</summary>
     {onshape ? <ol className="cad-setup-steps" aria-label="Set up Onshape">
       <li><b>Create an Onshape API key</b><span>In Onshape, open <b>My account → Developer → API keys</b>, create a key for this personal connection, and copy both values before closing the dialog. <a href="https://cad.onshape.com/help/Content/Plans/my_account_developer.htm" target="_blank" rel="noreferrer noopener">Onshape instructions</a></span></li>
       <li><b>Store the key in WG’s private credential file</b><span>Save <code>ONSHAPE_ACCESS_KEY=…</code> and <code>ONSHAPE_SECRET_KEY=…</code> in <code>{onshapeSetup?.credentialsPath ?? 'the credential file shown after the connection check'}</code>. Keep it out of synced or shared folders. WG reads it locally and never returns either value to the browser.</span></li>
@@ -304,6 +310,7 @@ function CadSettings() {
       <li><b>WGLink folder</b><span>WG and Fusion use this WGLink folder.</span><CadFolderSettings/></li>
       <li><b>Open a design in Fusion</b><span>Close Settings, open <b>CAD Link</b>, and choose <b>Open in Fusion 360</b>. WG saves the model, starts Fusion, and the connection card confirms when the Waveguide Generator add-in in Fusion is online.</span></li>
     </ol>}
+    </details>
   </section>;
 }
 
@@ -317,6 +324,12 @@ function AdvancedSettings() {
     <p className="cad-settings-note">Shows the technical detail behind what WG says: why a preparation failed, the checks&rsquo; evidence, model and preparation identifiers, the CAD Link request consumer, and the solver&rsquo;s diagnostic options. Failures are recorded for the developers either way.</p>
   </section>;
 }
+
+/** Each settings group, so the list below the fold is reachable in one press. */
+const SETTINGS_PAGES: ReadonlyArray<[id: string, label: string]> = [
+  ['theme', 'Theme'], ['cad', 'CAD Link'], ['drivers', 'Driver library'], ['folder', 'WG folder'], ['updates', 'Updates'],
+  ['results', 'Results and export'], ['runs', 'Runs'], ['advanced', 'Advanced'],
+];
 
 export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClose }: {
   open: boolean;
@@ -337,8 +350,12 @@ export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClo
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div ref={dialog} className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <header><div><h2 id="settings-title">Settings</h2><p>Application preferences are saved automatically.</p></div><button className="dialog-close" aria-label="Close settings" onClick={onClose}><Icon name="close"/></button></header>
+      <div className="settings-layout">
+      <nav className="settings-nav" aria-label="Settings sections">
+        {SETTINGS_PAGES.map(([id, label]) => <button key={id} type="button" onClick={() => dialog.current?.querySelector(`#settings-${id}`)?.scrollIntoView({ block: 'start' })}>{label}</button>)}
+      </nav>
       <div className="settings-scroll">
-        <section className="settings-theme" aria-labelledby="settings-theme-title">
+        <section id="settings-theme" className="settings-theme" aria-labelledby="settings-theme-title">
           <h3 id="settings-theme-title">Theme</h3>
           <div className="settings-theme-options">
             <button className={theme === 'dark' ? 'btn on' : 'btn'} aria-pressed={theme === 'dark'} onClick={() => onThemeChange('dark')}><Icon name="moon"/>Dark</button>
@@ -346,13 +363,14 @@ export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClo
           </div>
         </section>
         <CadSettings/>
-        <DriverLibrarySettings/>
-        <WorkspaceSettings/>
-        <UpdateChannelPointer/>
-        <ResultsPreferencesSurface expanded showFolders={false}/>
-        <JobsPreferencesSurface expanded/>
+        <div id="settings-drivers"><DriverLibrarySettings/></div>
+        <div id="settings-folder"><WorkspaceSettings/></div>
+        <div id="settings-updates"><UpdateChannelPointer/></div>
+        <div id="settings-results"><ResultsPreferencesSurface expanded showFolders={false}/></div>
+        <div id="settings-runs"><JobsPreferencesSurface expanded/></div>
         <AdvancedSettings/>
         <p className="viewer-preferences-note">Viewer preferences remain available in the Viewport panel.</p>
+      </div>
       </div>
     </div>
   </div>;
