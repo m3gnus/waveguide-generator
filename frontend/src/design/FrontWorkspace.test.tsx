@@ -2,8 +2,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fixture from '../sketch/adapters/frontView.fixture.json';
-import type { DesignAssembly } from '../stores/assembly';
-import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
+import { addWoofer, emptyAssembly, type DesignAssembly } from '../stores/assembly';
+import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { FRONT_CONTEXT_DELAY_MS, FrontWorkspace, FrontWorkspaceLauncher, openFrontWorkspace, closeFrontWorkspace } from './FrontWorkspace';
 
 const BEFORE = fixture.before.assembly as DesignAssembly;
@@ -92,6 +92,92 @@ describe('front workspace', () => {
     await act(async () => { useDesignStore.getState().replaceDocument(designForFamily('R-OSSE')); });
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('removes an assembly as one step and returns the design to its plain content', async () => {
+    useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
+    const plain = JSON.stringify(serializeDesign(useDesignStore.getState().design));
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly: structuredClone(BEFORE) });
+    const onClose = await mount();
+    const before = steps();
+    await act(async () => { button('Remove assembly').click(); });
+    expect(useDesignStore.getState().design.assembly).toBeUndefined();
+    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(plain);
+    expect(steps()).toBe(before + 1);
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => { useDesignStore.getState().undo(); });
+    expect(assembly()).toEqual(BEFORE);
+  });
+});
+
+describe('leaving an assembly', () => {
+  it('stays removed across a family switch', async () => {
+    await mount();
+    await act(async () => { button('Remove assembly').click(); });
+    await act(async () => { useDesignStore.getState().setFamily('OSSE'); });
+    expect(useDesignStore.getState().design.assembly).toBeUndefined();
+  });
+
+  it('goes back to no assembly when the last woofer is deleted, and Undo restores it', async () => {
+    useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
+    const plain = JSON.stringify(serializeDesign(useDesignStore.getState().design));
+    const one = addWoofer(emptyAssembly(), { anchor: 'below' });
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly: one.assembly });
+    await act(async () => root.render(<FrontWorkspace onClose={vi.fn()} fetcher={fetcher}/>));
+    await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
+    await act(async () => { button('Woofer 1').click(); });
+    await act(async () => { svg().focus(); svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true })); });
+    await act(async () => { await vi.waitFor(() => expect(useDesignStore.getState().design.assembly).toBeUndefined()); });
+    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(plain);
+    await act(async () => { useDesignStore.getState().undo(); });
+    expect(assembly().woofers).toHaveLength(1);
+  });
+});
+
+describe('looking at a design without an assembly', () => {
+  const plainDesign = () => {
+    useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
+    const { designRevision, design } = useDesignStore.getState();
+    return { designRevision, content: JSON.stringify(serializeDesign(design)), past: steps() };
+  };
+  const unchanged = (before: ReturnType<typeof plainDesign>) => {
+    const { designRevision, design } = useDesignStore.getState();
+    expect(design.assembly).toBeUndefined();
+    expect(designRevision).toBe(before.designRevision);
+    expect(JSON.stringify(serializeDesign(design))).toBe(before.content);
+    expect(steps()).toBe(before.past);
+  };
+  const mountPlain = async () => {
+    await act(async () => root.render(<FrontWorkspace onClose={vi.fn()} fetcher={fetcher}/>));
+    await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
+  };
+
+  it('leaves the design untouched by opening and closing', async () => {
+    const before = plainDesign();
+    openFrontWorkspace();
+    await mountPlain();
+    closeFrontWorkspace();
+    await act(async () => root.render(null));
+    unchanged(before);
+  });
+
+  it('draws the front view from a horn-only assembly the design does not hold', async () => {
+    plainDesign();
+    await mountPlain();
+    expect((requests[0].design as { assembly: DesignAssembly }).assembly.woofers).toEqual([]);
+    expect(button('Build').disabled).toBe(true);
+    expect(button('Solve').disabled).toBe(true);
+  });
+
+  it('writes the assembly on the first real edit, and Undo takes it back out', async () => {
+    const before = plainDesign();
+    await mountPlain();
+    await act(async () => { button('Add woofer below').click(); });
+    await act(async () => { await vi.waitFor(() => expect(assembly().woofers).toHaveLength(1)); });
+    expect(steps()).toBe(before.past + 1);
+    await act(async () => { useDesignStore.getState().undo(); });
+    expect(useDesignStore.getState().design.assembly).toBeUndefined();
+    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before.content);
+  });
 });
 
 describe('front workspace launch', () => {
@@ -102,15 +188,7 @@ describe('front workspace launch', () => {
     expect(host.textContent).toContain("Woofers on the enclosure's front baffle, solved with the horn.");
     useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
     await act(async () => { button('Sources and baffle…').click(); });
-    expect(assembly().signal_groups).toEqual([expect.objectContaining({ members: [{ radiator_id: 'horn-throat' }] })]);
-  });
-
-  it('gives a design without an assembly a horn-only one as one step', () => {
-    useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
-    openFrontWorkspace();
-    expect(assembly().woofers).toEqual([]);
-    expect(assembly().signal_groups).toEqual([expect.objectContaining({ members: [{ radiator_id: 'horn-throat' }] })]);
-    useDesignStore.getState().undo();
     expect(useDesignStore.getState().design.assembly).toBeUndefined();
   });
+
 });

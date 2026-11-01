@@ -197,12 +197,16 @@ export function frontViewAdapter(resolved: () => FrontViewContext | undefined,
   };
 }
 
-/** The workspace's binding to the design's `assembly`: absent closes the workspace. */
-export function frontViewBinding(onMissing: () => void): ProjectBinding<DesignAssembly> {
+/**
+ * The workspace's binding to the design's `assembly`; `blank` stands in while it
+ * has none. Deleting the last woofer leaves nothing an ordinary horn does not
+ * have, so the design goes back to having no assembly and to ordinary Solve.
+ */
+export function frontViewBinding(blank: DesignAssembly): ProjectBinding<DesignAssembly> {
   return {
-    paths: ['assembly'], onMissing,
-    read: values => (values.assembly as DesignAssembly | null | undefined) ?? undefined,
-    write: (state): EmbeddedDesignUpdates => ({ assembly: state }),
+    paths: ['assembly'], onMissing: () => {},
+    read: values => (values.assembly as DesignAssembly | null | undefined) ?? blank,
+    write: (state): EmbeddedDesignUpdates => ({ assembly: woofersOf(state).length ? state : undefined }),
   };
 }
 
