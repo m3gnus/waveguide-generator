@@ -6,7 +6,6 @@ import { Notice } from '../shell/Notice';
  * so one project history step; the enclosure fields are the design's own
  * parameters, written as the Geometry panel writes them.
  */
-import { useState } from 'react';
 import {
   DEFAULT_WOOFER_GAP_MM, commitAssembly, deleteWoofer, setMemberProcessing, setPlacement, updateWoofer, wooferById,
   type AssemblyAnchor, type AssemblyPlacement, type AssemblyWoofer, type DesignAssembly,
@@ -23,7 +22,6 @@ import { ToggleRow } from './SolveOptionsSections';
 
 type Session = WorkspaceSession<DesignAssembly, FrontCommand>;
 const ANCHORS: Array<[AssemblyAnchor, string]> = [['above', 'Above the mouth'], ['below', 'Below the mouth'], ['free', 'Free position']];
-const DEFAULT_ENCLOSURE_DEPTH_MM = 280;
 
 function run(session: Session, label: string, edit: FrontCommand['edit']) {
   void session.command({ label, edit }).catch(() => {});
@@ -180,7 +178,6 @@ function mountingBlock(design: DesignDocument): 'native' | 'mounting' | null {
 function BaffleProperties() {
   const design = useDesignStore(state => state.design);
   const updateValues = useDesignStore(state => state.updateValues);
-  const [lastDepth] = useState(() => design.enclosure.depth > 0 ? design.enclosure.depth : DEFAULT_ENCLOSURE_DEPTH_MM);
   const blocked = mountingBlock(design);
   if (blocked === 'native') {
     return <><div className="front-heading"><h3>Baffle</h3></div>
@@ -189,7 +186,7 @@ function BaffleProperties() {
   if (blocked) {
     return <><div className="front-heading"><h3>Baffle</h3></div>
       <Notice tone="info" role={null} title="Woofers need an enclosure" actions={<button className="btn-primary" type="button"
-        onClick={() => updateValues(outerBodyUpdates(design, 'enclosure', null, lastDepth, true))}>Use an enclosure</button>}>
+        onClick={() => updateValues(outerBodyUpdates(design, 'enclosure', null, true))}>Use an enclosure</button>}>
         This horn is not mounted in a box yet, so it has no front baffle to cut.
       </Notice></>;
   }

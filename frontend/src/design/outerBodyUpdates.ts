@@ -1,8 +1,12 @@
-import { defaultWallThickness, type DesignDocument } from '../stores/design';
+import { defaultWallThickness, useDesignStore, type DesignDocument } from '../stores/design';
+
+/** The depth an enclosure comes back with: the latest positive one, whichever control set it. */
+let lastEnclosureDepth = 280;
+useDesignStore.subscribe(({ design }) => { if (design.enclosure.depth > 0) lastEnclosureDepth = design.enclosure.depth; });
 
 /** The design writes that select a horn's outer body, shared by every control that offers it. */
 export function outerBodyUpdates(design: DesignDocument, mode: 'bare' | 'freestanding' | 'enclosure',
-  lastWallThickness: number | null, lastEnclosureDepth: number, mounting: boolean): Record<string, number | string> {
+  lastWallThickness: number | null, mounting: boolean): Record<string, number | string> {
   const updates = mode === 'bare'
     ? { 'mesh.wall_thickness': 0, 'enclosure.depth': 0 }
     : mode === 'freestanding'

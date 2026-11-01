@@ -277,7 +277,6 @@ const outerModeLabels: Record<OuterBodyMode, string> = {
 function WallEnclosureModeControl({ design, mounting = false, serverError }: { design: DesignDocument; mounting?: boolean; serverError?: string }) {
   const updateValues = useDesignStore((state) => state.updateValues);
   const [lastWallThickness, setLastWallThickness] = useState<number | null>(null);
-  const [lastEnclosureDepth, setLastEnclosureDepth] = useState(() => design.enclosure.depth > 0 ? design.enclosure.depth : 280);
   const backend = useActiveBackendCapability();
   const backendPlan = usePlannedBackendCapabilities();
   const { engines, hostPlatform } = useCapabilities();
@@ -292,16 +291,13 @@ function WallEnclosureModeControl({ design, mounting = false, serverError }: { d
   useEffect(() => {
     if (design.mesh.wall_thickness > 0 && !design._absent?.includes('mesh.wall_thickness')) setLastWallThickness(design.mesh.wall_thickness);
   }, [design.mesh.wall_thickness, design._absent]);
-  useEffect(() => {
-    if (design.enclosure.depth > 0) setLastEnclosureDepth(design.enclosure.depth);
-  }, [design.enclosure.depth]);
 
   const chooseMode = (mode: OuterBodyMode) => {
     if (mode === 'infinite-baffle') {
       if (mounting) updateValues({ 'simulation.sim_type': 'infinite-baffle' });
       return;
     }
-    updateValues(outerBodyUpdates(design, mode, lastWallThickness, lastEnclosureDepth, mounting));
+    updateValues(outerBodyUpdates(design, mode, lastWallThickness, mounting));
   };
 
   return <div className="outer-body-mode" data-parameter-id={mounting ? 'simulation.sim_type' : undefined} data-control-reveal-id={mounting ? PARAMETRIC_CONTROLS.mounting.reveal.id : undefined}>

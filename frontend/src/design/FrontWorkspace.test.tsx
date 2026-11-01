@@ -224,6 +224,14 @@ describe('front workspace status', () => {
     await act(async () => { await vi.waitFor(() => expect(assembly().woofers).toHaveLength(5)); });
   });
 
+  it('brings an enclosure back at the latest depth it had', async () => {
+    await mountWith(fetcher);
+    await act(async () => { useDesignStore.getState().updateValues({ 'enclosure.depth': 400 }); });
+    await act(async () => { useDesignStore.getState().updateValues({ 'enclosure.depth': 0 }); });
+    await act(async () => { button('Use an enclosure').click(); });
+    expect(useDesignStore.getState().design.enclosure.depth).toBe(400);
+  });
+
   it('keeps Add woofer closed without an enclosure and offers one', async () => {
     useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
     await mountWith(fetcher);
