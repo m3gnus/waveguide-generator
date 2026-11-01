@@ -55,7 +55,7 @@ import {
   openCadLinkedProject,
   takeDesignOpenTicket,
 } from './openCadProject';
-import { sentToCadMessage } from './useSendToCad';
+import { fusionSendOf, sentToCadMessage, useFusionDelivery, type FusionSend } from './useSendToCad';
 import { failureWords } from '../api/httpError';
 
 // Extensions only. The macOS desktop window (pywebview on WKWebView) filters its
@@ -180,6 +180,8 @@ export function DesignFileMenu() {
   const [projects, setProjects] = useState<CadLinkedDesignSummary[]>([]);
   const [moveRunsOpen, setMoveRunsOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [fusionSend, setFusionSend] = useState<FusionSend | null>(null);
+  const delivery = useFusionDelivery(fusionSend);
   const [adoptionCandidate, setAdoptionCandidate] = useState<CadLinkOpenState['adoptionCandidate']>(null);
   const [sharedQuestion, setSharedQuestion] = useState<SharedDesignQuestion | null>(null);
   const pendingSharedQuestion = useRef<SharedDesignQuestion | null>(null);
@@ -205,6 +207,7 @@ export function DesignFileMenu() {
     busyRef.current = true;
     setBusy(true);
     setMessage(null);
+    setFusionSend(null);
     setAdoptionCandidate(null);
     try { await operation(); } catch (error) {
       if (isOutboundSupersededError(error)) return;
@@ -531,6 +534,7 @@ export function DesignFileMenu() {
       // expected-document guard, and parks on the two-way conflict dialog.
       const result = await cadWorkspace.getSnapshot().sendWgToFusion();
       setMessage(result ? `${sentToCadMessage(result)}${omitsWoofers}` : 'Both WG and Fusion changed — choose a direction in the dialog.');
+      if (result) setFusionSend(fusionSendOf(result));
     });
   }
 
@@ -607,7 +611,7 @@ export function DesignFileMenu() {
       </>}
     </div>}
     {(message || adoptionCandidate) && <div role="status" className="design-menu-status" onClick={() => { setMessage(null); setAdoptionCandidate(null); }}>
-      {message}
+      {delivery ? `${delivery.text}${omitsWoofers}` : message}
       {adoptionCandidate && <button className="btn"
         type="button"
         onClick={(event) => { event.stopPropagation(); adoptCandidate(); }}

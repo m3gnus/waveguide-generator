@@ -644,7 +644,7 @@ describe('design file export menu', () => {
       return new Response(JSON.stringify({
         bundlePath: '/cad-library/wglink/tritonia_mk2.wglink', bundleId: 'wgb_1',
         exportId: 'wge_1', sequence: 7, designHash: 'sha256:d',
-        geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+        geometryHash: 'sha256:g', artifactSha256: 'sha256:a', cadHandoffRequestId: 'request-1',
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     });
 
@@ -657,7 +657,7 @@ describe('design file export menu', () => {
 
     expect(sendRequests()).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
     expect(container.querySelector('[role="status"]')?.textContent).toContain(
-      'Sent to CAD · /cad-library/wglink/tritonia_mk2.wglink',
+      'Waiting for Fusion to open this model.',
     );
   });
 

@@ -381,7 +381,7 @@ describe('RunExportControl', () => {
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
     expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
     expect(host.querySelector('[role="status"]')?.textContent).toContain(
-      'Sent to CAD · /cad-library/wglink/1_stored_horn_v07.wglink',
+      'The model is ready. In Fusion, choose WGLink → Advanced → Insert.',
     );
   });
 

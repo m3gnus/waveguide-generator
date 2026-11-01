@@ -23,6 +23,8 @@ export interface CadOperationSummary {
    * A Fusion-bound request claimed live: `adapter-received`, `queued-for-fusion`,
    * `executing` (docs/architecture/CAD-OPERATIONS.md, "Legacy HTTP claims"). */
   stage: string | null;
+  /** How far a Fusion-bound request has got, from the operation ledger. */
+  fusionDelivery?: 'waiting' | 'claimed' | 'applied' | 'refused' | 'expired' | 'uncertain' | 'cancelled' | null;
   /** A reason code ("Outcomes"), or null. */
   reason: string | null;
   message: string | null;
