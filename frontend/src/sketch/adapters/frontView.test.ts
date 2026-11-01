@@ -150,6 +150,18 @@ describe('front view edits', () => {
     expect(radiusProblem({ ...lone, woofers: [placed] }, placed.id, 500, atOrigin)).toContain('raise the margins under Baffle');
   });
 
+  it('accepts a boundary fit the mesher accepts', () => {
+    // 100.1 - 100 is 0.09999999999999432: within the mesher's 1e-8 of 0.1 mm.
+    const boundary: FrontViewContext = { ...before, context: { ...before.context, minimum_clearance_mm: 0.1, clearances: {
+      [W1]: { mouth_mm: 100.1 - 100, baffle_edge_mm: 100.1 - 100, woofers: {} },
+    } } };
+    expect(placementProblems(before.assembly, boundary).size).toBe(0);
+    const context = { ...before.context, woofers: [], minimum_clearance_mm: 0.1, mouth_top_mm: 100, mouth_bottom_mm: -100,
+      baffle: { x0_mm: -500, x1_mm: 500, y0_mm: -290.1, y1_mm: 200, edge_mm: 0 } };
+    // The woofer's lowest point lands 100.1 - 100 above the edge once its gap and diameter are placed.
+    expect(noRoomForWoofer('below', { ...before, context }, () => 25)).toBeNull();
+  });
+
   it('names one overlap between two woofers once', () => {
     const tight: FrontViewContext = { ...before, context: { ...before.context, minimum_clearance_mm: 0.1, clearances: {
       [W1]: { mouth_mm: 10, woofers: { [W2]: -2 } }, [W2]: { mouth_mm: 10, woofers: { [W1]: -2 } },

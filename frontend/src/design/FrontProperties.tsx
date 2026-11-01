@@ -11,7 +11,7 @@ import {
   type AssemblyAnchor, type AssemblyPlacement, type AssemblyWoofer, type DesignAssembly,
 } from '../stores/assembly';
 import { isNativeFamily, useDesignStore, type DesignDocument } from '../stores/design';
-import { addWooferCommand, anchoredPlacement, noRoomForWoofer, placementProblems, radiusProblem, type FrontCommand, type FrontViewContext } from '../sketch/adapters/frontView';
+import { addWooferCommand, anchoredPlacement, clears, noRoomForWoofer, placementProblems, radiusProblem, type FrontCommand, type FrontViewContext } from '../sketch/adapters/frontView';
 import type { DomainAdapter, PropertiesSection, WorkspaceSession } from '../sketch/workspace/types';
 import { ActionMenu } from './ActionMenu';
 import { NumberField } from './NumberField';
@@ -44,7 +44,7 @@ function Clearances({ id, assembly, resolved }: { id: string; assembly: DesignAs
     ...clearance.baffle_edge_mm === undefined ? [] : [['Baffle edge', clearance.baffle_edge_mm] as [string, number]],
     ...Object.entries(clearance.woofers).map(([other, distance]): [string, number] => [wooferById(assembly, other)?.label ?? 'Woofer', distance])];
   return <dl className="front-clearances">
-    {rows.map(([label, distance]) => <div key={label} className={distance < minimum ? 'problem' : undefined}><dt>{label}</dt><dd>{distance.toFixed(1)} mm</dd></div>)}
+    {rows.map(([label, distance]) => <div key={label} className={clears(distance, minimum) ? undefined : 'problem'}><dt>{label}</dt><dd>{distance.toFixed(1)} mm</dd></div>)}
   </dl>;
 }
 

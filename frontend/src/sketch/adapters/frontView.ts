@@ -166,6 +166,9 @@ const SIDE_ROOM = {
 } as const;
 type Side = keyof typeof SIDE_ROOM;
 
+/** The mesher's own comparison: `enclosure_woofers.py` allows CLEARANCE_MM - 1e-8. */
+export const clears = (distance: number, minimum: number) => distance >= minimum - 1e-8;
+
 type Context = FrontViewContext['context'];
 type Centre = { x: number; y: number };
 
@@ -180,16 +183,16 @@ function fitsAt(centre: Centre, radius: number, context: Context, neighbours: No
   const inset = baffle.edge_mm;
   const edge = Math.min(centre.x - (baffle.x0_mm + inset), (baffle.x1_mm - inset) - centre.x,
     centre.y - (baffle.y0_mm + inset), (baffle.y1_mm - inset) - centre.y) - radius;
-  if (edge < minimum) return false;
+  if (!clears(edge, minimum)) return false;
   if (ring?.length) {
     let inside = false;
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
       const [xi, yi] = ring[i], [xj, yj] = ring[j];
       if ((yi > centre.y) !== (yj > centre.y) && centre.x < (xj - xi) * (centre.y - yi) / (yj - yi) + xi) inside = !inside;
     }
-    if (inside || ring.some(([x, y]) => Math.hypot(x - centre.x, y - centre.y) - radius < minimum)) return false;
+    if (inside || ring.some(([x, y]) => !clears(Math.hypot(x - centre.x, y - centre.y) - radius, minimum))) return false;
   }
-  return neighbours.every(other => Math.hypot(other.x_mm - centre.x, other.y_mm - centre.y) - radius - other.radius_mm >= minimum);
+  return neighbours.every(other => clears(Math.hypot(other.x_mm - centre.x, other.y_mm - centre.y) - radius - other.radius_mm, minimum));
 }
 
 /** Where the mesher puts an anchored woofer (`resolve_woofer_placements`), or null with no mouth edges. */
@@ -293,7 +296,7 @@ export function placementProblems(state: DesignAssembly, resolved: FrontViewCont
     if (label === undefined) continue;
     const found: string[] = [];
     const check = (distance: number | undefined, what: string, fix: string) => {
-      if (distance !== undefined && distance < minimum) found.push(`${label} ${distance < 0 ? `overlaps ${what} by ${mm(Math.abs(distance))}` : `is too close to ${what}`}. ${fix}`);
+      if (distance !== undefined && !clears(distance, minimum)) found.push(`${label} ${distance < 0 ? `overlaps ${what} by ${mm(Math.abs(distance))}` : `is too close to ${what}`}. ${fix}`);
     };
     check(clearance.mouth_mm, 'the mouth', 'Raise Gap to mouth, or move it.');
     check(clearance.baffle_edge_mm, 'the edge of the baffle', 'Reduce Radius, move it, or raise the margins under Baffle.');
