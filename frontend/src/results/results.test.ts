@@ -1,3 +1,4 @@
+import { keepRefusalOriginals } from '../api/httpError';
 import { describe, expect, it, vi } from 'vitest';
 import { CompareStore, fetchJobArchiveSnapshot, fetchJobResults, fetchRadiationImpedancePresentation, mergeProvisionalResults, parseFinalResultEnvelope, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults, type ResultData } from '../api/results';
 import { COMBINED_VIEW } from '../stores/resultView';
@@ -491,7 +492,7 @@ describe('chart data mappers', () => {
 });
 
 describe('recombineJobResults', () => {
-  it('posts the spec, replaces the cache entry, and surfaces server detail', async () => {
+  it('posts the spec, replaces the cache entry, and records the original refusal behind plain guidance', async () => {
     resultsCache.clear();
     const updated = {
       ...result(),
@@ -531,9 +532,17 @@ describe('recombineJobResults', () => {
       JSON.stringify({ detail: 'combine crossovers_hz [5000.0] lie outside the solved band [100, 1000] Hz' }),
       { status: 422 },
     ));
-    await expect(recombineJobResults('job-9', { members: ['mf', 'hf'], crossovers_hz: [5000] }, failing as unknown as typeof fetch))
-      .rejects.toThrow('outside the solved band');
-    resultsCache.clear();
+    const originals: { message: string; operation: string }[] = [];
+    keepRefusalOriginals(entry => originals.push(entry));
+    try {
+      await expect(recombineJobResults('job-9', { members: ['mf', 'hf'], crossovers_hz: [5000] }, failing as unknown as typeof fetch))
+        .rejects.toThrowError(new Error('WG could not update the combined response. Change the crossover again.'));
+      expect(originals).toEqual([{ message: 'combine crossovers_hz [5000.0] lie outside the solved band [100, 1000] Hz', operation: 'request 422' }]);
+      expect(resultsCache.has('job-9')).toBe(false);
+    } finally {
+      keepRefusalOriginals(() => {});
+      resultsCache.clear();
+    }
   });
 
   it('never lets a superseded reply publish over a newer one', async () => {

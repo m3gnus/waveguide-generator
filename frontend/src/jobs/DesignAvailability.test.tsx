@@ -126,6 +126,6 @@ describe('the design verdict a job card shows', () => {
     // than trusting a field that is not there.
     render(<RerunButton job={{ script_snapshot: { params: { type: 'OSSE' } } }} onRerun={() => {}}/>);
     expect(button().disabled).toBe(true);
-    expect(button().title).toContain('cannot be reopened');
+    expect(button().title).toBe('This run did not keep a design WG can read, so it cannot be opened or repeated.');
   });
 });

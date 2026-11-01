@@ -486,7 +486,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     // The button, at render time.
     const button = host.querySelector<HTMLButtonElement>('.solve-button')!;
     expect(button.disabled).toBe(true);
-    expect(button.title).toContain('does not match the selected model');
+    expect(button.title).toBe('The mesh on screen is not the selected model. Select the model again, then press Solve.');
     // The shortcut.
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }));
@@ -494,7 +494,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     });
     // Every caller, at call time.
     await expect(solveControlStore.getSnapshot()!.solve()).resolves.toBe('blocked');
-    expect(solveControlStore.getSnapshot()!.title).toContain('does not match the selected model');
+    expect(solveControlStore.getSnapshot()!.title).toBe('The mesh on screen is not the selected model. Select the model again, then press Solve.');
     expect(mocks.solveModel).not.toHaveBeenCalled();
   });
 

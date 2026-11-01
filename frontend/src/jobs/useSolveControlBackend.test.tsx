@@ -101,7 +101,7 @@ it('keeps adaptive and field controls enabled through their own toggles, sweep e
   await flushReact();
   // A checked inactive preference can be removed; the settled field flag gates.
   expect(adaptive.disabled).toBe(false);
-  expect(host.querySelector('#adaptive-sampling-reason')?.textContent).toContain('BEAT only');
+  expect(host.querySelector('#adaptive-sampling-reason')?.textContent).toBe('Adaptive sampling needs a BEAT engine. Choose one under Solver, or turn this off.');
   expect(field.disabled).toBe(true);
   act(() => adaptive.click());
   expect(adaptive.checked).toBe(false);

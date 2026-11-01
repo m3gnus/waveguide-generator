@@ -41,11 +41,11 @@ describe('viewport field-plane job selection', () => {
   });
 
   it('explains why the disabled overlay needs a new solve', () => {
-    expect(fieldPlaneUnavailableTooltip([job('legacy', false, 'solve_predates_traces')])).toContain('re-solve');
+    expect(fieldPlaneUnavailableTooltip([job('legacy', false, 'solve_predates_traces')])).toBe('This run has no field data. Solve the design again.');
     expect(fieldPlaneUnavailableTooltip([job('axisymmetric', false, 'unsupported_axisymmetric_formulation')])).toContain('historical Axisymmetric result');
     expect(fieldPlaneUnavailableTooltip([job('coupled-ib', false, 'unsupported_coupled_infinite_baffle')])).toContain('Mounting to Bare shell');
     expect(fieldPlaneUnavailableTooltip([job('disabled', false, 'disabled_by_option')])).toContain('Keep field plane data');
-    expect(fieldPlaneUnavailableTooltip([job('ladder', false, 'unsupported_per_band_mesh_ladder')])).toContain('submit a new solve from the UI');
+    expect(fieldPlaneUnavailableTooltip([job('ladder', false, 'unsupported_per_band_mesh_ladder')])).toBe('This run used several meshes, so it has no field plane. Open its design, turn on Keep field plane data, and solve in WG');
   });
 });
 

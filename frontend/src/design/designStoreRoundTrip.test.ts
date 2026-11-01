@@ -100,7 +100,7 @@ describe('full DesignConfig client store', () => {
     useDesignStore.getState().redo();
     expect(serializeDesign(useDesignStore.getState().design).text_import_version).toBe('ath-2026-08c-v1');
     expect(serializeDesign(designForFamily('OSSE'))).not.toHaveProperty('text_import_version');
-    expect(() => hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'future-v2' })).toThrow('Unsupported text import geometry version');
+    expect(() => hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'future-v2' })).toThrowError(new Error('This design was saved by a newer version of WG. Update WG to open it.'));
   });
 
   it('retains ATH v2 lip, rear, sampling and NAC controls through editing and undo', () => {

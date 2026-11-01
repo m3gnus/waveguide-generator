@@ -177,7 +177,7 @@ it('round-trips v2 Sd without altering v1 readers or allowing invalid Sd', async
   expect(parseExteriorTransducer(filled)).toEqual(filled);
   expect(prefillExteriorDriver(filled, { sd_cm2: 500 })).toEqual(filled);
   expect(exteriorTransducerError({ ...filled, sd_m2: -1 })).toContain('positive Sd');
-  expect(exteriorTransducerError({ ...filled, version: 1 })).toContain('Unsupported');
+  expect(exteriorTransducerError({ ...filled, version: 1 })).toBe('WG cannot read this driver’s saved values. Clear the driver and enter it again.');
   expect(parseExteriorTransducer({ ...filled, sd_m2: 'bad' }).version).toBe(0);
   expect(normalizeExteriorOptions({ ...filled, sd_m2: undefined }).version).toBe(1);
   expect(prefillExteriorDriver({ version: 1, motion_axis: [0, 0, 1] }, { sd_cm2: 55, re_ohm: 6,

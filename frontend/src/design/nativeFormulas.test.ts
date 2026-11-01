@@ -127,7 +127,7 @@ it.each([
 });
 
 it.each(NATIVE_FAMILIES)('explains native domain and CAD limits for %s', (formula) => {
-  for (const symmetry of ['half_xz', 'half_yz', 'quarter']) expect(nativeSymmetryLimitation(formula, symmetry)).toContain('Select Full');
+  for (const symmetry of ['half_xz', 'half_yz', 'quarter']) expect(nativeSymmetryLimitation(formula, symmetry)).toBe(`${formula} needs the full model. Set Solve domain to Full.`);
   for (const symmetry of ['auto', 'full']) expect(nativeSymmetryLimitation(formula, symmetry)).toBeNull();
   expect(nativeCadLimitation(formula)).toContain('Export STEP or STL');
 });
