@@ -3,7 +3,7 @@ import { usePrepareEngine } from '../jobs/usePrepareEngine';
 import { runtimeSetupText } from '../jobs/runtimeSetup';
 import { heldEngineSolveJob, useHeldSolvePreparation } from '../jobs/useHeldSolvePreparation';
 import { messageBlocker, type SolveReadinessState } from '../jobs/solveReadiness';
-import { currentModel, useCurrentModel } from '../model/currentModel';
+import { currentModel, showsRetainedMesh, useCurrentModel } from '../model/currentModel';
 import { importedModelBlocker, importedModelId, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
 import { fileMeshSetup, fileMeshSubmission, useMeshImportStore } from '../stores/meshImport';
@@ -424,7 +424,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // Mode owns solve intent. The viewport CAD slot is evidence for the mismatch
   // guard only; an empty slot must still route to the imported blocker so CAD
   // mode can truthfully say that an ingest is required.
-  const fileGeometryActive = model.kind === 'file' || model.kind === 'assembly';
+  const fileGeometryActive = showsRetainedMesh(model.kind);
   const cadGeometryActive = model.kind === 'cad';
   const crossoverDraftError = useCrossoverDraftError();
   useMeshImportStore();

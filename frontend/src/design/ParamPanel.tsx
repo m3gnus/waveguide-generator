@@ -1381,7 +1381,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   if (workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'assembly') return <SolveOptionsStoreProvider mode="cad">
     <div className={`param-panel${embedded ? '' : ' panel-scroll'}`} data-param-tab={tab}>
       {tab === 'simulation' ? <CadSimulationSections searching={false} matches={() => true}/>
-        : <p className="section-note">This run uses its retained assembly mesh. Open the saved design to edit Sources and baffle.</p>}
+        : <p className="section-note">This run shows its retained assembly mesh. To change the assembly, return to Parametric with its design open.</p>}
     </div>
   </SolveOptionsStoreProvider>;
 

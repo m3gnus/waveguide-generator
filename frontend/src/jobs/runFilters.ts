@@ -1,16 +1,16 @@
 import { create } from 'zustand';
 import type { JobItem } from '../api/jobsSocket';
 import { jobDesignFingerprint } from '../results/runCoherence';
-import { runSourceForJob } from './exportNaming';
+import { runOrigin, type RunOrigin } from './runIdentity';
 
 export const useRunFilters = create<{
-  query: string; source: 'all' | ReturnType<typeof runSourceForJob>;
+  query: string; source: 'all' | RunOrigin;
   project: string; model: string;
 }>(() => ({ query: '', source: 'all', project: '', model: '' }));
 
 /** A missing state hash never asserts that unrelated ingestions share a model. */
 export function runModelKey(job: JobItem): string {
-  const source = runSourceForJob(job);
+  const source = runOrigin(job);
   if (source === 'parametric') {
     let fingerprint: string | null = null;
     try { fingerprint = jobDesignFingerprint(job); }

@@ -2,8 +2,7 @@ import { isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { useRunFilters, runModelKey } from '../jobs/runFilters';
-import { runSourceForJob } from '../jobs/exportNaming';
-import { runDocumentName, runSourceLabel, runSourceText } from '../jobs/runIdentity';
+import { runDocumentName, runOrigin, runSourceLabel, runSourceText } from '../jobs/runIdentity';
 import { RunModelDetails } from './RunModelDetails';
 import { retryBlockedExport } from '../jobs/autoExportOwner';
 import { useRunExportStore } from '../stores/runExports';
@@ -153,7 +152,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   const rating = job.rating ?? 0;
   const [editing, setEditing] = useState(false);
   const cadOperationId = cadJobOperationId(job);
-  const fileImport = job.config_summary.import_origin === 'mesh-file';
+  const fileImport = runOrigin(job) === 'mesh-file';
   const cadInputs = !fileImport && Boolean(cadOperationId || job.cad_state || job.cad_setup || job.cad_source || job.config_summary.geometry_type === 'imported'
     || job.config_summary.imported_geometry);
   const [titleDraft, setTitleDraft] = useState(job.label ?? '');
@@ -349,7 +348,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   const preferenceJobs = useMemo(() => applyJobPreferences(runJobs, preferences.jobSort, preferences.minRating), [runJobs, preferences.jobSort, preferences.minRating]);
   const visibleJobs = useMemo(() => {
     const wanted = query.trim().toLocaleLowerCase();
-    const scoped = preferenceJobs.filter(job => (source === 'all' || runSourceForJob(job) === source)
+    const scoped = preferenceJobs.filter(job => (source === 'all' || runOrigin(job) === source)
       && (!project || job.cad_source?.lineage_id === project) && (!model || runModelKey(job) === model));
     if (!wanted) return scoped;
     const numberQuery = wanted.replace(/^#/, '');
@@ -367,7 +366,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       cad.document_name ?? cad.archive_stem ?? 'CAD project');
   }
   if (project && !projects.has(project)) projects.set(project, 'Current project');
-  const models = new Map(runJobs.filter(job => (source === 'all' || runSourceForJob(job) === source)
+  const models = new Map(runJobs.filter(job => (source === 'all' || runOrigin(job) === source)
     && (!project || job.cad_source?.lineage_id === project)).map(job => [runModelKey(job),
       `${job.cad_source?.document_name ?? job.label ?? 'Model'} · …${runModelKey(job).slice(-10)}`]));
   // Clear failed removes failures only: a kept CAD request stored as an error
@@ -455,7 +454,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     <div className="jobs-filter"><Icon name="search"/><input aria-label="Filter runs" placeholder="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)}/><button className={`jobs-kept-toggle${preferences.minRating > 0 ? ' on' : ''}`} aria-label="Show kept runs only" aria-pressed={preferences.minRating > 0} title="Show kept runs only" onClick={() => preferencesStore.update({ minRating: preferences.minRating > 0 ? 0 : lastMinimumRating.current })}>★</button></div>
     <div className="jobs-scope-filter">
       <select aria-label="Run source" value={source} onChange={e => useRunFilters.setState({ source: e.target.value as typeof source, model: '' })}>
-        <option value="all">All sources</option><option value="parametric">Parametric</option><option value="mesh-file">Mesh files</option><option value="cadlink">CAD Link</option>
+        <option value="all">All sources</option><option value="parametric">Parametric</option><option value="mesh-file">Mesh files</option><option value="cadlink">CAD Link</option><option value="assembly">Assembly</option>
       </select>
       <select aria-label="Run project" value={project} onChange={e => useRunFilters.setState({ project: e.target.value, model: '' })}>
         <option value="">All projects</option>{[...projects].map(([id, name]) => <option key={id} value={id}>{name} · …{id.slice(-6)}</option>)}

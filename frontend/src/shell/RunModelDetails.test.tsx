@@ -171,3 +171,10 @@ it('uses a legacy mesh run’s own model when no archive key was recorded', asyn
   expect(body.key).toBe('model:mesh-file:horn');
   expect(body.name).toBe('Mesh horn');
 });
+
+it('says nothing of Fusion for a design assembly run', async () => {
+  const job = run();
+  await act(async () => root.render(<RunModelDetails job={{ ...job, config_summary: { ...job.config_summary, geometry_type: 'imported', import_origin: 'design-assembly' } }}/>));
+  expect(host.textContent).toContain('Assembly');
+  expect(host.textContent).not.toMatch(/Fusion|Document|CAD Link/);
+});

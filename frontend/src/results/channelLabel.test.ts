@@ -54,3 +54,9 @@ it('names group branches from saved labels and roles instead of opaque IDs', () 
   expect(selectResultChannels('job', 'Run', grouped, 'combined', 'mesh-file').map(entry => entry.channelId))
     .toEqual(['combined', 'author-left', 'author-right']);
 });
+
+it('numbers same-band design assembly channels instead of showing their identities', () => {
+  const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
+  const result = { channels: Object.fromEntries([1, 2].map(n => [id(n), { metadata: { role: 'LF' } }])) } as unknown as ResultPayload;
+  expect(channelLabel(result, id(2), 'design-assembly')).toBe('LF 2');
+});

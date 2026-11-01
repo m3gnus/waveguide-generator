@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { currentModel, type CurrentModel } from '../model/currentModel';
+import { currentModel, showsRetainedMesh, type CurrentModel } from '../model/currentModel';
 import { isHeldCadJob } from './cadSolve';
 import { jobsSocket } from '../api/jobsSocket';
 import { previewSocket } from '../api/previewSocket';
@@ -53,7 +53,7 @@ function solveInputs() {
   // Reuse the submission builders: setup identity includes retained physics,
   // not just the subset of settings the current controls can express.
   try {
-    setup = model.kind === 'file' || model.kind === 'assembly' ? fileMeshSetup()
+    setup = showsRetainedMesh(model.kind) ? fileMeshSetup()
       : model.kind === 'cad' ? buildImportedSubmission(useCadReturnStore.getState()) : null;
   } catch { /* An incomplete edit is also caught by the control snapshot/edit signal. */ }
   const frame = model.kind === 'cad' && model.ingestId ? useCadSolverFrameStore.getState().frames[model.ingestId] : null;

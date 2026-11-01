@@ -1,7 +1,6 @@
 import { MoveRunsButton } from './MoveRunsDialog';
 import { useEffect, useState } from 'react';
-import { runDocumentName, runSourceLabel } from '../jobs/runIdentity';
-import { runSourceForJob } from '../jobs/exportNaming';
+import { runDocumentName, runOrigin, runSourceLabel } from '../jobs/runIdentity';
 import { useDocumentStore } from '../stores/document';
 import { modelForRun } from '../model/currentModel';
 import { useDeveloperDetails } from '../prefs/preferences';
@@ -63,6 +62,7 @@ export function RunModelDetails({ job }: { job: JobItem }) {
       : 'Fusion imports this file as a new document; it does not reopen the cloud document.'}</p>
     {currentAction?.message && <p role={currentAction.error ? 'alert' : 'status'}>{currentAction.message}</p>}
   </>;
+  const origin = runOrigin(job);
   const document = runDocumentName(job) || current?.document?.documentName || 'Not recorded';
   const modelHash = job.cad_source?.solve_model_sha256 || job.cad_source?.transformed_geometry_hash
     || hash || job.cad_source?.manifest_sha256 || job.cad_state?.snapshot?.manifest_sha256;
@@ -74,7 +74,7 @@ export function RunModelDetails({ job }: { job: JobItem }) {
       {job.archive_folder && <><dt>Folder:</dt><dd>{job.archive_folder}/
         {currentName && job.design_name && currentName !== job.design_name && <> (design now <em>{currentName}</em>)</>}
       </dd></>}
-      <dt>Document</dt><dd>{document}</dd>
+      {origin === 'cadlink' && <><dt>Document</dt><dd>{document}</dd></>}
       <dt>Source</dt><dd>{runSourceLabel(job)}</dd>
       {/* Ids and hashes are for developers. */}
       {developer && <>
@@ -82,7 +82,7 @@ export function RunModelDetails({ job }: { job: JobItem }) {
         <dt>Model hash</dt><dd>{modelHash || 'Not recorded'}</dd>
       </>}
     </dl>
-    {runSourceForJob(job) !== 'mesh-file' && attachment}
+    {origin === 'cadlink' && attachment}
     <MoveRunsButton target={{ key: moveKey, name: moveName }}>
       {!job.archive_key ? `From an earlier version · Move into ${moveName}…` : 'Move earlier runs…'}
     </MoveRunsButton>
