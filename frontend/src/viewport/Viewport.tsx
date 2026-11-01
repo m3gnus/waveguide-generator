@@ -70,7 +70,7 @@ import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
 import { DeveloperDetails } from '../shell/DeveloperDetails';
-import { previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
+import { previewBadge, previewErrorKey, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 import { markParametricSolvedDomain, quadrantsForSolveMode, solvedDomainLabel, type DisplayQuadrants } from './symmetryScene';
 import { ROLE_MATERIAL_FAMILY, SOURCE_ROLES } from './types';
 import type { DisplayMode, SourceRole, ViewportTheme } from './types';
@@ -692,7 +692,7 @@ export function Viewport() {
   const connectionInterrupted = preferences.liveUpdate && preview.connection !== 'connected';
   const badge = previewBadge(preferences.liveUpdate, preview.connection, preview.error, preview.stale);
   const previewError = preview.error ? previewErrorMessage(preview.error, preview.errorRevision, designRevision) : null;
-  const showPreviewError = workspaceMode === 'parametric' && previewError !== null && dismissedPreviewError !== preview.error;
+  const showPreviewError = workspaceMode === 'parametric' && previewError !== null && dismissedPreviewError !== previewErrorKey(preview);
   // Geometry that builds but is not what was asked for. An unreachable guiding
   // curve is the motivating case: the coverage solver clamps, the mouth quietly
   // leaves the guide shape, and from the rail it looks like the parameters
@@ -1102,7 +1102,7 @@ export function Viewport() {
           disabled={(showPreviewError || showStalledPreview) && refreshRequestedAt !== null
             || showSolverMeshNotice && solverMeshState.building || showCadSolverError && cadSolverLoading}
           onClick={refreshNotice}>Refresh</button>}
-        {showPreviewError && <button type="button" className="icon-button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(preview.error)}><Icon name="close"/></button>}</>}>
+        {showPreviewError && <button type="button" className="icon-button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(previewErrorKey(preview))}><Icon name="close"/></button>}</>}>
         <div className="viewport-notice-messages">
           {showSolverMeshNotice && <>
             <span>{solverMeshState.error ? 'Mesh build failed' : 'Mesh out of date'}</span>

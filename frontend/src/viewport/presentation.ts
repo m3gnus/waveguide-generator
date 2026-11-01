@@ -33,6 +33,11 @@ export function previewErrorMessage(
   return `${attempt}: ${error.replace(/\.$/, '')}. Displayed geometry is not the current design.`;
 }
 
+/** What a dismissal names: the failure itself, since different ones can share plain words. */
+export function previewErrorKey(preview: { error: string | null; errorDetail?: string | null }): string | null {
+  return preview.errorDetail ?? preview.error;
+}
+
 /** Why the viewport is not showing the current design, in one plain sentence. */
 export function staleReason(
   liveUpdate: boolean,
