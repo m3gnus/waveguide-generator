@@ -1,6 +1,6 @@
 # Dependency compatibility
 
-The mesher pin `866f1674` declares version 0.2.8 and includes later development
+The mesher pin `746c6b1c` declares version 0.2.8 and includes later development
 changes. It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
 in `general_horn.radii_at_z`.
 `mesh_sizing.py` is unchanged, so CAD Link retains its earlier vendoring provenance.
@@ -82,6 +82,17 @@ RearShape 1 rears and the corrected import defaults. STEP export of lip or
 RearShape 3 imports is refused by name. Native rear construction is unchanged.
 See [Native source contour ingestion](architecture/NATIVE-SOURCE-CONTOURS.md)
 and [Source contour and assembly editors](architecture/source-contour-editor.md).
+
+Current v2 ATH imports also retain R-OSSE slot translation, ten authored throat
+extension segments before the complete body map, and sampled rectangular
+no-shrink boundary expansion. Saved v1 and native configurations retain their
+preceding construction. Consumers that replace angular, axial or corner density
+must first call the native `retain_ath_import_construction()` on the authored
+config and carry its transient construction through sampling. The coupled WG
+consumer correction shares that handoff across exports, STEP/STL planning,
+preview cache identity and symmetry probes; the data never enters saved designs
+or geometry stamps. The strong-expansion OCC triangulation failure and existing
+R-OSSE axial-table residuals at LengthSegments 12/30 remain separate limitations.
 
 The Metal pin `50fd3d3` supplies a BEAT-compatible worker using the existing
 request compiler and event/result decoder. WG routes its qualified single-source,
