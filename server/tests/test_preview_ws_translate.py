@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from server.design.text_import import TEXT_IMPORT_VERSION
+
 import asyncio
 import json
 import math
@@ -455,7 +457,7 @@ def test_tritonia_reference_import_translates_to_mesher_config() -> None:
     design = DesignConfig.model_validate(opened["design"])
 
     config = design_to_mesher_config(design)
-    assert config["_textImportVersion"] == "ath-2026-09a-v2"
+    assert config["_textImportVersion"] == TEXT_IMPORT_VERSION
     production = resolve_geometry(config).geometry
     outer = _restored_outer_throat_points(
         production.inner_points, production.outer_points,

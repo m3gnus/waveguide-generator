@@ -1,8 +1,14 @@
+import { readFileSync } from 'node:fs';
+import { failureWords, PLAIN_REQUEST_FAILURE } from './httpError';
 import { describe, expect, it, vi } from 'vitest';
 import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, openDesignText, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { setAnchorAngle } from '../design/customProfileEdit';
 import { expectNoJargon } from '../testing/expectNoJargon';
+
+const athRefusalCases: { name: string; text: string; message: string }[] = JSON.parse(
+  new TextDecoder().decode(readFileSync('../shared/ath-refusal-fixtures.json')),
+);
 
 async function untouchedRoundTrip(original: Record<string, unknown>): Promise<Record<string, unknown>> {
   let saved: Record<string, unknown> | undefined;
@@ -715,4 +721,36 @@ describe('native Open and browser fallback', () => {
     expect(await chooseDesignFile(vi.fn().mockRejectedValue(new Error('offline')))).toBeNull();
     expect(await chooseDesignFile(vi.fn(async () => new Response('not json')))).toBeNull();
   });
+});
+
+// Both sides assert the same response contract; these inputs are the review's
+// exact files, not a second implementation of the ATH wording rules.
+describe('ATH refusal display', () => {
+  it.each(athRefusalCases)('$name names the source setting through the final catch', async ({ text, message }) => {
+    const fetcher = vi.fn(async () => Response.json({
+      detail: { type: 'parse_error', message },
+    }, { status: 422 }));
+    let shown = '';
+    try {
+      await openDesignText(text, fetcher);
+    } catch (error) {
+      shown = failureWords(error);
+    }
+    expect(shown).toBe(message);
+    expect(fetcher).toHaveBeenCalledWith('/api/design/open', expect.objectContaining({ body: text }));
+  });
+});
+
+
+it('keeps unquoted internal names private even on a design parse refusal', async () => {
+  const fetcher = vi.fn(async () => Response.json({
+    detail: { type: 'parse_error', message: 'Source.InternalState cannot use mesh.private_value.' },
+  }, { status: 422 }));
+  let shown = '';
+  try {
+    await openDesignText('OSSE = {\nL=80\n}\n', fetcher);
+  } catch (error) {
+    shown = failureWords(error);
+  }
+  expect(shown).toBe(PLAIN_REQUEST_FAILURE);
 });

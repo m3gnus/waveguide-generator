@@ -6,6 +6,9 @@ Mouth radii quoted below are ATH's own ``profiles`` output for those configs.
 """
 from __future__ import annotations
 
+from server.design.text_import import TEXT_IMPORT_VERSION, ath_import_failure
+from server.design.schema import DesignConfig
+
 import asyncio
 from pathlib import Path
 
@@ -47,7 +50,6 @@ def mouth_radius(text: str) -> float:
 
 
 UNSUPPORTED = {
-    "Scale.Z": BASE + "Scale.Z = 0.5\n",
     "Horn.Part:1": BASE + "Horn.Part:1 = {\n L = 50\n}\n",
     "Throat.Ext.Ctrl": BASE + "Throat.Ext.Ctrl = 1\n",
     "Rollback": BASE + "Rollback.StartAt = 0.8\nRollback.Angle = 180\n",
@@ -69,11 +71,11 @@ def test_unsupported_ath_items_are_refused_by_name_without_stretch(key: str) -> 
     assert key.split(":")[0] in str(caught.value)
 
 
-def test_the_scale_z_fixture_is_refused_through_the_open_endpoint() -> None:
-    with pytest.raises(HTTPException) as caught:
-        asyncio.run(open_design(fixture("scalez")))
-    assert caught.value.status_code == 422
-    assert "Scale.Z" in caught.value.detail["message"]
+def test_the_scale_z_fixture_opens_with_the_axial_override() -> None:
+    opened = asyncio.run(open_design(fixture("scalez")))
+    design = DesignConfig.model_validate(opened["design"])
+    assert design.root.text_import_version == TEXT_IMPORT_VERSION
+    assert design.root.ath_axial_scale == 0.5
 
 
 def test_parked_items_do_not_refuse() -> None:
@@ -240,7 +242,6 @@ def test_no_op_values_of_unsupported_items_still_import(extra: str) -> None:
     "extra, key",
     [
         ("Mesh.RearShape = 1+1\n", "Mesh.RearShape"),
-        ("Scale.Z = 0.5+0.5+1\n", "Scale.Z"),
         ("Scale.Z = foo\n", "Scale.Z"),
         ("Mesh.Roundover = 2*5\n", "Mesh.Roundover"),
         ("HornGeometry = 1+1\n", "HornGeometry"),
@@ -248,15 +249,16 @@ def test_no_op_values_of_unsupported_items_still_import(extra: str) -> None:
     ],
 )
 def test_expression_values_are_evaluated_before_the_check(extra: str, key: str) -> None:
-    with pytest.raises(TextConfigError, match="unsupported item") as caught:
+    with pytest.raises(TextConfigError, match="Scale.Z" if key == "Scale.Z" else "unsupported item") as caught:
         parse(BASE + extra)
     assert key in str(caught.value)
 
 
 def test_a_constant_unit_scale_z_imports_as_the_horn_without_it() -> None:
-    plain = parse(BASE).design
+    saved_v2 = "; Waveguide Generator geometry-interpretation: ath-2026-09a-v2\n"
+    plain = parse(saved_v2 + BASE).design
     for value in ("1", "0.5+0.5", "cos(0)"):
-        design = parse(BASE + f"Scale.Z = {value}\n").design
+        design = parse(saved_v2 + BASE + f"Scale.Z = {value}\n").design
         assert design.extra_keys == {"Scale.Z": value}
         assert design_to_mesher_config(design) == design_to_mesher_config(plain)
 
@@ -285,16 +287,25 @@ ROSSE_BASE = (BASE.replace("OSSE = {\n L = 120\n", "R-OSSE = {\n R = 150\n b = 0
     ],
 )
 def test_azimuth_dependent_no_op_values_are_refused_by_name(text: str, key: str) -> None:
-    with pytest.raises(TextConfigError, match="unsupported item") as caught:
+    with pytest.raises(TextConfigError, match=key) as caught:
         parse(text)
     assert key in str(caught.value)
-    assert "refers to the azimuth p" in str(caught.value)
+    if key == "Scale.Z":
+        assert "“Scale.Z” must be a positive finite constant" in str(caught.value)
+        assert "Change or remove" in str(caught.value)
+    elif key == "OSSE.Scale.Z":
+        from hornlab_mesher.config_parser import ConfigError, parse_text_config
+        with pytest.raises(ConfigError) as native:
+            parse_text_config(text)
+        assert str(caught.value) == ath_import_failure(native.value)
+    else:
+        assert "refers to the azimuth p" in str(caught.value)
 
 
-def test_an_azimuth_dependent_unread_rotation_is_not_taken_as_zero() -> None:
-    assert parse(ROSSE_BASE + "Rot = 0\n").dialect == "ath"
-    with pytest.raises(TextConfigError, match="unsupported item.*Rot"):
-        parse(ROSSE_BASE + "Rot = sin(p)\n")
+def test_an_azimuth_dependent_rosse_rotation_is_applied() -> None:
+    design = parse(ROSSE_BASE + "Rot = sin(p)\n").design
+    assert design.root.rotation.raw == "sin(p)"
+    assert design_to_mesher_config(design)["profile"]["rot"] == "sin(p)"
 
 
 @pytest.mark.parametrize("key", sorted(AZIMUTH_DEPENDENT_NOOPS))
@@ -402,7 +413,8 @@ def test_no_ath_corpus_file_is_refused_by_the_integrity_checks(path: Path) -> No
         parse(source)
         return
     # Every recognised fresh ATH design must agree with the mesher, including
-    # the exact refusal message. ConfigError must never escape WG's API.
+    # refusal; native detail is logged and WG supplies display guidance.
+    # ConfigError must never escape WG's API.
     from hornlab_mesher.config_parser import ConfigError, parse_text_config
 
     try:
@@ -410,9 +422,9 @@ def test_no_ath_corpus_file_is_refused_by_the_integrity_checks(path: Path) -> No
     except ConfigError as reference:
         with pytest.raises(TextConfigError) as actual:
             parse(source)
-        assert str(actual.value) == str(reference)
+        assert str(actual.value) == ath_import_failure(reference)
     else:
-        assert parse(source).design.root.text_import_version == "ath-2026-09a-v2"
+        assert parse(source).design.root.text_import_version == TEXT_IMPORT_VERSION
 
 
 @pytest.mark.parametrize("key", ["ABEC.SimType", "Simulation.SimType"])
@@ -450,11 +462,13 @@ def test_unrelated_configs_keep_legacy_refusal_without_mesher_validation(monkeyp
 
 
 @pytest.mark.parametrize("stage", ["text", "geometry"])
-def test_fresh_mesher_config_error_is_wrapped_without_changing_message(monkeypatch, stage: str) -> None:
+def test_fresh_mesher_config_error_keeps_native_cause_and_displays_remedy(monkeypatch, stage: str) -> None:
     from hornlab_mesher import config_builder, config_parser
 
+    reason = config_parser.ConfigError("fresh import refused")
+
     def refuse(text):
-        raise config_parser.ConfigError("fresh import refused")
+        raise reason
 
     if stage == "text":
         monkeypatch.setattr(config_parser, "parse_text_config", refuse)
@@ -462,8 +476,11 @@ def test_fresh_mesher_config_error_is_wrapped_without_changing_message(monkeypat
         monkeypatch.setattr(config_builder, "build_geometry_params", refuse)
     with pytest.raises(TextConfigError) as actual:
         parse(BASE)
-    assert str(actual.value) == "fresh import refused"
-    assert isinstance(actual.value.__cause__, config_parser.ConfigError)
+    assert str(actual.value) == ath_import_failure(reason)
+    cause = actual.value
+    while cause.__cause__ is not None:
+        cause = cause.__cause__
+    assert cause is reason
     assert parse(saved_v1(BASE)) is not None
     assert parse("; Parameter config\n" + BASE) is not None
 
@@ -566,8 +583,16 @@ def test_every_gap_study_key_has_transport_or_a_named_refusal(family: str, base:
     if key == "Mesh.Enclosure.Dim":
         # Dim is read through the design mesher's contract (test_ath_lfsource.py):
         # four positive distances, or this named refusal.
-        with pytest.raises(TextConfigError, match="Mesh.Enclosure.Dim must contain four"):
+        with pytest.raises(TextConfigError, match="“Mesh.Enclosure.Dim” must contain four"):
             parse(base + GAP_STUDY_KEYS[key])
+        return
+    if key in {"Scale.Z", "Mesh.ThroatExtSegments"}:
+        design = parse(base + GAP_STUDY_KEYS[key]).design
+        config = design_to_mesher_config(design)
+        if key == "Scale.Z":
+            assert config["athAxialScale"] == 2
+        else:
+            assert config["mesh"]["athThroatExtSegments"] == 3
         return
     if key == "Source.Contours":
         from server.tests._ath_contract import assert_v2_refusal
@@ -576,13 +601,12 @@ def test_every_gap_study_key_has_transport_or_a_named_refusal(family: str, base:
     # These three controls now have qualified v2 transport. Check their exact
     # payloads here; the unsupported family composition still refuses by name.
     if key in {"NAC", "Mesh.RearShape", "Mesh.Roundover"}:
-        from server.preview.translate import design_to_mesher_config
         if key == "Mesh.Roundover" and family == "R-OSSE":
-            with pytest.raises(TextConfigError, match="Mesh.Roundover with R-OSSE"):
+            with pytest.raises(TextConfigError, match="“Mesh.Roundover” must be used with a supported horn shape"):
                 parse(base + GAP_STUDY_KEYS[key])
             return
         config = design_to_mesher_config(parse(base + GAP_STUDY_KEYS[key]).design)
-        assert config["_textImportVersion"] == "ath-2026-09a-v2"
+        assert config["_textImportVersion"] == TEXT_IMPORT_VERSION
         if key == "NAC":
             assert config["_athNacPresent"] is True
         elif key == "Mesh.RearShape":
@@ -597,18 +621,11 @@ def test_every_gap_study_key_has_transport_or_a_named_refusal(family: str, base:
     assert key.split(".")[-1] in str(caught.value) or key in str(caught.value)
 
 
-@pytest.mark.parametrize("value", ["0", "0*1", "2-2", "sin(0)"])
-def test_rot_beside_r_osse_is_refused_unless_zero(value: str) -> None:
-    with pytest.raises(TextConfigError, match="Rot"):
-        parse(RBASE + "Rot = 10\n")
-    assert parse(RBASE + f"Rot = {value}\n").dialect == "ath"
-    assert parse(BASE + "Rot = 10\n").dialect == "ath"  # OSSE reads it
-
-
-@pytest.mark.parametrize("value", ["1+1", "foo", "1/0", "1e309"])
-def test_nonzero_or_invalid_unread_expressions_are_refused_by_name(value: str) -> None:
-    with pytest.raises(TextConfigError, match="Rot"):
-        parse(RBASE + f"Rot = {value}\n")
+@pytest.mark.parametrize("value", ["0", "0*1", "2-2", "sin(0)", "10", "1+1"])
+def test_rot_beside_r_osse_reaches_the_mesher(value: str) -> None:
+    design = parse(RBASE + f"Rot = {value}\n").design
+    assert design.root.rotation.raw == value
+    assert design_to_mesher_config(design)["profile"]["rot"] == value
 
 
 @pytest.mark.parametrize("key", ["Mesh.Algorithm", "Mesh.Binary", "Mesh.MshFileVersion", "Mesh.Wireframe"])

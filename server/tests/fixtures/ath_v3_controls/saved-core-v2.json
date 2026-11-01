@@ -1,0 +1,192 @@
+{
+  "formula": "OSSE",
+  "text_import_version": "ath-2026-09a-v2",
+  "ath_axial_sampling_rule": "ath-v2025-12+",
+  "ath_nac_present": true,
+  "ath_nac": 10,
+  "scale": null,
+  "throat_ext_angle": null,
+  "throat_ext_length": null,
+  "slot_length": null,
+  "length_mode": "total",
+  "coverage_mode": null,
+  "morph": {
+    "target_shape": {
+      "value": 1.0,
+      "raw": "1"
+    },
+    "target_exponent": null,
+    "target_width": null,
+    "target_height": null,
+    "corner_radius": {
+      "value": 16.5,
+      "raw": "16.5"
+    },
+    "rate": {
+      "value": 3.0,
+      "raw": "3.0"
+    },
+    "fixed_part": {
+      "value": 0.0,
+      "raw": "0.0"
+    },
+    "allow_shrinkage": null
+  },
+  "mesh": {
+    "ath_roundover": {
+      "radius": 42.0,
+      "segments": 6
+    },
+    "ath_rear_shape": 3,
+    "ath_rear_front_offset": 40.0,
+    "ath_rear_step": 50.0,
+    "angular_segments": {
+      "value": 100.0,
+      "raw": "100"
+    },
+    "corner_segments": {
+      "value": 4.0,
+      "raw": "4"
+    },
+    "throat_segments": null,
+    "length_segments": {
+      "value": 20.0,
+      "raw": "20"
+    },
+    "throat_resolution": {
+      "value": 6.0,
+      "raw": "6"
+    },
+    "mouth_resolution": {
+      "value": 11.0,
+      "raw": "11"
+    },
+    "throat_slice_density": null,
+    "sampling_mode": null,
+    "z_map_points": null,
+    "vertical_offset": null,
+    "quadrants": {
+      "value": 1.0,
+      "raw": "1"
+    },
+    "wall_thickness": {
+      "value": 15.0,
+      "raw": "15"
+    },
+    "rear_resolution": {
+      "value": 25.0,
+      "raw": "25"
+    },
+    "aperture_resolution_scale": null,
+    "max_triangles": null,
+    "allow_large_mesh": null,
+    "max_edge": null
+  },
+  "enclosure": null,
+  "source": {
+    "shape": null,
+    "radius": null,
+    "curvature": null,
+    "velocity": null,
+    "contours": null,
+    "velocity_convention": null
+  },
+  "simulation": {
+    "f1": null,
+    "f2": null,
+    "num_frequencies": null,
+    "sim_type": "freestanding",
+    "solver_mode": null
+  },
+  "output": {
+    "stl": {
+      "value": 1.0,
+      "raw": "1"
+    },
+    "msh": {
+      "value": 1.0,
+      "raw": "1"
+    }
+  },
+  "extra_keys": {
+    "Mesh.InterfaceResolution": "8",
+    "Mesh.SubdomainSlices": "",
+    "Output.ABECProject": "1"
+  },
+  "extra_blocks": {
+    "GridExport:g": {
+      "items": {
+        "ExportProfiles": "1",
+        "ExportSlices": "1",
+        "Scale": "1",
+        "Delimiter": "\"",
+        "FileExtension": "\"csv\"",
+        "SeparateFiles": "0"
+      },
+      "lines": [],
+      "comments": [
+        ";\""
+      ],
+      "entries": [
+        "ExportProfiles = 1",
+        "ExportSlices = 1",
+        "Scale = 1",
+        "Delimiter = \";\"",
+        "FileExtension = \"csv\"",
+        "SeparateFiles = 0"
+      ]
+    }
+  },
+  "s1": 1.14,
+  "s2": 0.025,
+  "L": {
+    "value": 260.0,
+    "raw": "260"
+  },
+  "a": {
+    "value": null,
+    "raw": "5 + 35*sf(4,12,15,16,1,0.618,p) - 15*cos(p)^10"
+  },
+  "a0": {
+    "value": 1.2,
+    "raw": "1.2"
+  },
+  "r0": {
+    "value": 25.0,
+    "raw": "25.0"
+  },
+  "k": null,
+  "s": {
+    "value": null,
+    "raw": "0.6 + 0.23*cos(p)^2"
+  },
+  "n": {
+    "value": null,
+    "raw": "6.0 + 1.5*cos(p)^2"
+  },
+  "q": {
+    "value": 0.996,
+    "raw": "0.996"
+  },
+  "h": null,
+  "throat_profile": null,
+  "rotation": null,
+  "guiding_curve": {
+    "curve_type": null,
+    "distance": null,
+    "width": null,
+    "aspect_ratio": null,
+    "superellipse_n": null,
+    "superformula": null,
+    "sf_a": null,
+    "sf_b": null,
+    "sf_m1": null,
+    "sf_m2": null,
+    "sf_n1": null,
+    "sf_n2": null,
+    "sf_n3": null,
+    "rotation": null
+  },
+  "circ_arc_radius": null,
+  "circ_arc_term_angle": null
+}

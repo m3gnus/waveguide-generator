@@ -20,7 +20,7 @@ SMALL = 'OSSE = {\nL=80\nr0=8\na=35\na0=5\ns=.5\n}\nABEC.SimType=2\nMesh.Angular
 
 def test_unedited_core_export_is_byte_identical_to_pre_edit_controls_export():
     # Digest captured from the existing serializer before the UI changes.
-    text = serialize(parse(CORE.read_text()).design)
+    text = serialize(DesignConfig.model_validate_json((CORE.parent.parent / 'ath_v3_controls/saved-core-v2.json').read_text()))
     assert sha256(text.encode()).hexdigest() == '3ed4df4ec04c7a57961921a720fcf8d7d441b8f482ddfd958640356aba400006'
 
 

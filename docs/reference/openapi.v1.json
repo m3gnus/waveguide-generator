@@ -6112,6 +6112,18 @@
             ],
             "title": "Ath Axial Sampling Rule"
           },
+          "ath_axial_scale": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Axial Scale"
+          },
           "ath_nac": {
             "anyOf": [
               {
@@ -6283,7 +6295,8 @@
               {
                 "enum": [
                   "ath-2026-08c-v1",
-                  "ath-2026-09a-v2"
+                  "ath-2026-09a-v2",
+                  "ath-2026-09a-v3"
                 ],
                 "type": "string"
               },
@@ -6929,6 +6942,18 @@
             ],
             "title": "Ath Axial Sampling Rule"
           },
+          "ath_axial_scale": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Axial Scale"
+          },
           "ath_nac": {
             "anyOf": [
               {
@@ -7251,7 +7276,8 @@
               {
                 "enum": [
                   "ath-2026-08c-v1",
-                  "ath-2026-09a-v2"
+                  "ath-2026-09a-v2",
+                  "ath-2026-09a-v3"
                 ],
                 "type": "string"
               },
@@ -9318,6 +9344,18 @@
             ],
             "title": "Ath Axial Sampling Rule"
           },
+          "ath_axial_scale": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Axial Scale"
+          },
           "ath_nac": {
             "anyOf": [
               {
@@ -9457,7 +9495,8 @@
               {
                 "enum": [
                   "ath-2026-08c-v1",
-                  "ath-2026-09a-v2"
+                  "ath-2026-09a-v2",
+                  "ath-2026-09a-v3"
                 ],
                 "type": "string"
               },
@@ -9641,6 +9680,19 @@
                 "type": "null"
               }
             ]
+          },
+          "ath_throat_ext_segments": {
+            "anyOf": [
+              {
+                "maximum": 4096.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Throat Ext Segments"
           },
           "corner_segments": {
             "anyOf": [
@@ -10526,6 +10578,18 @@
             ],
             "title": "Ath Axial Sampling Rule"
           },
+          "ath_axial_scale": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Axial Scale"
+          },
           "ath_nac": {
             "anyOf": [
               {
@@ -10701,7 +10765,8 @@
               {
                 "enum": [
                   "ath-2026-08c-v1",
-                  "ath-2026-09a-v2"
+                  "ath-2026-09a-v2",
+                  "ath-2026-09a-v3"
                 ],
                 "type": "string"
               },
@@ -10820,6 +10885,18 @@
               }
             ],
             "title": "Ath Axial Sampling Rule"
+          },
+          "ath_axial_scale": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Axial Scale"
           },
           "ath_nac": {
             "anyOf": [
@@ -11060,7 +11137,8 @@
               {
                 "enum": [
                   "ath-2026-08c-v1",
-                  "ath-2026-09a-v2"
+                  "ath-2026-09a-v2",
+                  "ath-2026-09a-v3"
                 ],
                 "type": "string"
               },
@@ -12198,6 +12276,18 @@
             ],
             "title": "Ath Axial Sampling Rule"
           },
+          "ath_axial_scale": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Axial Scale"
+          },
           "ath_nac": {
             "anyOf": [
               {
@@ -12347,6 +12437,16 @@
               }
             ]
           },
+          "rotation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "s1": {
             "anyOf": [
               {
@@ -12404,7 +12504,8 @@
               {
                 "enum": [
                   "ath-2026-08c-v1",
-                  "ath-2026-09a-v2"
+                  "ath-2026-09a-v2",
+                  "ath-2026-09a-v3"
                 ],
                 "type": "string"
               },
@@ -14501,6 +14602,18 @@
             ],
             "title": "Ath Axial Sampling Rule"
           },
+          "ath_axial_scale": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Axial Scale"
+          },
           "ath_nac": {
             "anyOf": [
               {
@@ -14624,7 +14737,8 @@
               {
                 "enum": [
                   "ath-2026-08c-v1",
-                  "ath-2026-09a-v2"
+                  "ath-2026-09a-v2",
+                  "ath-2026-09a-v3"
                 ],
                 "type": "string"
               },

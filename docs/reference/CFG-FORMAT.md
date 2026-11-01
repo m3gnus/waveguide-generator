@@ -1,7 +1,7 @@
 # Waveguide Generator text configuration format
 
 Status: canonical file-format contract, verified against `server/design/` on
-2026-10-11.
+2026-11-01.
 
 The conventional suffix is `.cfg` or `.txt`. Legacy `.mwg` files use the same
 ATH-style grammar and remain readable.
@@ -22,16 +22,23 @@ output starts with:
 The geometry interpretation is persisted independently of the lexical dialect.
 Imported omitted `Morph.CornerRadius` uses ATH's 35 mm authored default when a
 morph target is supplied. Translation applies the same profile scale as an
-explicit corner dimension. Current v2 imports send authored profile, morph,
+explicit corner dimension. Current v2/v3 imports send authored profile, morph,
 and guiding-curve dimensions plus `scale` to the mesher, which scales the
 finished geometry. Implicit rectangular morph extents are derived and rounded
 before Scale is applied. Native omitted corners retain their native default.
 Native authored documents use `native-v1`; external ATH imports without a stamp
-use the bounded `ath-2026-09a-v2` interpretation. Saved `ath-2026-08c-v1`
-designs retain their earlier geometry and defaults. Rewritten imports retain their
-stamp even though the canonical writer uses the Parameter config heading.
+use the bounded `ath-2026-09a-v3` interpretation. Saved `ath-2026-08c-v1`
+and `ath-2026-09a-v2` designs retain their earlier geometry and defaults.
+Rewritten imports retain their stamp even though the canonical writer uses the
+Parameter config heading.
 Historical Parameter/MWG configs without a stamp retain native behavior.
-Unknown or conflicting interpretation stamps are rejected.
+Unknown interpretation stamps ask the user to update WG; conflicting stamps are
+rejected. V3 adds positive constant `Scale.Z` (an absolute axial override of
+global `Scale`), top-level R-OSSE `Rot`, authored `Mesh.ThroatExtSegments` and
+the corrected R-OSSE station map. A `Mesh` block member overrides the dotted
+throat-extension count. R-OSSE block `Rot` stays ignored; only top-level `Rot`
+applies. `Scale.Z` has no supported block form. New controls never upgrade a
+saved v1/v2 stamp. WG's v3 consumer must land with a v3-capable mesher pin.
 
 The same provenance is retained as the optional `text_import_version` JSON
 field and passed to the mesher as `_textImportVersion`. Copying, editing,

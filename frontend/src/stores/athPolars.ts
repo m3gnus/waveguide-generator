@@ -1,3 +1,4 @@
+import { usesCurrentAthImport } from '../design/athImportVersion';
 import type { ConfigBlock } from './design';
 import { DEFAULT_POLAR_UI } from './solveDefaults';
 
@@ -86,7 +87,7 @@ function polarEntries(blocks: unknown): Array<[string, unknown]> {
 
 /** Counterpart of solve_block.solve_options_from_blocks' ATH import origin contract. */
 export function athPolarObservationOrigin(blocks: unknown, design: unknown): 'throat' | 'mouth' | null {
-  if (!isRecord(design) || design.text_import_version !== 'ath-2026-09a-v2' || !polarEntries(blocks).length) return null;
+  if (!isRecord(design) || !usesCurrentAthImport(design.text_import_version) || !polarEntries(blocks).length) return null;
   const origin = isRecord(blocks) ? blockItems(blocks['WG.Solve']).ObservationOrigin : undefined;
   if (origin === 'mouth' || origin === 'throat') return null;
   return isRecord(design.simulation) && design.simulation.sim_type === 'infinite-baffle' ? 'mouth' : 'throat';

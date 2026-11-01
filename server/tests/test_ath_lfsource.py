@@ -88,7 +88,7 @@ def test_sids_are_kept_when_positive_and_unique_and_otherwise_reported():
     zero = ath(" Spacing = 20,20,20,250\n LFSource.B.Radius = 60\n LFSource.B.SID = 0\n")
     assert assembly_of(zero)["woofers"][0]["ath"] == {"key": "B"}
     assert "reserved for the waveguide" in notes(zero)["Mesh.Enclosure.LFSource.B.SID"]
-    with pytest.raises(TextConfigError, match="SID must be a nonnegative integer"):
+    with pytest.raises(TextConfigError, match="nonnegative integer SID"):
         parse(ath(" LFSource.B.Radius = 60\n LFSource.B.SID = 1.5\n"))
 
 

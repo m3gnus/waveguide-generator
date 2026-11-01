@@ -28,8 +28,13 @@ the collapsed surface without attributing it to excessive wall thickness.
 
 It also includes ATH R-OSSE morph import and early singular-coverage checks.
 R-OSSE block `Rot` and top-level `arcterm`/`trunc` follow ATH as named,
-ignored no-ops. A no-op `Scale.Z` must be constant and exactly 1; nonunit or
-azimuth-dependent values remain refused. Fresh ATH OSSE text
+ignored no-ops. Its v2 interpretation treats a constant `Scale.Z = 1` as a
+no-op and refuses nonunit or azimuth-dependent axial scales. The v3 consumer
+requires a v3-capable mesher pin: it supports positive constant `Scale.Z`,
+top-level R-OSSE `Rot`, authored `Mesh.ThroatExtSegments` and the corrected
+R-OSSE station map. A separate axial scale cannot be silently discarded by
+native feature conversion. Saved v1/v2 interpretations remain unchanged.
+Fresh ATH OSSE text
 with `Length = 0` is refused as an unsupported source-only model. Saved and
 native geometry retain their existing interpretation.
 
@@ -77,16 +82,19 @@ shared horn/woofer and passive phase-plug contracts, and the public
 versioned: designs saved with the `ath-2026-08c-v1` stamp build exactly as
 before, including bounded near-planar imported rear returns (pointwise
 displacement at most the smaller of 0.0001 mm and 0.0001 times the wall
-thickness). Fresh ATH imports are stamped `ath-2026-09a-v2` and follow ATH
-V2026-09a: the ATH expression functions with natural `log`, NAC, current ATH
-axial sampling, `Mesh.Roundover` lips, `Mesh.RearShape = 3` rears, warped
+thickness). The pin supplies the `ath-2026-09a-v2` behavior retained by saved
+v2 designs. WG now stamps fresh ATH imports `ath-2026-09a-v3`; this consumer
+change must land together with its v3-capable mesher pin. V3 inherits the v2
+ATH V2026-09a behavior: the ATH expression functions with natural `log`, NAC,
+current ATH axial sampling, `Mesh.Roundover` lips, `Mesh.RearShape = 3` rears, warped
 RearShape 1 rears and the corrected import defaults. STEP export of lip or
 RearShape 3 imports is refused by name. Native rear construction is unchanged.
 See [Native source contour ingestion](architecture/NATIVE-SOURCE-CONTOURS.md)
 and [Source contour and assembly editors](architecture/source-contour-editor.md).
 
-Current v2 ATH imports also retain R-OSSE slot translation, ten authored throat
-extension segments before the complete body map, and sampled rectangular
+Current v2/v3 ATH imports also retain R-OSSE slot translation, authored throat
+extension segments before the complete body map (ten by default; v3 can override
+the count with `Mesh.ThroatExtSegments`), and sampled rectangular
 no-shrink boundary expansion. Saved v1 and native configurations retain their
 preceding construction. Consumers that replace angular, axial or corner density
 must first call the native `retain_ath_import_construction()` on the authored

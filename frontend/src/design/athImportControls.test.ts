@@ -3,10 +3,10 @@ import { hydrateDesignDocument } from '../api/designIo';
 import { resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { athControlError, lipRadiusWallError, lipUnavailableReason, rosseMorphNote } from './athImportControls';
 
-describe('ATH import wall default and controls', () => {
+describe.each(['ath-2026-09a-v2', 'ath-2026-09a-v3'] as const)('ATH import wall default and controls (%s)', (version) => {
   it('keeps ATH\'s 5 mm wall for an unset wall through lip/rear edits without saving it', () => {
     resetDesignStore();
-    useDesignStore.getState().replaceDocument(hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, mesh: { wall_thickness: null } }));
+    useDesignStore.getState().replaceDocument(hydrateDesignDocument({ formula: 'OSSE', text_import_version: version, enclosure: null, mesh: { wall_thickness: null } }));
     const state = () => useDesignStore.getState();
     // ATH's parser defaults an omitted wall to 5 mm, which is also what WG sends the mesher.
     expect(state().design.mesh.wall_thickness).toBe(5);
@@ -60,6 +60,7 @@ describe('R-OSSE morph where ATH builds none', () => {
 
   it('notes a Rectangle on a length-varying horn and any Superellipse, and nothing else', () => {
     expect(rosseMorphNote(load({ morph: { target_shape: 1 } }))).toBeUndefined();
+    expect(rosseMorphNote(load({ text_import_version: 'ath-2026-09a-v3', morph: { target_shape: 1 }, rotation: { value: null, raw: '10+5*cos(p)', dialect: 'ath' } }))).toContain('depth changes');
     expect(rosseMorphNote(load({ morph: { target_shape: 1 }, R: { value: 150, raw: '150 - 20*cos(p)^2', dialect: 'ath' } }))).toContain('its own R-OSSE morph');
     expect(rosseMorphNote(load({ morph: { target_shape: 1 }, k: { value: 2, raw: '4 * abs(cos(p))', dialect: 'ath' } }))).toContain('depth changes');
     expect(rosseMorphNote(load({ morph: { target_shape: 1 }, a0: { value: 10, raw: '10 + 5*cos(p)^2', dialect: 'ath' } }))).toContain('depth changes');

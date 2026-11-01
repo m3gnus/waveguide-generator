@@ -1,6 +1,8 @@
 """ATH CORE transport and saved geometry contracts measured against ATH V2026-09a output."""
 from __future__ import annotations
 
+from server.design.text_import import TEXT_IMPORT_VERSION, ath_import_failure
+
 import asyncio
 import json
 import struct
@@ -31,7 +33,7 @@ def test_core_json_and_text_transport_match_direct_mesher_import_exactly():
     parsed = parse(CORE)
     original = parsed.design
     assert parse(CORE.replace('Segments = 6', 'Segments = 6.0')).design.root.mesh.ath_roundover == original.root.mesh.ath_roundover
-    assert original.root.text_import_version == 'ath-2026-09a-v2'
+    assert original.root.text_import_version == TEXT_IMPORT_VERSION
     assert original.root.ath_axial_sampling_rule == 'ath-v2025-12+'
     assert original.root.ath_nac_present is True
     assert original.root.ath_nac == 10
@@ -201,7 +203,7 @@ def test_nonliteral_osse_radius_is_refused_only_for_v2():
 def test_r_osse_morph_imports_for_the_mesher():
     design = parse('R-OSSE = {\nR=80\n}\nMorph.TargetShape=1\n').design
     config = design_to_mesher_config(design)
-    assert config['_textImportVersion'] == 'ath-2026-09a-v2'
+    assert config['_textImportVersion'] == TEXT_IMPORT_VERSION
     assert float(config['morph']['morphTarget']) == 1
 
 
@@ -330,7 +332,7 @@ def test_fresh_v2_missing_block_length_surfaces_the_mesher_refusal(text):
         build_geometry_params(parse_text_config(text))
     with pytest.raises(TextConfigError) as imported:
         parse(text)
-    assert str(imported.value) == str(direct.value)
+    assert str(imported.value) == ath_import_failure(direct.value)
     assert 'must set Length' in str(imported.value)
     # Historical native/v1 files retain their flat fallback interpretation.
     for stamp in ('native-v1', 'ath-2026-08c-v1'):

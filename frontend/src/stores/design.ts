@@ -1,3 +1,4 @@
+import { usesCurrentAthImport, type AthImportVersion } from '../design/athImportVersion';
 import { useDocumentStore, type DocumentState } from './document';
 import type { EmbeddedDesignUpdates } from './designEdit';
 import { create } from 'zustand';
@@ -75,7 +76,8 @@ export interface CornerGrid {
 export interface DesignDocument {
   formula: DesignFamily;
   /** Persisted geometry interpretation for imported ATH documents. */
-  text_import_version?: 'ath-2026-08c-v1' | 'ath-2026-09a-v2';
+  text_import_version?: AthImportVersion;
+  ath_axial_scale?: number;
   ath_axial_sampling_rule?: 'ath-v2025-06' | 'ath-v2025-12+';
   ath_nac_present?: boolean;
   ath_nac?: number;
@@ -195,6 +197,7 @@ export interface DesignDocument {
     ath_rear_shape?: 1 | 3 | null;
     ath_rear_front_offset?: number | null;
     ath_rear_step?: number | null;
+    ath_throat_ext_segments?: number | null;
     mouth_roundover_radius_mm?: number;
     size_mm?: number;
     angular_segments: number;
@@ -252,7 +255,7 @@ export function defaultWallThickness(): number {
 }
 
 export function refreshAbsentWall(design: DesignDocument): DesignDocument {
-  if (design.text_import_version === 'ath-2026-09a-v2' && design._absent?.includes('mesh.wall_thickness')) {
+  if (usesCurrentAthImport(design.text_import_version) && design._absent?.includes('mesh.wall_thickness')) {
     design.mesh.wall_thickness = design.simulation.sim_type === 'infinite-baffle' ? 0 : defaultWallThickness();
   }
   return design;
@@ -399,7 +402,7 @@ const FAMILY_SPECIFIC_FIELDS = {
     'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h', 's1', 's2', 'throat_profile',
     'rotation', 'guiding_curve', 'circ_arc_radius', 'circ_arc_term_angle',
   ],
-  'R-OSSE': ['s1', 's2', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
+  'R-OSSE': ['s1', 's2', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax', 'rotation'],
   ICW: [
     'R', 'L', 'r0', 'a0', 'a', 'k', 'q', 'coverage_angle', 'hold_start',
     'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth', 'curl',
@@ -647,6 +650,10 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
 
 function mergeFamilyParameters(current: DesignDocument, family: DesignFamily, options?: { preserveOsseBody: boolean }): DesignDocument {
   if (current.formula === family) return structuredClone(current);
+  if (current.formula === 'OSSE' && isNativeFamily(family) && family !== 'SOURCE-DISK'
+    && current.ath_axial_scale !== undefined && current.ath_axial_scale !== current.scale) {
+    throw new Error('OSSE features cannot preserve this import’s separate axial scale. Keep editing the imported horn, or set Scale.Z equal to Scale in a copy of the source file and re-import before choosing OSSE features.');
+  }
   if (options?.preserveOsseBody && current.formula === 'OSSE' && isNativeFamily(family)) requireLiteralOsseBody(current);
   if (isNativeFamily(family) || isNativeFamily(current.formula)) {
     // Native domains cannot inherit active legacy morphs, prefixes or shells.
@@ -693,6 +700,10 @@ function mergeFamilyParameters(current: DesignDocument, family: DesignFamily, op
   else delete shared._absent;
 
   const next = { ...designForFamily(family), ...shared, formula: family } as DesignDocument;
+  if (!['OSSE', 'R-OSSE'].includes(family)) {
+    delete next.ath_axial_scale;
+    delete next.mesh.ath_throat_ext_segments;
+  }
   if (family === 'FREEFORM') {
     next.cross_section = { exponent: 2, aspect_ratio: 1 };
     // A new Custom profile edits one table; its V copy stays inactive until separated.

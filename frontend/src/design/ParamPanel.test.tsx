@@ -927,6 +927,21 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('Replace those expressions');
   });
 
+  it('keeps an imported separate axial scale when native feature conversion is refused', async () => {
+    const validate = vi.spyOn(designIo, 'serializeDesignDocument');
+    const original = hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v3',
+      L: 120, r0: 12.7, a: 40, a0: 10, k: 1, s: 0, scale: 3, ath_axial_scale: 2,
+    });
+    act(() => useDesignStore.getState().replaceDocument(original));
+    const select = host.querySelector<HTMLSelectElement>('#osse-feature-axial')!;
+    await act(async () => { select.value = 'on'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(validate).not.toHaveBeenCalled();
+    expect(useDesignStore.getState().design).toEqual(original);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('set Scale.Z equal to Scale');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('re-import');
+  });
+
   it('does not copy a displayed fallback for a missing OSSE dimension', async () => {
     const validate = vi.spyOn(designIo, 'serializeDesignDocument');
     const original = designForFamily('OSSE');

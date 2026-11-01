@@ -6,6 +6,8 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping
 
+from server.design.text_import import uses_current_ath_import, uses_ath_v3_import, validate_ath_mesher_config
+
 from server.design.schema import (
     DesignConfig,
     Expr,
@@ -357,6 +359,7 @@ def _profile(
                     "b": _expr(design.b),
                     "m": _expr(design.m),
                     "tmax": _expr(design.tmax),
+                    "rot": _expr(design.rotation),
                 }
             )
         )
@@ -421,7 +424,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
 
     scale = _scale_factor(root.scale)
     s1, s2 = getattr(root, "s1", None) or 0, getattr(root, "s2", None) or 0
-    current_import = root.text_import_version == "ath-2026-09a-v2"
+    current_import = uses_current_ath_import(root.text_import_version)
     active_stretch = s1 != 0 and s2 != 0
     # ATH scales the finished profile, including implicit morph extents rounded
     # in authored units. Pre-scaling changes those extents. Active stretch also
@@ -478,6 +481,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "athRearShape": mesh.ath_rear_shape,
                 "athRearFrontOffset": mesh.ath_rear_front_offset,
                 "athRearStep": mesh.ath_rear_step,
+                "athThroatExtSegments": mesh.ath_throat_ext_segments,
                 "encFrontResolution": (
                     enclosure_resolution(root.enclosure.front_resolution)
                     if root.enclosure is not None
@@ -520,6 +524,8 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
             }
         ),
     }
+    if root.ath_axial_scale is not None:
+        config["athAxialScale"] = root.ath_axial_scale
     if current_import or active_stretch:
         config["scale"] = scale
     if active_stretch:
@@ -594,7 +600,13 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         config["_athAxialSamplingRule"] = root.ath_axial_sampling_rule
     if root.ath_nac_present is not None:
         config["_athNacPresent"] = root.ath_nac_present
-    if mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
+    if uses_ath_v3_import(root.text_import_version) and (
+        root.ath_axial_scale is not None or mesh.ath_throat_ext_segments is not None
+        or (isinstance(root, ROSSEConfig) and root.rotation is not None)
+        or mesh.ath_roundover is not None or mesh.ath_rear_shape == 3
+    ):
+        validate_ath_mesher_config(config)
+    elif mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
         feature = "Mesh.Roundover / Mesh.RearShape = 3"
         if scale != 1:
             raise ValueError(f"Scale with {feature} is unsupported: awaiting ATH probes")
