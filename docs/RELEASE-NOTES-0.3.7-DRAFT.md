@@ -1,10 +1,20 @@
 # 0.3.7 — unreleased draft
 
-Draft based on Waveguide Generator `cb0aea323c4c8044020601a1fb8f2c236680f24b`.
+Draft checked against the 0.3.7 additions source, based on Waveguide Generator
+`b05750ce8`, including the Sources and baffle launcher change.
 This is not a release announcement or a statement of platform qualification.
 
 ## Added
 
+- Open **Sources and baffle…** from the parametric enclosure controls without
+  a special URL. Add and edit front-baffle woofers alongside the current horn,
+  keep them in the saved design and Undo history, and build or solve the
+  assembly from that workspace. It retains its **Experimental** badge:
+  results are geometry-checked only and not yet acoustically qualified.
+- Edit **Custom profile** (FREEFORM) using the app's anchor table, including
+  throat and mouth, smooth/corner joins, angles, point import and a separate
+  vertical profile. Edits preview curve deviation and generated-profile change
+  before applying.
 - Import supported Gmsh surface meshes directly in the **Imported mesh**
   workspace. Assign a role to each surface group, set units and axes, and use
   full, half or quarter symmetry settings.
@@ -48,10 +58,14 @@ This is not a release announcement or a statement of platform qualification.
 - Flush enclosure construction has geometry guards; zero margin does not make
   every horn shape supported. Fusion and other CAD export routes keep their own
   stated capability limits.
+- Solve a design assembly from **Sources and baffle**, rather than ordinary
+  toolbar Solve. Coupled exterior drivers require a supported BEAT engine;
+  prescribed-velocity engines show a fallback notice. Assembly geometry export,
+  wiring, boxes and arrays are not part of this first phase.
 
 ## Pending and excluded from these notes
 
-Custom-profile server support does not expose a profile table or canvas in the
-app, and cloud assembly launchers remain hidden. Tessellation controls and
-maximum surface deviation claims are not included. These are not delivered
-features described by this draft.
+The Custom profile drawing canvas and conversion from an existing horn remain
+later work. Other experimental source-assembly launchers keep their existing
+availability. Tessellation controls and maximum surface deviation claims are
+not included. These are not delivered features described by this draft.

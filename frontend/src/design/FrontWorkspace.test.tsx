@@ -95,12 +95,14 @@ describe('front workspace', () => {
 });
 
 describe('front workspace launch', () => {
-  it('stays hidden unless asked for', async () => {
+  it('launches normally with its experimental badge and explanation', async () => {
     await act(async () => root.render(<FrontWorkspaceLauncher/>));
-    expect(host.textContent).toBe('');
-    window.history.replaceState(null, '', '/?assembly=1');
-    await act(async () => root.render(<FrontWorkspaceLauncher key="flagged"/>));
     expect(host.textContent).toContain('Sources and baffle');
+    expect(host.textContent).toContain('Experimental');
+    expect(host.textContent).toContain("Woofers on the enclosure's front baffle, solved with the horn.");
+    useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
+    await act(async () => { button('Sources and baffle…').click(); });
+    expect(assembly().signal_groups).toEqual([expect.objectContaining({ members: [{ radiator_id: 'horn-throat' }] })]);
   });
 
   it('gives a design without an assembly a horn-only one as one step', () => {

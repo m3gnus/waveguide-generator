@@ -1,6 +1,6 @@
 # Waveguide Generator user guide
 
-Status: current overview, checked against current dev source on 2026-10-29.
+Status: current overview, checked against current source on 2026-11-01.
 
 ## Launching
 
@@ -23,8 +23,17 @@ names the ones that are missing.
 
 Start with a new OSSE, R-OSSE, ICW, or FREEFORM design, or open an ATH-style
 `.cfg`/`.txt` file. Legacy `.mwg` files use the same text grammar and remain readable.
-The Family picker lists OSSE, R-OSSE, ICW and FREEFORM. Existing LOOKUP and
+The Family picker lists OSSE, R-OSSE, ICW and **Custom profile** (FREEFORM). Existing LOOKUP and
 SOURCE-DISK designs keep their current-only Family entry.
+
+**Custom profile** starts a blank design with an editable anchor table under
+**Profile**. The table includes the throat and mouth, positions and radii in
+mm, smooth/corner joins and incoming/outgoing angles. One profile initially
+shapes both planes; **Separate vertical profile** enables a separate vertical
+table. You can insert or remove anchors and paste point rows. Edits show a
+preview with curve deviation and generated-profile change before applying.
+Conversion from an existing horn and a profile drawing canvas are not yet
+available.
 
 Within **OSSE → Model Type → OSSE features**, choose:
 
@@ -61,6 +70,43 @@ is not a cached drawing or a second geometry implementation.
 Edits update the live preview. Viewer controls change the display, not the design
 parameters. A solve always receives a revisioned design snapshot, so later editor changes
 cannot alter an existing run.
+
+### Sources and baffle
+
+In the parametric **Geometry** panel, open the wall and enclosure controls
+under **Mounting** and press **Sources and baffle…**. This Experimental
+workspace edits the current horn together with woofers on its enclosure's
+front baffle. The badge notes that results are geometry-checked only and not
+yet acoustically qualified; solve completion does not replace measurement.
+
+Choose **Waveguide in enclosure** and set the enclosure depth and margins to
+fit the woofers. Add a woofer above or below the mouth, or at a free position.
+Select it in the front view or list to edit its radius, flat piston or ATH cone,
+piston recess, placement, spacing, enabled state and drive. Member weight,
+delay and polarity are editable there too. The existing horn and enclosure
+remain the geometry owners. Invalid clearances or unsupported construction
+are reported when the context or build is prepared.
+
+Opening the workspace adds a horn-only assembly when necessary. Edits and
+drags use the design's **Undo/Redo** history. Save the design normally; reopening
+it restores the assembly, driver identities and disabled woofer data. Opening
+a design without an assembly closes the workspace. **Export a copy** preserves
+the assembly in WG's `.cfg` extension data; ATH does not interpret that data.
+
+Press **Build** to compile a mesh, or **Solve** inside this workspace to build
+the current revision and solve all enabled, driven radiators together. Use the
+design's Simulation settings for the sweep and engine. Ordinary toolbar Solve
+asks you to use Sources and baffle for an assembly. Exterior drivers require a
+supported BEAT coupled solve; other engines use prescribed velocity and show
+a notice. Close the editor to use **Results**, where a completed run shows its
+retained assembly mesh and channel results. Reopen the saved design to edit the assembly;
+reopening a run restores its retained mesh and solve setup.
+
+Result curves and run archives use the normal export actions. Assembly
+geometry export (STEP/STL), wiring, boxes and arrays are later phases. Keep the
+saved design for editable geometry; an assembly run's imported-model view does
+not provide a WG parameter-config export. Parametric STEP/STL exports describe
+the horn and enclosure, without the assembly's woofer diaphragms.
 
 ### Mesh settings for Fusion models
 

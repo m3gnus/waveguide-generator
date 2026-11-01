@@ -7,7 +7,7 @@
  * server supplies the live context (outlines, mouth edges, resolved woofer
  * centres) for each assembly revision on screen.
  *
- * The launcher is hidden: it renders only with `?assembly=1` in the address.
+ * The launcher lives with the design's wall and enclosure controls.
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
@@ -28,9 +28,6 @@ import './sourceContourEditor.css';
 /** How long the design must rest before the front context is refreshed. */
 export const FRONT_CONTEXT_DELAY_MS = 150;
 
-export const frontWorkspaceEnabled = () => typeof window !== 'undefined'
-  && new URLSearchParams(window.location.search).get('assembly') === '1';
-
 const visibility = {
   open: false, listeners: new Set<() => void>(),
   getSnapshot: () => visibility.open,
@@ -47,7 +44,6 @@ export function openFrontWorkspace(): void {
 export function closeFrontWorkspace(): void { visibility.set(false); }
 
 export function FrontWorkspaceLauncher() {
-  if (!frontWorkspaceEnabled()) return null;
   return <div className="source-editor-launch" data-control-reveal-id="front-workspace-launch">
     <button className="btn" type="button" aria-haspopup="dialog" onClick={openFrontWorkspace}>Sources and baffle…</button>
     <ExperimentalBadge/>
