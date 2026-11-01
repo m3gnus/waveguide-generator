@@ -119,6 +119,8 @@ export class DurableSettings {
   private readonly inFlight = new Map<SettingsNamespace, Promise<void>>();
   private readonly memory = new Map<SettingsNamespace, string | null>();
   private readonly failedCacheWrites = new Set<SettingsNamespace>();
+  private readonly failedUploads = new Set<SettingsNamespace>();
+  private readonly keptListeners = new Set<() => void>();
   private readonly memoryLocalNewer = new Set<SettingsNamespace>();
   /** Requests issued and not yet settled, per namespace. */
   private readonly outstanding = new Map<SettingsNamespace, number>();
@@ -300,6 +302,21 @@ export class DurableSettings {
     }
   }
 
+  /** True when neither this browser nor the server took the latest value, so a crash would lose it. */
+  readonly isNotKept = (namespace: SettingsNamespace): boolean =>
+    (this.storage === null || this.failedCacheWrites.has(namespace)) && this.failedUploads.has(namespace);
+
+  readonly subscribeKept = (listener: () => void): (() => void) => {
+    this.keptListeners.add(listener);
+    return () => { this.keptListeners.delete(listener); };
+  };
+
+  private noteUpload(namespace: SettingsNamespace, kept: boolean): void {
+    if (kept === !this.failedUploads.has(namespace)) return;
+    if (kept) this.failedUploads.delete(namespace); else this.failedUploads.add(namespace);
+    for (const listener of [...this.keptListeners]) listener();
+  }
+
   /** Push every pending change before the page goes away. */
   flush(): void {
     for (const namespace of [...this.timers.keys()]) this.scheduleUpload(namespace, 0, true);
@@ -389,6 +406,7 @@ export class DurableSettings {
         // overtook, and one without it commits in arrival order, so the last
         // acceptance is the last commit either way. Non-OK responses are
         // failed writes and say nothing about what is stored.
+        this.noteUpload(namespace, response.ok);
         if (response.ok) {
           this.acknowledged.set(namespace, raw);
           if (namespace === CAD_DRAFTS_NAMESPACE) {
@@ -408,7 +426,10 @@ export class DurableSettings {
             }
           }
         }
-      } catch { /* the cache still holds it; the next change or hydration retries */ }
+      } catch {
+        // The cache normally still holds it, and the next change or hydration retries.
+        this.noteUpload(namespace, false);
+      }
       finally {
         const left = (this.outstanding.get(namespace) ?? 1) - 1;
         if (left > 0) this.outstanding.set(namespace, left);

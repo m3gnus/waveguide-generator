@@ -17,6 +17,7 @@ import { parseFrequencyList, type FrequencyMode } from '../stores/solveOptions';
 import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { previewErrorMessage, previewMeshMetrics } from '../viewport/presentation';
+import { durableSettings } from '../stores/durableSettings';
 import { Icon } from './icons';
 
 interface SolveSummaryOptions {
@@ -82,6 +83,8 @@ export function documentLabel(filename: string, family?: string): string {
   return named.trim() || 'untitled design';
 }
 
+const DRAFT_NOT_KEPT = 'WG cannot keep your work in progress. Use Export a copy in the File menu to keep this design.';
+
 export function StatusBar() {
   const { engines } = useCapabilities();
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
@@ -105,6 +108,7 @@ export function StatusBar() {
   const backend = useSolveControlBackend();
   const engineLabel = backend.plan?.engine ? engineStatusLabel(engines, backend.plan.engine) : resolveEngineLabel(requestedEngine);
   const previewError = preview.error ? previewErrorMessage(preview.error) : null;
+  const draftNotKept = useSyncExternalStore(durableSettings.subscribeKept, () => durableSettings.isNotKept('designDraft'));
   const meshMetrics = previewMeshMetrics(preview.frame);
   const [fileStart, fileEnd, fileCount] = fileSweep.split('/').map(Number);
   const listedFrequencies = frequencyMode === 'list' ? parseFrequencyList(frequencyListText).frequencies ?? undefined : undefined;
@@ -134,6 +138,7 @@ export function StatusBar() {
         : `CAD model · ${cadLine.short}`
       : <>preview {meshMetrics ? <><b>{meshMetrics.triangles.toLocaleString()}</b> tri · <b>{meshMetrics.vertices.toLocaleString()}</b> vert</> : <b>no frame</b>}</>}</div>
     {mode === 'parametric' && previewError && <div className="status-item preview-error-status" title={previewError}>{previewError}</div>}
+    {draftNotKept && <div className="status-item preview-error-status" role="alert" title={DRAFT_NOT_KEPT}>{DRAFT_NOT_KEPT}</div>}
     <span className="spacer"/>
     <div className="status-item right">{summary}</div>
     <div className="status-item right status-drop-1"><Icon name="folder"/>{document}</div>
