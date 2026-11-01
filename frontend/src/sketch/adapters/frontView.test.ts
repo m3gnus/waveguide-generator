@@ -85,7 +85,16 @@ describe('front view edits', () => {
     expect(display.items.find(item => item.id === `${W2}#aperture`)!.state).not.toContain('problem');
   });
 
-  it('offers a free woofer any place it really fits, and refuses only when there is none', () => {
+  it('never takes a failed search as proof: free placement stays open while the woofer can fit the baffle', () => {
+    const ring = Array.from({ length: 64 }, (_, index): [number, number] => [140 * Math.cos(index / 32 * Math.PI), 140 * Math.sin(index / 32 * Math.PI)]);
+    const woofers = [[1, 1], [1, -1], [-1, 1], [-1, -1]].map(([x, y], index) => ({ radiator_id: `w${index}`, x_mm: 310 * x, y_mm: 95 * y, radius_mm: 50 }));
+    const crowded: FrontViewContext = { ...before, context: { ...before.context, woofers, clearances: {}, mouth_outline_mm: ring, mouth_top_mm: 140, mouth_bottom_mm: -140,
+      minimum_clearance_mm: 0.1, baffle: { x0_mm: -400, x1_mm: 400, y0_mm: -165, y1_mm: 165, edge_mm: 18 } } };
+    // A radius 80 woofer fits at (220.2, 0), a place the search does not land on.
+    expect(noRoomForWoofer('free', crowded, () => 25)).toBeNull();
+  });
+
+  it('starts a free woofer where it fits, and refuses only a woofer larger than the baffle', () => {
     const circle = Array.from({ length: 64 }, (_, index) => {
       const angle = index / 64 * 2 * Math.PI;
       return [140 * Math.cos(angle), 140 * Math.sin(angle)] as [number, number];
@@ -101,13 +110,9 @@ describe('front view edits', () => {
     expect(Math.hypot(x!, y!)).toBeGreaterThanOrEqual(140 + 80 + 0.1);
     expect(Math.abs(x!)).toBeLessThanOrEqual(400 - 18 - 80 - 0.1);
     expect(Math.abs(y!)).toBeLessThanOrEqual(165 - 18 - 80 - 0.1);
-    // A woofer already standing in that gap on both sides leaves nowhere.
-    const taken = (side: number) => ({ radiator_id: `w${side}`, x_mm: 300 * side, y_mm: 0, radius_mm: 100 });
-    const full: FrontViewContext = { ...wide, context: { ...wide.context, woofers: [taken(1), taken(-1)] } };
-    expect(noRoomForWoofer('free', full, margin)?.reason).toContain('does not fit anywhere');
-    // Too narrow everywhere.
-    const small: FrontViewContext = { ...wide, context: { ...wide.context, baffle: { x0_mm: -165, x1_mm: 165, y0_mm: -165, y1_mm: 165, edge_mm: 18 } } };
-    expect(noRoomForWoofer('free', small, margin)?.reason).toContain('does not fit anywhere');
+    // Only a baffle smaller than the woofer closes free placement.
+    const small: FrontViewContext = { ...wide, context: { ...wide.context, baffle: { x0_mm: -400, x1_mm: 400, y0_mm: -90, y1_mm: 90, edge_mm: 18 } } };
+    expect(noRoomForWoofer('free', small, margin)?.reason).toContain('taller than');
   });
 
   it('says why a new woofer has no room, what to change, and never changes it', () => {
@@ -120,7 +125,7 @@ describe('front view edits', () => {
     expect(full).toMatchObject({ updates: { 'enclosure.space_b': 189 }, action: 'Set Bottom margin to 189 mm' });
     expect(full.reason).toBe('A 160 mm woofer needs 170.1 mm below the mouth, and this enclosure has 7 mm. Raise Bottom margin to 189 mm under Baffle, or use Free position.');
     expect(noRoomForWoofer('above', tight, margin)?.updates).toHaveProperty(['enclosure.space_t']);
-    expect(noRoomForWoofer('free', tight, margin)).toMatchObject({ updates: { 'enclosure.space_b': 189 } });
+    expect(noRoomForWoofer('free', tight, margin)).toBeNull();
     // A baffle too narrow for the woofer needs its width too, or the offer would not work.
     const narrow: FrontViewContext = { ...tight, context: { ...tight.context, baffle: { x0_mm: -70, x1_mm: 70, y0_mm: -165, y1_mm: 165, edge_mm: 18 } } };
     expect(noRoomForWoofer('free', narrow, margin)).toMatchObject({ updates: { 'enclosure.space_b': 189, 'enclosure.space_l': 54, 'enclosure.space_r': 54 } });

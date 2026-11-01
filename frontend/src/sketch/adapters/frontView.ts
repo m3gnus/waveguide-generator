@@ -203,9 +203,9 @@ function anchoredCentre(side: Side, radius: number, gap: number, context: Contex
 }
 
 /**
- * A centre where a new woofer really fits, or null when none does: beside the
- * mouth by preference, otherwise anywhere it can be placed freely. Without the
- * mouth's outline only the anchored places can be judged.
+ * A centre where a new woofer fits, or null when none turned up: beside the
+ * mouth by preference, otherwise a coarse search of the baffle. It chooses a
+ * starting place only: null never means that no place exists.
  */
 function freeSpot(radius: number, context: Context): Centre | null {
   const taken = context.woofers ?? [];
@@ -246,21 +246,25 @@ export function noRoomForWoofer(anchor: AssemblyAnchor, resolved: FrontViewConte
   const side: Side = anchor === 'above' ? 'above' : 'below';
   const centre = anchoredCentre(side, DEFAULT_WOOFER_RADIUS_MM, DEFAULT_WOOFER_GAP_MM, context);
   if (!centre) return null;
-  // An anchored place answers for the baffle and the mouth; a neighbour there can still be moved.
-  if (anchor === 'free' ? freeSpot(DEFAULT_WOOFER_RADIUS_MM, context) || !context.mouth_outline_mm?.length : fitsAt(centre, DEFAULT_WOOFER_RADIUS_MM, context, [])) return null;
   const { baffle, mouth_bottom_mm: bottom, mouth_top_mm: top, minimum_clearance_mm: minimum = 0 } = context;
+  const span = 2 * (DEFAULT_WOOFER_RADIUS_MM + minimum);
+  const width = baffle.x1_mm - baffle.x0_mm - 2 * baffle.edge_mm;
+  const height = baffle.y1_mm - baffle.y0_mm - 2 * baffle.edge_mm;
+  // Free placement closes only on certain geometry: a search that found nothing
+  // proves nothing, and the exact check and the held Build and Solve still apply.
+  // An anchored place answers for the baffle and the mouth; a neighbour there can still be moved.
+  if (anchor === 'free' ? width >= span && height >= span : fitsAt(centre, DEFAULT_WOOFER_RADIUS_MM, context, [])) return null;
   const have = side === 'below' ? bottom! - (baffle.y0_mm + baffle.edge_mm) : (baffle.y1_mm - baffle.edge_mm) - top!;
   const need = 2 * DEFAULT_WOOFER_RADIUS_MM + DEFAULT_WOOFER_GAP_MM + minimum;
   const { field, label, mouth } = SIDE_ROOM[side];
   const value = Math.ceil(marginOf(field) + Math.max(0, need - have));
-  const width = baffle.x1_mm - baffle.x0_mm - 2 * baffle.edge_mm;
-  const narrow = width < 2 * (DEFAULT_WOOFER_RADIUS_MM + minimum);
-  const sideMargin = (name: string) => Math.ceil(marginOf(name) + (2 * (DEFAULT_WOOFER_RADIUS_MM + minimum) - width) / 2);
+  const narrow = width < span;
+  const sideMargin = (name: string) => Math.ceil(marginOf(name) + (span - width) / 2);
   const updates = { ...need > have ? { [field]: value } : {},
     ...narrow ? { 'enclosure.space_l': sideMargin('enclosure.space_l'), 'enclosure.space_r': sideMargin('enclosure.space_r') } : {} };
   const change = [...need > have ? [`${label} to ${value} mm`] : [], ...narrow ? [`Left margin and Right margin to ${sideMargin('enclosure.space_l')} mm`] : []].join(' and ');
   const short = narrow ? `A ${size} woofer is wider than this enclosure's ${mm(Math.max(0, width))} baffle.`
-    : anchor === 'free' ? `A ${size} woofer does not fit anywhere on this enclosure.`
+    : anchor === 'free' ? `A ${size} woofer is taller than this enclosure's ${mm(Math.max(0, height))} baffle.`
     : `A ${size} woofer needs ${mm(need)} ${mouth}, and this enclosure has ${mm(Math.max(0, have))}.`;
   return { updates, action: `Set ${change}`, reason: `${short} Raise ${change} under Baffle${anchor === 'free' ? '' : ', or use Free position'}.` };
 }
