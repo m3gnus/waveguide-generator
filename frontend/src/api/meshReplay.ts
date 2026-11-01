@@ -15,7 +15,7 @@ export class MeshReplayRefusal extends Error {
 async function checked(response: Response): Promise<Response> {
   if (!response.ok) {
     const error = await response.json().catch(() => null) as { detail?: unknown } | null;
-    throw new MeshReplayRefusal(refusalText(error?.detail, 'mesh replay'), response.status);
+    throw new MeshReplayRefusal(refusalText(error?.detail, 'mesh replay', 'WG could not reopen this mesh. Solve the design again.'), response.status);
   }
   return response;
 }

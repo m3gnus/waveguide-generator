@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { PLAIN_REQUEST_FAILURE } from './httpError';
 import { fetchMeshReplay, MeshReplayRefusal, openMeshReplay } from './meshReplay';
+
+const REPLAY_FALLBACK = 'WG could not reopen this mesh. Solve the design again.';
 
 describe('mesh replay refusals', () => {
   it.each([
     ['legacy refusal', 'legacy refusal'],
     [[{ loc: ['body', 'version'], msg: 'Value error, unsupported' }], 'unsupported'],
-    ['', PLAIN_REQUEST_FAILURE],
-    [null, PLAIN_REQUEST_FAILURE],
+    ['', REPLAY_FALLBACK],
+    [null, REPLAY_FALLBACK],
   ])('retains detail %j and status on import and download', async (detail, message) => {
     for (const request of [openMeshReplay, fetchMeshReplay]) {
       const response = Response.json({ detail }, { status: 422 });
