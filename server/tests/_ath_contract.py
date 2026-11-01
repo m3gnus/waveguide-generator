@@ -2,7 +2,7 @@
 
 import pytest
 
-from server.design.text_import import GEOMETRY_STAMP_LABEL, TEXT_IMPORT_V1
+from server.design.text_import import GEOMETRY_STAMP_LABEL, TEXT_IMPORT_V1, ath_import_failure
 from server.design.textcfg import TextConfigError, parse
 
 
@@ -17,4 +17,4 @@ def assert_v2_refusal(text: str) -> None:
         parse_text_config(text)
     with pytest.raises(TextConfigError) as actual:
         parse(text)
-    assert str(actual.value) == str(reference.value)
+    assert str(actual.value) == ath_import_failure(reference.value)

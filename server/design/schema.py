@@ -31,7 +31,6 @@ from pydantic import (
 
 
 from server.design.text_import import (
-    ATH_AXIAL_SURFACE_MESSAGE, ATH_EXTENSION_SAMPLING_MESSAGE,
     TextImportVersion, ath_extension_segments, uses_current_ath_import, uses_ath_v3_import,
 )
 
@@ -1024,10 +1023,6 @@ class DesignCommon(StrictModel):
                 raise ValueError("These ATH controls need a fresh import. Re-import a copy of the original file to use them.")
             if self.formula not in {"OSSE", "R-OSSE"}:
                 raise ValueError("These ATH controls need an OSSE or R-OSSE horn. Remove them from this file.")
-            if mesh.ath_throat_ext_segments is not None and self.formula == "OSSE" and self.ath_axial_sampling_rule == "ath-v2025-06":
-                raise ValueError(ATH_EXTENSION_SAMPLING_MESSAGE)
-            if self.ath_axial_scale is not None and (mesh.ath_roundover is not None or mesh.ath_rear_shape == 3):
-                raise ValueError(ATH_AXIAL_SURFACE_MESSAGE)
         if mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
             if not uses_current_ath_import(self.text_import_version):
                 raise ValueError("The ATH mouth lip and Opus rear need a current ATH import. Re-import a copy of the original file to use them.")

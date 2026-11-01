@@ -76,7 +76,7 @@ def test_native_stamp_can_override_external_looking_text_and_is_not_a_geometry_c
     "; Waveguide Generator geometry-interpretation: native-v1\n; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\n",
 ])
 def test_future_or_conflicting_text_stamps_fail(stamps):
-    with pytest.raises(TextConfigError, match="geometry interpretation"):
+    with pytest.raises(TextConfigError, match="newer version" if "future-v2" in stamps else "geometry interpretation"):
         parse(stamps + ATH)
     with pytest.raises(ValidationError):
         DesignConfig.model_validate({"formula":"OSSE", "text_import_version":"future-v2"})

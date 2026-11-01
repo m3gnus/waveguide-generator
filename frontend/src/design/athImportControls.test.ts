@@ -60,6 +60,7 @@ describe('R-OSSE morph where ATH builds none', () => {
 
   it('notes a Rectangle on a length-varying horn and any Superellipse, and nothing else', () => {
     expect(rosseMorphNote(load({ morph: { target_shape: 1 } }))).toBeUndefined();
+    expect(rosseMorphNote(load({ text_import_version: 'ath-2026-09a-v3', morph: { target_shape: 1 }, rotation: { value: null, raw: '10+5*cos(p)', dialect: 'ath' } }))).toContain('depth changes');
     expect(rosseMorphNote(load({ morph: { target_shape: 1 }, R: { value: 150, raw: '150 - 20*cos(p)^2', dialect: 'ath' } }))).toContain('its own R-OSSE morph');
     expect(rosseMorphNote(load({ morph: { target_shape: 1 }, k: { value: 2, raw: '4 * abs(cos(p))', dialect: 'ath' } }))).toContain('depth changes');
     expect(rosseMorphNote(load({ morph: { target_shape: 1 }, a0: { value: 10, raw: '10 + 5*cos(p)^2', dialect: 'ath' } }))).toContain('depth changes');

@@ -1,7 +1,7 @@
 """ATH CORE transport and saved geometry contracts measured against ATH V2026-09a output."""
 from __future__ import annotations
 
-from server.design.text_import import TEXT_IMPORT_VERSION
+from server.design.text_import import TEXT_IMPORT_VERSION, ath_import_failure
 
 import asyncio
 import json
@@ -332,7 +332,7 @@ def test_fresh_v2_missing_block_length_surfaces_the_mesher_refusal(text):
         build_geometry_params(parse_text_config(text))
     with pytest.raises(TextConfigError) as imported:
         parse(text)
-    assert str(imported.value) == str(direct.value)
+    assert str(imported.value) == ath_import_failure(direct.value)
     assert 'must set Length' in str(imported.value)
     # Historical native/v1 files retain their flat fallback interpretation.
     for stamp in ('native-v1', 'ath-2026-08c-v1'):

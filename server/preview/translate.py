@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping
 
-from server.design.text_import import uses_current_ath_import
+from server.design.text_import import uses_current_ath_import, uses_ath_v3_import, validate_ath_mesher_config
 
 from server.design.schema import (
     DesignConfig,
@@ -602,7 +602,13 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         config["_athAxialSamplingRule"] = root.ath_axial_sampling_rule
     if root.ath_nac_present is not None:
         config["_athNacPresent"] = root.ath_nac_present
-    if mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
+    if uses_ath_v3_import(root.text_import_version) and (
+        root.ath_axial_scale is not None or mesh.ath_throat_ext_segments is not None
+        or (isinstance(root, ROSSEConfig) and root.rotation is not None)
+        or mesh.ath_roundover is not None or mesh.ath_rear_shape == 3
+    ):
+        validate_ath_mesher_config(config)
+    elif mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
         feature = "Mesh.Roundover / Mesh.RearShape = 3"
         if scale != 1:
             raise ValueError(f"Scale with {feature} is unsupported: awaiting ATH probes")

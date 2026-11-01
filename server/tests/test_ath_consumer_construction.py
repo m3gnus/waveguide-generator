@@ -181,7 +181,7 @@ def test_old_native_without_handoff_keeps_its_existing_config(monkeypatch):
     assert retain_mesher_construction(config) == config
 
 
-@pytest.fixture(params=['ath-2026-09a-v2', 'ath-2026-09a-v3'], autouse=True)
+@pytest.fixture(params=[None, 'ath-2026-09a-v2', 'ath-2026-09a-v3'], ids=['fresh', 'v2', 'v3'], autouse=True)
 def import_version(request, monkeypatch):
     monkeypatch.setattr(sys.modules[__name__], 'CFG',
-                        f'; Waveguide Generator geometry-interpretation: {request.param}\n' + CFG)
+                        (f'; Waveguide Generator geometry-interpretation: {request.param}\n' if request.param else '') + CFG)

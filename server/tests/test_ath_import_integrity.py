@@ -6,7 +6,7 @@ Mouth radii quoted below are ATH's own ``profiles`` output for those configs.
 """
 from __future__ import annotations
 
-from server.design.text_import import TEXT_IMPORT_VERSION
+from server.design.text_import import TEXT_IMPORT_VERSION, ath_import_failure
 from server.design.schema import DesignConfig
 
 import asyncio
@@ -291,7 +291,13 @@ def test_azimuth_dependent_no_op_values_are_refused_by_name(text: str, key: str)
         parse(text)
     assert key in str(caught.value)
     if key == "Scale.Z":
-        assert "Set Scale.Z to a number greater than 0 without p" in str(caught.value)
+        assert "Scale.Z must be a positive finite constant" in str(caught.value)
+        assert "Change or remove" in str(caught.value)
+    elif key == "OSSE.Scale.Z":
+        from hornlab_mesher.config_parser import ConfigError, parse_text_config
+        with pytest.raises(ConfigError) as native:
+            parse_text_config(text)
+        assert str(caught.value) == ath_import_failure(native.value)
     else:
         assert "refers to the azimuth p" in str(caught.value)
 
@@ -415,7 +421,7 @@ def test_no_ath_corpus_file_is_refused_by_the_integrity_checks(path: Path) -> No
     except ConfigError as reference:
         with pytest.raises(TextConfigError) as actual:
             parse(source)
-        assert str(actual.value) == str(reference)
+        assert str(actual.value) == ath_import_failure(reference)
     else:
         assert parse(source).design.root.text_import_version == TEXT_IMPORT_VERSION
 
@@ -455,11 +461,13 @@ def test_unrelated_configs_keep_legacy_refusal_without_mesher_validation(monkeyp
 
 
 @pytest.mark.parametrize("stage", ["text", "geometry"])
-def test_fresh_mesher_config_error_is_wrapped_without_changing_message(monkeypatch, stage: str) -> None:
+def test_fresh_mesher_config_error_keeps_native_detail_and_adds_remedy(monkeypatch, stage: str) -> None:
     from hornlab_mesher import config_builder, config_parser
 
+    reason = config_parser.ConfigError("fresh import refused")
+
     def refuse(text):
-        raise config_parser.ConfigError("fresh import refused")
+        raise reason
 
     if stage == "text":
         monkeypatch.setattr(config_parser, "parse_text_config", refuse)
@@ -467,8 +475,11 @@ def test_fresh_mesher_config_error_is_wrapped_without_changing_message(monkeypat
         monkeypatch.setattr(config_builder, "build_geometry_params", refuse)
     with pytest.raises(TextConfigError) as actual:
         parse(BASE)
-    assert str(actual.value) == "fresh import refused"
-    assert isinstance(actual.value.__cause__, config_parser.ConfigError)
+    assert str(actual.value) == ath_import_failure(reason)
+    cause = actual.value
+    while cause.__cause__ is not None:
+        cause = cause.__cause__
+    assert cause is reason
     assert parse(saved_v1(BASE)) is not None
     assert parse("; Parameter config\n" + BASE) is not None
 

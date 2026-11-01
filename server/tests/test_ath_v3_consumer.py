@@ -92,8 +92,8 @@ def test_saved_stamps_cannot_silently_acquire_new_geometry(stamp, control):
 
 
 @pytest.mark.parametrize('text, remedy', [
-    ('; Ath version V2025-06\nOSSE = {\nL=80\n}\nMesh.ThroatExtSegments=4\n', 'Remove Mesh.ThroatExtSegments'),
-    ('OSSE = {\nL=80\n}\nABEC.SimType=2\nScale.Z=2\nMesh.Roundover = {\nRadius=10\n}\n', 'Remove Scale.Z'),
+    ('; Ath version V2025-06\nOSSE = {\nL=80\n}\nMesh.ThroatExtSegments=4\n', 'Change or remove'),
+    ('OSSE = {\nL=80\n}\nABEC.SimType=2\nScale.Z=2\nMesh.Roundover = {\nRadius=10\n}\n', 'Change or remove'),
 ])
 def test_unqualified_new_control_combinations_explain_the_fix(text, remedy):
     with pytest.raises(TextConfigError, match=remedy):
@@ -101,17 +101,16 @@ def test_unqualified_new_control_combinations_explain_the_fix(text, remedy):
 
 
 @pytest.mark.parametrize('rotation', ['foo', '1/0'])
-def test_invalid_rotation_expressions_still_fail_when_evaluated(rotation):
+def test_invalid_rotation_expressions_are_refused_at_import(rotation):
     text = (ROOT / 'r-rot10.cfg').read_text().replace('Rot = 10', f'Rot = {rotation}')
-    design = parse(text).design
-    with pytest.raises(ValueError, match='invalid parameter expression'):
-        build_point_grid_arrays(build_geometry_params(design_to_mesher_config(design))[0])
+    with pytest.raises(TextConfigError, match='Rot:.*Change or remove'):
+        parse(text)
 
 
 @pytest.mark.parametrize('rotation', ['1e309', 'nan', 'inf'])
 def test_nonfinite_rotation_explains_the_fix(rotation):
     text = (ROOT / 'r-rot10.cfg').read_text().replace('Rot = 10', f'Rot = {rotation}')
-    with pytest.raises(TextConfigError, match='Set Rot to a finite number'):
+    with pytest.raises(TextConfigError, match='Rot must be finite.*Change or remove'):
         parse(text)
 
 
@@ -128,3 +127,141 @@ def test_rosse_block_rotation_stays_ignored_through_cfg_reopen(rotation):
         config = design_to_mesher_config(design)
         actual = build_point_grid_arrays(build_geometry_params(config)[0])['inner_grid']
         np.testing.assert_array_equal(actual, expected)
+
+
+def test_extension_block_precedence_matches_mesher_through_reopen():
+    from hornlab_mesher.config_parser import parse_text_config
+
+    text = (ROOT / 'r-ext-seg4.cfg').read_text() + '\nMesh = {\n ThroatExtSegments = 7\n}\n'
+    expected_config = parse_text_config(text)
+    expected = build_point_grid_arrays(build_geometry_params(expected_config)[0])['inner_grid']
+    design = parse(text).design
+    for copy in (design, parse(serialize(design)).design):
+        config = design_to_mesher_config(copy)
+        assert config['mesh']['athThroatExtSegments'] == 7
+        actual = build_point_grid_arrays(build_geometry_params(config)[0])['inner_grid']
+        assert actual.shape == (32, 28, 3)
+        np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize('control', [
+    {'ath_axial_scale': 2, 'mesh': {'ath_roundover': {'radius': 10, 'segments': 5}}},
+    {'ath_axial_sampling_rule': 'ath-v2025-06', 'mesh': {'ath_throat_ext_segments': 4}},
+])
+def test_dictionary_composition_decisions_belong_to_mesher(monkeypatch, control):
+    import hornlab_mesher.config_builder as native
+
+    seen = []
+
+    def accepted(config):
+        seen.append(config)
+        return {}, 'OSSE', 'bare'
+
+    monkeypatch.setattr(native, 'build_geometry_params', accepted)
+    design = DesignConfig.model_validate({
+        'formula': 'OSSE', 'text_import_version': V3, 'simulation': {'sim_type': 'freestanding'},
+        **control,
+    })
+    config = design_to_mesher_config(design)
+    assert seen == [config]
+
+
+def test_axial_scale_text_interpretation_belongs_to_mesher(monkeypatch):
+    import hornlab_mesher.config_parser as native
+
+    original = native.parse_text_config
+
+    def supported(text):
+        # Simulate a new constant spelling accepted by the native owner.
+        return original(text.replace('native_axis_unit', '2'))
+
+    monkeypatch.setattr(native, 'parse_text_config', supported)
+    text = (ROOT / 'o-z2-s3.cfg').read_text().replace('Scale.Z = 2', 'Scale.Z = native_axis_unit')
+    assert parse(text).design.root.ath_axial_scale == 2
+
+
+@pytest.mark.parametrize('block', ['Scale = {\n Z = 7\n}\n', 'profile'])
+def test_axial_scale_has_no_supported_block_override(block):
+    from hornlab_mesher.config_parser import ConfigError, parse_text_config
+
+    text = (ROOT / 'o-z2-s3.cfg').read_text()
+    text = text.replace('OSSE = {', 'OSSE = {\n Scale.Z = 7') if block == 'profile' else text + '\n' + block
+    with pytest.raises(ConfigError):
+        parse_text_config(text)
+    with pytest.raises(TextConfigError):
+        parse(text)
+
+
+def test_mesher_refusal_wording_is_preserved_with_a_remedy(monkeypatch):
+    import hornlab_mesher.config_builder as native
+
+    def refuse(config):
+        raise ValueError('A newly worded native refusal')
+
+    monkeypatch.setattr(native, 'build_geometry_params', refuse)
+    design = DesignConfig.model_validate({'formula': 'OSSE', 'text_import_version': V3, 'ath_axial_scale': 2})
+    with pytest.raises(ValueError, match='A newly worded native refusal.*Change or remove'):
+        design_to_mesher_config(design)
+
+
+@pytest.mark.parametrize('stamp', ['ath-2026-08c-v1', 'ath-2026-09a-v2'])
+def test_hand_edited_old_cfg_controls_remain_inert(stamp):
+    original = (ROOT / 'r-rot10.cfg').read_text().replace('Rot = 10\n', '')
+    prefix = f'; Waveguide Generator geometry-interpretation: {stamp}\n'
+    plain = parse(prefix + original).design
+    edited = parse(prefix + original + 'Scale.Z=2\nMesh.ThroatExtSegments=7\nRot=10\n').design
+    expected = build_point_grid_arrays(build_geometry_params(design_to_mesher_config(plain))[0])['inner_grid']
+    for design in (edited, parse(serialize(edited)).design):
+        assert design.root.text_import_version == stamp
+        assert {'Scale.Z', 'Mesh.ThroatExtSegments', 'Rot'} <= design.root.extra_keys.keys()
+        config = design_to_mesher_config(design)
+        assert 'athAxialScale' not in config
+        assert 'athThroatExtSegments' not in config['mesh']
+        assert 'rot' not in config['profile']
+        np.testing.assert_array_equal(build_point_grid_arrays(build_geometry_params(config)[0])['inner_grid'], expected)
+
+
+def test_unknown_import_version_has_the_update_remedy():
+    with pytest.raises(TextConfigError) as error:
+        parse('; Waveguide Generator geometry-interpretation: future-v4\nOSSE = {\nL=120\n}\n')
+    assert str(error.value) == 'This design was saved by a newer version of WG. Update WG to open it.'
+
+
+@pytest.mark.parametrize('kind', ['key', 'block'])
+def test_saved_v3_keeps_inert_wg_metadata(kind):
+    from server.design.schema import ConfigBlock
+
+    design = parse((ROOT / 'r-ext-seg4.cfg').read_text()).design
+    expected = build_point_grid_arrays(build_geometry_params(design_to_mesher_config(design))[0])['inner_grid']
+    if kind == 'key':
+        design.root.extra_keys['ArchiveNote'] = 'unchanged'
+    else:
+        design.root.extra_blocks['ArchiveNote'] = ConfigBlock(items={'Text': 'unchanged'}, entries=['Text = unchanged'])
+    reopened = parse(serialize(design)).design
+    assert reopened.root.extra_keys == design.root.extra_keys
+    assert reopened.root.extra_blocks == design.root.extra_blocks
+    np.testing.assert_array_equal(build_point_grid_arrays(build_geometry_params(design_to_mesher_config(reopened))[0])['inner_grid'], expected)
+
+
+def test_saved_sampling_metadata_reaches_the_native_composition_check():
+    text = ('; Parameter config\n; Waveguide Generator geometry-interpretation: ' + V3 + '\n'
+            'OSSE = {\nL=80\n}\n_athAxialSamplingRule=ath-v2025-06\nMesh.ThroatExtSegments=4\n')
+    with pytest.raises(TextConfigError, match='Mesh.ThroatExtSegments requires the current.*Change or remove'):
+        parse(text)
+
+
+def test_explicit_unit_axial_scale_survives_before_a_transverse_scale_edit():
+    from hornlab_mesher.config_parser import parse_text_config
+    from server.design.schema import Expr
+
+    text = (ROOT / 'o-z2-s3.cfg').read_text().replace('Scale = 3', 'Scale = 1').replace('Scale.Z = 2', 'Scale.Z = 1')
+    design = parse(text).design
+    for copy in (design, parse(serialize(design)).design):
+        assert copy.root.ath_axial_scale == 1
+        copy.root.scale = Expr(value=3)
+        config = design_to_mesher_config(copy)
+        assert config['athAxialScale'] == 1
+        expected = parse_text_config(text.replace('Scale = 1', 'Scale = 3'))
+        actual_grid = build_point_grid_arrays(build_geometry_params(config)[0])['inner_grid']
+        expected_grid = build_point_grid_arrays(build_geometry_params(expected)[0])['inner_grid']
+        np.testing.assert_array_equal(actual_grid, expected_grid)

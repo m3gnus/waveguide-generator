@@ -24,9 +24,9 @@ from .uid import validate_design_uid
 from .ath_import_defaults import apply_ath_import_defaults
 from .migrate import MigrationApplication, apply_migrations
 from .text_import import (
-    ATH_AXIAL_SURFACE_MESSAGE, ATH_EXTENSION_SAMPLING_MESSAGE,
+    AthImportError, ath_import_failure, validate_ath_mesher_config,
     GEOMETRY_STAMP_LABEL, NATIVE_GEOMETRY_VERSION, TEXT_IMPORT_VERSION, TEXT_IMPORT_VERSIONS,
-    ath_extension_segments, uses_current_ath_import, uses_ath_v3_import,
+    uses_current_ath_import, uses_ath_v3_import,
 )
 from .schema import (
     ConfigBlock,
@@ -857,7 +857,6 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
 # own table. Keys that ATH itself ignores (typos, solver and export settings)
 # are not listed: they import and are shown by name as preserved.
 _UNSUPPORTED_ATH_REASONS: dict[str, str] = {
-    "Scale.Z": "a separate axial scale is not implemented",
     "Horn.Part": "the two-profile (Horn.Part) geometry is not implemented",
     "HornGeometry": "the two-profile (Horn.Part) geometry is not implemented",
     "Horn.Adapter": "the two-profile (Horn.Part) geometry is not implemented",
@@ -872,7 +871,6 @@ _UNSUPPORTED_ATH_REASONS: dict[str, str] = {
     "Source.Contours": "contour-drawn (dome) sources are not implemented; WG would solve "
     "with its default throat source",
     "Mesh.ThroatSegments": "the throat-extension slice count is read but never built; use Mesh.ZMapPoints",
-    "Mesh.ThroatExtSegments": "the throat-extension slice count is not implemented; use Mesh.ZMapPoints",
     "Mesh.ThroatSliceDensity": "the throat slice density is read but never built",
     "Coverage.Mode": "the coverage mode is read but never built",
     "Plan": "user-defined enclosure plans are not implemented; use Depth and Spacing",
@@ -981,7 +979,6 @@ def _refuse_unsupported_ath_items(
     *,
     formula: str,
     block_name: str | None,
-    v3: bool = False,
 ) -> None:
     """Refuse ATH items that change ATH's model and that WG would drop.
 
@@ -1025,8 +1022,6 @@ def _refuse_unsupported_ath_items(
             for key, value in blocks[section].items.items():
                 dotted.setdefault(f"{section}.{key}", value)
     for key, value in dotted.items():
-        if v3 and key in {"Scale.Z", "Mesh.ThroatExtSegments"}:
-            continue
         if inactive_rollback(key):
             continue
         reason = _ath_unsupported_reason(key)
@@ -1249,7 +1244,7 @@ def _build_payload(
         try:
             _reject_unsupported_ath_keys(flat, selected, {}, {name: block.items for name, block in blocks.items()})
         except ConfigError as exc:
-            raise TextConfigError(str(exc)) from exc
+            raise TextConfigError(ath_import_failure(exc)) from exc
     if multi_source:
         raise TextConfigError(
             "multi-source ATH configs are not supported by this mesher "
@@ -1263,7 +1258,7 @@ def _build_payload(
     if rollback and not _ath_rollback_disabled(flat, fresh=refuse_unsupported):
         raise TextConfigError(f"Rollback is not supported by this mesher (saw {', '.join(rollback)})")
     if dialect == "ath" and refuse_unsupported:
-        _refuse_unsupported_ath_items(flat, blocks, formula=formula, block_name=block_name, v3=v3)
+        _refuse_unsupported_ath_items(flat, blocks, formula=formula, block_name=block_name)
     composition = {**stretch}
     for key in ("Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length"):
         if key in flat:
@@ -1517,19 +1512,10 @@ def _build_payload(
             mesh.setdefault("ath_rear_front_offset", 40)
             mesh.setdefault("ath_rear_step", 25)
 
-    if v3:
-        if "Scale.Z" in flat:
-            value = _ath_number(flat["Scale.Z"])
-            if _references_azimuth(flat["Scale.Z"]) or value is None or value <= 0:
-                raise TextConfigError("Axial scale must be a positive finite constant. Set Scale.Z to a number greater than 0 without p.")
-            payload["ath_axial_scale"] = value
-            consumed_keys.add("Scale.Z")
-        if "Mesh.ThroatExtSegments" in flat:
-            try:
-                payload.setdefault("mesh", {})["ath_throat_ext_segments"] = ath_extension_segments(flat["Mesh.ThroatExtSegments"])
-            except ValueError as exc:
-                raise TextConfigError(str(exc)) from exc
-            consumed_keys.add("Mesh.ThroatExtSegments")
+    if v3 and formula in {"OSSE", "R-OSSE"}:
+        # The native parser owns the values and section precedence. Consume
+        # these here, then retain its validated values below before schema load.
+        consumed_keys.update(key for key in ("Scale.Z", "Mesh.ThroatExtSegments") if key in flat)
         if formula == "R-OSSE" and "Rot" in flat:
             payload["rotation"] = flat["Rot"]
             consumed_keys.add("Rot")
@@ -1629,7 +1615,7 @@ def _apply_ath_lf_sources(
 
 def _mesher_validation_text(
     flat: Mapping[str, str], blocks: Mapping[str, _RawBlock], comments: list[str],
-    payload: Mapping[str, Any], ignored: list[IgnoredSetting],
+    payload: Mapping[str, Any], ignored: list[IgnoredSetting], *, preserve_passthrough: bool = False,
 ) -> str:
     """Keep ATH profile precedence while parking WG's nongeometry extensions.
 
@@ -1646,11 +1632,13 @@ def _mesher_validation_text(
         rows = []
         for key, value in source.items():
             name = prefix + key
+            if preserve_passthrough and name in payload.get("extra_keys", {}):
+                continue
             if (name in ignored_names and name not in {"OSSE.Rot", "NAC"}) or name.startswith("WG."):
                 continue
             if rollback_off and (name == "Rollback" or name.startswith("Rollback.")):
                 continue
-            if _ath_is_noop(name, value, fresh=False) and not (name == "Scale.Z" and uses_ath_v3_import(payload.get("text_import_version"))):
+            if not (name == "Scale.Z" and uses_ath_v3_import(payload.get("text_import_version"))) and _ath_is_noop(name, value, fresh=False):
                 continue
             if name in {"Mesh.RearShape", "Throat.Profile", "OSSE.Throat.Profile"}:
                 number = _ath_number(value)
@@ -1679,7 +1667,9 @@ def _mesher_validation_text(
         if payload.get("simulation", {}).get("sim_type") is None:
             rows.append("ABEC.SimType = 2")
     for name, block in blocks.items():
-        if name.startswith("WG.") or (inactive_enclosure and name == "Mesh.Enclosure"):
+        if preserve_passthrough and name in payload.get("extra_blocks", {}):
+            continue
+        if name == "CadLink" or name.startswith("WG.") or (inactive_enclosure and name == "Mesh.Enclosure"):
             continue
         if rollback_off and (name == "Rollback" or name.startswith("Rollback.")):
             continue
@@ -1766,7 +1756,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         raise TextConfigError("conflicting geometry interpretation stamps")
     version = next(iter(versions), None)
     if version is not None and version not in {*TEXT_IMPORT_VERSIONS, NATIVE_GEOMETRY_VERSION}:
-        raise TextConfigError(f"unsupported geometry interpretation {version!r}")
+        raise TextConfigError("This design was saved by a newer version of WG. Update WG to open it.")
     native = blocks.get("WG.NativeDesign")
     if native is not None:
         from .native import NATIVE_FORMULAS
@@ -1851,25 +1841,39 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         except (OverflowError, ValueError) as exc:
             raise TextConfigError(str(exc)) from exc
     mesh_payload = payload.get("mesh", {})
-    if (fresh_ath
+    if (fresh_ath or uses_ath_v3_import(payload.get("text_import_version"))
             or mesh_payload.get("ath_roundover") is not None or mesh_payload.get("ath_rear_shape") == 3):
         # The mesher owns the bounded combinations and their named diagnostics.
         # This is config validation only; no surfaces or mesh jobs are built.
         from hornlab_mesher.config_parser import ConfigError, parse_text_config
-        from hornlab_mesher.config_builder import build_geometry_params
         try:
-            validation_text = _mesher_validation_text(flat, blocks, comments, payload, ignored_profile)
+            validation_text = _mesher_validation_text(
+                flat, blocks, comments, payload, ignored_profile,
+                preserve_passthrough=uses_ath_v3_import(version),
+            )
             mesher_config = parse_text_config(validation_text)
-            build_geometry_params(mesher_config)
+            if uses_ath_v3_import(import_version):
+                from hornlab_mesher.text_import import ATH_AXIAL_RULE_KEY
+
+                # WG persists this metadata explicitly; the native text reader
+                # selects its default from the ATH header instead.
+                mesher_config[ATH_AXIAL_RULE_KEY] = payload["ath_axial_sampling_rule"]
+                if "Scale.Z" in flat and "athAxialScale" not in mesher_config:
+                    from hornlab_mesher.profile_common import eval_param
+
+                    # Retain an explicitly authored no-op for later edits. The
+                    # native reader has accepted it; reuse its scalar evaluator.
+                    mesher_config["athAxialScale"] = eval_param(flat["Scale.Z"])
+            validate_ath_mesher_config(mesher_config)
+        except AthImportError as exc:
+            raise TextConfigError(str(exc)) from exc
         except (ConfigError, ValueError) as exc:
-            message = str(exc)
-            if message.startswith("Mesh.ThroatExtSegments requires the current"):
-                message = ATH_EXTENSION_SAMPLING_MESSAGE
-            elif message.startswith("Scale.Z with Mesh.Roundover"):
-                message = ATH_AXIAL_SURFACE_MESSAGE
-            elif uses_ath_v3_import(import_version) and message.startswith("Rot must be finite"):
-                message = "R-OSSE rotation must be a finite angle. Set Rot to a finite number or a valid expression."
-            raise TextConfigError(message) from exc
+            raise TextConfigError(ath_import_failure(exc)) from exc
+        if uses_ath_v3_import(import_version):
+            if "athAxialScale" in mesher_config:
+                payload["ath_axial_scale"] = mesher_config["athAxialScale"]
+            if "athThroatExtSegments" in mesher_config.get("mesh", {}):
+                payload.setdefault("mesh", {})["ath_throat_ext_segments"] = mesher_config["mesh"]["athThroatExtSegments"]
         if fresh_ath:
             _apply_ath_lf_sources(payload, _ath_enclosure_items(flat, blocks),
                                   flat.get("Mesh.Quadrants"), mesher_config, ignored_profile)

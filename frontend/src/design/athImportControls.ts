@@ -56,7 +56,7 @@ export function lipUnavailableReason(design: DesignDocument): string | undefined
 }
 
 /** R-OSSE terms that change a meridian's depth when they vary with p. */
-const ROSSE_DEPTH_TERMS = ['R', 'a', 'a0', 'r0', 'k', 'r', 'b', 'm', 'tmax'];
+const ROSSE_DEPTH_TERMS = ['R', 'a', 'a0', 'r0', 'k', 'r', 'b', 'm', 'tmax', 'rotation'];
 
 /**
  * Where an imported R-OSSE morph is not ATH's: ATH V2026-09a builds a
