@@ -73,41 +73,59 @@ cannot alter an existing run.
 
 ### Sources and baffle
 
-In the parametric **Geometry** panel, open the wall and enclosure controls
-under **Mounting** and press **Sources and baffle…**. This Experimental
-workspace edits the current horn together with woofers on its enclosure's
-front baffle. The badge notes that results are geometry-checked only and not
-yet acoustically qualified; solve completion does not replace measurement.
+In the parametric **Geometry** panel, open **Mounting** and press **Sources and
+baffle…**. This Experimental workspace shows the front of the current horn and
+its enclosure, and places woofers on the front baffle. The badge notes that
+results are geometry-checked only and not yet acoustically qualified. The
+assembly was checked to complete at 200, 500, 1,000 and 2,000 Hz on BEAT CPU and
+Metal-BEM; BEAT Metal was not run, and completing a solve does not replace
+measurement.
 
-Choose **Waveguide in enclosure** and set the enclosure depth and margins to
-fit the woofers. Add a woofer above or below the mouth, or at a free position.
-Select it in the front view or list to edit its radius, flat piston or ATH cone,
-piston recess, placement, spacing, enabled state and drive. Member weight,
-delay and polarity are editable there too. The existing horn and enclosure
-remain the geometry owners. Invalid clearances or unsupported construction
-are reported when the context or build is prepared.
+Looking changes nothing: opening and closing the workspace leaves your design
+exactly as it was. The first real edit, such as adding a woofer, adds an assembly
+to the design, and from then on you solve it from this workspace rather than the
+toolbar **Solve**. To go back to an ordinary horn, delete the last woofer or press
+**Remove assembly**. Both are one **Undo** step.
 
-Opening the workspace adds a horn-only assembly when necessary. Edits and
-drags use the design's **Undo/Redo** history. Save the design normally; reopening
-it restores the assembly, driver identities and disabled woofer data. Opening
-a design without an assembly closes the workspace. **Export a copy** preserves
-the assembly in WG's `.cfg` extension data; ATH does not interpret that data.
+The drawing shows the baffle, the mouth, the line where the baffle's edge
+rounding starts, and each woofer, seen from the front with x to the right and y
+up. **Dimensions** adds the baffle size, the mouth size and the selected woofer's
+diameter and gap. **Names** labels every source. Drag a woofer to move it.
 
-Press **Build** to compile a mesh, or **Solve** inside this workspace to build
-the current revision and solve all enabled, driven radiators together. Use the
-design's Simulation settings for the sweep and engine. Ordinary toolbar Solve
-asks you to use Sources and baffle for an assembly. Exterior drivers require a
-supported BEAT coupled solve. Metal-BEM uses prescribed velocity and shows a
-notice; BEMPP cannot solve these compiled assembly meshes. Close the editor to
-use **Results**, where a completed run shows its retained assembly mesh and
-channel results. Reopen the saved design to edit the assembly;
-reopening a run restores its retained mesh and solve setup.
+Woofers need an enclosure. If the design has none, press **Use an enclosure**.
+Set the enclosure depth and margins under **Baffle** in the side panel; they are
+the same values as in **Mounting**. Press **Add woofer** to add one below the
+mouth, or use its arrow to add one above the mouth or at a free position. Select
+a woofer in the drawing or the list to edit its name, radius, flat piston or ATH
+cone, piston recess, drive and position, and its weight, delay and polarity.
+Delete, or **Remove woofer**, removes it. With **Spacing from**, the spacing sets
+the distance from the other woofer and the position only sets the direction.
+
+A woofer that overlaps the mouth, another woofer or the baffle edge turns red and
+the panel says by how much. The side panel also lists its clearances. A disabled
+woofer keeps its settings but is left out of the drawing, the geometry and the
+solve.
+
+Edits and drags use the design's **Undo/Redo** history. WG keeps the assembly with
+the design on screen and restores it when you return. **Export a copy** writes it
+into WG's `.cfg` extension data, and opening that file restores the assembly,
+source identities and disabled woofers; ATH does not interpret that data. Opening
+a design without an assembly closes the workspace.
+
+Press **Build** to compile a mesh, or **Solve** to build the current revision and
+solve all enabled, driven sources together, using the design's Simulation settings
+for the sweep and engine. BEMPP cannot solve these assembly meshes. If the mesh is
+over the limit, WG asks before solving it. Drivers and crossovers cannot be set in
+this workspace yet. Close the workspace to use **Results**, where a completed run
+shows its retained assembly mesh and channel results. Reopening a run restores its
+retained mesh and solve setup.
 
 Result curves and run archives use the normal export actions. Assembly
-geometry export (STEP/STL), wiring, boxes and arrays are later phases. Keep the
-saved design for editable geometry; an assembly run's imported-model view does
-not provide a WG parameter-config export. Parametric STEP/STL exports describe
-the horn and enclosure, without the assembly's woofer diaphragms.
+geometry export (STEP/STL), wiring, boxes and arrays are later phases. Keep
+an exported copy for editable geometry; an assembly run's imported-model view does
+not provide a WG parameter-config export. **STEP solid**, **STL** and **Send to CAD**
+carry the horn and enclosure only: the woofers and their baffle cutouts are not in
+the file, and WG says so at the export.
 
 ### Mesh settings for Fusion models
 
