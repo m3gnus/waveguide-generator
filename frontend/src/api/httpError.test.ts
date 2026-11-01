@@ -95,6 +95,8 @@ describe('failureWords', () => {
   it('keeps lengths in millimetres and the user\'s own names', () => {
     expect(readsPlain('The 500 mm mouth does not fit (400 mm).')).toBe(true);
     expect(readsPlain('Open “my_horn” again.')).toBe(true);
+    expect(readsPlain('Throat.Diameter must be a positive finite number')).toBe(false);
+    expect(readsPlain('Reduce Wall thickness. Then press Solve.')).toBe(true);
   });
 });
 

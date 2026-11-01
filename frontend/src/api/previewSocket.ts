@@ -1,4 +1,4 @@
-import { fieldSentence, validationSentence, failureWords, PLAIN_VALIDATION_FAILURE } from './httpError';
+import { fieldSentence, validationSentence, failureWords, PLAIN_VALIDATION_FAILURE, readsPlain } from './httpError';
 import { decodeFrame, type DecodedFrame, type FrameHeader } from './frame';
 import { selectPreferredFrame } from '../viewport/lodPolicy';
 import {
@@ -324,9 +324,9 @@ export class PreviewSocketManager {
         || (typeof message.code === 'string' && message.code.trim())
         || 'Preview request failed';
       // An internal failure's text is for developers; a field's own sentence is for the user.
+      const worded = firstField && original === firstField[1] ? fieldSentence(firstField[0].split('.'), original) : validationSentence(original);
       const detail = message.code === 'internal' ? PLAIN_PREVIEW_FAILURE
-        : (firstField && original === firstField[1] ? fieldSentence(firstField[0].split('.'), original) : validationSentence(original))
-          ?? PLAIN_VALIDATION_FAILURE;
+        : worded && readsPlain(worded) ? worded : PLAIN_VALIDATION_FAILURE;
       if (errorSeq !== null) this.latestOutcomeSeq = Math.max(this.latestOutcomeSeq, errorSeq);
       this.errorDocumentLoad = this.documentLoad;
       const documentFailed = supported && this.snapshot.awaitingDocumentFrame
