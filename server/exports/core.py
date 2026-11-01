@@ -785,7 +785,6 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     if design.formula in NATIVE_FORMULAS:
         return _native_step(design)
     _refuse_ath_step(design)
-    validate_export_segments(design)
     try:
         from hornlab_mesher.cad import write_step_from_config
     except ImportError as exc:
