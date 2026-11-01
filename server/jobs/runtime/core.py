@@ -3050,6 +3050,7 @@ class JobRuntime:
         try:
             results = json.loads(results_text)
         except json.JSONDecodeError as exc:
+            logger.warning("Could not read stored results of run %s: %s", job_id, exc)
             raise JobResourceUnavailableError(
                 "WG could not read this run’s results. Solve the design again."
             ) from exc
@@ -3073,6 +3074,7 @@ class JobRuntime:
                         }
                     )
             except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("Could not read pressure basis of run %s: %s", job_id, exc)
                 raise JobResourceUnavailableError(
                     "WG could not read this run’s saved response. Solve the design again."
                 ) from exc
@@ -3083,6 +3085,7 @@ class JobRuntime:
             try:
                 presentation = radiation_impedance_presentation(radiation_npz)
             except ValueError as exc:
+                logger.warning("Could not read radiation impedance of run %s: %s", job_id, exc)
                 raise JobResourceUnavailableError(
                     "WG could not read this run’s port data. Solve the design again."
                 ) from exc
@@ -3160,6 +3163,7 @@ class JobRuntime:
                 radiation_impedance_presentation, artifact
             )
         except ValueError as exc:
+            logger.warning("Could not read radiation impedance of run %s: %s", job_id, exc)
             raise JobResourceUnavailableError(
                 "WG could not read this run’s port data. Solve the design again."
             ) from exc

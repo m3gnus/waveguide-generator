@@ -1104,6 +1104,7 @@ def _write_export_unlocked(
                 # is a name collision, the other is a file this account cannot
                 # open. See `server/platform/staging.py` for how the app used
                 # to write files it could not read back.
+                logger.warning("Could not read the existing export file %s: %s", destination, exc)
                 raise HTTPException(
                     status_code=409,
                     detail=(

@@ -242,6 +242,7 @@ def create_diagnostics_router(
             paths.logs.mkdir(parents=True, exist_ok=True)
             subprocess.Popen(open_folder_command(paths.logs), **background_process_kwargs())
         except Exception as exc:
+            log.warning("Could not open the logs folder: %s", exc)
             raise HTTPException(
                 status_code=500, detail="WG could not open the logs folder. Download a problem report instead."
             ) from exc
