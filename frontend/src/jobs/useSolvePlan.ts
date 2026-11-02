@@ -31,7 +31,8 @@ function requestBody(
   options: SolveOptions | null,
   enabled: boolean,
 ): string | null {
-  if (!enabled || options === null) return null;
+  // An assembly solves its compiled model; the server refuses it this horn-only plan.
+  if (!enabled || options === null || design.assembly) return null;
   return solvePlanRequestBody(design, options);
 }
 

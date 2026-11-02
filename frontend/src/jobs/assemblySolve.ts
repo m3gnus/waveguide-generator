@@ -22,7 +22,6 @@ export async function prepareAssemblySolve(fetcher: typeof fetch = fetch,
   if (!design.assembly) throw new Error('This design has no Sources and baffle assembly.');
   // Everything below answers for what was on screen at this press: the check,
   // the build and the settings all belong to one revision, or none goes out.
-  const setupAtPress = assemblyImportedSetup();
   const optionsAtPress = useSolveOptionsStore.getState().options() as ImportedSolveSubmission['options'];
   const sameRevision = () => useDesignStore.getState().designRevision === designRevision;
   const changed = () => new Error('The design changed while it was being prepared. Press Solve again.');
@@ -41,7 +40,8 @@ export async function prepareAssemblySolve(fetcher: typeof fetch = fetch,
   }
   const published = useAssemblyBuildStore.getState().published;
   if (!published || !sameRevision() || !assemblyBuildCurrent(useAssemblyBuildStore.getState(), design)) throw changed();
-  const { setup, notice } = resolveAssemblySetup(setupAtPress, design.assembly, optionsAtPress, design.simulation);
+  // Channels are the compiled record's excitations, so this reads the build above.
+  const { setup, notice } = resolveAssemblySetup(assemblyImportedSetup(), design.assembly, optionsAtPress, design.simulation);
   return {
     modelId: published.model.model_id, notice,
     press: {

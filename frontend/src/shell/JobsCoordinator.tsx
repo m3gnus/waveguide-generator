@@ -422,7 +422,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   } = useSolvePlan(
     design,
     currentOptions,
-    workspaceMode === 'parametric' && !assemblyActive,
+    workspaceMode === 'parametric',
   );
   // Mode owns solve intent. The viewport CAD slot is evidence for the mismatch
   // guard only; an empty slot must still route to the imported blocker so CAD

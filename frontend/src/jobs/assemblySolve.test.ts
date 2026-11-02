@@ -106,6 +106,19 @@ describe('assembly Solve press', () => {
     expect(submitted?.setup.options.accuracy).toBe(engine === 'bempp' ? undefined : 'accurate');
   });
 
+  it('sends the channels of the build this press made, on a first Solve', async () => {
+    const { assembly, id } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });
+    const record = { ingest_id: 'wgi_9', model_id: 'design-assembly:wgu_x', sources: [{ id: 'horn-throat', role: 'HF' }, { id: `${id}/piston`, role: 'LF' }],
+      excitations: [{ id: 'horn-throat', source_ids: ['horn-throat'], motion: 'normal' }, { id, source_ids: [`${id}/piston`], motion: 'axial' }] };
+    const fetcher = (async (url: string) => new Response(JSON.stringify(url.endsWith('/context')
+      ? { minimum_clearance_mm: 0.1, clearances: {} }
+      : { status: 'published', prepared: record, model: { model_id: 'design-assembly:wgu_x', producer: 'design-assembly', display_name: 'x' } }), { status: 200 })) as unknown as typeof fetch;
+    const { press } = await prepareAssemblySolve(fetcher, () => 'p1');
+    const geometry = (press.setup as unknown as { geometry: { drive_channels: Array<{ id: string }> } }).geometry;
+    expect(geometry.drive_channels.map(channel => channel.id)).toEqual(['horn-throat', id]);
+  });
+
   it('refuses a design without an assembly', async () => {
     useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
     await expect(prepareAssemblySolve(fetch)).rejects.toThrow('no Sources and baffle assembly');
