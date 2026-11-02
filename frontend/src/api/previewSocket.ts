@@ -1,3 +1,5 @@
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { viewerPreferences } from '../viewerprefs/viewerPreferences';
 import { fieldSentence, validationSentence, failureWords, PLAIN_VALIDATION_FAILURE, readsPlain } from './httpError';
 import { decodeFrame, type DecodedFrame, type FrameHeader } from './frame';
 import { selectPreferredFrame } from '../viewport/lodPolicy';
@@ -583,3 +585,28 @@ export class PreviewSocketManager {
 }
 
 export const previewSocket = new PreviewSocketManager();
+
+/** Defer hidden parametric geometry until the design is viewed or edited. */
+export function observeLivePreview(control: Pick<PreviewSocketManager, 'start' | 'stop'> = previewSocket): () => void {
+  let active = true;
+  let editedInCad = false;
+  const apply = () => queueMicrotask(() => {
+    if (!active) return;
+    if (viewerPreferences.getSnapshot().liveUpdate
+      && (workspaceModeStore.getSnapshot().mode === 'parametric' || editedInCad)) control.start();
+    else control.stop();
+  });
+  apply();
+  const stops = [viewerPreferences.subscribe(apply), workspaceModeStore.subscribe(apply), subscribeRevision(event => {
+    // Linked CAD projects still edit WG's waveguide fields. Their first edit
+    // needs the normal server field validation, but restoring a document does not.
+    if (event.reason === 'load') editedInCad = false;
+    else if (workspaceModeStore.getSnapshot().mode === 'cad') editedInCad = true;
+    apply();
+  })];
+  return () => {
+    active = false;
+    stops.forEach(stop => stop());
+    control.stop();
+  };
+}

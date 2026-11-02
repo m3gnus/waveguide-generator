@@ -16,7 +16,7 @@ import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { observeLastModel, refreshChannelDriverBases } from './restores';
 import { archivedRequest, bundle, deferred, job, json, mesh, record, workspaceFor } from './selection.fixtures';
-import { effectiveImportedSetup, openImported, resetImportedModelStore, unchangedSetup, useImportedModelStore, type ImportedDisplay } from '../../stores/importedModel';
+import { effectiveImportedSetup, importedModelBlocker, openImported, reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore, type ImportedDisplay } from '../../stores/importedModel';
 
 import type { JobItem } from '../../api/jobsSocket';
 import { createCadArrivalActions, createCadReturnArrivalReader } from './arrivals';
@@ -158,7 +158,57 @@ describe('job and last-model restores without the coordinator', () => {
       await vi.waitFor(() => expect(useImportedModelStore.getState()).toMatchObject({ phase: 'ready', input: 'cad', modelId: 'wgl_project' }));
       expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
       expect(status).toHaveBeenCalledWith('Reopened the last model.');
+      const paths = fetcher.mock.calls.map(([url]) => String(url));
+      expect(paths.filter(path => path === '/api/models/wgl_project')).toHaveLength(1);
+      expect(paths.filter(path => path.startsWith('/api/models/wgl_project/setup'))).toHaveLength(1);
+      expect(paths.filter(path => path === `/api/cadlink/ingest/${record.ingest_id}`)).toHaveLength(1);
+      expect(useImportedModelStore.getState().restoredRevisionId).toBe('wgs_saved');
     } finally { stop(); }
+  });
+
+  it('owns the load during discovery so the passive empty viewport cannot force re-ingestion', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' }); workspaceModeStore.setMode('cad');
+    const setup = deferred<Response>(); const requested = deferred<void>();
+    const reads = cadModelFetcher();
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).startsWith('/api/models/wgl_project/setup')) { requested.resolve(); return setup.promise; }
+      return reads(input, init);
+    });
+    const opened = reopenLastModel(fetcher);
+    await requested.promise;
+    // The viewport's existing empty-record effect stands down for a loading model.
+    expect(useImportedModelStore.getState()).toMatchObject({ input: 'cad', phase: 'loading' });
+    expect(importedModelBlocker('cad')).toBeTruthy();
+    setup.resolve(json({ setup: workspaceFor().setup?.content, revision_id: 'wgs_saved' }));
+    expect(await opened).toBe(true);
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+    expect(useImportedModelStore.getState().restoredRevisionId).toBe('wgs_saved');
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
+  });
+
+  it('clears only its own discovery state when a newer selection cancels it', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' }); workspaceModeStore.setMode('cad');
+    const pending = deferred<Response>(); const requested = deferred<void>();
+    const opened = reopenLastModel(vi.fn<typeof fetch>(async () => { requested.resolve(); return pending.promise; }));
+    await requested.promise;
+    importedMeshStore.beginIntent();
+    pending.resolve(json({ model: { model_id: 'wgl_project', producer: 'cad' }, latest_prepared: null }));
+    expect(await opened).toBe(false);
+    expect(useImportedModelStore.getState().phase).toBe('empty');
+  });
+
+  it('keeps a newer opened model when the old discovery finally settles', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' }); workspaceModeStore.setMode('cad');
+    const pending = deferred<Response>(); const requested = deferred<void>();
+    const opened = reopenLastModel(vi.fn<typeof fetch>(async () => { requested.resolve(); return pending.promise; }));
+    await requested.promise;
+    await openImported({ kind: 'cad', record: { ...record, model_id: 'wgl_new' } });
+    const newer = useImportedModelStore.getState();
+    pending.resolve(json({ model: { model_id: 'wgl_project', producer: 'cad' }, latest_prepared: null }));
+    expect(await opened).toBe(false);
+    expect(useImportedModelStore.getState()).toBe(newer);
+    expect(newer).toMatchObject({ modelId: 'wgl_new', phase: 'ready' });
+    expect(readLastModel('cad')?.model_id).toBe('wgl_new');
   });
 
   it('opens nothing and keeps Parametric when that was the persisted mode', async () => {
@@ -263,8 +313,8 @@ describe('job and last-model restores without the coordinator', () => {
       expect(fetcher).not.toHaveBeenCalled();
       await settings.hydrate();
       await vi.waitFor(() => expect(useImportedModelStore.getState()).toMatchObject({ phase: 'ready', modelId: 'wgl_project' }));
-      // One open is two reads: the existence check, then the open itself.
-      expect(modelReads(fetcher)).toBe(2);
+      // Discovery and the open share one model read.
+      expect(modelReads(fetcher)).toBe(1);
     } finally { stop(); }
   });
 
@@ -284,7 +334,7 @@ describe('job and last-model restores without the coordinator', () => {
       late.resolve(settingsEnvelope({ cad: 'wgl_project', file: 'mesh-file:sha256:other' }));
       await vi.waitFor(() => expect(readLastModel('file')).toEqual({ model_id: 'mesh-file:sha256:other', input: 'file' }));
       await Promise.resolve(); await Promise.resolve();
-      expect(modelReads(fetcher)).toBe(2);
+      expect(modelReads(fetcher)).toBe(1);
     } finally { stop(); }
   });
 

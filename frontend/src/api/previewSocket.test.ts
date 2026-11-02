@@ -1,3 +1,5 @@
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { viewerPreferences } from '../viewerprefs/viewerPreferences';
 import { readFileSync } from 'node:fs';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -6,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTOSAVE_KEY, restoreAutosaveWithLateRetry, writeAutosave } from '../stores/autosave';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
-import { PreviewSocketManager, previewSocket, type WebSocketLike } from './previewSocket';
+import { PreviewSocketManager, previewSocket, observeLivePreview, type WebSocketLike } from './previewSocket';
 import { PLAIN_VALIDATION_FAILURE } from './httpError';
 
 class MockSocket implements WebSocketLike {
@@ -647,4 +649,23 @@ describe('rendered document dimension transitions', () => {
     expect(host.textContent).not.toContain(mouth[0].toFixed(1));
     act(() => root.unmount()); manager.stop(); host.remove();
   });
+});
+
+it('reconnects for CAD field edits and retains server validation errors after deferred startup', async () => {
+  resetDesignStore(); viewerPreferences.reset(); workspaceModeStore.setMode('cad');
+  const sockets: MockSocket[] = [];
+  const manager = new PreviewSocketManager(() => { const socket = new MockSocket(); sockets.push(socket); return socket; }, 'ws://test/ws/preview');
+  const dispose = observeLivePreview(manager);
+  try {
+    await Promise.resolve();
+    expect(sockets).toHaveLength(0);
+    useDesignStore.getState().updateValue('a', 95);
+    await Promise.resolve();
+    expect(sockets).toHaveLength(1);
+    sockets[0].message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    const message = 'Mouth coverage angle (a) must stay below 90°.';
+    sockets[0].message(JSON.stringify({ v: 1, kind: 'error', epoch: 3,
+      designRevision: useDesignStore.getState().designRevision, code: 'validation', fields: { a: message } }));
+    expect(manager.getSnapshot()).toMatchObject({ errorFields: { a: message }, errorRevision: useDesignStore.getState().designRevision });
+  } finally { dispose(); }
 });

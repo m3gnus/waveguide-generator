@@ -23,6 +23,9 @@ vi.mock('../api/previewSocket', () => ({
 }));
 
 import { resetDesignStore, useDesignStore } from '../stores/design';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { resetDocumentStore, useDocumentStore } from '../stores/document';
+import { bundle, record } from '../shell/cadlink/selection.fixtures';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { ParamPanel } from './ParamPanel';
 
@@ -34,7 +37,7 @@ describe('ParamPanel preview field errors', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
-    resetDesignStore();
+    resetDesignStore(); resetCadReturnStore(); resetDocumentStore();
     useDesignStore.getState().updateValue('morph.target_shape', 1);
     workspaceModeStore.setMode('parametric');
     preview.snapshot.errorFields = null;
@@ -106,6 +109,20 @@ describe('ParamPanel preview field errors', () => {
     act(() => useDesignStore.getState().updateValue(field, 40));
     expect(row.textContent).not.toContain(message);
     expect(row.querySelector('input')?.getAttribute('aria-invalid')).not.toBe('true');
+  });
+
+  it('shows server coverage errors after editing a Fusion-linked waveguide in CAD mode', () => {
+    useDocumentStore.getState().setCadLink({ designId: 'design-a', lineageId: 'wgl_project', baseEditVersion: 1 }, 'current');
+    useCadReturnStore.setState({ selectedBundle: { ...bundle, designIds: ['design-a'] },
+      ingestRecord: { ...record, project: { design_id: 'design-a', lineage_id: 'wgl_project', document_name: 'Speaker', document_native_id: null, archive_stem: null } } });
+    workspaceModeStore.setMode('cad');
+    useDesignStore.getState().setFamily('OSSE');
+    render();
+    act(() => useDesignStore.getState().updateValue('a', 95));
+    publish({ a: 'Mouth coverage angle (a) must stay below 90°.' });
+    const row = host.querySelector<HTMLElement>('[data-parameter-id="osse.a"]')!;
+    expect(row.textContent).toContain('Mouth coverage angle (a) must stay below 90°.');
+    expect(row.querySelector('input')?.getAttribute('aria-invalid')).toBe('true');
   });
 
   it('matches schema-qualified paths without attaching unknown keys to a row', () => {
