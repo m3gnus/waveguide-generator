@@ -162,14 +162,16 @@ def public_error_message(exc: BaseException, *, domain_values: bool = True) -> s
             return None
         seen.add(id(cause))
         cause = cause.__cause__
-    refusal = _user_refusal(exc)
-    if refusal is not None:
-        return f"{refusal.user_message} {refusal.next_step}".strip()
+    # The outer domain owner may have authored more specific import guidance.
+    # Invariant causes were rejected above before any public marker is trusted.
     forwarded = getattr(exc, "public_message", None)
     if isinstance(forwarded, str) and forwarded:
         return forwarded
     if exc.args and isinstance(exc.args[0], PublicMessage):
         return str(exc.args[0])
+    refusal = _user_refusal(exc)
+    if refusal is not None:
+        return f"{refusal.user_message} {refusal.next_step}".strip()
     public_types = {
         "server.mesh.imported": ("ImportedMeshError",),
         "server.mesh.builder": ("AssemblyRefusal",),
