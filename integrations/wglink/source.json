@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "a4ce2f475e9f2dbae8642b888c1dcbef9daee0f8",
+  "commit": "ae201fe33cf4f739aee9ea51cb6a1e0667c66c71",
   "license": "AGPL-3.0-or-later",
   "addinVersion": "0.3.3",
-  "note": "WGLink 0.3.3 (tag v0.3.3): Sources & Mesh driver rows and size zones, request progress and shared preflight checks."
+  "note": "Reviewed Send to CAD pickup, correlated delivery and confirmed solve-setting edits; previous history is not migrated into pending edits."
 }

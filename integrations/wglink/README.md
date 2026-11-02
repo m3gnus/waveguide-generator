@@ -78,3 +78,11 @@ The pinned source follows immutable WG export bundles: Fusion updates resolve th
 latest export through its locator and check the handoff's export id. Add-ins without
 the `immutableBundles` capability keep automatic Send; WG asks them to update for a
 manual Update.
+
+The reviewed source pin `ae201fe33cf4f739aee9ea51cb6a1e0667c66c71` picks up explicit Send to CAD requests
+with coordination off, reports correlated outcomes, and creates a separate Design
+for a new Insert. Unconfirmed solve-setting edits survive refusal/retry until WG
+reports the saved setup. The add-in uses its existing atomic writer for that
+optional pending-edit record; history written by the previous add-in is not
+migrated into pending edits. Real Fusion acceptance of this exact revision
+remains separate from source/package qualification.
