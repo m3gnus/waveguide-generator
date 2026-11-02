@@ -220,7 +220,7 @@ export function startAutosave(
       || state.designUid !== previous.designUid
       || state.designName !== previous.designName
       || state.filename !== previous.filename
-      // Export a copy and Send to CAD change only this: the draft must record
+      // A design file export and Send to CAD change only this: the draft must record
       // the copy they wrote, or a restart forgets it.
       || state.openedContentKey !== previous.openedContentKey
       || state.identity !== previous.identity

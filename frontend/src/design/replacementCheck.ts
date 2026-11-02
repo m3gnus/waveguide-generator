@@ -8,7 +8,7 @@ import { deadlineFetch } from '../api/deadlineFetch';
  * content key equals one of:
  *
  * - `openedContentKey`: the design as WG last opened it, or as WG itself last
- *   wrote it somewhere it can be opened from again (Export a copy, or the
+ *   wrote it somewhere it can be opened from again (Export → Design file, or the
  *   CAD-link registry a Send to CAD commits to);
  * - the key of a stored run's design, which can be loaded back from the run;
  * - the built-in default design's key, because New recreates that design.
@@ -213,10 +213,10 @@ export function discardConfirmation(replacement: string): string {
   if (keptContentKeyNow() === null) {
     return `Discard the design on screen and ${replacement}? Its directivity settings are incomplete, `
       + 'so WG cannot tell whether a run or a copy holds it. To keep it, cancel and finish them, '
-      + 'then solve it or export a copy.';
+      + 'then solve it or export its design file.';
   }
   // One remembered copy, not every file ever opened: "may", because an older
   // file the design matches can still be on disk.
   return `Discard the design on screen and ${replacement}? No run matches it, and neither does what WG `
-    + 'last opened, exported or sent, so this may lose it. To keep it, cancel, then solve it or export a copy.';
+    + 'last opened, exported or sent, so this may lose it. To keep it, cancel, then solve it or export its design file.';
 }

@@ -29,7 +29,7 @@ export function RunNameField({ now = new Date() }: { now?: Date }) {
       aria-label="Design name"
       value={draft}
       placeholder="Untitled"
-      title="Names the design, its Export a copy file, and every run and export made from it"
+      title="Names the design, its design file, and every run and export made from it"
       onChange={(event) => setDraft(event.target.value)}
       onFocus={() => { setEditing(true); }}
       onBlur={(event) => { commit(event.target.value); }}

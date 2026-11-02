@@ -79,7 +79,7 @@ Keep only one **WGLink** entry in Fusion's add-in list.
 8. The run appears in the **Jobs** panel with its progress. When it finishes,
    the charts appear in **Results**.
 
-To save your design, choose **File → Export a copy**.
+To save your design, choose **File → Export → Design file**.
 Every solved run also keeps a copy of its design.
 
 ## 3. Import and solve a mesh file

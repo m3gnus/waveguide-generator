@@ -107,7 +107,7 @@ woofer keeps its settings but is left out of the drawing, the geometry and the
 solve.
 
 Edits and drags use the design's **Undo/Redo** history. WG keeps the assembly with
-the design on screen and restores it when you return. **Export a copy** writes it
+the design on screen and restores it when you return. **File → Export → Design file** writes it
 into WG's `.cfg` extension data, and opening that file restores the assembly,
 source identities and disabled woofers; ATH does not interpret that data. Opening
 a design without an assembly closes the workspace.
@@ -685,11 +685,11 @@ memory than the computer can provide, make the mesh coarser before solving.
 
 A design has one name, typed in the **Design name** field above the run list. It is
 the only place a name is edited, and everything follows it: the title bar, the label
-beside the **File** menu, the viewport heading, the `.cfg` filename used by **Export a copy**, the
+beside the **File** menu, the viewport heading, the `.cfg` filename of its design file, the
 `Report.Title` written at the top of that file, the label each solve is stored under,
 and every export stem. Renaming alone never makes WG ask before replacing the design:
 the name is left out when WG checks whether a design exists anywhere else.
-**Export a copy as…** first renames the current design and then exports it, so the
+**Export design file as…** in the command palette first renames the current design and then exports it, so the
 file follows the name rather than the other way round.
 
 Opening a `.cfg` takes its name from the file, so a design renamed on disk keeps the
@@ -733,12 +733,12 @@ The folder picker opens on the machine running WG. When that machine has no
 desktop session to open it on — a tunnelled or headless install — type the path
 under *Enter a folder path instead*.
 
-**File → Export a copy** serializes the current parameters and solve
+**File → Export → Design file** serializes the current parameters and solve
 settings to a `.cfg` and writes it to the folder you choose. It is a portable
 copy: it does not create or advance a CAD-link identity or update the CAD-link
 registry.
 
-To branch a design, export a copy and open that file. When WG recognises it as a
+To branch a design, export its design file and open that file. When WG recognises it as a
 copy of a file you opened before, it asks whether to keep it with the original's
 runs or start a new design.
 
@@ -749,13 +749,13 @@ moves until you confirm.
 Nothing marks the design as changed. Instead, **New design**, **Open…**, opening a CAD-linked design
 and a Fusion project switch ask before replacing the design on screen only when it
 exists nowhere else: no stored run matches it, and it is not what WG last opened,
-exported or sent to CAD. To keep a design, solve it or export a copy; either one
+exported or sent to CAD. To keep a design, solve it or export its design file; either one
 stops the question.
 
 The same menu exports the current design. STEP solid is the normal CAD/production
 export; STEP inner surface is available when a bare acoustic surface is wanted. STL
 is a tessellated inner surface for mesh-oriented workflows. **Send to CAD** is
-different from **Export a copy**: it commits an identity-bearing snapshot to the
+different from a design file export: it commits an identity-bearing snapshot to the
 CAD-link registry. A design based on an older registry version is refused rather than
 silently forked into a second bundle that diverges from the linked CAD document --
 reopen its current head from **CAD-linked designs** and send that.

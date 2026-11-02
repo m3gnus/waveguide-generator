@@ -75,7 +75,7 @@ describe('StatusBar workspace modes', () => {
   it('says when work in progress is not being kept, and what to do', () => {
     const notKept = vi.spyOn(durableSettings, 'isNotKept').mockReturnValue(true);
     act(() => root.render(<StatusBar/>));
-    expect(host.textContent).toContain('WG cannot keep your work in progress. Use Export a copy in the File menu to keep this design.');
+    expect(host.textContent).toContain('WG cannot keep your work in progress. Use Export → Design file in the File menu to keep this design.');
     notKept.mockRestore();
   });
 

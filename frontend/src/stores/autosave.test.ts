@@ -90,7 +90,7 @@ describe('design autosave', () => {
   it('rewrites the draft when only the remembered copy changes', () => {
     vi.useFakeTimers();
     const controller = startAutosave(localStorage, 250, window, document);
-    // What Export a copy or a successful Send to CAD does to the document.
+    // What a design file export or a successful Send to CAD does to the document.
     useDocumentStore.getState().setOpenedContentKey(`${DESIGN_CONTENT_KEY_VERSION}:exported`);
     vi.advanceTimersByTime(250);
 
