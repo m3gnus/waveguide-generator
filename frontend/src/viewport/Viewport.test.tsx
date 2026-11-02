@@ -21,6 +21,7 @@ import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { PreviewSnapshot } from '../api/previewSocket';
 import { compareSelection } from '../api/results';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { preferencesStore } from '../prefs/preferences';
 import { currentDocumentLoad, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -206,42 +207,18 @@ describe('Viewport preview errors', () => {
       act(() => root.render(<Viewport />));
       const readout = host.querySelector('[data-testid="design-dimensions"]')!;
       expect(readout.closest('.wg2-viewport')).not.toBeNull();
-      expect(readout.textContent).toBe('Mouth 411.7 × 320.0 · Depth 176.5 · Enclosure 450.0 × 360.0 × 240.0 mm');
+      expect([...readout.querySelectorAll('.viewport-fact')].map((fact) => fact.textContent))
+        .toEqual(['Mouth 411.7 × 320.0 mm', 'Depth 176.5 mm', 'Enclosure 450.0 × 360.0 × 240.0 mm']);
       expect(readout.classList.contains('stale')).toBe(false);
       act(() => workspaceModeStore.setMode('cad'));
       expect(host.querySelector('[data-testid="design-dimensions"]')).toBeNull();
     } finally { Object.assign(previewSnapshot, saved); }
   });
 
-  it('shows native opening dimensions only for the current document and revision', () => {
-    const original = { ...previewSnapshot };
-    try {
-      act(() => useDesignStore.getState().setFamily('OSSE-ARC'));
-      const revision = useDesignStore.getState().designRevision;
-      const dimensionsFrame = { ...frame, documentLoad: currentDocumentLoad(), header: {
-        ...frame.header, designRevision: revision,
-        previewMetadata: { dimensions_mm: { mouth_opening: [280, 280] as [number, number] } },
-      } };
-      const render = () => act(() => root.render(<Viewport />));
-      Object.assign(previewSnapshot, { dimensionsFrame, displayedRevision: revision, stale: false, error: null });
-      render();
-      expect(host.querySelector('.viewport-title span')?.textContent).toBe('OSSE-ARC · Ø 280 mm · full');
-      previewSnapshot.awaitingDocumentFrame = true;
-      render();
-      expect(host.querySelector('.viewport-title span')?.textContent).toBe('OSSE-ARC · full');
-      previewSnapshot.awaitingDocumentFrame = false;
-      dimensionsFrame.documentLoad -= 1;
-      render();
-      expect(host.querySelector('.viewport-title span')?.textContent).toBe('OSSE-ARC · full');
-      dimensionsFrame.documentLoad = currentDocumentLoad();
-      dimensionsFrame.header.designRevision -= 1;
-      render();
-      expect(host.querySelector('.viewport-title span')?.textContent).toBe('OSSE-ARC · full');
-    } finally {
-      delete previewSnapshot.dimensionsFrame;
-      delete previewSnapshot.awaitingDocumentFrame;
-      Object.assign(previewSnapshot, original);
-    }
+  it('names the family alone: the mouth and the solve domain are facts of their own', () => {
+    act(() => useDesignStore.getState().setFamily('OSSE-ARC'));
+    act(() => root.render(<Viewport />));
+    expect(host.querySelector('.viewport-title span')?.textContent).toBe('OSSE-ARC');
   });
 
   it('offers one Refresh that re-requests the current design', () => {
@@ -266,12 +243,18 @@ describe('Viewport preview errors', () => {
     previewSnapshot.error = saved;
   });
 
-  it('presents geometry evaluation and on-screen time as overlapping timings', () => {
-    const timing = [...host.querySelectorAll<HTMLElement>('.viewport-live > span')]
-      .find((element) => element.textContent?.startsWith('geometry '));
-    // 'request→paint' was developer telemetry sitting in a user-facing readout.
-    expect(timing?.textContent).toBe('geometry 1388.0 ms · on screen —');
-    expect(timing?.textContent).not.toContain('+ client');
+  it('keeps geometry evaluation and on-screen time behind developer details', () => {
+    expect(host.querySelector('.viewport-timing')).toBeNull();
+    try {
+      act(() => preferencesStore.update({ showDeveloperDetails: true }));
+      act(() => root.render(<Viewport />));
+      const timing = host.querySelector('.viewport-timing');
+      // 'request→paint' was developer telemetry sitting in a user-facing readout.
+      expect(timing?.textContent).toBe('Geometry 1388.0 msOn screen —');
+      expect(timing?.textContent).not.toContain('+ client');
+    } finally {
+      act(() => preferencesStore.update({ showDeveloperDetails: false }));
+    }
   });
 
   it('starts in an untilted orthographic front view for precise shape inspection', () => {
@@ -967,7 +950,7 @@ describe('Viewport preview errors', () => {
       importedMeshStore.setCad(createImportedMeshScene('Speaker', parseMSH(meshFixture), 'cad', ingestId, planes as string[]));
       workspaceModeStore.setMode('cad');
     });
-    expect(host.querySelector('[aria-label="Solved domain"]')?.textContent).toBe(`Solve domain: ${label}`);
+    expect(host.querySelector('[aria-label="Solved domain"]')?.textContent).toBe(`Solve domain ${label}`);
   });
 
   it('shows one calm fallback line after a CAD solve, without diagnostic ids or reasons', () => {
@@ -1124,7 +1107,7 @@ describe('Viewport preview errors', () => {
     });
     const buttons = () => [...host.querySelectorAll<HTMLButtonElement>('.mesh-source-tools button')];
     act(() => buttons()[1].click());
-    expect(host.querySelector('.viewport-live')?.textContent).toContain('loading solve mesh');
+    expect(host.querySelector('.viewport-facts')?.textContent).toContain('Solve mesh loading…');
 
     // Three polls land while the fetch is still open.
     act(() => useCadReturnStore.setState({ ingestRecord: record() }));
@@ -1139,7 +1122,8 @@ describe('Viewport preview errors', () => {
       await Promise.resolve();
     });
     expect(importedMeshStore.getSnapshot().cadSolver?.ingestId).toBe(ingestId);
-    expect(host.querySelector('.viewport-live')?.textContent).toContain('prepared solve mesh');
+    expect(host.querySelector('.viewport-facts')?.textContent).toContain('Solve mesh prepared');
+    expect(host.querySelector('.model-source-badge')?.textContent).toBe('CAD LINK');
 
     fetchSpy.mockRestore();
     act(() => {
@@ -1206,29 +1190,24 @@ describe('Viewport geometry warnings', () => {
     expect(warning?.textContent).toContain('581.3 mm instead of the requested 500.0 mm');
   });
 
-  it('anchors wrapped dimensions in the timing header, separately from warnings, errors and stats', () => {
+  it('writes one header above the model and floats nothing over it', () => {
     render([UNREACHABLE], { error: 'Invalid draft', dimensions: true });
-    const dimensions = host.querySelector('[data-testid="design-dimensions"]')!;
-    const header = dimensions.closest('.viewport-header')!;
-    expect(dimensions.closest('.viewport-live')).not.toBeNull();
-    expect(header).not.toBeNull();
-    expect(dimensions.textContent).toContain('Enclosure 500.0 × 400.0 × 200.0');
-    for (const selector of ['.viewport-warning', '.viewport-error-banner']) {
-      const banner = host.querySelector(selector)!;
-      expect(banner).not.toBeNull();
-      expect(header.contains(banner)).toBe(false);
-    }
+    const header = host.querySelector('.viewport-header')!;
+    expect(header.querySelector('.viewport-title')).not.toBeNull();
+    expect(header.querySelector('.viewport-facts [data-testid="design-dimensions"]')?.textContent).toContain('Enclosure 500.0 × 400.0 × 200.0');
+    expect(header.querySelector('.viewport-facts [aria-label="Solved domain"]')?.textContent).toContain('Solve domain');
+    expect(header.querySelector('.viewport-live .viewport-warning')).not.toBeNull();
+    const notices = host.querySelector('.viewport-top > .viewport-notices')!;
+    expect(notices.querySelector('.viewport-error-banner')).not.toBeNull();
     const css = new TextDecoder().decode(readFileSync('src/viewport/viewport.css'));
-    const rule = css.match(/\.viewport-dimensions \{([^}]+)\}/)![1];
-    expect(rule).toContain('width: max-content');
-    expect(rule).toContain('max-width: 100%');
-    expect(rule).toContain('pointer-events: none');
-    expect(rule).not.toMatch(/position: absolute|top:|right:/);
+    for (const selector of ['viewport-top', 'viewport-header', 'viewport-notices', 'viewport-note', 'viewport-connection-banner']) {
+      expect(css.match(new RegExp(`\\.${selector} \\{([^}]+)\\}`))![1]).not.toContain('position: absolute');
+    }
     expect(css).toContain('top: calc(var(--viewport-header-height, 34px) + 9px)');
-    expect(css).toContain('.parametric-viewport .wg2-stats { top: calc(var(--viewport-header-height, 34px) + 18px)');
+    expect(css).toContain('.wg2-viewport .wg2-stats { top: calc(var(--viewport-header-height, 34px) + 18px)');
   });
 
-  it('moves the HUD below the measured header when dimensions wrap', () => {
+  it('moves the HUD below the measured header in every workspace', () => {
     let resize: () => void = () => {};
     const observe = vi.fn();
     const disconnect = vi.fn();
@@ -1239,19 +1218,19 @@ describe('Viewport geometry warnings', () => {
     });
     try {
       render([UNREACHABLE], { dimensions: true });
-      const header = host.querySelector<HTMLElement>('.viewport-header')!;
+      const top = host.querySelector<HTMLElement>('.viewport-top')!;
       const viewport = host.querySelector<HTMLElement>('.wg2-viewport')!;
-      expect(observe).toHaveBeenCalledWith(header);
-      const bounds = vi.spyOn(header, 'getBoundingClientRect');
+      expect(observe).toHaveBeenCalledWith(top);
+      const bounds = vi.spyOn(top, 'getBoundingClientRect');
       bounds.mockReturnValue(new DOMRect(0, 0, 600, 86));
       act(() => resize());
+      expect(viewport.style.getPropertyValue('--viewport-header-height')).toBe('86px');
+      act(() => workspaceModeStore.setMode('cad'));
+      expect(disconnect).not.toHaveBeenCalled();
       expect(viewport.style.getPropertyValue('--viewport-header-height')).toBe('86px');
       bounds.mockReturnValue(new DOMRect(0, 0, 1200, 34));
       act(() => resize());
       expect(viewport.style.getPropertyValue('--viewport-header-height')).toBe('34px');
-      act(() => workspaceModeStore.setMode('cad'));
-      expect(disconnect).toHaveBeenCalledOnce();
-      expect(viewport.style.getPropertyValue('--viewport-header-height')).toBe('');
     } finally {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
@@ -1279,20 +1258,8 @@ describe('Viewport geometry warnings', () => {
     render([UNREACHABLE], { error: 'ATH expression is unsupported' });
     expect(host.querySelector('.viewport-error-banner')).not.toBeNull();
     expect(host.querySelector<HTMLDetailsElement>('.viewport-warning')?.open).toBe(false);
-    const notices = host.querySelector('.viewport-notices')!;
-    expect(notices.querySelector('.viewport-warning')).not.toBeNull();
-    expect(notices.querySelector('.viewport-error-banner')).not.toBeNull();
     const css = new TextDecoder().decode(readFileSync('src/viewport/viewport.css'));
-    expect(css).toContain('.viewport-notices { position: absolute;');
-    expect(css).toContain('flex-direction: column; align-items: center; gap: 8px');
-    for (const selector of ['viewport-connection-banner', 'viewport-error-banner', 'viewport-warning-details']) {
-      const rule = css.match(new RegExp(`\\.${selector} \\{([^}]+)\\}`))![1];
-      expect(rule).not.toContain('position: absolute');
-      expect(rule).not.toContain('top:');
-    }
     expect(css).not.toContain('below-error');
-    const shared = css.match(/\.viewport-connection-banner,\s*\.viewport-error-banner \{([^}]+)\}/)![1];
-    expect(shared).not.toContain('--red-rgb');
   });
 });
 

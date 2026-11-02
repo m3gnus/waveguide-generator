@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NATIVE_FAMILIES, designForFamily } from '../stores/design';
-import { previewBadge, previewErrorKey, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
+import { previewBadge, previewErrorKey, previewErrorMessage, staleReason } from './presentation';
 
 describe('preview presentation', () => {
   it('applies badge precedence from paused through live', () => {
@@ -31,39 +30,6 @@ describe('preview presentation', () => {
     expect(staleReason(true, 'reconnecting', null)).toContain('reconnecting');
     expect(staleReason(true, 'connected', 'boom')).toContain('could not show');
     expect(staleReason(true, 'connected', null)).toContain('still drawing');
-  });
-});
-
-describe('viewport subtitle', () => {
-  it.each(NATIVE_FAMILIES)('uses resolved opening dimensions for %s', (family) => {
-    const design = designForFamily(family);
-    expect(viewportSubtitle(design, [280, 280])).toBe(`${family} · Ø 280 mm · full`);
-    expect(viewportSubtitle(design)).toBe(`${family} · full`);
-    expect(viewportSubtitle(design, [NaN, 280])).toBe(`${family} · full`);
-  });
-
-  it('uses the family mouth field and actual quadrant count', () => {
-    const design = designForFamily('R-OSSE');
-    design.R = 140;
-    design.quadrants = [1, 2];
-    expect(viewportSubtitle(design)).toBe('R-OSSE · Ø 280 mm · half');
-  });
-
-  it('omits a mouth dimension that OSSE does not provide', () => {
-    const design = { ...designForFamily('OSSE'), R: 999, quadrants: [1, 2, 3] };
-    expect(viewportSubtitle(design)).toBe('OSSE · 3/4');
-    expect(viewportSubtitle(design)).not.toContain('999');
-  });
-
-  it('derives FREEFORM mouth dimensions only when both profiles provide them', () => {
-    const design = designForFamily('FREEFORM');
-    design.profile_h!.points.at(-1)!.r = 140;
-    design.profile_v!.points.at(-1)!.r = 100;
-    design.quadrants = [1];
-    expect(viewportSubtitle(design)).toBe('FREEFORM · 280 × 200 mm · quarter');
-
-    design.profile_v = undefined;
-    expect(viewportSubtitle(design)).toBe('FREEFORM · quarter');
   });
 });
 

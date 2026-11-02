@@ -2,9 +2,10 @@ import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { CurrentModelStatus } from './CurrentModelStatus';
 import { selectJob } from '../jobs/selectJob';
+import { listedRuns, railRuns, useRunFilters } from '../jobs/runFilters';
 import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
 import { samplingNotes } from '../results/sampling';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
@@ -47,7 +48,7 @@ import { Icon } from './icons';
 import { ResultsHeader } from './ResultsHeader';
 import { jobsCoordinatorBridge, useOptionalSolveControl } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
-import { trapDialogFocus } from './dialogFocus';
+import { useModalDialogFocus } from './dialogFocus';
 import { useRunNormAngle } from '../stores/solveOptionsContext';
 import { useObservationStore } from '../viewport/observationStore';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
@@ -2005,60 +2006,17 @@ export function useCardMetrics(target: React.RefObject<HTMLElement | null>): Car
   return metrics;
 }
 
-function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAction, radiationArtifact, wrapper, job, channelId }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; live: boolean; beamShapeAction?: ChartStubAction; radiationArtifact?: RadiationArtifactView } & SummarySourceProps) {
-  // A comparison is active but this card cannot carry it. Saying so is the
-  // whole point: silently drawing the primary run looks identical to drawing
-  // both, so the user believes they are comparing when they are not. Members of
-  // a combined sum are not a comparison and are not counted here.
-  const compared = named.filter(({ secondary }) => !secondary);
-  const comparisonIgnored = compared.length > 1 && !COMPARABLE_CHARTS.has(chartType);
+/** What a chart says about itself, on its card and in its detail view alike. */
+function useChartDescription({ chartType, result, named, job }: { chartType: ChartType; result?: ResultPayload; named: NamedResult[] } & Pick<SummarySourceProps, 'job'>) {
+  // The subtitle and map share the shown run's recorded reference.
+  const normAngle = useRunNormAngle(job);
+  const preferences = usePreferences();
+  if (!result) return { samplingDisclosure: '', subtitle: null, unit: null };
   const samplingDisclosure = (COMPARABLE_CHARTS.has(chartType) && named.length
     ? named : [{ label: 'Shown result', result }])
     .flatMap(({ label, result: entry }) => samplingNotes(entry).length
       ? [`${label}: ${samplingNotes(entry)[1]}. ${samplingNotes(entry)[0]}`] : [])
     .join('\n');
-  // The subtitle and map share the shown run's recorded reference.
-  const cardNormAngle = useRunNormAngle(job);
-  const cardPreferences = usePreferences();
-  const [expanded, setExpanded] = useState(false);
-  const [imageReady, setImageReady] = useState(false);
-  const [imageOperation, setImageOperation] = useState<'copy' | 'download' | null>(null);
-  const [imageStatus, setImageStatus] = useState<string | null>(null);
-  const detail = useRef<HTMLElement>(null);
-  const card = useRef<HTMLElement>(null);
-  const imageStatusTimer = useRef<number | null>(null);
-  const { density, wide } = useCardMetrics(card);
-  useLayoutEffect(() => {
-    const element = card.current;
-    if (!element || chartType === 'summary') { setImageReady(false); return; }
-    const update = () => setImageReady(Boolean(element.querySelector('.chart-placeholder canvas')));
-    update();
-    const observer = new MutationObserver(update);
-    observer.observe(element, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [chartType]);
-  useEffect(() => () => {
-    if (imageStatusTimer.current !== null) window.clearTimeout(imageStatusTimer.current);
-  }, []);
-  useEffect(() => {
-    if (!expanded) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focus = requestAnimationFrame(() => detail.current?.querySelector<HTMLElement>('button, select, [tabindex]:not([tabindex="-1"])')?.focus());
-    const close = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setExpanded(false);
-        return;
-      }
-      trapDialogFocus(detail, event);
-    };
-    window.addEventListener('keydown', close);
-    return () => {
-      cancelAnimationFrame(focus);
-      window.removeEventListener('keydown', close);
-      previous?.focus();
-    };
-  }, [expanded]);
   const polarStep = chartType.startsWith('directivity_map') ? resolvedPolarStepNotice(result) : null;
   // The same list ResultChart overlays, so the chip and the subtitle describe
   // the chart that is actually drawn rather than the primary run alone.
@@ -2069,12 +2027,12 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   // infer at all -- an angle outside this run's sweep is answered at the
   // nearest measured one, not refused.
   const mapNorm = chartType.startsWith('directivity_map')
-    ? resolveNormalizationAngle(result, cardNormAngle)
+    ? resolveNormalizationAngle(result, normAngle)
     : null;
   const subtitle = chartType.startsWith('directivity_map')
     ? `ref ${preferencesStore.getSnapshot().mapReference} dB · 0 dB at ${Number(mapNorm!.angle.toFixed(3))}°${mapNorm!.clamped ? ' (nearest measured)' : ''}${polarStep ? ` · ${polarStep}` : ''}`
     : chartType === 'frequency_response'
-      ? splSubtitle(result, resolveMeasurementSelection(result, cardPreferences.measurementPlane, cardPreferences.measurementAngles))
+      ? splSubtitle(result, resolveMeasurementSelection(result, preferences.measurementPlane, preferences.measurementAngles))
     : chartType === 'power_response' ? powerResponseMethodCaption(result)
     : impedanceItems ? impedanceSubtitle(impedanceItems)
     : chartType === 'radiation_impedance' ? 'engineering · exp(+jωt) · in-phase ports'
@@ -2084,33 +2042,36 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     : chartType === 'max_output' ? limitingSummary(maxOutputOf(result), memberLabelOf(result))
     : null;
   const unit = chartUnit(chartType, result, impedanceItems, preferencesStore.getSnapshot().groupDelayUnit);
-  // Every card, not only the curves that can carry a hatched band: a map, a
-  // polar cut or a balloon of an unqualified channel is just as unreliable.
-  const unqualifiedNote = useMemo(
-    () => unqualifiedCaption(named.length ? named : [{ id: 'primary', label: 'Primary', result, wrapper }]),
-    [named, result, wrapper],
-  );
-  const unqualifiedFormulation = powerQualificationOf(result, wrapper ?? result)?.formulation ?? null;
-  const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';
-  // The detail dialog owns the rendered chart while it is open, so capture from
-  // there rather than from the card behind it -- otherwise the large view would
-  // silently hand back the small view's image.
-  const imageAction = useCallback(async (operation: 'copy' | 'download') => {
-    const target = detail.current?.querySelector<HTMLElement>('.result-detail-chart')
-      ?? card.current?.querySelector<HTMLElement>('.chart-placeholder');
+  return { samplingDisclosure, subtitle, unit };
+}
+
+/** Copy and export of whichever element holds the rendered chart. */
+function useChartImage({ capture, chartType, job, channelId, background }: {
+  capture: () => HTMLElement | null | undefined;
+  chartType: ChartType;
+  background: ChartTokens['background'];
+} & Pick<SummarySourceProps, 'job' | 'channelId'>) {
+  const [imageOperation, setImageOperation] = useState<'copy' | 'download' | null>(null);
+  const [imageStatus, setImageStatus] = useState<string | null>(null);
+  const imageStatusTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (imageStatusTimer.current !== null) window.clearTimeout(imageStatusTimer.current);
+  }, []);
+  const imageAction = async (operation: 'copy' | 'download') => {
+    const target = capture();
     if (!target || imageOperation) return;
     setImageOperation(operation);
     setImageStatus(null);
     try {
       if (operation === 'copy') {
-        await copyChartPng(target, tokens.background);
+        await copyChartPng(target, background);
         setImageStatus('Copied PNG');
       } else {
         const filename = chartImageFilename(chartType, job, channelId);
         const destination = await askForExportDestination({ title: 'Export chart PNG', detail: filename });
         if (!destination) { setImageStatus('Export cancelled'); return; }
         await saveChartPng(
-          target, filename, destination.token, tokens.background, askToReplaceExports,
+          target, filename, destination.token, background, askToReplaceExports,
         );
         setImageStatus('Saved PNG');
       }
@@ -2123,60 +2084,202 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
       if (imageStatusTimer.current !== null) window.clearTimeout(imageStatusTimer.current);
       imageStatusTimer.current = window.setTimeout(() => setImageStatus(null), 1_600);
     }
-  }, [channelId, chartType, imageOperation, job, tokens.background]);
-  return <>
-    <section ref={card} className={`result-card result-${index}`} data-density={density}>
-      <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}>
-        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/>
-      </div>
-      {/* Chrome floats over the plot rather than reserving a row of its own:
-          a fixed header costs a quarter of a six-panel card's height. */}
-      <div className="result-chrome">
-        <span className="result-title">
-          <b>{chartTitle(chartType, wide)}</b>
-          {unit && <em>{unit}</em>}
-          <Icon name="caret"/>
-          <select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select>
+  };
+  return { imageOperation, imageStatus, imageAction };
+}
+
+function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAction, radiationArtifact, wrapper, job, channelId, onExpand }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; live: boolean; beamShapeAction?: ChartStubAction; radiationArtifact?: RadiationArtifactView; onExpand?: (index: number) => void } & SummarySourceProps) {
+  // A comparison is active but this card cannot carry it. Saying so is the
+  // whole point: silently drawing the primary run looks identical to drawing
+  // both, so the user believes they are comparing when they are not. Members of
+  // a combined sum are not a comparison and are not counted here.
+  const compared = named.filter(({ secondary }) => !secondary);
+  const comparisonIgnored = compared.length > 1 && !COMPARABLE_CHARTS.has(chartType);
+  const { samplingDisclosure, subtitle, unit } = useChartDescription({ chartType, result, named, job });
+  const [imageReady, setImageReady] = useState(false);
+  const card = useRef<HTMLElement>(null);
+  const { density, wide } = useCardMetrics(card);
+  const { imageOperation, imageStatus, imageAction } = useChartImage({
+    capture: () => card.current?.querySelector<HTMLElement>('.chart-placeholder'),
+    chartType, job, channelId, background: tokens.background,
+  });
+  useLayoutEffect(() => {
+    const element = card.current;
+    if (!element || chartType === 'summary') { setImageReady(false); return; }
+    const update = () => setImageReady(Boolean(element.querySelector('.chart-placeholder canvas')));
+    update();
+    const observer = new MutationObserver(update);
+    observer.observe(element, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [chartType]);
+  // Every card, not only the curves that can carry a hatched band: a map, a
+  // polar cut or a balloon of an unqualified channel is just as unreliable.
+  const unqualifiedNote = useMemo(
+    () => unqualifiedCaption(named.length ? named : [{ id: 'primary', label: 'Primary', result, wrapper }]),
+    [named, result, wrapper],
+  );
+  const unqualifiedFormulation = powerQualificationOf(result, wrapper ?? result)?.formulation ?? null;
+  const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';
+  return <section ref={card} className={`result-card result-${index}`} data-density={density}>
+    <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => onExpand?.(index)}>
+      <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/>
+    </div>
+    {/* Chrome floats over the plot rather than reserving a row of its own:
+        a fixed header costs a quarter of a six-panel card's height. */}
+    <div className="result-chrome">
+      <span className="result-title">
+        <b>{chartTitle(chartType, wide)}</b>
+        {unit && <em>{unit}</em>}
+        <Icon name="caret"/>
+        <select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}><ChartTypeOptions/></select>
+      </span>
+      {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
+      {samplingDisclosure && <span className="result-unqualified" role="note" title={samplingDisclosure}>Adaptive · reconstructed estimates</span>}
+      {unqualifiedNote && <span className="result-unqualified" role="note" title={`${unqualifiedNote}. ${unqualifiedMessage(unqualifiedFormulation)}`}>{density === 'compact' ? 'Unqualified' : unqualifiedNote}</span>}
+      {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {compared.length}</span>}
+      <span className="result-chrome-spacer"/>
+      {imageReady && <>
+        <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label={`Copy panel ${index + 1} as PNG`} title="Copy chart image" onClick={() => void imageAction('copy')}><Icon name="copy"/></button>
+        <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label={`Export panel ${index + 1} as PNG`} title="Export chart as PNG" onClick={() => void imageAction('download')}><Icon name="download"/></button>
+      </>}
+      <button className="result-card-expand" aria-label={`Expand panel ${index + 1}`} title="Open detail view" onClick={() => onExpand?.(index)}><Icon name="expand"/></button>
+      <button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}><Icon name="close"/></button>
+      {imageStatus && <span className="result-image-status" role="status">{imageStatus}</span>}
+    </div>
+  </section>;
+}
+
+function ChartTypeOptions() {
+  return <>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</>;
+}
+
+const detailInitialFocus = (dialog: HTMLElement) => dialog.querySelector<HTMLElement>('.result-detail-close');
+
+/** A step of a value that lives elsewhere: this view only asks for the next one. */
+function DetailStep({ direction, disabled, label, onClick }: { direction: 'previous' | 'next'; disabled: boolean; label: string; onClick: () => void }) {
+  return <button type="button" className={`result-detail-step ${direction}`} disabled={disabled} aria-label={label} title={label} onClick={onClick}><Icon name="caret"/></button>;
+}
+
+interface ChartDetailData extends SummarySourceProps {
+  result: ResultPayload;
+  named: NamedResult[];
+  live: boolean;
+  beamShapeAction?: ChartStubAction;
+  radiationArtifact?: RadiationArtifactView;
+}
+
+/**
+ * One chart panel, large. It owns no result of its own: the run is the compare
+ * selection, the chart is the panel's entry in the preferences, and the dock's
+ * snapshot is what it draws, so moving here moves the rail and the grid too.
+ * It lives above the grid because the grid goes away for the moment a run from
+ * another model takes to arrive, and this view has to stay open through that.
+ */
+export function ChartDetailDialog({ index, chartTypes, tokens, data, unavailable, runs, runId, runLabel, viewSwitch, onShowPanel, onClose }: {
+  index: number;
+  chartTypes: ChartType[];
+  tokens: ChartTokens;
+  data: ChartDetailData | null;
+  /** What to say instead of a chart; null while the run is on its way. */
+  unavailable: string | null;
+  runs: JobItem[];
+  runId: string | null;
+  runLabel: (job: JobItem) => string;
+  viewSwitch?: ReactNode;
+  onShowPanel: (index: number) => void;
+  onClose: () => void;
+}) {
+  const chartType = chartTypes[index];
+  const dialog = useModalDialogFocus<HTMLElement>({ open: true, onClose, initialFocus: detailInitialFocus });
+  const [runError, setRunError] = useState<string | null>(null);
+  const { samplingDisclosure, subtitle } = useChartDescription({ chartType, result: data?.result, named: data?.named ?? NO_NAMED_RESULTS, job: data?.job });
+  // The dialog holds the rendered chart while it is open, so capture from here
+  // rather than from the card behind it: a large view must hand back its own image.
+  const { imageOperation, imageStatus, imageAction } = useChartImage({
+    capture: () => dialog.current?.querySelector<HTMLElement>('.result-detail-chart'),
+    chartType, job: data?.job, channelId: data?.channelId, background: tokens.background,
+  });
+  const runIndex = runs.findIndex((job) => job.id === runId);
+  const showRun = (job: JobItem | undefined) => {
+    if (!job || job.id === runId) return;
+    setRunError(null);
+    selectJob(job, setRunError);
+  };
+  const stepRun = (delta: number) => { if (runIndex >= 0) showRun(runs[runIndex + delta]); };
+  const stepPanel = (delta: number) => {
+    const next = index + delta;
+    if (next >= 0 && next < chartTypes.length) onShowPanel(next);
+  };
+  const step = useRef({ stepRun, stepPanel });
+  step.current = { stepRun, stepPanel };
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      // A slider, a list and a text field already answer to the arrows.
+      if (event.target instanceof Element && event.target.closest('input, select, textarea')) return;
+      if (event.key === 'ArrowLeft') step.current.stepRun(-1);
+      else if (event.key === 'ArrowRight') step.current.stepRun(1);
+      else if (event.key === 'ArrowUp') step.current.stepPanel(-1);
+      else if (event.key === 'ArrowDown') step.current.stepPanel(1);
+      else return;
+      event.preventDefault();
+    };
+    window.addEventListener('keydown', keydown);
+    return () => window.removeEventListener('keydown', keydown);
+  }, []);
+  const shownRun = runs[runIndex];
+  return createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section ref={dialog} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
+      <header>
+        {runs.length > 0 && <span className="result-detail-nav" role="group" aria-label="Run">
+          {runs.length > 1 && <DetailStep direction="previous" disabled={runIndex <= 0} label="Previous run (←)" onClick={() => stepRun(-1)}/>}
+          <span className="result-detail-pick run">
+            <span>{shownRun ? middleEllipsis(runLabel(shownRun)) : 'Choose a run'}</span>
+            <Icon name="caret"/>
+            <select aria-label="Run shown" value={runId ?? ''} onChange={(event) => showRun(runs.find((job) => job.id === event.target.value))}>
+              {runIndex < 0 && <option value={runId ?? ''} disabled>Choose a run</option>}
+              {runs.map((job) => <option key={job.id} value={job.id}>{runLabel(job)}</option>)}
+            </select>
+          </span>
+          {runs.length > 1 && <DetailStep direction="next" disabled={runIndex < 0 || runIndex >= runs.length - 1} label="Next run (→)" onClick={() => stepRun(1)}/>}
+        </span>}
+        <span className="result-detail-nav" role="group" aria-label="Chart">
+          {chartTypes.length > 1 && <DetailStep direction="previous" disabled={index === 0} label="Previous chart panel (↑)" onClick={() => stepPanel(-1)}/>}
+          <span className="result-detail-pick">
+            <b>{chartLabel(chartType)}</b>
+            <Icon name="caret"/>
+            <select aria-label="Chart shown in this panel" value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}><ChartTypeOptions/></select>
+          </span>
+          {chartTypes.length > 1 && <DetailStep direction="next" disabled={index === chartTypes.length - 1} label="Next chart panel (↓)" onClick={() => stepPanel(1)}/>}
         </span>
-        {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
-        {samplingDisclosure && <span className="result-unqualified" role="note" title={samplingDisclosure}>Adaptive · reconstructed estimates</span>}
-        {unqualifiedNote && <span className="result-unqualified" role="note" title={`${unqualifiedNote}. ${unqualifiedMessage(unqualifiedFormulation)}`}>{density === 'compact' ? 'Unqualified' : unqualifiedNote}</span>}
-        {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {compared.length}</span>}
-        <span className="result-chrome-spacer"/>
-        {imageReady && <>
-          <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label={`Copy panel ${index + 1} as PNG`} title="Copy chart image" onClick={() => void imageAction('copy')}><Icon name="copy"/></button>
-          <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label={`Export panel ${index + 1} as PNG`} title="Export chart as PNG" onClick={() => void imageAction('download')}><Icon name="download"/></button>
+        {viewSwitch}
+        <div className="result-detail-summary">
+          <span>{runError ?? subtitle}</span>
+          <small>Hover to inspect · Ctrl/scroll to zoom lines · ←→ run · ↑↓ chart</small>
+        </div>
+        {/* The same actions the card carries: a view that shows the chart
+            larger should not offer less to do with it. */}
+        {data && chartType !== 'summary' && <>
+          <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label="Copy chart as PNG" title="Copy chart image" onClick={() => void imageAction('copy')}><Icon name="copy"/></button>
+          <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label="Export chart as PNG" title="Export chart as PNG" onClick={() => void imageAction('download')}><Icon name="download"/></button>
         </>}
-        <button className="result-card-expand" aria-label={`Expand panel ${index + 1}`} title="Open detail view" onClick={() => setExpanded(true)}><Icon name="expand"/></button>
-        <button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}><Icon name="close"/></button>
         {imageStatus && <span className="result-image-status" role="status">{imageStatus}</span>}
+        <button type="button" className="result-detail-close" aria-label="Close detail view" onClick={onClose}><Icon name="close"/></button>
+      </header>
+      <div className="result-detail-chart">
+        {data
+          ? <>{samplingDisclosure && <p role="note">{samplingDisclosure}</p>}<ResultChart key={chartType} chartType={chartType} result={data.result} named={data.named} tokens={tokens} density="full" live={data.live} beamShapeAction={data.beamShapeAction} radiationArtifact={data.radiationArtifact} wrapper={data.wrapper} job={data.job} channelId={data.channelId}/></>
+          : <EmptyState className="result-detail-empty" title={unavailable ?? 'Loading this run…'}/>}
       </div>
     </section>
-    {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
-      <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
-        <header>
-          <div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div>
-          <small>Hover to inspect · Ctrl/scroll to zoom lines</small>
-          {/* The same actions the card carries: a view that shows the chart
-              larger should not offer less to do with it. */}
-          {chartType !== 'summary' && <>
-            <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label="Copy chart as PNG" title="Copy chart image" onClick={() => void imageAction('copy')}><Icon name="copy"/></button>
-            <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label="Export chart as PNG" title="Export chart as PNG" onClick={() => void imageAction('download')}><Icon name="download"/></button>
-          </>}
-          {imageStatus && <span className="result-image-status" role="status">{imageStatus}</span>}
-          <button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button>
-        </header>
-        <div className="result-detail-chart">{samplingDisclosure && <p role="note">{samplingDisclosure}</p>}<ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/></div>
-      </section>
-    </div>, document.body)}
-  </>;
+  </div>, document.body);
 }
 
 export function resultLayoutClass(count: number): string {
   return `result-layout-${Math.max(0, Math.min(MAX_RESULT_PANELS, Math.floor(count)))}`;
 }
 
-export function ResultsChartGrid({ chartTypes, result, named, tokens, live = false, beamShapeAction, radiationArtifact, wrapper, job, channelId }: {
+export function ResultsChartGrid({ chartTypes, result, named, tokens, live = false, beamShapeAction, radiationArtifact, wrapper, job, channelId, onExpand }: {
   chartTypes: ChartType[];
   result: ResultPayload;
   named: NamedResult[];
@@ -2184,12 +2287,13 @@ export function ResultsChartGrid({ chartTypes, result, named, tokens, live = fal
   live?: boolean;
   beamShapeAction?: ChartStubAction;
   radiationArtifact?: RadiationArtifactView;
+  onExpand?: (index: number) => void;
 } & SummarySourceProps) {
   if (!chartTypes.length) {
     return <EmptyState className="result-grid-empty" title="No charts open" detail="Add a chart to rebuild the results workspace." action={<button className="btn-primary" onClick={() => preferencesStore.addChart()}>+ Add chart</button>}/>;
   }
   return <div className={`result-grid ${resultLayoutClass(chartTypes.length)}`} data-chart-count={chartTypes.length}>
-    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/>) }
+    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId} onExpand={onExpand}/>) }
   </div>;
 }
 
@@ -2267,6 +2371,9 @@ export function ResultsPanel() {
   const [modelLoad, setModelLoad] = useState<'idle' | 'loading' | 'failed'>('idle');
   const coherenceAnchor = useRef<HTMLButtonElement | null>(null);
   const [dismissedNewRun, setDismissedNewRun] = useState<string | null>(null);
+  const [detailPanel, setDetailPanel] = useState<number | null>(null);
+  const closeDetail = useCallback(() => setDetailPanel(null), []);
+  const runFilters = useRunFilters();
   const view = useResultView();
   const measuredOverlays = useMeasuredOverlayStore((state) => state.overlays);
   const [measuredError, setMeasuredError] = useState<string | null>(null);
@@ -2595,8 +2702,17 @@ export function ResultsPanel() {
   // is rebuilt and no canvas is touched until the tab is in front again, and
   // then exactly once from the newest snapshot.
   const charts = useVisibleRedraw(shown && cadResultMatchesViewport
-    ? <><FemPortsPanel result={shown}/><ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifactView} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/></>
+    ? <><FemPortsPanel result={shown}/><ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifactView} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel} onExpand={setDetailPanel}/></>
     : null);
+  const detailRunId = selection.primary ?? resolved.job?.id ?? null;
+  const detailRuns = useMemo(() => {
+    if (detailPanel === null) return [];
+    const listed = listedRuns(railRuns(jobs), runFilters, preferences.jobSort, preferences.minRating)
+      .filter((job) => job.status === 'complete' && job.has_results);
+    // A run the rail's filters hide can still be the one on screen.
+    const shownRun = jobs.find((job) => job.id === detailRunId);
+    return shownRun && !listed.includes(shownRun) ? [shownRun, ...listed] : listed;
+  }, [detailPanel, detailRunId, jobs, preferences.jobSort, preferences.minRating, runFilters]);
   /** Every file is attempted; the ones that fail are named rather than
    * cancelling the ones that parsed. */
   const loadMeasured = useCallback(async (files: File[]) => {
@@ -2749,6 +2865,22 @@ export function ResultsPanel() {
         loading, which is how a dock with no selection looked like a hang. */}
     <CurrentModelStatus actions solveStatus activeOnly={!!(charts && resolved.job) || !!error || !!cleanedUpRun}/>
     {resolved.modelNotLoaded && <div role="status">Run model not loaded</div>}
+    {detailPanel !== null && detailPanel < preferences.chartTypes.length && <ChartDetailDialog
+      index={detailPanel}
+      chartTypes={preferences.chartTypes}
+      tokens={tokens}
+      data={shown && cadResultMatchesViewport ? { result: shown, named, live: primaryIsProvisional, beamShapeAction, radiationArtifact: radiationArtifactView, wrapper: shownRaw, job: selectedJob, channelId: shownActiveChannel } : null}
+      unavailable={error ?? (cleanedUpRun ? cleanedUpMessage(cleanedUpRun) : null)}
+      runs={detailRuns}
+      runId={detailRunId}
+      runLabel={(job) => {
+        const marker = runContextMarker(job, coherenceContext);
+        return `${runDisplayName(job)}${marker ? ` · ${marker}` : ''}`;
+      }}
+      viewSwitch={primaryRaw && cadResultMatchesViewport && <ResultViewSwitch result={primaryRaw} view={view} importOrigin={selectedJob?.config_summary.import_origin} onSelect={(next) => resultViewStore.setView(next)}/>}
+      onShowPanel={setDetailPanel}
+      onClose={closeDetail}
+    />}
     {!resolved.job ? emptyModel : charts ?? (cleanedUpRun ? <EmptyState title="Results cleaned up" detail={cleanedUpMessage(cleanedUpRun)}/> : error ? <EmptyState title="Results unavailable" detail="Retry above, or select another run in the Jobs rail."/> : emptyModel)}
   </div>;
 }

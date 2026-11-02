@@ -1,5 +1,5 @@
 import { labelFor } from './ResultsPanel';
-import { act, createElement } from 'react';
+import { act, createElement, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
@@ -12,7 +12,10 @@ import { resultFrequencyValidity } from '../results/validity';
 import { provideExportDestinationPrompt } from './exportDestinationPrompt';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { newRunBadgeLabel } from './ResultsPanel';
-import { beamShapeMissingReason, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, measurementAngleEntries, middleEllipsis, phaseOption, polarOption, powerResponseOption, resolveMeasurementSelection, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption, splSubtitle } from './ResultsPanel';
+import { selectJob } from '../jobs/selectJob';
+import { beamShapeMissingReason, ChartDetailDialog, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, measurementAngleEntries, middleEllipsis, phaseOption, polarOption, powerResponseOption, resolveMeasurementSelection, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption, splSubtitle } from './ResultsPanel';
+
+vi.mock('../jobs/selectJob', () => ({ selectJob: vi.fn() }));
 
 const chartImageMocks = vi.hoisted(() => ({
   copy: vi.fn<() => Promise<void>>(),
@@ -830,12 +833,90 @@ describe('results chart layouts', () => {
     expect(preferencesStore.getSnapshot().chartTypes).toHaveLength(1);
   });
 
-  it('opens a full-size interactive detail view and closes it with Escape', () => {
-    act(() => root.render(createElement(ResultsChartGrid, { chartTypes: ['summary'], result, named: [], tokens })));
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Expand panel 1"]')!.click());
-    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
-    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
-    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  describe('chart detail view', () => {
+    const run = (id: string, number: number) => ({
+      id, run_number: number, label: null, status: 'complete', has_results: true, created_at: '', config_summary: {},
+    }) as unknown as JobItem;
+    const runs = [run('newest', 3), run('middle', 2), run('oldest', 1)];
+    const detail = () => document.body.querySelector<HTMLElement>('[role="dialog"]');
+    const press = (key: string, target: EventTarget = window) => act(() => {
+      target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    });
+    const step = (label: string) => detail()!.querySelector<HTMLButtonElement>(`[aria-label^="${label}"]`)!;
+    const shown = vi.fn();
+    function Harness({ runId = 'middle', data = true }: { runId?: string | null; data?: boolean }) {
+      const preferences = usePreferences();
+      const [panel, setPanel] = useState<number | null>(null);
+      return createElement('div', null,
+        createElement(ResultsChartGrid, { chartTypes: preferences.chartTypes, result, named: [], tokens, onExpand: setPanel }),
+        panel !== null && createElement(ChartDetailDialog, {
+          index: panel, chartTypes: preferences.chartTypes, tokens, runs, runId, runLabel: (job) => `Run ${job.run_number}`,
+          data: data ? { result, named: [] as NamedResult[], live: false } : null, unavailable: null,
+          onShowPanel: setPanel, onClose: () => setPanel(null),
+        }));
+    }
+    const open = (props: { runId?: string | null; data?: boolean } = {}) => {
+      act(() => root.render(createElement(Harness, props)));
+      act(() => host.querySelector<HTMLButtonElement>('[aria-label="Expand panel 1"]')!.click());
+    };
+    beforeEach(() => {
+      shown.mockClear();
+      vi.mocked(selectJob).mockImplementation((job) => shown(job.id));
+      preferencesStore.update({ chartTypes: ['summary', 'summary'] });
+    });
+
+    it('opens a full-size interactive view and closes it with Escape', () => {
+      open();
+      expect(detail()).not.toBeNull();
+      act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
+      expect(detail()).toBeNull();
+    });
+
+    it('moves between runs through the one selection, buttons and arrows alike', () => {
+      open();
+      expect(detail()!.querySelector<HTMLSelectElement>('[aria-label="Run shown"]')?.value).toBe('middle');
+      act(() => step('Next run').click());
+      expect(shown).toHaveBeenLastCalledWith('oldest');
+      press('ArrowLeft');
+      expect(shown).toHaveBeenLastCalledWith('newest');
+      expect(detail()).not.toBeNull();
+    });
+
+    it('stops at the ends of the run list', () => {
+      open({ runId: 'oldest' });
+      expect(step('Next run').disabled).toBe(true);
+      press('ArrowRight');
+      expect(shown).not.toHaveBeenCalled();
+      expect(step('Previous run').disabled).toBe(false);
+    });
+
+    it('moves between the open panels without changing them, and leaves the arrows to a control that uses them', () => {
+      open();
+      press('ArrowDown');
+      expect(step('Previous chart panel').disabled).toBe(false);
+      expect(step('Next chart panel').disabled).toBe(true);
+      expect(preferencesStore.getSnapshot().chartTypes).toEqual(['summary', 'summary']);
+      const select = detail()!.querySelector<HTMLSelectElement>('[aria-label="Run shown"]')!;
+      press('ArrowLeft', select);
+      expect(shown).not.toHaveBeenCalled();
+    });
+
+    it('changes the chart of this panel the way its card does, and stays open', () => {
+      open();
+      const select = detail()!.querySelector<HTMLSelectElement>('[aria-label="Chart shown in this panel"]')!;
+      act(() => {
+        select.value = 'impedance';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      expect(preferencesStore.getSnapshot().chartTypes).toEqual(['impedance', 'summary']);
+      expect(detail()?.getAttribute('aria-label')).toBe('Impedance detail');
+    });
+
+    it('stays open and says so while the next run is on its way', () => {
+      open({ data: false });
+      expect(detail()?.textContent).toContain('Loading this run…');
+      expect(detail()!.querySelector('[aria-label="Copy chart as PNG"]')).toBeNull();
+    });
   });
 
   it('names the active channel in a non-comparable chart badge', () => {

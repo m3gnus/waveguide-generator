@@ -343,20 +343,16 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    not move with the camera: zoom in and the model rides across a fixed ellipse
    that runs off the edges, which reads as a rendering fault rather than as
    styling. A viewport shows geometry; anything else in it has to be true. */
-.viewport-title { position: absolute; top: 7px; left: 84px; display: flex; flex-direction: row; align-items: baseline; gap: 6px; z-index: 2; }
-.viewport-title b { color: var(--fg); font-size: var(--text-title); font-weight: 600; }
-.viewport-title span { color: var(--fg3); font: var(--text-micro) var(--mono); }
-.viewport-live { position: absolute; top: 10px; right: 11px; display: flex; align-items: center; gap: 8px; z-index: 2; color: var(--fg3); font: var(--text-micro) var(--mono); }
-.viewport-live > .imported-mesh-badge,
+.viewport-live > .model-source-badge,
 .viewport-live > .paused-badge,
 .viewport-live > .reconnect-badge,
 .viewport-live > .error-badge,
 .viewport-live > .stale-badge,
-.viewport-live > .live-badge { display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 6px; border-radius: var(--r3); font-family: var(--ui); font-weight: 680; letter-spacing: .14em; }
+.viewport-live > .live-badge { display: flex; flex: none; align-items: center; gap: 4px; padding: 2px 6px 2px 6px; border-radius: var(--r3); font-family: var(--ui); font-weight: 680; letter-spacing: .14em; }
 .live-badge { border: 1px solid rgba(var(--green-rgb), .32); background: rgba(var(--green-rgb), .12); color: var(--green); }
 .stale-badge { border: 1px solid rgba(var(--amber-rgb), .32); background: rgba(var(--amber-rgb), .12); color: var(--amber); }
-.viewport-live i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-.viewport-live b { color: var(--fg1); font-weight: 500; }
+.model-source-badge { border: 1px solid var(--hair-hi); background: var(--ov1); color: var(--fg2); }
+.viewport-live > span > i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .frame-stat-card { position: absolute; top: 50%; left: 50%; width: min(430px, 70%); padding: 16px 16px; border: 1px solid var(--glass-bd); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); transform: translate(-50%, -50%); backdrop-filter: blur(12px) saturate(1.3); }
 .frame-stat-card > span { color: var(--fg3); font-size: var(--text-micro); font-weight: 660; letter-spacing: .13em; text-transform: uppercase; }
 .frame-stat-card dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin: 8px 0 8px; overflow: hidden; border: 1px solid var(--hair); border-radius: var(--r2); background: var(--hair); }
@@ -451,10 +447,10 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    hairline between segments is a border on the group, so a selected segment
    can paint edge to edge without the group's outline showing through it. */
 .result-view-switch { display: flex; flex: none; align-items: center; height: 19px; overflow: hidden; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); }
-.results-toolbar .result-view-switch button { height: 100%; min-width: 44px; padding: 0 8px; border: 0; border-left: 1px solid var(--hair); border-radius: 0; background: transparent; color: var(--fg2); font-size: var(--text-micro); text-transform: none; white-space: nowrap; }
-.results-toolbar .result-view-switch button:first-child { border-left: 0; }
-.results-toolbar .result-view-switch button:hover:not(.on) { background: var(--ov3); color: var(--fg1); }
-.results-toolbar .result-view-switch button.on { background: rgba(var(--acc-rgb), .16); color: var(--acc); }
+.result-view-switch button { height: 100%; min-width: 44px; padding: 0 8px; border: 0; border-left: 1px solid var(--hair); border-radius: 0; background: transparent; color: var(--fg2); font-size: var(--text-micro); text-transform: none; white-space: nowrap; }
+.result-view-switch button:first-child { border-left: 0; }
+.result-view-switch button:hover:not(.on) { background: var(--ov3); color: var(--fg1); }
+.result-view-switch button.on { background: rgba(var(--acc-rgb), .16); color: var(--acc); }
 .result-count-control { display: flex; align-items: center; gap: 4px; color: var(--fg3); font-size: var(--text-micro); text-transform: none; }
 .result-count-control select { height: 19px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
 /* Charts get everything the dock can spare: the gutters are hairline-thin and
@@ -604,12 +600,32 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .result-detail-backdrop { position: fixed; inset: 0; z-index: 1800; display: grid; place-items: center; padding: 24px; background: rgba(2,5,10,.72); backdrop-filter: blur(7px); }
 .result-detail { display: flex; flex-direction: column; width: min(1240px, calc(100vw - 56px)); height: min(780px, calc(100vh - 56px)); overflow: hidden; border: 1px solid var(--chart-spine); border-radius: var(--r3); background: var(--chart-page); box-shadow: 0 28px 70px -28px #000; }
 .result-detail > header { display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--chart-spine); color: var(--chart-fg); }
-.result-detail > header > div { display: flex; flex-direction: column; min-width: 0; }
+.result-detail-summary { display: flex; flex: 1; flex-direction: column; min-width: 0; text-align: right; }
+.result-detail-summary > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result-detail > header b { font-size: var(--text-micro); letter-spacing: .08em; text-transform: uppercase; }
 .result-detail > header span, .result-detail > header small { color: var(--chart-muted); font: var(--text-micro) var(--mono); }
-.result-detail > header small { margin-left: auto; }
+.result-detail-nav { display: flex; flex: 0 1 auto; align-items: center; gap: 2px; min-width: 0; }
+.result-detail-pick { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 4px; width: 236px; min-width: 0; height: 28px; padding: 0 6px; border-radius: var(--r3); color: var(--chart-fg); }
+.result-detail > header .result-detail-pick.run > span { color: var(--chart-fg); font-family: var(--ui); }
+.result-detail-pick > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-detail-pick > svg { flex: none; width: 10px; height: 10px; color: var(--chart-muted); }
+/* Fixed widths: a step leaves its arrows under the pointer whatever the name is. */
+.result-detail-pick.run { width: 190px; }
+.result-detail-pick:hover { background: var(--ov1); }
+.result-detail-pick:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.result-detail-pick select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
 .result-detail > header button { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r3); background: var(--ov1); color: var(--chart-muted); font-size: 20px; }
 .result-detail > header button:hover { background: var(--ov3); color: var(--chart-fg); }
+.result-detail > header .result-detail-step { flex: none; width: 22px; height: 22px; background: transparent; }
+.result-detail > header .result-detail-step:hover:not(:disabled) { background: var(--ov3); }
+.result-detail > header .result-detail-step:disabled { opacity: .35; }
+.result-detail-step svg { width: 12px; height: 12px; }
+.result-detail-step.previous svg { transform: rotate(90deg); }
+.result-detail-step.next svg { transform: rotate(-90deg); }
+.result-detail > header .result-view-switch { height: 22px; }
+.result-detail > header .result-view-switch button { display: block; width: auto; }
+@media (max-width: 900px) { .result-detail > header { flex-wrap: wrap; } .result-detail-summary { flex-basis: 100%; order: 3; text-align: left; } }
+.result-detail-empty { position: absolute; top: 50%; left: 50%; margin: 0; transform: translate(-50%, -50%); }
 .result-detail-chart { position: relative; flex: 1; min-height: 0; margin: 8px; overflow: hidden; border: 1px solid var(--chart-spine); border-radius: var(--r3); background: var(--chart-bg); }
 
 /* jobs rail */
@@ -1064,11 +1080,6 @@ textarea:disabled { opacity: .48; }
 .unit { font-size: var(--text-micro); }
 .section-description { font-size: var(--text-base); line-height: 1.45; }
 
-.viewport-title { top: 0; left: 12px; height: 34px; align-items: center; gap: 8px; }
-.viewport-title b { font-size: var(--text-title); }
-.viewport-title span,
-.viewport-live { font-size: var(--text-micro); }
-.viewport-live { top: 0; right: 12px; height: 34px; }
 .viewport-tools { bottom: 12px; border-radius: var(--r); background: var(--surface-raised); box-shadow: var(--float-sh); backdrop-filter: none; }
 .viewport-tools button { border-radius: var(--r3); }
 

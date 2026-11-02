@@ -51,6 +51,7 @@ describe('live design dimensions', () => {
     publish({ frame: frame(data), displayedRevision: 1, lastValidRevision: 1, stale: false });
   }
   const dimensions = () => host.querySelector('[data-testid="design-dimensions"]');
+  const facts = () => [...host.querySelectorAll('.viewport-fact')].map((fact) => fact.textContent);
   const expectedMouth = metadata.dimensions_mm!.mouth_opening!.map((v) => v.toFixed(1)).join(' × ');
   it('hides all readouts when the pinned mesher has no dimension keys', () => {
     render(); valid({ warnings: [] });
@@ -202,10 +203,11 @@ describe('live design dimensions', () => {
     const data = structuredClone(metadata);
     data.dimensions_mm = { mouth_opening: [411.7, 320], horn_overall: [411.75, 320.05, 176.5] };
     valid(data);
-    expect(dimensions()?.textContent).toBe('Mouth 411.7 × 320.0 · Depth 176.5 mm');
+    expect(facts()).toEqual(['Mouth 411.7 × 320.0 mm', 'Depth 176.5 mm']);
     expect(dimensions()?.classList.contains('stale')).toBe(false);
     data.dimensions_mm.horn_overall = [421.7, 330, 176.5]; valid(data);
-    expect(dimensions()?.textContent).toBe('Mouth 411.7 × 320.0 · Depth 176.5 · Overall 421.7 × 330.0 mm');
+    expect(facts()).toEqual(['Mouth 411.7 × 320.0 mm', 'Depth 176.5 mm', 'Overall 421.7 × 330.0 mm']);
+    expect(dimensions()?.getAttribute('aria-label')).toContain('Mouth 411.7 × 320.0 · Depth 176.5 · Overall 421.7 × 330.0 mm.');
     expect(dimensions()?.hasAttribute('aria-live')).toBe(false);
     expect(host.querySelector('[data-testid="dimensions-status"]')?.getAttribute('aria-live')).toBe('polite');
   });

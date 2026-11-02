@@ -1,20 +1,6 @@
 .wg2-viewport { isolation: isolate; container: viewport / inline-size; }
-.wg2-viewport::before {
-  content: "";
-  position: absolute;
-  z-index: 2;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: 34px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--surface-panel);
-  pointer-events: none;
-}
 .wg2-viewport-canvas-host { position: absolute; inset: 0; }
 .wg2-viewport-canvas { position: absolute !important; inset: 0; width: 100% !important; height: 100% !important; }
-.wg2-viewport .viewport-title,
-.wg2-viewport .viewport-live,
 .wg2-viewport .viewport-tools,
 .wg2-viewport .viewport-scale,
 .wg2-viewport .frame-stat-card,
@@ -22,9 +8,7 @@
 .wg2-viewport .source-role-legend,
 .wg2-viewport .viewport-empty,
 .wg2-viewport .viewport-mode-empty,
-.wg2-viewport .viewport-connection-banner,
-.wg2-viewport .viewport-warning,
-.wg2-viewport .viewport-error-banner { z-index: 3; }
+.wg2-viewport .viewport-top { z-index: 4; }
 .wg2-viewport .viewport-tools { pointer-events: auto; }
 .wg2-viewport .viewport-tools button:disabled { color: var(--fg4); cursor: not-allowed; opacity: .48; }
 .wg2-text-glyph { font: 700 var(--text-micro) var(--mono); letter-spacing: -.04em; }
@@ -61,7 +45,7 @@
   position: absolute; right: max(1px, calc(var(--tool-size) * .07)); bottom: max(1px, calc(var(--tool-size) * .04));
   font: 700 max(8px, calc(var(--tool-size) * .36))/1 var(--mono); letter-spacing: 0; pointer-events: none;
 }
-.wg2-viewport .wg2-stats { top: 52px; left: 12px; width: min(390px, calc(100% - 24px)); transform: none; }
+.wg2-viewport .wg2-stats { top: calc(var(--viewport-header-height, 34px) + 18px); left: 12px; width: min(390px, calc(100% - 24px)); transform: none; }
 .wg2-viewport .wg2-stats .surface-list { max-height: min(240px, 38vh); }
 .wg2-tool-divider { width: 1px; height: 19px; margin: 2px 2px; background: var(--hair-hi); }
 .wg2-stats-glyph { font: 600 12px var(--mono); }
@@ -128,31 +112,65 @@
 .viewport-empty-mark::before { inset: 4px 7px; }
 .viewport-empty-mark::after { inset: 8px 13px; background: rgba(var(--acc-rgb), .34); box-shadow: 0 0 9px rgba(var(--acc-rgb), .45); }
 .viewport-empty-mark > i { top: -4px; bottom: -4px; left: 50%; width: 1px; border-width: 0 0 0 1px; border-radius: 0; }
-/* All viewport notices share flow, including expanded geometry warnings. */
-.viewport-notices { position: absolute; z-index: 3; top: 43px; left: 12px; right: 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
-.viewport-notice-messages { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
-.viewport-notices button { flex: none; }
-.viewport-notices > .solver-plan-adjustment-note { max-width: 100%; color: var(--amber); font-size: var(--text-micro); pointer-events: auto; }
-.viewport-connection-banner { min-width: 0; pointer-events: auto; max-width: 100%; margin: 0; box-shadow: var(--glass-sh); backdrop-filter: blur(10px); }
-.viewport-connection-banner span { display: flex; align-items: center; gap: 6px; white-space: normal; }
-.viewport-connection-banner b { color: var(--fg2); font: 500 var(--text-micro) var(--mono); white-space: normal; }
-/* Geometry diagnoses remain available without automatically covering the
-   model, title, or controls. The compact indicator expands only on request. */
-.viewport-warning { width: 100%; color: var(--amber); font-size: var(--text-micro); line-height: 1.45; pointer-events: none; }
-.viewport-warning summary { display: flex; align-items: center; gap: 6px; width: max-content; min-height: 24px; margin-left: auto; padding: 4px 8px; border: 1px solid rgba(var(--amber-rgb), .25); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); font: 650 var(--text-micro) var(--mono); letter-spacing: .04em; text-transform: uppercase; cursor: pointer; pointer-events: auto; list-style: none; backdrop-filter: blur(10px); }
+/* The header and the notices under it are one solid band across the top of the
+   viewport, so nothing written here floats over the model. It grows with what
+   it holds; --viewport-header-height keeps the stats and mesh cards below it. */
+.viewport-top { position: relative; display: flex; flex-direction: column; }
+.viewport-header { position: relative; display: flex; align-items: center; gap: 0 var(--space-12); min-height: 34px; padding: 0 var(--space-12); border-bottom: 1px solid var(--border-subtle); background: var(--surface-panel); }
+.viewport-title { display: flex; flex: 0 100 auto; align-items: baseline; gap: 8px; min-width: 140px; }
+.viewport-title b { flex: none; max-width: 100%; overflow: hidden; color: var(--fg); font-size: var(--text-title); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.viewport-title span { flex: 0 100 auto; min-width: 0; overflow: hidden; color: var(--fg3); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.viewport-title span:empty { display: none; }
+/* Groups read left to right, most about the model first; a hairline parts them. */
+.viewport-facts { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; min-width: 0; min-height: 34px; }
+.viewport-facts > :not(.sr-only) { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-12); min-height: 22px; padding-inline: var(--space-12); border-left: 1px solid var(--hair-hi); }
+.viewport-fact { color: var(--fg3); font-size: var(--text-micro); white-space: nowrap; }
+.viewport-fact > b { color: var(--fg1); font: 500 var(--text-micro) var(--mono); font-variant-numeric: tabular-nums; }
+.viewport-fact > em { color: var(--fg3); font: var(--text-micro) var(--mono); font-style: normal; }
+.viewport-dimensions.stale { opacity: .45; }
+/* State keeps the same corner whatever the facts to its left are doing. */
+.viewport-live { display: flex; flex: none; align-items: center; gap: var(--space-8); min-height: 34px; margin-left: auto; color: var(--fg3); font: var(--text-micro) var(--mono); }
+.viewport-live b { color: var(--fg1); font-weight: 500; }
+.viewport-warning { color: var(--amber); }
+.viewport-warning summary { display: flex; align-items: center; gap: 6px; min-height: 20px; padding: 0 6px; border: 1px solid rgba(var(--amber-rgb), .32); border-radius: var(--r3); background: rgba(var(--amber-rgb), .12); font: 680 var(--text-micro) var(--ui); letter-spacing: .08em; text-transform: uppercase; cursor: pointer; list-style: none; }
 .viewport-warning summary::-webkit-details-marker { display: none; }
-.viewport-warning summary > i { flex: none; width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px rgba(var(--amber-rgb), .55); }
+.viewport-warning summary > i { flex: none; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .viewport-warning summary:hover,
-.viewport-warning summary:focus-visible { border-color: rgba(var(--amber-rgb), .5); background: rgba(var(--amber-rgb), .1); }
+.viewport-warning summary:focus-visible { border-color: rgba(var(--amber-rgb), .5); }
 .viewport-warning summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.viewport-warning-details { margin: 6px 0 0 auto; width: min(520px, 100%); max-height: min(260px, calc(100vh - 120px)); overflow: auto; box-shadow: var(--float-sh); pointer-events: auto; }
+/* Opened on request, so this one surface may lie over the model. */
+.viewport-warning-details { position: absolute; z-index: 1; top: 100%; right: var(--space-12); width: min(520px, calc(100% - 24px)); max-height: min(260px, calc(100vh - 120px)); margin: 4px 0 0; overflow: auto; background: var(--surface-floating); box-shadow: var(--float-sh); color: var(--fg2); font: var(--text-micro)/1.45 var(--ui); }
 .viewport-warning-details ul { display: grid; gap: 6px; margin: 0; padding: 0 0 0 16px; }
 .viewport-warning-details li { padding-left: 2px; }
-.viewport-error-banner { width: max-content; }
+
+/* The count alone says it once the word would push the facts onto a second line. */
+@container viewport (max-width: 1120px) {
+  .viewport-warning-word { display: none; }
+}
+
+/* Facts take a row of their own once they no longer fit beside the name. */
+@container viewport (max-width: 900px) {
+  .viewport-header { flex-wrap: wrap; }
+  .viewport-title { flex: 1 1 0; min-height: 34px; align-items: center; }
+  .viewport-facts { order: 3; flex: 1 0 100%; min-height: 28px; padding-bottom: 4px; }
+  .viewport-facts > :first-child { padding-left: 0; border-left: 0; }
+}
+
+.viewport-notices { display: flex; flex-direction: column; }
+.viewport-notices:empty { display: none; }
+.viewport-note { padding: 4px var(--space-12); border-bottom: 1px solid var(--border-subtle); background: var(--surface-panel); color: var(--fg2); font-size: var(--text-micro); line-height: 1.4; }
+.viewport-note.solver-plan-adjustment-note { color: var(--amber); }
+.viewport-notice-messages { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.viewport-connection-banner { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-width: 0; margin: 0; padding: 4px var(--space-12); border-width: 0 0 1px; font-size: var(--text-micro); }
+.viewport-notices .notice-warning { background: color-mix(in srgb, var(--amber) 8%, var(--surface-panel)); }
+.viewport-notices .notice-error { background: color-mix(in srgb, var(--red) 8%, var(--surface-panel)); }
+.viewport-connection-banner .notice-actions { flex: none; align-items: center; margin: 0; }
+.viewport-connection-banner button { flex: none; }
+.viewport-connection-banner span { display: flex; align-items: center; gap: 6px; white-space: normal; }
+.viewport-connection-banner b { color: var(--fg2); font: 500 var(--text-micro) var(--mono); white-space: normal; }
 .viewport-error-banner button[aria-label] { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: var(--r3); background: transparent; color: currentColor; font-size: 15px; line-height: 1; }
 
-.viewport-connection-banner button:disabled,
-.viewport-error-banner button:disabled { opacity: .45; }
+.viewport-connection-banner button:disabled { opacity: .45; }
 .viewport-refresh { flex: none; }
 .viewport-refresh svg { width: 9px; height: 9px; }
 .viewport-refresh:disabled { opacity: .5; }
@@ -161,12 +179,10 @@
 .wg2-viewport .reconnect-badge { border: 1px solid rgba(var(--amber-rgb), .34); background: rgba(var(--amber-rgb), .13); color: var(--amber); }
 
 @media (max-width: 900px) {
-  .wg2-viewport .viewport-title span { display: none; }
   .wg2-viewport .viewport-tools { bottom: 8px; }
 }
 
 @container viewport (max-width: 900px) {
-  .viewport-title span,
   .viewport-scale { display: none; }
   .viewport-tools { bottom: 8px; }
 }
@@ -192,8 +208,6 @@
 .viewer-pref-scroll fieldset label { font-size: var(--text-micro); }
 .viewer-preferences footer { padding: 8px 12px; }
 .viewer-preferences footer button { min-height: var(--control-h-sm); padding-inline: 8px; font-size: var(--text-micro); }
-.viewport-connection-banner,
-.viewport-error-banner { border-radius: var(--r); font-size: var(--text-micro); }
 
 /* Acoustic source colour key. Bottom-left is the one free corner: the mode
    rail owns the centre, the scale bar and the field legend the right. */
@@ -217,26 +231,10 @@
   .source-role-legend > b { display: none; }
 }
 
-/* The parametric header grows with wrapped timing/dimensions. Its measured
-   height keeps warnings, banners and stats in their own band below it. */
-.parametric-viewport .viewport-header { position: relative; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; padding: 0 12px; background: var(--surface-panel); border-bottom: 1px solid var(--border-subtle); pointer-events: none; }
-.parametric-viewport .viewport-title { position: static; min-height: 34px; height: auto; flex-wrap: wrap; }
-.parametric-viewport .viewport-live { position: static; width: max-content; max-width: 100%; height: auto; min-height: 34px; display: flex; flex-wrap: wrap; padding: 6px 0; box-sizing: border-box; pointer-events: none; }
-.parametric-viewport .viewport-refresh { pointer-events: auto; }
-.parametric-viewport .viewport-notices { top: calc(var(--viewport-header-height, 34px) + 9px); }
-.parametric-viewport .wg2-stats { top: calc(var(--viewport-header-height, 34px) + 18px); }
-.viewport-dimensions { width: max-content; max-width: 100%; color: var(--fg2); font: var(--text-micro)/1.6 var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: normal; pointer-events: none; }
-/* Only the dimension text needs hover for its native title tooltip. */
-.viewport-dimensions > span { display: inline-block; white-space: nowrap; pointer-events: auto; }
-.viewport-dimensions.stale { opacity: .45; }
-
-.viewport-notices > .viewport-domain-note { max-width: 100%; color: var(--fg2); font-size: var(--text-micro); }
-
 .wg2-viewport .mesh-quality-card {
-  top: 43px; left: 12px; width: 248px;
+  top: calc(var(--viewport-header-height, 34px) + 9px); left: 12px; width: 248px;
   max-width: calc(100% - 24px); padding: 8px 10px; transform: none; pointer-events: none;
 }
-.parametric-viewport .mesh-quality-card { top: calc(var(--viewport-header-height, 34px) + 9px); }
 .mesh-quality-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .mesh-quality-card header b { color: var(--fg1); font-size: var(--text-micro); font-weight: 600; }
 .mesh-quality-card header span { color: var(--fg3); font-size: var(--text-micro); }
@@ -246,11 +244,8 @@
 .wg2-viewport .mesh-quality-card dd { margin: 0; color: var(--fg1); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mesh-quality-card p { margin: 6px 0 0; color: var(--fg3); font-size: var(--text-micro); line-height: 1.35; }
 .mesh-quality-card.stale dl, .mesh-quality-card.stale p { opacity: .45; }
-/* The report owns the top-left corner; notices carry a Refresh button and centre in what is left. */
-.wg2-viewport:has(.mesh-quality-card) .viewport-notices { left: 272px; }
 /* A narrow viewport keeps the numbers; their meaning is in the user guide and on a wider one. */
 @container viewport (max-width: 720px) {
   .wg2-viewport .mesh-quality-card { width: 212px; }
   .mesh-quality-card p { display: none; }
-  .wg2-viewport:has(.mesh-quality-card) .viewport-notices { left: 236px; }
 }

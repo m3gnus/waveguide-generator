@@ -1,6 +1,5 @@
 import type { ConnectionState } from '../api/previewSocket';
 import type { DecodedFrame } from '../api/frame';
-import { isNativeFamily, type DesignDocument } from '../stores/design';
 
 export interface PreviewBadge {
   label: string;
@@ -48,47 +47,6 @@ export function staleReason(
   if (connection !== 'connected') return 'WG is reconnecting to the preview. The view follows your edits again once it is back.';
   if (error) return 'WG could not show the latest edit. Refresh to try this design again.';
   return 'WG is still drawing this design. Refresh to ask again.';
-}
-
-function finitePositive(value: number | undefined): value is number {
-  return value !== undefined && Number.isFinite(value) && value > 0;
-}
-
-function millimetres(value: number): string {
-  return Number(value.toFixed(1)).toLocaleString(undefined, { maximumFractionDigits: 1 });
-}
-
-function mouthClause(design: DesignDocument, opening?: [number, number]): string | null {
-  if (isNativeFamily(design.formula) && opening?.length === 2 && opening.every(finitePositive)) {
-    const [width, height] = opening.map(millimetres);
-    return width === height ? `Ø ${width} mm` : `${width} × ${height} mm`;
-  }
-  if ((design.formula === 'R-OSSE' || design.formula === 'ICW') && finitePositive(design.R)) {
-    return `Ø ${millimetres(design.R * 2)} mm`;
-  }
-  if (design.formula === 'FREEFORM') {
-    const horizontal = design.profile_h?.points.at(-1)?.r;
-    const vertical = design.profile_v?.points.at(-1)?.r;
-    if (finitePositive(horizontal) && finitePositive(vertical)) {
-      const width = millimetres(horizontal * 2);
-      const height = millimetres(vertical * 2);
-      return width === height ? `Ø ${width} mm` : `${width} × ${height} mm`;
-    }
-  }
-  return null;
-}
-
-function symmetryClause(quadrants: number[]): string {
-  if (quadrants.length === 4) return 'full';
-  if (quadrants.length === 2) return 'half';
-  if (quadrants.length === 1) return 'quarter';
-  return `${quadrants.length}/4`;
-}
-
-export function viewportSubtitle(design: DesignDocument, opening?: [number, number]): string {
-  return [design.formula, mouthClause(design, opening), symmetryClause(design.quadrants)]
-    .filter((clause): clause is string => clause !== null)
-    .join(' · ');
 }
 
 /**

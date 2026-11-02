@@ -1,8 +1,8 @@
-import { isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
+import { isHeldCadJob } from '../jobs/cadSolve';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { engineDisplayName } from '../design/backendSupport';
-import { useRunFilters, runModelKey } from '../jobs/runFilters';
+import { listedRuns, railRuns, useRunFilters, runModelKey } from '../jobs/runFilters';
 import { runDocumentName, runOrigin, runSourceLabel, runSourceText } from '../jobs/runIdentity';
 import { RunModelDetails } from './RunModelDetails';
 import { retryBlockedExport } from '../jobs/autoExportOwner';
@@ -16,7 +16,7 @@ import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailabilit
 import { canOpenJobModel, canLoadJobDesign } from '../jobs/jobDesign';
 import { selectJob } from '../jobs/selectJob';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
-import { applyJobPreferences, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
+import { preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { runProvenanceMarker, solveFailureWords } from '../model/currentModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -347,24 +347,11 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     if (preferences.minRating > 0) lastMinimumRating.current = preferences.minRating;
   }, [preferences.minRating]);
 
-  // A held request and a failed preparation never became runs; CAD Link and
-  // Results present them.
-  const runJobs = useMemo(() => snapshot.jobs.filter(job => !isHeldCadJob(job) && !isFailedCadPreparation(job)
-    && !(job.cad_intent && job.cad_state?.reason === 'superseded')), [snapshot.jobs]);
-  const preferenceJobs = useMemo(() => applyJobPreferences(runJobs, preferences.jobSort, preferences.minRating), [runJobs, preferences.jobSort, preferences.minRating]);
-  const visibleJobs = useMemo(() => {
-    const wanted = query.trim().toLocaleLowerCase();
-    const scoped = preferenceJobs.filter(job => (source === 'all' || runOrigin(job) === source)
-      && (!project || job.cad_source?.lineage_id === project) && (!model || runModelKey(job) === model));
-    if (!wanted) return scoped;
-    const numberQuery = wanted.replace(/^#/, '');
-    return scoped.filter((job) => {
-      const formula = String(job.config_summary.formula_type ?? '').toLocaleLowerCase();
-      const title = runDisplayName(job).toLocaleLowerCase();
-      const runNumberMatches = /^#?\d+$/.test(wanted) && job.run_number !== null && String(job.run_number).includes(numberQuery);
-      return title.includes(wanted) || runNumberMatches || formula.includes(wanted) || runSourceText(job).toLocaleLowerCase().includes(wanted);
-    });
-  }, [preferenceJobs, query, source, project, model]);
+  const runJobs = useMemo(() => railRuns(snapshot.jobs), [snapshot.jobs]);
+  const visibleJobs = useMemo(
+    () => listedRuns(runJobs, { query, source, project, model }, preferences.jobSort, preferences.minRating),
+    [runJobs, preferences.jobSort, preferences.minRating, query, source, project, model],
+  );
   const projects = new Map<string, string>();
   for (const job of runJobs) {
     const cad = job.cad_source;

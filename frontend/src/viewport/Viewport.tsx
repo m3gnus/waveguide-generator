@@ -7,6 +7,8 @@ import { designFingerprint } from '../results/runCoherence';
 import { importedModelBlocker, useImportedModelStore } from '../stores/importedModel';
 import { useShallow } from 'zustand/react/shallow';
 import { LiveDimensions } from '../design/LiveDimensions';
+import { useDeveloperDetails } from '../prefs/preferences';
+import { ViewportFact } from './ViewportFact';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecodedFrame } from '../api/frame';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
@@ -22,7 +24,7 @@ import { solverMeshScene } from './solverMeshScene';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { cadCameraAxes } from './cadCamera';
-import { currentDocumentLoad, subscribeRevision, useDesignStore } from '../stores/design';
+import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { useScopedSolveOptions } from '../stores/solveOptionsContext';
@@ -71,7 +73,7 @@ import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
 import { DeveloperDetails } from '../shell/DeveloperDetails';
-import { previewBadge, previewErrorKey, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
+import { previewBadge, previewErrorKey, previewErrorMessage, staleReason } from './presentation';
 import { markParametricSolvedDomain, quadrantsForSolveMode, solvedDomainLabel, type DisplayQuadrants } from './symmetryScene';
 import { ROLE_MATERIAL_FAMILY, SOURCE_ROLES } from './types';
 import type { DisplayMode, SourceRole, ViewportTheme } from './types';
@@ -704,18 +706,24 @@ export function Viewport() {
   const behindDesign = preview.stale || preview.displayedRevision !== designRevision;
   const showStalledPreview = Boolean(activeScene && stalled && !showPreviewError && !connectionInterrupted && !importedMesh);
   const showConnectionNotice = Boolean(activeScene && connectionInterrupted && !importedMesh);
+  const developerDetails = useDeveloperDetails();
   const showSolverMeshNotice = solverViewSelected && solverMeshState.stale;
   const showCadSolverError = cadSolverViewSelected && cadSolverError !== null;
   const showNoticeRefresh = showPreviewError || showStalledPreview || showSolverMeshNotice || showCadSolverError;
-  const dimensionsFrame = preview.dimensionsFrame ?? preview.frame;
-  const dimensionsMetadata = dimensionsFrame?.header.previewMetadata;
-  const currentDimensions = !behindDesign && !preview.error && !preview.awaitingDocumentFrame
-    && !preview.dimensionsUnavailable && dimensionsFrame?.header.designRevision === designRevision
-    && (dimensionsFrame.documentLoad === undefined || dimensionsFrame.documentLoad === currentDocumentLoad())
-    && dimensionsMetadata?.dimensions_status !== 'pending' && dimensionsMetadata?.dimensions_status !== 'unavailable'
-    ? dimensionsMetadata?.dimensions_mm : null;
-  const nativeOpening = design.formula === 'SOURCE-DISK'
-    ? currentDimensions?.source_diameter : currentDimensions?.mouth_opening;
+  const viewportName = importedMesh?.source === 'solver'
+    ? designName || 'Untitled design'
+    : importedMesh?.name ?? (assemblyInputActive ? 'Assembly' : fileInputActive ? 'Imported mesh' : workspaceMode === 'cad' ? cadName : designName || 'Untitled design');
+  const solveMeshState = workspaceMode === 'parametric'
+    ? solverViewSelected
+      ? solverMeshState.building
+        ? 'building…'
+        : importedMesh
+          ? solverMeshState.stale ? 'out of date' : 'current'
+          : 'pending'
+      : null
+    : cadSolverViewSelected
+      ? cadSolverLoading ? 'loading…' : cadSolverMesh ? 'prepared' : 'unavailable'
+      : null;
   const refresh = () => {
     setDismissedPreviewError(null);
     setRefreshRequestedAt(performance.now());
@@ -1030,7 +1038,7 @@ export function Viewport() {
     if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
   }, []);
 
-  return <div className={`viewport-panel wg2-viewport${workspaceMode === 'parametric' ? ' parametric-viewport' : ''}`}>
+  return <div className="viewport-panel wg2-viewport">
     {activeScene && hasSurfaces && webgl && <ViewportCanvas
       scene={activeScene}
       sceneMarker={sceneMarker}
@@ -1054,20 +1062,37 @@ export function Viewport() {
         sequential={fieldColormap} unitsPerMetre={activeScene.unitsPerMetre}/>}
     </ViewportCanvas>}
 
-    <div className="viewport-header" ref={workspaceMode === 'parametric' ? trackHeaderHeight : undefined}>
+    <div className="viewport-top" ref={trackHeaderHeight}>
+    <div className="viewport-header">
       <div className="viewport-title">
-        <b>{importedMesh?.source === 'solver'
-          ? designName || 'Untitled design'
-          : importedMesh?.name ?? (assemblyInputActive ? 'Assembly' : fileInputActive ? 'Imported mesh' : workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
+        <b title={viewportName}>{viewportName}</b>
         {/* A CAD model's subtitle is its solved triangle count; the display
             mesh's own counts are one hover away. Without a mesh it has none:
             the model's status line lives in Results. */}
         <span title={importedMeshDetail ?? undefined}>{importedMesh
           ? cadMeshShown ? `${importedMesh.solvedTriangleCount.toLocaleString()} triangles` : importedMeshDetail
-          : assemblyInputActive ? 'Saved mesh of a run' : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? null : viewportSubtitle(design, nativeOpening)}</span>
+          : assemblyInputActive ? 'Saved mesh of a run' : fileInputActive ? 'Configure in Geometry' : workspaceMode === 'cad' ? null : design.formula}</span>
+      </div>
+      <div className="viewport-facts">
+        {workspaceMode === 'parametric' && <LiveDimensions />}
+        {(activeScene && domainLabel || solveMeshState) && <span className="viewport-fact-group">
+          {activeScene && domainLabel && <span role="note" aria-label="Solved domain"><ViewportFact label="Solve domain">{domainLabel}</ViewportFact></span>}
+          {solveMeshState && <ViewportFact label="Solve mesh">{solveMeshState}</ViewportFact>}
+        </span>}
+        {developerDetails && workspaceMode === 'parametric' && !solverViewSelected && <span className="viewport-fact-group viewport-timing">
+          <ViewportFact label="Geometry" unit="ms">{selected?.header.evalMs?.toFixed(1) ?? '—'}</ViewportFact>
+          <ViewportFact label="On screen">{formatClientLatency(clientFrameMs)}</ViewportFact>
+        </span>}
       </div>
       <div className="viewport-live">
-        {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
+        {activeScene && geometryWarnings.length > 0 && <details className="viewport-warning" role="status">
+          <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>
+            <i />{geometryWarnings.length}<span className="viewport-warning-word"> warning{geometryWarnings.length === 1 ? '' : 's'}</span>
+          </summary>
+          <Notice tone="warning" className="viewport-warning-details" title={<>Geometry warning{geometryWarnings.length === 1 ? '' : 's'}</>}>
+            <ul>{geometryWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+          </Notice>
+        </details>}
         {workspaceMode === 'parametric' && behindDesign && !importedMesh && !showNoticeRefresh && <button
           type="button"
           className="btn viewport-refresh"
@@ -1077,26 +1102,11 @@ export function Viewport() {
           onClick={refresh}
         ><Icon name="reset"/>{preferences.liveUpdate ? 'Refresh' : 'Resume'}</button>}
         {workspaceMode === 'parametric'
-          ? solverViewSelected
-            ? <span>{solverMeshState.building
-              ? 'building solver mesh…'
-              : importedMesh
-                ? solverMeshState.stale ? 'solver mesh out of date' : 'solver mesh current'
-                : 'solver mesh pending'}</span>
-            : <span>geometry <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · on screen <b>{formatClientLatency(clientFrameMs)}</b></span>
-          : cadSolverViewSelected
-            ? <span>{cadSolverLoading
-              ? 'loading solve mesh…'
-              : cadSolverMesh ? 'prepared solve mesh' : 'solve mesh unavailable'}</span>
-            : <span>{assemblyInputActive ? 'Assembly' : fileInputActive ? 'Mesh file' : 'CAD Link'} workspace</span>}
-        {workspaceMode === 'parametric' && <LiveDimensions />}
+          ? <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>
+          : <span className="model-source-badge">{assemblyInputActive ? 'ASSEMBLY' : fileInputActive ? 'MESH FILE' : 'CAD LINK'}</span>}
       </div>
     </div>
 
-    {!activeScene && <EmptyState className="viewport-empty" aria-live="polite" title={<>{assemblyInputActive ? 'Opening this run’s model' : fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</>} detail={<>{assemblyInputActive ? 'Its saved mesh appears here.' : fileInputActive ? 'Use File → Import mesh…. WG reads ASCII Gmsh 2.2 surface meshes (.msh).' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</>} action={workspaceMode === 'cad' && !fileInputActive && !workspaceNavigation.isVisible('results')
-        && <button type="button" className="btn viewport-retry" onClick={() => workspaceNavigation.navigate('results')}>Show Results</button> || undefined}>
-      <i className="viewport-empty-mark" aria-hidden="true"><i /></i>
-    </EmptyState>}
     <div className="viewport-notices">
       {(showNoticeRefresh || showConnectionNotice) && <Notice tone={showPreviewError || (showSolverMeshNotice && solverMeshState.error) || showCadSolverError ? 'error' : 'warning'}
         className={`viewport-connection-banner${showPreviewError ? ' viewport-error-banner' : ''}${showSolverMeshNotice || showCadSolverError ? ' solver-mesh-banner' : ''}`}
@@ -1127,25 +1137,19 @@ export function Viewport() {
         const notice = planAdjustmentNotice(adjustment);
         return notice === null ? [] : [notice];
       }).map((notice) => (
-        <div className="solver-plan-adjustment-note" role="note" key={notice}>{notice}</div>
+        <div className="viewport-note solver-plan-adjustment-note" role="note" key={notice}>{notice}</div>
       ))}
-      {solverViewSelected && solverMeshRefusal && <div className="solver-plan-adjustment-note" role="note">
+      {solverViewSelected && solverMeshRefusal && <div className="viewport-note solver-plan-adjustment-note" role="note">
         Cannot solve this yet: {solverMeshRefusal}
       </div>}
-      {activeScene && domainLabel && <div className="viewport-domain-note" role="note" aria-label="Solved domain">
-        Solve domain: {domainLabel}
-      </div>}
-      {activeScene && previewNote && <div className="viewport-domain-note" role="note" aria-label="Preview surface">{previewNote}</div>}
-      {recoveryNotice && <div className="viewport-domain-note" role="note">{recoveryNotice}</div>}
-      {activeScene && geometryWarnings.length > 0 && <details className="viewport-warning" role="status">
-        <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>
-          <i />{geometryWarnings.length} warning{geometryWarnings.length === 1 ? '' : 's'}
-        </summary>
-        <Notice tone="warning" className="viewport-warning-details" title={<>Geometry warning{geometryWarnings.length === 1 ? '' : 's'}</>}>
-          <ul>{geometryWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
-        </Notice>
-      </details>}
+      {activeScene && previewNote && <div className="viewport-note" role="note" aria-label="Preview surface">{previewNote}</div>}
+      {recoveryNotice && <div className="viewport-note" role="note">{recoveryNotice}</div>}
     </div>
+    </div>
+    {!activeScene && <EmptyState className="viewport-empty" aria-live="polite" title={<>{assemblyInputActive ? 'Opening this run’s model' : fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</>} detail={<>{assemblyInputActive ? 'Its saved mesh appears here.' : fileInputActive ? 'Use File → Import mesh…. WG reads ASCII Gmsh 2.2 surface meshes (.msh).' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</>} action={workspaceMode === 'cad' && !fileInputActive && !workspaceNavigation.isVisible('results')
+        && <button type="button" className="btn viewport-retry" onClick={() => workspaceNavigation.navigate('results')}>Show Results</button> || undefined}>
+      <i className="viewport-empty-mark" aria-hidden="true"><i /></i>
+    </EmptyState>}
     {activeScene && hasSurfaces && !webgl && !renderFailure && <EmptyState className="viewport-empty" title={<>The 3D view is not available</>} detail={<>The geometry is fine, but this computer cannot draw the 3D view. Update its graphics driver, then reopen WG.</>}/>}
     {activeScene && !hasSurfaces && <EmptyState className="viewport-empty" title={<>Nothing to draw</>} detail={<>This model has no surfaces to draw. Change the design, or open another model.</>}/>}
     {activeScene && renderFailure && <EmptyState className="viewport-empty" title={<>The 3D view stopped drawing</>} detail={<>Retry to rebuild the view. If it stops again, turn on graphics acceleration in your system settings.</>} action={<button type="button" className="btn viewport-retry" onClick={retryRenderer}><Icon name="reset"/>Retry</button>}/>}

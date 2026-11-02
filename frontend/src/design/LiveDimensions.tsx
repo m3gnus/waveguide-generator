@@ -1,8 +1,9 @@
 import { parameterPanelValidity } from './parameterPanelValidity';
-import { Fragment, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { currentDocumentLoad, useDesignStore } from '../stores/design';
+import { ViewportFact } from '../viewport/ViewportFact';
 
 function formatted(value: unknown, count: number): string | null {
   if (!Array.isArray(value) || value.length !== count
@@ -49,12 +50,12 @@ export function LiveDimensions() {
   const overallValues = dimensions?.horn_overall;
   const wider = mouth && overall && mouthValues && overallValues
     && overallValues.slice(0, 2).some((value, index) => Math.abs(value - mouthValues[index]) > .05 + 1e-9);
-  const parts = formula === 'SOURCE-DISK'
-    ? [source && `Source ${source}`, body && `Body ${body}`]
-    : [mouth && `Mouth ${mouth}`, overall && `Depth ${overallValues![2].toFixed(1)}`,
-      wider && `Overall ${overallValues!.slice(0, 2).map((value) => value.toFixed(1)).join(' × ')}`,
-      enclosure && `Enclosure ${enclosure}`];
-  const content = parts.filter(Boolean).join(' · ');
+  const facts = (formula === 'SOURCE-DISK'
+    ? [['Source', source], ['Body', body]]
+    : [['Mouth', mouth], ['Depth', overall && overallValues![2].toFixed(1)],
+      ['Overall', wider && overallValues!.slice(0, 2).map((value) => value.toFixed(1)).join(' × ')],
+      ['Enclosure', enclosure]]).filter((fact): fact is [string, string] => Boolean(fact[1]));
+  const content = facts.map(([label, value]) => `${label} ${value}`).join(' · ');
   const state = pending ? 'Updating dimensions' : !content ? 'Dimensions unavailable'
     : current ? 'Current preview' : 'Last valid preview';
   const requested = formattedTarget(metadata!.dimensions_requested_mm?.mouth_opening);
@@ -64,6 +65,6 @@ export function LiveDimensions() {
   return <><span className={`viewport-dimensions${!current || !content ? ' stale' : ''}`}
     data-testid="design-dimensions" title={title}
     aria-label={`Design dimensions. ${content ? `${content} mm. ` : ''}${title}`}>
-    {content && <>{parts.filter(Boolean).map((part, index) => <Fragment key={index}>{index > 0 && ' · '}<span>{part}</span></Fragment>)} mm</>}
+    {facts.map(([label, value]) => <ViewportFact key={label} label={label} unit="mm">{value}</ViewportFact>)}
   </span><span className="sr-only" data-testid="dimensions-status" aria-live="polite" aria-atomic="true">{state}</span></>;
 }
