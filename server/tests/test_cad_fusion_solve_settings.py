@@ -105,11 +105,26 @@ def test_a_solve_with_settings_uses_them_and_makes_them_the_models_own(real) -> 
         "frequencyStartHz": 100.0, "frequencyEndHz": 10000.0, "frequencyCount": 60,
         "frequencySpacing": "log",
     }
+    assert harness.latest_job()["task_metadata"]["cad"]["settings_unsaved"] is False
     # Recorded as the user's own choice, as an edit in WG would be.
     assert harness.store.model_setup_has_user_choice(lineage_id, inventory_sha256(manifest["sources"]))
     _receipt(harness)
     _publisher(harness).tick(harness.jobs_store)
     assert _status(harness)["settings"] == sweep_settings(setup.options)
+
+
+def test_a_solve_without_edits_reports_the_models_settings(real) -> None:
+    harness, _mesher = real
+    lineage_id, _manifest_record = _delivered(harness, "without-settings", {})
+    _record_setup(harness, lineage_id, _setup(engine="bempp"))
+
+    solved = _prepare(harness, setup_revision_id=None)
+
+    assert solved["state"] == "accepted", solved
+    assert harness.latest_job()["task_metadata"]["cad"]["settings_unsaved"] is False
+    _receipt(harness)
+    _publisher(harness).tick(harness.jobs_store)
+    assert _status(harness)["settings"] == sweep_settings(vars(harness.submitted[-1].options))
 
 
 def test_an_unknown_design_solves_with_the_edit_but_does_not_report_it_as_saved(real, monkeypatch) -> None:
@@ -148,7 +163,7 @@ def test_an_unknown_design_solves_with_the_edit_but_does_not_report_it_as_saved(
     assert solved["state"] == "accepted", solved
     assert save_results == [False, False]
     assert harness.submitted[-1].options.num_frequencies == 41
-    assert harness.latest_job()["task_metadata"]["cad"]["settings_recorded"] is False
+    assert harness.latest_job()["task_metadata"]["cad"]["settings_unsaved"] is True
     _receipt(harness)
     _publisher(harness).tick(harness.jobs_store)
     status = _status(harness)
@@ -259,17 +274,17 @@ def test_a_new_cad_models_settings_are_recorded_after_a_held_preparation_resumes
     assert _status(harness)["settings"]["frequencyCount"] == 12
 
 
-@pytest.mark.parametrize("saved", [True, False, None])
+@pytest.mark.parametrize("unsaved", [True, False, None])
 @pytest.mark.parametrize("status", ["queued", "running", "complete"])
-def test_the_request_status_reports_only_a_sweep_saved_to_the_model(saved, status) -> None:
+def test_the_request_status_omits_only_explicitly_unsaved_settings(unsaved, status) -> None:
     receipt = {"commandId": "cmd-1", "kind": PREPARE_AND_SOLVE, "manifestSha256": "sha256:" + "0" * 64,
                "outcome": "accepted"}
     job = {"id": "job-1", "status": status, "run_number": 1,
-           "task_metadata": {"cad": {} if saved is None else {"settings_recorded": saved}}}
+           "task_metadata": {"cad": {} if unsaved is None else {"settings_unsaved": unsaved}}}
     sweep = {"frequencyStartHz": 50.0, "frequencyEndHz": 20000.0, "frequencyCount": 36}
     record, _incident = project_request_status(receipt, {"kind": PREPARE_AND_SOLVE}, job, {},
                                                settings=sweep)
-    if saved:
+    if unsaved is not True:
         assert record["settings"] == sweep
     else:
         assert "settings" not in record

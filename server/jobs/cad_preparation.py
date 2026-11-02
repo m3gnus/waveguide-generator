@@ -680,7 +680,7 @@ def prepare_job_sync(
                 "Change them in Fusion's Waveguide Generator panel, then solve again.",
             )
     # Keep the requested settings even if reading the retained copy fails.
-    run.advance(cad={"setup": _setup_record(store, revision_id), "settings_recorded": False})
+    run.advance(cad={"setup": _setup_record(store, revision_id), "settings_unsaved": bool(intent.solve_settings)})
     manifest_sha256 = str(retained["manifest_sha256"])
     if run.intent.mesh_limit_override:
         # Answered in Fusion before sending (the delivery's ``acknowledged``)
@@ -702,9 +702,9 @@ def prepare_job_sync(
     settings_revision_id = revision_id
     # A resumed first-time model already has the revised setup, but its
     # earlier held preparation may not have ingested and named the model yet.
-    settings_recorded = bool(intent.solve_settings) and record_settings_setup(
+    settings_unsaved = bool(intent.solve_settings) and not record_settings_setup(
         store, retained_manifest, settings_revision_id)
-    run.advance(cad={"settings_recorded": settings_recorded})
+    run.advance(cad={"settings_unsaved": settings_unsaved})
     if run.intent.parent_job_id is None and not run.intent.bundle_path.startswith("ingest/"):
         # A delivery admitted before WG held its return (its retention wait
         # ran out) was never judged at admission: its first preparation is.
@@ -794,8 +794,8 @@ def prepare_job_sync(
                        else f"Preparing the mesh failed: {exc}")
             return run.refuse(code, message, exception=exc)
 
-    if intent.solve_settings and not settings_recorded:
-        run.advance(cad={"settings_recorded": record_settings_setup(
+    if settings_unsaved:
+        run.advance(cad={"settings_unsaved": not record_settings_setup(
             store, retained_manifest, settings_revision_id, project=record.get("project"))})
     if setup.origin == DEFAULTS_ORIGIN:
         standing = _remember_default_setup(store, retained_manifest, record, revision_id)
@@ -1333,7 +1333,7 @@ def _job_provenance(
         preparation=preparation,
         approvals=preparation.get("approvals") or [],
     )
-    for key in ("snapshot", "return_state_hash", "mesh_limit_override", "settings_recorded"):
+    for key in ("snapshot", "return_state_hash", "mesh_limit_override", "settings_unsaved"):
         if key in run.cad:
             record[key] = run.cad[key]
     if run.intent.frame_axis:
