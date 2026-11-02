@@ -86,6 +86,17 @@ describe('result comparison charts', () => {
     ]);
   });
 
+  it('never lets a comparison run supply a heatmap the primary has no data for', () => {
+    const [runA, runB] = items;
+    const comparison = [{ ...runB, primary: true }, runA];
+    expect(directivityMapPanels(comparison, 'directivity_map_d')).toMatchObject([
+      { plane: 'diagonal', primaryLabel: 'Run B', references: [], hasData: false },
+    ]);
+    expect(directivityMapPanels(comparison, 'directivity_map_h')).toMatchObject([
+      { plane: 'horizontal', primaryLabel: 'Run B', references: [{ label: 'Run A' }], hasData: true },
+    ]);
+  });
+
   it('draws comparison runs in the primary heatmap as labelled contour series', () => {
     const map = (edge: number): ResultPayload => ({
       frequencies: [500, 1_000],

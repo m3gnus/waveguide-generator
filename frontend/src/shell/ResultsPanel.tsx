@@ -1397,17 +1397,20 @@ export function directivityMapPanels(items: NamedResult[], chartType: Directivit
   const planes = chartType === 'directivity_map'
     ? orderedPlanes(items)
     : [directivityPlaneForChart(chartType)!];
+  // A comparison run may be another model, so it only ever draws contours: the
+  // colour field stays the primary's, or the plane says it has no data.
+  const owners = items.some((item) => item.primary) ? items.filter((item) => item.primary) : items;
   return planes.map((plane) => {
     const available = items.filter((item) => Boolean((item.result.directivity as Record<string, unknown[]> | undefined)?.[plane]?.length));
-    const primary = available[0] ?? items[0];
+    const primary = available.find((item) => owners.includes(item));
     return {
       key: plane,
       label: plane,
       plane,
-      result: primary?.result as ResultPayload,
-      hasData: available.length > 0,
-      primaryLabel: primary?.label ?? 'Primary',
-      references: available.slice(1).map(({ label, result }) => ({ label, result: result as ResultPayload })),
+      result: (primary ?? items[0])?.result as ResultPayload,
+      hasData: Boolean(primary),
+      primaryLabel: (primary ?? items[0])?.label ?? 'Primary',
+      references: primary ? available.filter((item) => item !== primary).map(({ label, result }) => ({ label, result: result as ResultPayload })) : [],
     };
   });
 }
