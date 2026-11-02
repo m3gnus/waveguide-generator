@@ -289,7 +289,7 @@ def evaluate_instance_freshness(
     *,
     recompute: Callable[[Mapping[str, Any]], str] | None = None,
 ) -> dict[str, Any]:
-    """Apply freshness precedence rows 1-6 and retain supporting findings."""
+    """Prioritise freshness holds over body-edit notes and retain supporting facts."""
 
     instance_id = str(instance["instance_id"])
     evidence = instance["body_evidence"]
@@ -333,16 +333,13 @@ def evaluate_instance_freshness(
             except Exception as exc:  # freshness must never make ingestion crash
                 recompute_error = f"{type(exc).__name__}: {exc}"
                 evidence_errors.append(recompute_error)
-        if body_state != "unmodified" or fingerprint_match is not True:
+        if body_state == "unknown" or fingerprint_match is None:
             evidence_errors.append("body evidence is missing or unreadable")
         for evidence_error in dict.fromkeys(evidence_errors):
             facts.append({"kind": "freshness-evidence-unreadable", "error": evidence_error})
 
-    # Headline precedence is independent of the retained simultaneous facts.
-    if body_diverged:
-        verdict = "body_modified"
-        error = None
-    elif head is None:
+    # A body edit is a note only when no other freshness difference needs review.
+    if head is None:
         verdict = "missing_design"
         error = None
     elif design_changed:
@@ -354,6 +351,9 @@ def evaluate_instance_freshness(
     elif evidence_errors:
         verdict = "unknown"
         error = "; ".join(dict.fromkeys(evidence_errors))
+    elif body_diverged:
+        verdict = "body_modified"
+        error = None
     else:
         verdict = "current"
         error = None

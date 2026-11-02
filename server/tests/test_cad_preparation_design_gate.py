@@ -221,6 +221,58 @@ def test_a_fusion_body_edit_is_recorded_without_review(
         assert _freshness(_record(harness, resent)) == [("body_modified", False)]
 
 
+@pytest.mark.parametrize(
+    ("difference", "verdict"),
+    [
+        ("design_changed", "design_changed"),
+        ("generator_changed", "generator_changed"),
+        ("missing_design", "missing_design"),
+        ("unreadable_generator", "unknown"),
+        ("unreadable_body", "unknown"),
+        ("missing_hash", "unknown"),
+    ],
+)
+def test_a_fusion_body_edit_does_not_hide_other_freshness_holds(
+    real, monkeypatch, difference, verdict,
+) -> None:
+    harness, _mesher = real
+    design_id, _ = _project(harness, 45.0)
+    step = b"STEP changed in Fusion"
+    manifest = _manifest(step)
+    instance = manifest["instances"][0]
+    instance["design_id"] = design_id
+    _current(harness, manifest, design_id)
+    evidence = instance["body_evidence"]
+    evidence["local_body_state"] = "modified"
+    evidence["observed_fingerprint"]["volume_mm3"] = 15
+    if difference == "design_changed":
+        instance["design_hash"] = "sha256:" + "4" * 64
+    elif difference == "generator_changed":
+        instance["geometry_hash"] = "sha256:" + "4" * 64
+    elif difference == "missing_design":
+        instance["design_id"] = "wgd_missing"
+    elif difference == "unreadable_generator":
+        def unreadable(_design):
+            raise RuntimeError("cannot regenerate freshness evidence")
+        monkeypatch.setattr(ingest_module, "geometry_hash_for_design", unreadable)
+    elif difference == "unreadable_body":
+        evidence["baseline_fingerprint"] = None
+    elif difference == "missing_hash":
+        instance["geometry_hash"] = None
+    _received(harness, "edited", manifest, step)
+
+    summary = _prepare(harness, setup_revision_id=_revision(harness.store, _setup()))
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "findings_need_review"), summary
+    assert harness.submitted == []
+    record = _record(harness, summary)
+    assert _freshness(record) == [(verdict, True)]
+    freshness = record["freshness"]["instances"][0]
+    assert freshness["local_body_state"] == "modified"
+    assert any(fact["kind"] == "body-evidence-diverged" for fact in freshness["facts"])
+    assert record["evidence"]["instances"][0]["local_body_state"] == "modified"
+
+
 def test_a_design_repeated_in_the_assembly_resolves_to_its_solver_anchor_exactly(real) -> None:
     harness, _mesher = real
     design_id, _lineage_id = _project(harness, 45.0)

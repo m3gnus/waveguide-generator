@@ -131,7 +131,7 @@ def test_freshness_hash_rows_precede_unreadable_body_evidence() -> None:
     assert unknown["verdict"] == "unknown"
 
 
-def test_freshness_row_one_and_row_three_keep_precedence_over_other_errors() -> None:
+def test_freshness_design_change_precedes_body_edits_and_other_errors() -> None:
     contradictory = _instance(
         body_evidence={
             "local_body_state": "unmodified",
@@ -144,7 +144,8 @@ def test_freshness_row_one_and_row_three_keep_precedence_over_other_errors() -> 
         _Store({"design_hash": "other"}),
         recompute=lambda _head: (_ for _ in ()).throw(RuntimeError("boom")),
     )
-    assert row_one["verdict"] == "body_modified"
+    assert row_one["verdict"] == "design_changed"
+    assert any(fact["kind"] == "body-evidence-diverged" for fact in row_one["facts"])
 
     row_three = evaluate_instance_freshness(
         _instance(),
