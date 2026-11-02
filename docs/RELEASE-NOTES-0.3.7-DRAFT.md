@@ -1,7 +1,7 @@
 # 0.3.7 — unreleased draft
 
 Draft checked against the 0.3.7 additions source, based on Waveguide Generator
-`b05750ce8`, including the Sources and baffle launcher change.
+`d17767bb9`.
 This is not a release announcement or a statement of platform qualification.
 
 ## Added
@@ -26,6 +26,10 @@ This is not a release announcement or a statement of platform qualification.
   arc; the controls adapter remains a separate construction.
 - Build supported enclosure designs with a zero side margin at a flush mouth:
   the enclosure sides continue back from the fitted mouth rim.
+- Import ATH V2026-09a `Scale.Z`, R-OSSE rotation and
+  `Mesh.ThroatExtSegments` settings. Designs saved before this release build
+  exactly as they did.
+- Overlay any solved run under **+ compare**, including runs of other designs.
 
 ## Changed
 
@@ -35,6 +39,19 @@ This is not a release announcement or a statement of platform qualification.
   same file is imported again.
 - The 22,000-triangle **Solve anyway** choice is shared by parametric, file and
   CAD models. A separate memory refusal still requires a coarser mesh.
+- **Send to CAD** now opens or updates the design in Fusion without a click in
+  Fusion, and Waveguide Generator shows what actually happened there. If Fusion
+  is busy, for example with a sketch open, the send waits and continues by
+  itself. Fusion needs the WGLink add-in that ships with this release.
+- Failure messages now cover what you can act on, and each says what is wrong
+  and what to do. Faults in the program go to developer diagnostics instead.
+- The File menu has one **Export**. The design file is a row inside it, next to
+  the geometry formats. Exporting a run from **Results** is unchanged.
+- A woofer that the enclosure cannot hold is refused where you enter it, with
+  what is short and which margin to raise. A woofer that no longer fits holds
+  Build and Solve with its reason. Margins change only when you change them.
+- The run list shows each run's time, mesh, sweep and engine, and Settings has
+  a section list.
 
 ## Fixed
 
@@ -45,6 +62,10 @@ This is not a release announcement or a statement of platform qualification.
   undone.
 - Route eligible Metal solves through the supported compatible path while
   continuing to identify the selected engine as **Metal**.
+- Keep a frequency change made in Fusion's Waveguide Generator panel until a
+  solve has used it. A refused Solve no longer loses the change or shows it as
+  used.
+- Find room for a free woofer beside the mouth as well as above and below it.
 
 ## Known limitations
 

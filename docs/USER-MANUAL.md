@@ -120,7 +120,9 @@ Fusion.
 ### Optional: send a WG waveguide to Fusion first
 
 1. In WG, choose **File → Export → Send to CAD**.
-2. Fusion opens and inserts the waveguide. If it does not, use **Manage
+2. Fusion opens and inserts the waveguide, and WG says what happened there. If
+   Fusion is busy, for example with a sketch open, the send waits and continues
+   when you finish. If the waveguide still does not arrive, use **Manage
    Link… → Insert** in Fusion's **Waveguide Generator** panel.
 3. Save and name the Fusion document. WG uses that name for your runs.
 4. Add the baffle, enclosure or other parts around the waveguide. Move the
