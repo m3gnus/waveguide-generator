@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "ae201fe33cf4f739aee9ea51cb6a1e0667c66c71",
+  "commit": "5780a9a3a0a7eecdb808741766f28d274e33878e",
   "license": "AGPL-3.0-or-later",
   "addinVersion": "0.3.3",
-  "note": "Reviewed Send to CAD pickup, correlated delivery and confirmed solve-setting edits; previous history is not migrated into pending edits."
+  "note": "Reviewed linked throat in the default Sources & Mesh HF row; user-picked sources retain precedence. Previous add-in history is not migrated into pending edits."
 }

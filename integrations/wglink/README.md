@@ -86,3 +86,6 @@ reports the saved setup. The add-in uses its existing atomic writer for that
 optional pending-edit record; history written by the previous add-in is not
 migrated into pending edits. Real Fusion acceptance of this exact revision
 remains separate from source/package qualification.
+
+The pinned source shows a WG-inserted horn’s linked throat in the default HF row
+of Sources & Mesh, while preserving user-picked sources and linked read-only faces.
