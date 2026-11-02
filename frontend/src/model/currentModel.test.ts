@@ -248,3 +248,14 @@ it('uses the server return identity for an unprepared ingest request without a c
     cad_return: { bundle_path: 'ingest/wgi_retained', return_id: 'wgr_retained' } } as JobItem;
   expect(modelForRun(job).ingestId).toBe('wgi_retained');
 });
+
+it('says a selected run is arriving while the viewport has yet to draw its model', () => {
+  const job = { id: 'next', status: 'complete', has_results: true, config_summary: {}, script_snapshot: { version: 1, design: { formula: 'OSSE' } } } as unknown as JobItem;
+  const model = { ...currentModel(), kind: 'parametric' as const, key: modelForRun(job).key, unloadedRunId: undefined };
+  const shown = (viewportShowing: boolean, other: Partial<JobItem> = {}) =>
+    shownResult({ ...model, viewportShowing }, { primary: 'next' }, [{ ...job, ...other }]);
+  expect(shown(false)).toMatchObject({ arriving: true, job: null, canRender: false });
+  expect(shown(true)).toMatchObject({ arriving: false, job: { id: 'next' }, canRender: true });
+  expect(shown(false, { has_results: false, status: 'error' }).arriving).toBe(false);
+  expect(shownResult({ ...model, key: 'another model', viewportShowing: true }, { primary: 'next' }, [job]).arriving).toBe(false);
+});

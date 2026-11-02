@@ -12,10 +12,7 @@ import { resultFrequencyValidity } from '../results/validity';
 import { provideExportDestinationPrompt } from './exportDestinationPrompt';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { newRunBadgeLabel } from './ResultsPanel';
-import { selectJob } from '../jobs/selectJob';
 import { beamShapeMissingReason, ChartDetailDialog, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, measurementAngleEntries, middleEllipsis, phaseOption, polarOption, powerResponseOption, resolveMeasurementSelection, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption, splSubtitle } from './ResultsPanel';
-
-vi.mock('../jobs/selectJob', () => ({ selectJob: vi.fn() }));
 
 const chartImageMocks = vi.hoisted(() => ({
   copy: vi.fn<() => Promise<void>>(),
@@ -852,7 +849,7 @@ describe('results chart layouts', () => {
         panel !== null && createElement(ChartDetailDialog, {
           index: panel, chartTypes: preferences.chartTypes, tokens, runs, runId, runLabel: (job) => `Run ${job.run_number}`,
           data: data ? { result, named: [] as NamedResult[], live: false } : null, unavailable: null,
-          onShowPanel: setPanel, onClose: () => setPanel(null),
+          onShowRun: (job: JobItem) => shown(job.id), onShowPanel: setPanel, onClose: () => setPanel(null),
         }));
     }
     const open = (props: { runId?: string | null; data?: boolean } = {}) => {
@@ -861,7 +858,6 @@ describe('results chart layouts', () => {
     };
     beforeEach(() => {
       shown.mockClear();
-      vi.mocked(selectJob).mockImplementation((job) => shown(job.id));
       preferencesStore.update({ chartTypes: ['summary', 'summary'] });
     });
 

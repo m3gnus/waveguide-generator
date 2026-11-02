@@ -2175,7 +2175,7 @@ interface ChartDetailData extends SummarySourceProps {
  * It lives above the grid because the grid goes away for the moment a run from
  * another model takes to arrive, and this view has to stay open through that.
  */
-export function ChartDetailDialog({ index, chartTypes, tokens, data, unavailable, runs, runId, runLabel, viewSwitch, onShowPanel, onClose }: {
+export function ChartDetailDialog({ index, chartTypes, tokens, data, unavailable, runs, runId, runLabel, runError, viewSwitch, onShowRun, onShowPanel, onClose }: {
   index: number;
   chartTypes: ChartType[];
   tokens: ChartTokens;
@@ -2185,13 +2185,15 @@ export function ChartDetailDialog({ index, chartTypes, tokens, data, unavailable
   runs: JobItem[];
   runId: string | null;
   runLabel: (job: JobItem) => string;
+  /** Why the last move to another run did not happen. */
+  runError?: string | null;
   viewSwitch?: ReactNode;
+  onShowRun: (job: JobItem) => void;
   onShowPanel: (index: number) => void;
   onClose: () => void;
 }) {
   const chartType = chartTypes[index];
   const dialog = useModalDialogFocus<HTMLElement>({ open: true, onClose, initialFocus: detailInitialFocus });
-  const [runError, setRunError] = useState<string | null>(null);
   const { samplingDisclosure, subtitle } = useChartDescription({ chartType, result: data?.result, named: data?.named ?? NO_NAMED_RESULTS, job: data?.job });
   // The dialog holds the rendered chart while it is open, so capture from here
   // rather than from the card behind it: a large view must hand back its own image.
@@ -2201,9 +2203,7 @@ export function ChartDetailDialog({ index, chartTypes, tokens, data, unavailable
   });
   const runIndex = runs.findIndex((job) => job.id === runId);
   const showRun = (job: JobItem | undefined) => {
-    if (!job || job.id === runId) return;
-    setRunError(null);
-    selectJob(job, setRunError);
+    if (job && job.id !== runId) onShowRun(job);
   };
   const stepRun = (delta: number) => { if (runIndex >= 0) showRun(runs[runIndex + delta]); };
   const stepPanel = (delta: number) => {
@@ -2373,6 +2373,9 @@ export function ResultsPanel() {
   const [dismissedNewRun, setDismissedNewRun] = useState<string | null>(null);
   const [detailPanel, setDetailPanel] = useState<number | null>(null);
   const closeDetail = useCallback(() => setDetailPanel(null), []);
+  /** The run whose model the detail view is putting on screen right now. */
+  const [detailSwitch, setDetailSwitch] = useState<string | null>(null);
+  const [detailRunError, setDetailRunError] = useState<string | null>(null);
   const runFilters = useRunFilters();
   const view = useResultView();
   const measuredOverlays = useMeasuredOverlayStore((state) => state.overlays);
@@ -2704,7 +2707,23 @@ export function ResultsPanel() {
   const charts = useVisibleRedraw(shown && cadResultMatchesViewport
     ? <><FemPortsPanel result={shown}/><ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifactView} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel} onExpand={setDetailPanel}/></>
     : null);
-  const detailRunId = selection.primary ?? resolved.job?.id ?? null;
+  // The view names the run it is going to, or else the one the dock resolved:
+  // a selection that cannot show its model must not name a chart it is not.
+  const detailRunId = detailSwitch ?? (resolved.arriving ? selection.primary : resolved.job?.id) ?? selection.primary ?? null;
+  // Nothing will ever arrive: the run was deleted or failed and nothing replaces
+  // it. A cleaned-up run and a failed fetch have words of their own to show.
+  const detailRunGone = detailPanel !== null && !detailSwitch && !resolved.arriving && !resolved.canRender && !cleanedUpRun && !error;
+  useEffect(() => { if (detailRunGone) setDetailPanel(null); }, [detailRunGone]);
+  const showDetailRun = useCallback((job: JobItem) => {
+    setDetailRunError(null);
+    selectJob(job, (message) => {
+      setDetailRunError(message);
+      coordinator.reportError(message);
+    }, (next, onError) => {
+      setDetailSwitch(next.id);
+      return showJobModel(next, onError).finally(() => setDetailSwitch((current) => current === next.id ? null : current));
+    });
+  }, [coordinator.reportError]);
   const detailRuns = useMemo(() => {
     if (detailPanel === null) return [];
     const listed = listedRuns(railRuns(jobs), runFilters, preferences.jobSort, preferences.minRating)
@@ -2869,7 +2888,7 @@ export function ResultsPanel() {
       index={detailPanel}
       chartTypes={preferences.chartTypes}
       tokens={tokens}
-      data={shown && cadResultMatchesViewport ? { result: shown, named, live: primaryIsProvisional, beamShapeAction, radiationArtifact: radiationArtifactView, wrapper: shownRaw, job: selectedJob, channelId: shownActiveChannel } : null}
+      data={shown && cadResultMatchesViewport && display?.primaryId === detailRunId ? { result: shown, named, live: primaryIsProvisional, beamShapeAction, radiationArtifact: radiationArtifactView, wrapper: shownRaw, job: selectedJob, channelId: shownActiveChannel } : null}
       unavailable={error ?? (cleanedUpRun ? cleanedUpMessage(cleanedUpRun) : null)}
       runs={detailRuns}
       runId={detailRunId}
@@ -2877,7 +2896,9 @@ export function ResultsPanel() {
         const marker = runContextMarker(job, coherenceContext);
         return `${runDisplayName(job)}${marker ? ` · ${marker}` : ''}`;
       }}
+      runError={detailRunError}
       viewSwitch={primaryRaw && cadResultMatchesViewport && <ResultViewSwitch result={primaryRaw} view={view} importOrigin={selectedJob?.config_summary.import_origin} onSelect={(next) => resultViewStore.setView(next)}/>}
+      onShowRun={showDetailRun}
       onShowPanel={setDetailPanel}
       onClose={closeDetail}
     />}

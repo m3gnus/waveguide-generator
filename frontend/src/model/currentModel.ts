@@ -180,6 +180,8 @@ export interface ResultSelection {
   resultsSeenFor?: string | null;
 }
 export interface ShownResult {
+  /** The selected run is on its way to the viewport; `job` is not yet that run. */
+  arriving: boolean;
   job: JobItem | null;
   latest: JobItem | null;
   ids: string[];
@@ -205,7 +207,9 @@ export function shownResult(model: CurrentModel, selection: ResultSelection, job
   // user added to compare against it, so comparing other designs is the point.
   const ids = job ? [job.id, ...(selection.overlays ?? []).filter(id => id !== job.id
     && jobs.some(candidate => candidate.id === id && drawable(candidate)))] : [];
-  return { job, latest, ids, verdict, modelNotLoaded: !!legacy, releaseSelection, canRender: !!job && drawable(job) };
+  // Its model is the one on screen and the viewport has not drawn it yet.
+  const arriving = !!selected && !legacy && drawable(selected) && verdict === 'model-not-shown';
+  return { job, latest, ids, verdict, modelNotLoaded: !!legacy, releaseSelection, canRender: !!job && drawable(job), arriving };
 }
 
 /** Spatial artifacts require the shown run's model to actually be in the viewport.
