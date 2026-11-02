@@ -608,7 +608,7 @@ describe('rendered document dimension transitions', () => {
     const firstRevision = useDesignStore.getState().designRevision;
     act(() => socket.message(fixtureWithHeader({ seq: 1, designRevision: firstRevision,
       previewMetadata: { dimensions_status: 'current', dimensions_mm: { mouth_opening: [400, 200], horn_overall: [410, 210, 200] } } })));
-    expect(dimensions()?.textContent).toBe('Mouth 400.0 × 200.0 · Depth 200.0 · Overall 410.0 × 210.0 mm');
+    expect(dimensions()?.textContent).toBe('Mouth 400.0 × 200.0 mmDepth 200.0 mmOverall 410.0 × 210.0 mm');
     expectState('Current preview');
     const newDocument = structuredClone(oldDocument); newDocument.scale = 3;
     act(() => {
@@ -632,7 +632,7 @@ describe('rendered document dimension transitions', () => {
     const mouth: [number, number] = action === 'New' ? [300, 150] : [600, 300];
     act(() => socket.message(fixtureWithHeader({ seq: 4, designRevision: revision, lod: 'fine',
       previewMetadata: { dimensions_status: 'current', dimensions_mm: { mouth_opening: mouth, horn_overall: [610, 310, 300] } } })));
-    const expectedReadout = `Mouth ${mouth.map((value) => value.toFixed(1)).join(' × ')} · Depth 300.0 · Overall 610.0 × 310.0 mm`;
+    const expectedReadout = `Mouth ${mouth.map((value) => value.toFixed(1)).join(' × ')} mmDepth 300.0 mmOverall 610.0 × 310.0 mm`;
     expect(dimensions()?.textContent).toBe(expectedReadout);
     expectState('Current preview');
     expect(host.textContent).not.toContain('400.0');
