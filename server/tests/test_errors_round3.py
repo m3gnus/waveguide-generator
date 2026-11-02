@@ -453,6 +453,7 @@ def test_ui_catalog_matches_the_installed_mesher_package(tmp_path):
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
     assert json.loads(output.read_text(encoding="utf-8")) == json.loads(
