@@ -290,7 +290,8 @@ def project_request_status(
     of the mesh a solved job used; ``previous`` the status last written, as
     the validator read it; ``bundle_name`` names the model when no snapshot
     does (:func:`bundle_document_name`); ``settings`` is the frequency sweep of the
-    setup the job prepares with, once it has one (``fusion_settings.revision_sweep``).
+    setup the job prepares with (``fusion_settings.revision_sweep``), reported only
+    when preparation recorded that setup as the model's own.
     A Solve whose job is gone was dismissed in WG (or
     its run removed): it keeps a finished state it already had, without the
     run it no longer has, and otherwise reads ``cancelled``.
@@ -331,7 +332,7 @@ def project_request_status(
             return {**kept, **{key: value for key, value in record.items() if value is not None}}, None
         return {**record, "state": "cancelled", "cancelReason": "dismissed"}, None
     record["job"] = _job_ref(job)
-    if settings:
+    if settings and cad_of(job).get("settings_recorded") is True:
         record["settings"] = dict(settings)
     status = str(job.get("status"))
     cad = cad or {}
