@@ -22,6 +22,7 @@ import { connectCadObservation } from './cadObservation';
 import { createCadArrivalActions, createCadReturnArrivalReader, enterCadWorkspace, SupersededError } from './cadlink/arrivals';
 import { showIngestedMeshInViewport } from './cadlink/artifactLoader';
 import { createCadOutboundController } from './cadlink/outbound';
+import { showCadSendOutcome } from '../design/useSendToCad';
 import { createCadReturnWaiter } from './cadlink/returnWaiter';
 import { createReceiptDisplay } from './cadlink/receiptDisplay';
 import { createFusionSolveDisplay } from './cadlink/fusionSolveDisplay';
@@ -291,7 +292,7 @@ export function mountCadWorkspaceOwners(): () => void {
     sendWgToFusion: outbound.sendWgToFusion, cancelFusionConflict: outbound.cancelFusionConflict,
     clearFeedback: () => {
       reportError(null); reportStatus(null);
-      outbound.setState({ error: null, status: null }); waiter.setState({ error: null, status: null });
+      showCadSendOutcome(null); waiter.setState({ error: null, status: null });
     },
     reportError, reportStatus, reportViewportNotice,
     selectFusionInstance: (id) => {
@@ -372,10 +373,8 @@ export function mountCadWorkspaceOwners(): () => void {
     context = next; subscribeContext();
   };
   const stops = [
-    outbound.subscribe((state, previous) => { changed(); publish({ sendingToFusion: state.sendingToFusion,
-      pendingFusionConflict: state.pendingFusionConflict,
-      ...(state.error !== previous.error ? { error: state.error } : {}),
-      ...(state.status !== previous.status ? { status: state.status } : {}) }); }),
+    outbound.subscribe((state) => { changed(); publish({ sendingToFusion: state.sendingToFusion,
+      pendingFusionConflict: state.pendingFusionConflict }); }),
     waiter.subscribe((state, previous) => {
       claimedReturns.clear();
       if (state.requestId) claimedReturns.add(state.requestId);

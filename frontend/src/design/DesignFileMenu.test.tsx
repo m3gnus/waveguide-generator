@@ -1,3 +1,4 @@
+import { showCadSendOutcome } from './useSendToCad';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,6 +37,7 @@ let root: Root;
 const requested: string[] = [];
 
 beforeEach(() => {
+    showCadSendOutcome(null);
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   resetDesignStore();
   resetImportedModelStore();
@@ -659,6 +661,27 @@ describe('design file export menu', () => {
     expect(container.querySelector('[role="status"]')?.textContent).toContain(
       'Waiting for Fusion to open this model.',
     );
+  });
+
+  it('never lets an earlier menu message hide a send outcome from elsewhere', async () => {
+    vi.mocked(fetch).mockImplementationOnce(async () => new Response(
+      JSON.stringify({ detail: 'Could not serialize this design.' }),
+      { status: 422, headers: { 'Content-Type': 'application/json' } },
+    ));
+    act(() => root.render(<DesignFileMenu/>));
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    act(() => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.querySelector('span')?.textContent === 'Export')!.click());
+    const download = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.textContent?.startsWith('Design file'))!;
+    await act(async () => { download.click(); });
+    await act(async () => { showCadSendOutcome({ tone: 'error', text: 'Fusion could not open this model.' }); });
+    const line = container.querySelector<HTMLElement>('.design-menu-status')!;
+    expect(line.textContent).toContain('Could not serialize this design.');
+    expect(line.querySelector('[data-outcome="cad-send"]')?.textContent).toBe('Fusion could not open this model.');
+    expect(line.getAttribute('role')).toBe('alert');
+    await act(async () => { line.click(); });
+    expect(container.querySelector('.design-menu-status')).toBeNull();
   });
 
   it('does not start a second CAD export on a double click', async () => {

@@ -44,7 +44,6 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
   const store = createStore(() => ({
     requests: {} as Record<string, string>,
     sendingToFusion: false, pendingFusionConflict: false,
-    error: null as string | null, status: null as string | null,
   }));
   let generation = 0;
   let active = true;
@@ -94,7 +93,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
     };
     stopWatching?.();
     stopWatching = null;
-    store.setState({ sendingToFusion: true, error: null, status: null });
+    store.setState({ sendingToFusion: true });
     showCadSendOutcome(null);
     options.noteCadActivity?.();
     let evidence: CadConnectionStatus | null = null;
@@ -153,7 +152,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
           rememberSentCopy(sentKey, result.identity?.designId, adopt);
           if (!current()) return result;
           if (!adopt) {
-            store.setState({ status: `Sent to Fusion 360 · sequence ${result.sequence}. ${sameModel ? 'The Fusion link' : 'The model'} changed while it was sending, so the returned CAD link was not adopted.` });
+            showCadSendOutcome({ tone: 'status', text: `Sent to Fusion 360 · sequence ${result.sequence}. ${sameModel ? 'The Fusion link' : 'The model'} changed while it was sending, so the returned CAD link was not adopted.` }, true);
             return result;
           }
           try {
@@ -166,12 +165,8 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
             ? ' It replaced an earlier update Fusion had not started yet.' : '';
           const send = fusionSendOf(result, Boolean(target));
           if (send) {
-            stopWatching = followCadSend(send, ({ tone, text }) => store.setState(tone === 'error'
-              ? { error: text, status: null } : { status: `${text}${superseded}` }));
-          } else {
-            store.setState({ status: sentToCadMessage(result) });
-            showCadSendOutcome({ tone: 'status', text: sentToCadMessage(result) }, true);
-          }
+            stopWatching = followCadSend(send, superseded);
+          } else showCadSendOutcome({ tone: 'status', text: sentToCadMessage(result) }, true);
           await options.refresh?.();
           return result;
         },
@@ -184,9 +179,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
         rememberSentCopy(null, exportedIdentity?.designId, current() && isCurrentDocumentLoad(load));
       }
       if (current() && !(reason instanceof OutboundSupersededError)) {
-        const text = failureWords(reason);
-        store.setState({ error: text });
-        showCadSendOutcome({ tone: 'error', text });
+        showCadSendOutcome({ tone: 'error', text: failureWords(reason) });
       }
       throw reason;
     } finally {

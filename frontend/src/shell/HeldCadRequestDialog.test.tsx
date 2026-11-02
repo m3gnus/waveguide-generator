@@ -213,6 +213,22 @@ describe('held CAD request dialog owner', () => {
     expect(actions.continueRun).toHaveBeenCalledWith(job.id, { approvals: { preparation_id: 'wgi_1', finding_ids: blocking } });
     vi.unstubAllGlobals();
   });
+  it('offers no approval when it cannot say what would be approved', async () => {
+    const job = held();
+    job.cad_state = { ...job.cad_state!, reason: 'findings_need_review',
+      options: [{ id: 'review', label: 'Review model' }, { id: 'dismiss', label: 'Dismiss request' }],
+      preparation: { ingest_id: 'wgi_1', preparation_id: 'wgi_1', blocking_finding_ids: ['one', 'two'], report_sha256: 'sha256:r' },
+      approvals: [] };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      findings: [{ id: 'one', kind: 'freshness', blocking: true, verdict: 'body_modified' }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    publishCadJobs([job]);
+    await act(async () => root.render(<HeldCadRequestDialog/>));
+    await vi.waitFor(() => expect(host.textContent).toContain('Send it again from Fusion'));
+    expect(host.textContent).not.toContain('Approve and solve');
+    expect(host.textContent).not.toContain('Review model');
+    vi.unstubAllGlobals();
+  });
   it('keeps the choice after a failed action and suppresses repeated presses', async () => {
     let fail: (error: Error) => void = () => undefined;
     actions.continueRun.mockImplementation(() => new Promise((_, reject) => { fail = reject; }));

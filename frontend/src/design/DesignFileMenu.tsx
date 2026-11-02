@@ -180,9 +180,9 @@ export function DesignFileMenu() {
   const [projects, setProjects] = useState<CadLinkedDesignSummary[]>([]);
   const [moveRunsOpen, setMoveRunsOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const sendOutcome = useCadSendOutcome((state) => state.outcome);
-  /** What a send from this menu left out, said with what became of it. */
-  const [sendNote, setSendNote] = useState('');
+  const { outcome: sendOutcome, requestId: sentRequest } = useCadSendOutcome();
+  /** What a send from this menu left out, said only with that send's outcome. */
+  const [sendNote, setSendNote] = useState<{ requestId: string | null; text: string } | null>(null);
   const [adoptionCandidate, setAdoptionCandidate] = useState<CadLinkOpenState['adoptionCandidate']>(null);
   const [sharedQuestion, setSharedQuestion] = useState<SharedDesignQuestion | null>(null);
   const pendingSharedQuestion = useRef<SharedDesignQuestion | null>(null);
@@ -208,7 +208,7 @@ export function DesignFileMenu() {
     busyRef.current = true;
     setBusy(true);
     setMessage(null);
-    setSendNote('');
+    setSendNote(null);
     setAdoptionCandidate(null);
     try { await operation(); } catch (error) {
       if (isOutboundSupersededError(error)) return;
@@ -534,7 +534,7 @@ export function DesignFileMenu() {
       // The coordinator owns the send: it derives open-vs-update, attaches the
       // expected-document guard, and parks on the two-way conflict dialog.
       const result = await cadWorkspace.getSnapshot().sendWgToFusion();
-      if (result) setSendNote(omitsWoofers);
+      if (result) setSendNote({ requestId: result.cadHandoffRequestId ?? null, text: omitsWoofers });
       else setMessage('Both WG and Fusion changed — choose a direction in the dialog.');
     });
   }
@@ -612,12 +612,13 @@ export function DesignFileMenu() {
       </>}
     </div>}
     {(message || adoptionCandidate || sendOutcome) && <div
-      role={!message && sendOutcome?.tone === 'error' ? 'alert' : 'status'}
-      className={`design-menu-status${!message && sendOutcome?.tone === 'error' ? ' error' : ''}`}
-      data-outcome={!message && sendOutcome ? 'cad-send' : undefined}
+      role={sendOutcome?.tone === 'error' ? 'alert' : 'status'}
+      className={`design-menu-status${sendOutcome?.tone === 'error' ? ' error' : ''}`}
       onClick={() => { setMessage(null); setAdoptionCandidate(null); showCadSendOutcome(null); }}
     >
-      {message ?? (sendOutcome && `${sendOutcome.text}${sendNote}`)}
+      {/* Both, when both exist: a menu message never hides a send's outcome. */}
+      {message && message !== sendOutcome?.text && <div>{message}</div>}
+      {sendOutcome && <div data-outcome="cad-send">{sendOutcome.text}{sendNote?.requestId === sentRequest ? sendNote?.text : ''}</div>}
       {adoptionCandidate && <button className="btn"
         type="button"
         onClick={(event) => { event.stopPropagation(); adoptCandidate(); }}

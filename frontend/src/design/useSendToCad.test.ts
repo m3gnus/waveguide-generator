@@ -116,6 +116,13 @@ describe('the latest send on screen', () => {
     expect(useCadSendOutcome.getState().outcome?.tone).toBe('error');
     stop();
   });
+  it('adds a note to progress words, never to a problem', () => {
+    const stop = followCadSend({ requestId: 'r1' }, ' It replaced an earlier update.');
+    expect(useCadSendOutcome.getState().outcome?.text).toContain('It replaced an earlier update.');
+    useCadDeliveryHealthStore.setState({ outboundOperations: { r1: { operationId: 'r1', kind: 'insert_link', fusionDelivery: 'refused' } as never } });
+    expect(useCadSendOutcome.getState().outcome?.text).not.toContain('It replaced an earlier update.');
+    stop();
+  });
   it('lets the next send replace the one before', () => {
     followCadSend({ requestId: 'r1' });
     const stop = followCadSend({ requestId: 'r2', update: true });

@@ -1,3 +1,4 @@
+import { showCadSendOutcome, useCadSendOutcome } from '../../design/useSendToCad';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCadConnectionStore } from '../../stores/cadConnection';
 import { designForFamily, resetDesignStore, useDesignStore } from '../../stores/design';
@@ -16,6 +17,7 @@ import runSource from '../../jobs/RunExportControl.tsx?raw';
 const controllers: ReturnType<typeof createCadOutboundController>[] = [];
 const connections: ReturnType<typeof createCadConnectionStore>[] = [];
 beforeEach(() => {
+    showCadSendOutcome(null);
   resetDesignStore(); resetDocumentStore(); resetSolveOptionsStore();
   workspaceModeStore.setMode('parametric');
   useDocumentStore.getState().setCadLink(identity, 'current');
@@ -139,7 +141,7 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     await Promise.resolve(); await Promise.resolve();
     setStatus(status()); pick.resolve(json({ selected: true }));
     expect(await first).toBeUndefined(); await second;
-    expect(feedback).not.toHaveBeenCalled(); expect(controller.getState().error).toBeNull();
+    expect(feedback).not.toHaveBeenCalled(); expect(useCadSendOutcome.getState().outcome?.tone).toBe('status');
     expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/select'))).toHaveLength(1);
     expect(exportsFrom(fetcher)).toHaveLength(1);
   });
@@ -180,8 +182,8 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     await vi.waitFor(() => expect(exportsFrom(fetcher)).toHaveLength(1));
     useDocumentStore.getState().setCadLink({ ...identity, designId: 'wgd_new' }, 'current');
     old.resolve(json(exported)); await sending;
-    expect(controller.getState().status).toContain('The model changed');
-    expect(controller.getState().status).not.toContain('Another design was opened');
+    expect(useCadSendOutcome.getState().outcome?.text).toContain('The model changed');
+    expect(useCadSendOutcome.getState().outcome?.text).not.toContain('Another design was opened');
   });
   it('leaves polar edits made during export uncommitted', async () => {
     const old = deferred<Response>();
@@ -245,7 +247,7 @@ describe.each(['file', 'cad', 'another parametric model'] as const)('current-mod
       : replacement === 'file'
         ? 'STEP export is not available for imported mesh models.'
         : 'STEP export is not available for imported models.';
-    expect(controller.getState().error).toBe(reason);
+    expect(useCadSendOutcome.getState().outcome).toEqual({ tone: 'error', text: reason });
   }
 
   it('stops after the first Fusion status await', async () => {
@@ -325,7 +327,7 @@ describe.each(['file', 'cad', 'another parametric model'] as const)('current-mod
     const before = useDocumentStore.getState().identity;
     switchModel(); pending.resolve(json(exported)); await sending;
     expect(useDocumentStore.getState().identity).toBe(before);
-    expect(controller.getState().status).toContain('The model changed');
+    expect(useCadSendOutcome.getState().outcome?.text).toContain('The model changed');
   });
 });
 

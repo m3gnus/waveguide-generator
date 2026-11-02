@@ -86,30 +86,29 @@ export function sentToCadMessage(result: WgLinkExportResponse): string {
     : 'The model is ready. In Fusion, choose WGLink → Advanced → Insert.';
 }
 
-/** The latest send's words, wherever it was sent from. The floating status
- * line beside the File menu shows them, so they stay on screen with the menus
- * closed and the panel that sent them out of sight. */
-export const useCadSendOutcome = create<{ outcome: FusionDeliveryWords | null }>(() => ({ outcome: null }));
+/** The latest send's words, wherever it was sent from: the one outcome state
+ * and lifetime. The floating status line beside the File menu shows them, so
+ * they stay on screen with the menus closed, and the CAD Link panel reads them. */
+export const useCadSendOutcome = create<{ outcome: FusionDeliveryWords | null; requestId: string | null }>(() => ({ outcome: null, requestId: null }));
 
 let stopFollowing: (() => void) | null = null;
 let fading: ReturnType<typeof setTimeout> | null = null;
 
 /** Put a send's words on screen. Finished words leave by themselves. */
-export function showCadSendOutcome(outcome: FusionDeliveryWords | null, finished = false): void {
+export function showCadSendOutcome(outcome: FusionDeliveryWords | null, finished = false, requestId: string | null = null): void {
   if (fading !== null) clearTimeout(fading);
   fading = outcome && finished
-    ? setTimeout(() => { fading = null; useCadSendOutcome.setState({ outcome: null }); }, SEND_OUTCOME_SHOWN_MS)
+    ? setTimeout(() => { fading = null; useCadSendOutcome.setState({ outcome: null, requestId: null }); }, SEND_OUTCOME_SHOWN_MS)
     : null;
-  useCadSendOutcome.setState({ outcome });
+  useCadSendOutcome.setState({ outcome, requestId: outcome ? requestId : null });
 }
 
-/** Show this send's outcome until the next send replaces it. `report` also
- * gets the words, for a caller keeping its own line. */
-export function followCadSend(send: FusionSend, report?: (words: FusionDeliveryWords) => void): () => void {
+/** Show this send's outcome until the next send replaces it. `note` follows
+ * its progress words, not a problem. */
+export function followCadSend(send: FusionSend, note = ''): () => void {
   stopFollowing?.();
   const stop = watchFusionDelivery(send, (words, finished) => {
-    report?.(words);
-    showCadSendOutcome(words, finished);
+    showCadSendOutcome(words.tone === 'error' ? words : { ...words, text: `${words.text}${note}` }, finished, send.requestId);
   });
   stopFollowing = stop;
   return () => {

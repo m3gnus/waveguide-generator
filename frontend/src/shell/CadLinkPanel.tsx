@@ -28,6 +28,7 @@ import { Icon } from './icons';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
 import { CadOperationsSection, CurrentModelRequests } from './CadOperationsSection';
+import { useCadSendOutcome } from '../design/useSendToCad';
 import { CadDeliveryHealth } from './CadDeliveryHealth';
 import { CadModelDetails, FRESHNESS_COPY, freshnessSummary } from './CadModelDetails';
 import { CadDrawer } from './CadDrawer';
@@ -353,6 +354,7 @@ export function CadLinkPanel() {
   // An engine gate on this model's latest request is described only in
   // Results, with its remedies: its requests get no card here meanwhile.
   const { status: requestStatus } = useCurrentModelStatus(record ?? undefined);
+  const sendOutcome = useCadSendOutcome((state) => state.outcome);
   const engineHold = requestStatus.kind === 'waiting' && ENGINE_HOLDS.has(requestStatus.job?.cad_state?.reason ?? '');
   // A model authored in Fusion is on screen. The link states compare the
   // Fusion document with the parametric WG design, which is not this model,
@@ -505,6 +507,7 @@ export function CadLinkPanel() {
       </DeveloperDetails>}
     </Notice>}
     {status && <Notice tone="info" className="cad-status-strip" role="status">{status}</Notice>}
+    {sendOutcome && <Notice tone={sendOutcome.tone === 'error' ? 'error' : 'info'} className="cad-status-strip" role={sendOutcome.tone === 'error' ? 'alert' : 'status'}>{sendOutcome.text}</Notice>}
 
     {/* The connection leads while it needs the user: until it is sorted, nothing
         else here can happen. Otherwise it is one quiet line below the runs. */}

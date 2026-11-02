@@ -7,7 +7,7 @@ import { cadWorkspace } from '../stores/cadWorkspace';
 import { durableSettings } from '../stores/durableSettings';
 import { meshCeilingFacts, meshCeilingQuestion } from '../stores/cadModelStatusLine';
 import { meshCeilingChoice } from '../stores/meshCeilingChoice';
-import { findingWords, useFindingReview } from './CadOperationsSection';
+import { findingsDescribed, FINDINGS_UNREADABLE, findingWords, useFindingReview } from './CadOperationsSection';
 import { useModalDialogFocus } from './dialogFocus';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -118,8 +118,11 @@ export function HeldCadRequestDialog() {
   // solve. Sending the user to look for it elsewhere was a dead end.
   const operation = job?.cad_state?.reason === 'findings_need_review' ? cadJobSummary(job) : null;
   const review = useFindingReview(operation);
-  const reviewed = operation && review.preparationId && review.findingIds.length > 0 && review.preparationId === operation.preparationId
+  const loaded = operation && review.preparationId && review.findingIds.length > 0 && review.preparationId === operation.preparationId
     ? { preparation_id: review.preparationId, finding_ids: review.findingIds } : null;
+  // Approve and solve only what the user can read.
+  const reviewed = loaded && findingsDescribed(review) ? loaded : null;
+  const unreadable = loaded !== null && reviewed === null;
   const shownJob = job?.id ?? null;
   useEffect(() => {
     publishShown(shownJob);
@@ -140,6 +143,7 @@ export function HeldCadRequestDialog() {
   // The ceiling has three choices; dismissal remains on other requests.
   const options = reviewed
     ? [...serverOptions.filter(option => option.id === 'dismiss'), { id: 'approve', label: 'Approve and solve' }]
+    : unreadable ? serverOptions.filter(option => option.id === 'dismiss')
     : ceilingQuestion
     ? [...((!!job || (!ceiling?.continueSolve && selectedBundle?.bundleOrigin !== 'onshape')) ? [{ id: 'change_in_fusion', label: 'Change in Fusion' }] : []),
       ...serverOptions.filter(option => option.id !== 'dismiss')]
@@ -198,11 +202,9 @@ export function HeldCadRequestDialog() {
       </div></header>
       <div className="update-dialog-body">
         {reviewed
-          ? <ul className="cad-operation-findings">{reviewed.finding_ids.map((findingId) => {
-            const finding = review.findings.find((item) => item.id === findingId);
-            return <li key={findingId}>{finding ? findingWords(finding) : 'WG could not read the details of this check.'}</li>;
-          })}</ul>
-          : <p>{changingNow ? ceilingQuestion!.changeInFusion : ceilingQuestion ? ceilingQuestion.body : nextStep}</p>}
+          ? <ul className="cad-operation-findings">{review.findings.filter((finding) => reviewed.finding_ids.includes(finding.id))
+            .map((finding) => <li key={finding.id}>{findingWords(finding)}</li>)}</ul>
+          : <p>{unreadable ? FINDINGS_UNREADABLE : changingNow ? ceilingQuestion!.changeInFusion : ceilingQuestion ? ceilingQuestion.body : nextStep}</p>}
         {error?.id === id && <Notice tone="error" role="alert">{error.message}</Notice>}
       </div>
       {changingNow ? <footer>

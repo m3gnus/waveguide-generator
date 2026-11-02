@@ -68,6 +68,14 @@ interface FindingReview {
 
 const NO_REVIEW: FindingReview = { preparationId: null, findingIds: [], approvedIds: [], findings: [], error: null };
 
+/** Said when WG cannot describe what the user would be approving. */
+export const FINDINGS_UNREADABLE = 'WG could not read what it found in this model, so it cannot be approved. Send it again from Fusion.';
+
+/** Whether every blocking finding has its words: nothing is approved unseen. */
+export function findingsDescribed(review: Pick<FindingReview, 'findingIds' | 'findings'>): boolean {
+  return review.findingIds.every((id) => review.findings.some((finding) => finding.id === id));
+}
+
 /** The gates a preparation stops at, in the backend's order
  * (server/cadlink/joblane/preparation.py): frame, then findings, then the submission. */
 const LADDER_REASONS: ReadonlySet<string> = new Set(['frame_confirmation_required', 'findings_need_review']);
@@ -278,6 +286,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   // Only the preparation the operation names: an approval never carries to another.
   const reviewedPreparation = review.findingIds.length > 0
     && review.preparationId === operation.preparationId ? review.preparationId : null;
+  const unreadable = reviewedPreparation !== null && !findingsDescribed(review);
   const manual = operation.operationId.startsWith('manual-solve:');
   // An approval is a continuation: it sends no settings, so the backend
   // reuses the setup revision the operation holds and the approvals given on
@@ -328,8 +337,8 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
         aria-label={`Stop: ${label}`}
         onClick={() => ask('stop', () => jobsSocket.stopJob(job.id))}
       >Stop</button>}
-      {review.error && operation.reason === 'findings_need_review' && <button className="btn" aria-label={`Retry reading the findings for ${label}`} onClick={review.retry}>Retry</button>}
-      {waiting && help.action === 'approve' && reviewedPreparation && <>
+      {(review.error || unreadable) && operation.reason === 'findings_need_review' && <button className="btn" aria-label={`Retry reading the findings for ${label}`} onClick={review.retry}>Retry</button>}
+      {waiting && help.action === 'approve' && reviewedPreparation && !unreadable && <>
         {approvalUnavailable && <span role="status">{approvalUnavailable}</span>}
         <button
         className="btn-primary primary"
@@ -352,16 +361,14 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
         >{step.text}</li>)}
       </ol>}
       {/* Listed at the gate that approves them, where Approve and solve is. */}
-      {reviewedPreparation && operation.reason === 'findings_need_review' && <ul className="cad-operation-findings">
-        {review.findingIds.map((id) => {
-          const finding = review.findings.find((item) => item.id === id);
-          return <li key={id}>{finding ? findingWords(finding) : 'A finding whose details could not be read'}</li>;
-        })}
+      {reviewedPreparation && !unreadable && operation.reason === 'findings_need_review' && <ul className="cad-operation-findings">
+        {review.findings.filter((finding) => review.findingIds.includes(finding.id)).map((finding) => <li key={finding.id}>{findingWords(finding)}</li>)}
       </ul>}
+      {unreadable && operation.reason === 'findings_need_review' && <span>{FINDINGS_UNREADABLE}</span>}
       {/* At the frame gate the read only forecasts the next gate; failing it
           must not read as a problem with this one. */}
       {review.error && operation.reason === 'findings_need_review' && <span>Could not read the findings to review: {review.error}</span>}
-      {waiting && help.text && <span>{help.text}</span>}
+      {waiting && help.text && !unreadable && <span>{help.text}</span>}
       {showStatus && solve && (operation.state === 'received' || operation.state === 'processing')
         && <span className="cad-operation-in-flight">{inFlightWords(operation)}</span>}
       {/* What the request holds -- its snapshot, preparation, settings and

@@ -1,3 +1,4 @@
+import { showCadSendOutcome } from '../design/useSendToCad';
 import { expectNoJargon } from '../testing/expectNoJargon';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -109,6 +110,7 @@ describe('CadLinkPanel', () => {
   let host: HTMLDivElement;
   let root: Root;
   beforeEach(() => {
+    showCadSendOutcome(null);
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetCadReturnStore(); resetSolveOptionsStore(); resetDocumentStore(); resetDesignStore(); preferencesStore.resetForTests();
     capabilityClient.clear();
@@ -365,7 +367,7 @@ describe('CadLinkPanel', () => {
     expect(importedSubmissionBlocker()).toBeNull();
     expect(host.querySelector('.cad-blocking-suffix')?.textContent).toContain('blocking');
     expect(host.querySelector('.cad-checks input[type="checkbox"]')).toBeNull();
-    expect(host.querySelector('.cad-check-findings')?.textContent).toContain('freshness');
+    expect(host.querySelector('.cad-check-findings')?.textContent).toContain('The design in WG has changed since this model was sent');
     // A record that needs attention arrives with its Model details open.
     expect(modelDetails().querySelector('.section-head')?.getAttribute('aria-expanded')).toBe('true');
     expect(modelDetails().querySelector('.cad-state-chip')?.textContent).toMatch(/needs? attention/);
@@ -756,7 +758,7 @@ describe('CadLinkPanel', () => {
       applyCadRequest(cadOperation({ operationId: 'op-review', reason: 'findings_need_review', preparationId: 'wgp_7' }));
       retry.click();
     });
-    await vi.waitFor(() => expect(card.querySelector('.cad-operation-findings')?.textContent).toBe('freshness — design changed'));
+    await vi.waitFor(() => expect(card.querySelector('.cad-operation-findings')?.textContent).toBe('The design in WG has changed since this model was sent — WG solves the model as it is in Fusion. Approve to go ahead, or change it in Fusion and send it again.'));
     expect(card.textContent).not.toContain('Could not read the findings');
     // In words, never by id.
     expect(card.textContent).not.toContain('finding-a');
@@ -908,6 +910,7 @@ describe('CadLinkPanel', () => {
       apply(cadOperation({
         operationId: 'op-new', state: 'received', stage: 'received', reason: null, message: null,
         createdAt: '2026-09-14T10:00:02Z',
+        snapshot: { manifestSha256: `sha256:${'e'.repeat(64)}`, documentName: 'Another model', projectLineageId: 'wgl_another' },
       }));
     });
     // The backend's own loop prepares an operation nobody has touched: no
@@ -1007,7 +1010,7 @@ describe('CadLinkPanel', () => {
     expect(prepared).toEqual([]);
   });
 
-  it('solves the waiting version on screen with its settings, and keeps the other one a quiet line', async () => {
+  it('solves the waiting model on screen with its settings, and keeps another project a quiet line', async () => {
     // The ingestion files the model on screen under the project both versions belong to.
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -1028,7 +1031,7 @@ describe('CadLinkPanel', () => {
       const apply = applyCadRequest;
       apply(cadOperation({
         ...waiting, operationId: 'op-v1',
-        snapshot: { manifestSha256: `sha256:${'d'.repeat(64)}`, documentName: 'Tritonia v1', projectLineageId: 'wgl_other' },
+        snapshot: { manifestSha256: `sha256:${'d'.repeat(64)}`, documentName: 'Tritonia v1', projectLineageId: 'wgl_another' },
       }));
       apply(cadOperation({
         ...waiting, operationId: 'op-v2', createdAt: '2026-09-14T10:00:01Z',
@@ -1781,7 +1784,7 @@ describe('CadLinkPanel', () => {
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
     expect(useCadReturnStore.getState().selectedBundle?.documentName).toBe('Tritonia');
     expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Received and prepared Tritonia');
-    expect(host.querySelector('.cad-check-findings')?.textContent).toContain('freshness');
+    expect(host.querySelector('.cad-check-findings')?.textContent).toContain('The design in WG has changed since this model was sent');
   });
 
   it('asks for confirmation before creating a world-readable document, then sends', async () => {
@@ -2894,8 +2897,8 @@ describe('CadLinkPanel', () => {
     expect(modelDetails().querySelector('.cad-mesh-line > p')?.textContent).toMatch(/· 10,084 triangles · memory ≈ 1\.6 GB$/);
     // Only the finding that blocks is listed, and its hover says what it does.
     const findings = checks.querySelector('.cad-check-findings')!;
-    expect(findings.textContent).toContain('scope degradation');
-    expect(findings.textContent).not.toContain('freshness');
+    expect(findings.textContent).toContain('Part of the model was left out when Fusion sent it');
+    expect(findings.textContent).not.toContain('not linked');
     expect(findings.querySelector('.cad-blocking-suffix')?.getAttribute('title')).not.toContain('Solving is not blocked');
     expect(findings.querySelector('.cad-blocking-suffix')?.getAttribute('title')).toContain('approve');
   });

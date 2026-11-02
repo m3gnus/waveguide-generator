@@ -260,7 +260,7 @@ describe('Model details, and the run status Results shows for its model', () => 
     expect(head().querySelector('.cad-state-chip')?.textContent).toBe('1 needs attention');
     const row = host.querySelector('.cad-check-findings .cad-check')!;
     expect(row.textContent).toContain('A driver or port surface is left out of this solve');
-    expect(row.textContent).toContain('Sources & Mesh…');
+    expect(row.textContent).toContain('WG solves the model without it');
     expectPlain(host.querySelector('.cad-check-findings')?.textContent);
     expect(host.textContent).not.toContain('source id');
   });

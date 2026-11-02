@@ -21,27 +21,19 @@ const FINDING_WORDS: Record<string, FindingWords> = {
   },
   'source-skip': {
     what: 'A driver or port surface is left out of this solve',
-    means: 'WG solves the model without it. Approve to go ahead, or set it up in Sources & Mesh… in Fusion and send the model again.',
+    means: 'WG solves the model without it. Approve to go ahead, or set it up and solve again.',
   },
   'source-paint-missing': {
-    what: 'A driver surface has no paint',
-    means: 'Approve to solve without trusting that surface, or paint it in Sources & Mesh… in Fusion and send the model again.',
+    what: 'WG found a driver surface from the model’s shape, and it has no paint',
+    means: 'WG solves the surface it found. Approve if it is the right one, or paint it in Sources & Mesh… in Fusion and send the model again.',
   },
   'geometry-overrode-paint': {
-    what: 'A driver surface was placed from the model’s shape, not from its paint',
-    means: 'Approve if the surface shown is the right one, or fix the paint in Sources & Mesh… in Fusion and send the model again.',
+    what: 'Paint on some surfaces does not match the driver WG found from the model’s shape',
+    means: 'WG solves the surface it found, not that paint. Approve if it is the right one, or fix the paint in Sources & Mesh… in Fusion and send the model again.',
   },
   'source-area-drift-override': {
-    what: 'A driver surface’s area differs from what was set up',
-    means: 'Approve if the surface is right, or check it in Sources & Mesh… in Fusion and send the model again.',
-  },
-  'symmetry-cut-unverified': {
-    what: 'WG solves the whole model, not a part of it',
-    means: 'The solve takes longer. Nothing needs to change.',
-  },
-  'stale-detection-unavailable': {
-    what: 'WG cannot tell whether this model is out of date',
-    means: 'Approve to solve it as it is, or send it again from Fusion.',
+    what: 'A driver surface’s area differs from what Fusion reported',
+    means: 'WG solves the surface as it found it. Approve if it is the right one, or check it in Sources & Mesh… in Fusion and send the model again.',
   },
 };
 
@@ -55,6 +47,9 @@ function wordsFor(finding: CadReturnFinding): FindingWords | undefined {
 /** What a finding of a kind is called, in words, never by id. */
 const FINDING_TITLE: Record<string, string> = {
   fem_termination_with_exterior: 'FEM termination requires an interior-only solve',
+  'stale-detection-unavailable': 'WG cannot tell whether this model is out of date',
+  // Its detail, written from the domain actually solved, is the server's.
+  'symmetry-cut-unverified': 'WG could not reduce this model any further',
 };
 
 export function findingName(finding: CadReturnFinding): string {
