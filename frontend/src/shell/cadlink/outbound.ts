@@ -16,7 +16,7 @@ import { designNameSlug } from '../../stores/designName';
 import { polarConfigFromUi, useSolveOptionsStore } from '../../stores/solveOptions';
 import { runGuardedFusionSend } from './send';
 import { reportCadAutomationError } from './caughtErrors';
-import { fusionSendOf, sentToCadMessage, watchFusionDelivery } from '../../design/useSendToCad';
+import { followCadSend, fusionSendOf, sentToCadMessage, showCadSendOutcome } from '../../design/useSendToCad';
 import { useCadDeliveryHealthStore } from '../../stores/cadDeliveryHealth';
 import { failureWords } from '../../api/httpError';
 
@@ -95,6 +95,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
     stopWatching?.();
     stopWatching = null;
     store.setState({ sendingToFusion: true, error: null, status: null });
+    showCadSendOutcome(null);
     options.noteCadActivity?.();
     let evidence: CadConnectionStatus | null = null;
     let exportedIdentity: ReturnType<typeof useDocumentStore.getState>['identity'] | undefined;
@@ -165,9 +166,12 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
             ? ' It replaced an earlier update Fusion had not started yet.' : '';
           const send = fusionSendOf(result, Boolean(target));
           if (send) {
-            stopWatching = watchFusionDelivery(send, ({ tone, text }) => store.setState(tone === 'error'
+            stopWatching = followCadSend(send, ({ tone, text }) => store.setState(tone === 'error'
               ? { error: text, status: null } : { status: `${text}${superseded}` }));
-          } else store.setState({ status: sentToCadMessage(result) });
+          } else {
+            store.setState({ status: sentToCadMessage(result) });
+            showCadSendOutcome({ tone: 'status', text: sentToCadMessage(result) }, true);
+          }
           await options.refresh?.();
           return result;
         },
@@ -180,7 +184,9 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
         rememberSentCopy(null, exportedIdentity?.designId, current() && isCurrentDocumentLoad(load));
       }
       if (current() && !(reason instanceof OutboundSupersededError)) {
-        store.setState({ error: failureWords(reason) });
+        const text = failureWords(reason);
+        store.setState({ error: text });
+        showCadSendOutcome({ tone: 'error', text });
       }
       throw reason;
     } finally {

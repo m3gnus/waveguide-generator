@@ -136,6 +136,30 @@ function recoverySummary(notice: CadRecoveryNotice): CadOperationSummary {
   };
 }
 
+/** A request about another model stops asking once a request this much newer
+ * exists: measured from the latest send, so time away from WG drops nothing. */
+const REQUEST_ATTENTION_MS = 7 * 86_400_000;
+
+/** Whether two requests are about one model: its project, or its document name
+ * for a request that names no project. */
+function sameCadModel(a: JobItem, b: JobItem): boolean {
+  const [one, other] = [a.cad_state?.snapshot, b.cad_state?.snapshot];
+  if (one?.project_lineage_id && other?.project_lineage_id) return one.project_lineage_id === other.project_lineage_id;
+  return !!one?.document_name && one.document_name === other?.document_name;
+}
+
+/** A request about a model not on screen asks nothing of the user when a newer
+ * send of that model replaced it, when work has long moved on from it, or when
+ * it only says WG's preparation failed: that is recorded for the developers,
+ * and sending the model again is what Fusion's own panel offers. */
+function requestStoppedAsking(job: JobItem, jobs: readonly JobItem[]): boolean {
+  const created = Date.parse(job.created_at);
+  return isFailedCadPreparation(job) || jobs.some((other) => {
+    const newer = Date.parse(other.created_at) - created;
+    return newer > REQUEST_ATTENTION_MS || (newer > 0 && sameCadModel(job, other));
+  });
+}
+
 /** One request view joins jobs and authoritative recovery notices. */
 export function selectCadRequests({ jobs, notices, record, bundle = null }: {
   jobs: JobItem[];
@@ -166,8 +190,10 @@ export function selectCadRequests({ jobs, notices, record, bundle = null }: {
     // Restart-held jobs can need user input while still active and stoppable.
     // Job status takes precedence over the CAD state used for refusal actions.
     if (request.source === 'job' && isActiveJobStatus(request.job.status)) active.push(request);
-    else if (operationNeedsUser(request.operation)) (request.onScreen ? current : earlier).push(request);
-    else active.push(request);
+    else if (request.onScreen && operationNeedsUser(request.operation)) current.push(request);
+    else if (operationNeedsUser(request.operation)) {
+      if (request.source !== 'job' || !requestStoppedAsking(request.job, jobs)) earlier.push(request);
+    } else active.push(request);
   }
   return { current, earlier, active };
 }

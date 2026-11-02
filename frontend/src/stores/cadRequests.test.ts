@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CadOperationSummary } from '../api/cadOperations';
 import type { CadReturnIngestRecord } from '../api/cadlink';
+import type { JobItem } from '../api/jobsSocket';
 import { cadJobFixture, migratedCadRequestFixture } from '../jobs/cadSolve.fixtures';
 import { createCadRecoveryNoticesStore, createCadRequestActions, selectCadRequests, type CadRecoveryNotice } from './cadRecoveryNotices';
 
@@ -173,4 +174,42 @@ it.each(['prepared', 'bundle'] as const)('opens a held unlinked request by its %
     expect(openPrepared).toHaveBeenCalledExactlyOnceWith(job, 'held-preparation');
     expect(openBundle).not.toHaveBeenCalled();
   } else expect(openBundle).toHaveBeenCalledExactlyOnceWith('wgreturn/speaker.wgreturn');
+});
+
+describe('which requests about other models still ask', () => {
+  const waiting = (id: string, createdAt: string, name: string, lineage: string | null, extra: object = {}) => {
+    const job = cadJobFixture(operation(id));
+    job.created_at = createdAt;
+    job.cad_state = { ...job.cad_state!, received_at: createdAt, ...extra,
+      snapshot: { ...job.cad_state!.snapshot!, document_name: name, project_lineage_id: lineage } };
+    return job;
+  };
+  const earlier = (jobs: JobItem[]) => selectCadRequests({ jobs, notices: {}, record: null }).earlier.map((item) => item.id);
+
+  it('drops a request a newer send of the same model replaced, by project or by name', () => {
+    const older = waiting('old', '2026-11-01T10:00:00', 'Horn', 'wgl_1');
+    const unnamed = waiting('unnamed', '2026-11-01T10:00:00', 'Untitled', null);
+    const newer = waiting('new', '2026-11-02T10:00:00', 'Horn', 'wgl_1');
+    const sameName = waiting('sent', '2026-11-02T11:00:00', 'Untitled', 'wgl_2');
+    expect(earlier([older, unnamed, newer, sameName])).toEqual(['job:new', 'job:sent']);
+  });
+  it('keeps two projects apart even when their documents share a name', () => {
+    expect(earlier([waiting('a', '2026-11-01T10:00:00', 'Untitled', 'wgl_1'), waiting('b', '2026-11-02T10:00:00', 'Untitled', 'wgl_2')]))
+      .toEqual(['job:a', 'job:b']);
+  });
+  it('drops a request a week behind the latest send, however long WG sat unused', () => {
+    const aged = waiting('aged', '2026-10-24T10:00:00', 'Tritonia', null);
+    expect(earlier([aged])).toEqual(['job:aged']);
+    expect(earlier([aged, waiting('today', '2026-11-02T10:00:00', 'Other', null)])).toEqual(['job:today']);
+  });
+  it('drops a failed preparation: nothing about it is the user’s to do', () => {
+    expect(earlier([waiting('failed', '2026-11-02T10:00:00', 'Horn', null, { prepare_failed: true, held: false })])).toEqual([]);
+  });
+  it('keeps every request about the model on screen, whatever its age', () => {
+    const job = waiting('screen', '2026-10-24T10:00:00', 'Tritonia', null);
+    const manifest = job.cad_state!.snapshot!.manifest_sha256!;
+    const requests = selectCadRequests({ jobs: [job, waiting('today', '2026-11-02T10:00:00', 'Other', null)], notices: {},
+      record: { manifest_sha256: manifest } as never });
+    expect(requests.current.map((item) => item.id)).toContain('job:screen');
+  });
 });

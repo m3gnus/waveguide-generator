@@ -187,8 +187,31 @@ describe('held CAD request dialog owner', () => {
     publishCadJobs([job]);
     await act(async () => root.render(<HeldCadRequestDialog/>));
     await act(async () => button('Review settings').click());
-    expect(reveal).toHaveBeenCalledWith('cad-requests');
+    // That request, not the oldest one waiting.
+    expect(reveal).toHaveBeenCalledWith('cad-requests', job.id);
     expect(actions.continueRun).not.toHaveBeenCalled();
+  });
+  it('answers a model held for review here: what WG found, then Approve and solve', async () => {
+    const job = held();
+    const blocking = ['finding-freshness-a8d4fabd1e45f50b'];
+    job.cad_state = { ...job.cad_state!, reason: 'findings_need_review',
+      message: 'WG found something to check in this model before it solves.',
+      next_step: 'Read what WG found, then choose Approve and solve in WG.',
+      options: [{ id: 'review', label: 'Review model' }, { id: 'dismiss', label: 'Dismiss request' }],
+      preparation: { ingest_id: 'wgi_1', preparation_id: 'wgi_1', blocking_finding_ids: blocking, report_sha256: 'sha256:r' },
+      approvals: [] };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      findings: [{ id: blocking[0], kind: 'freshness', blocking: true, verdict: 'body_modified' }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    publishCadJobs([job]);
+    await act(async () => root.render(<HeldCadRequestDialog/>));
+    await vi.waitFor(() => expect(host.querySelector('.cad-operation-findings')?.textContent)
+      .toContain('The waveguide body was changed in Fusion after WG sent it'));
+    expect(host.textContent).not.toContain('finding-freshness');
+    expect(host.textContent).not.toContain('Review model');
+    await act(async () => button('Approve and solve').click());
+    expect(actions.continueRun).toHaveBeenCalledWith(job.id, { approvals: { preparation_id: 'wgi_1', finding_ids: blocking } });
+    vi.unstubAllGlobals();
   });
   it('keeps the choice after a failed action and suppresses repeated presses', async () => {
     let fail: (error: Error) => void = () => undefined;

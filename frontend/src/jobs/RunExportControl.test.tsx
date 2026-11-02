@@ -13,6 +13,7 @@ import { ExportCancelledError } from '../api/exportDestination';
 import { RunExportControl } from './RunExportControl';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { JobsPanel } from '../shell/JobsPanel';
+import { useCadSendOutcome } from '../design/useSendToCad';
 
 const mocks = vi.hoisted(() => ({
   fetchJobResults: vi.fn(),
@@ -380,9 +381,7 @@ describe('RunExportControl', () => {
     );
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
     expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
-    expect(host.querySelector('[role="status"]')?.textContent).toContain(
-      'The model is ready. In Fusion, choose WGLink → Advanced → Insert.',
-    );
+    expect(useCadSendOutcome.getState().outcome?.text).toContain('The model is ready. In Fusion, choose WGLink → Advanced → Insert');
   });
 
   it('keeps design-only exports after result retention and disables result formats', async () => {

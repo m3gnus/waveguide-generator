@@ -1,12 +1,13 @@
 import { Notice } from './Notice';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { dismissCadJob, isCadChoiceJob, latestCadJobs, useCadJobs } from '../jobs/cadSolve';
+import { cadJobSummary, dismissCadJob, isCadChoiceJob, latestCadJobs, useCadJobs } from '../jobs/cadSolve';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { durableSettings } from '../stores/durableSettings';
 import { meshCeilingFacts, meshCeilingQuestion } from '../stores/cadModelStatusLine';
 import { meshCeilingChoice } from '../stores/meshCeilingChoice';
+import { findingWords, useFindingReview } from './CadOperationsSection';
 import { useModalDialogFocus } from './dialogFocus';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -113,6 +114,12 @@ export function HeldCadRequestDialog() {
     setChanging(null);
   };
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: !!id, onClose: close });
+  // A model held for review is answered here: what WG found, and Approve and
+  // solve. Sending the user to look for it elsewhere was a dead end.
+  const operation = job?.cad_state?.reason === 'findings_need_review' ? cadJobSummary(job) : null;
+  const review = useFindingReview(operation);
+  const reviewed = operation && review.preparationId && review.findingIds.length > 0 && review.preparationId === operation.preparationId
+    ? { preparation_id: review.preparationId, finding_ids: review.findingIds } : null;
   const shownJob = job?.id ?? null;
   useEffect(() => {
     publishShown(shownJob);
@@ -131,7 +138,9 @@ export function HeldCadRequestDialog() {
     ? state?.options?.length ? state.options : [{ id: 'review', label: 'Review request' }, { id: 'dismiss', label: 'Dismiss request' }]
     : [{ id: 'solve_anyway', label: 'Solve anyway' }];
   // The ceiling has three choices; dismissal remains on other requests.
-  const options = ceilingQuestion
+  const options = reviewed
+    ? [...serverOptions.filter(option => option.id === 'dismiss'), { id: 'approve', label: 'Approve and solve' }]
+    : ceilingQuestion
     ? [...((!!job || (!ceiling?.continueSolve && selectedBundle?.bundleOrigin !== 'onshape')) ? [{ id: 'change_in_fusion', label: 'Change in Fusion' }] : []),
       ...serverOptions.filter(option => option.id !== 'dismiss')]
     : serverOptions;
@@ -164,8 +173,12 @@ export function HeldCadRequestDialog() {
         const child = await jobsCoordinatorBridge.getSnapshot().continueRun(job.id, { mesh_limit_override: option === 'solve_anyway' });
         if (!child) throw new Error('Request could not continue');
         await jobsSocket.refresh();
+      } else if (option === 'approve') {
+        const child = await jobsCoordinatorBridge.getSnapshot().continueRun(job.id, { approvals: reviewed! });
+        if (!child) throw new Error('Request could not continue');
+        await jobsSocket.refresh();
       } else if (option === 'review') {
-        workspaceNavigation.reveal('cad-requests');
+        workspaceNavigation.reveal('cad-requests', job.id);
       }
       if (job) remember(job.id);
       setRequested(null);
@@ -180,11 +193,16 @@ export function HeldCadRequestDialog() {
   return <div className="modal-backdrop">
     <div ref={dialog} className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="held-request-title" aria-busy={busy === id}>
       <header><div>
-        <h2 id="held-request-title">{ceilingQuestion ? ceilingQuestion.title : 'Waiting for you'}</h2>
+        <h2 id="held-request-title">{ceilingQuestion ? ceilingQuestion.title : reviewed ? 'Check this before solving' : 'Waiting for you'}</h2>
         {name && !ceilingQuestion && <p>{name}</p>}
       </div></header>
       <div className="update-dialog-body">
-        <p>{changingNow ? ceilingQuestion!.changeInFusion : ceilingQuestion ? ceilingQuestion.body : nextStep}</p>
+        {reviewed
+          ? <ul className="cad-operation-findings">{reviewed.finding_ids.map((findingId) => {
+            const finding = review.findings.find((item) => item.id === findingId);
+            return <li key={findingId}>{finding ? findingWords(finding) : 'WG could not read the details of this check.'}</li>;
+          })}</ul>
+          : <p>{changingNow ? ceilingQuestion!.changeInFusion : ceilingQuestion ? ceilingQuestion.body : nextStep}</p>}
         {error?.id === id && <Notice tone="error" role="alert">{error.message}</Notice>}
       </div>
       {changingNow ? <footer>
@@ -193,7 +211,7 @@ export function HeldCadRequestDialog() {
       </footer> : <footer>
         <button className="btn" disabled={busy !== null} onClick={close}>Later</button>
         {options.map(option => <button key={option.id} disabled={busy !== null}
-          className={option.id === 'solve_anyway' ? 'btn-primary primary' : 'btn'}
+          className={option.id === 'solve_anyway' || option.id === 'approve' ? 'btn-primary primary' : 'btn'}
           onClick={() => option.id === 'change_in_fusion' ? setChanging(id) : void choose(option.id)}>{option.label}</button>)}
       </footer>}
     </div>

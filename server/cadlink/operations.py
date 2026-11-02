@@ -408,6 +408,13 @@ MESH_CEILING_NEXT_STEP = (
 )
 
 
+#: What a model held for review says, on every surface. The finding ids stay in
+#: ``preparation.blocking_finding_ids``; WG lists the findings in words beside
+#: Approve and solve, and rows written before this rule carried the raw ids.
+FINDINGS_REVIEW_MESSAGE = "WG found something to check in this model before it solves."
+FINDINGS_REVIEW_NEXT_STEP = "Read what WG found, then choose Approve and solve in WG."
+
+
 def hold_details(code: str, message: str) -> dict[str, Any]:
     """One vocabulary for persisted holds and historical request readers."""
 
@@ -415,7 +422,7 @@ def hold_details(code: str, message: str) -> dict[str, Any]:
     action, label, next_step = {
         MESH_TOO_LARGE_CODE: ("solve_anyway", "Solve anyway", MESH_CEILING_NEXT_STEP + " You can also solve anyway."),
         "setup_required": ("review", "Review settings", "Review this model's solve settings, then solve."),
-        "findings_need_review": ("review", "Review model", "Review this model's preparation before solving."),
+        "findings_need_review": ("review", "Review model", FINDINGS_REVIEW_NEXT_STEP),
         "engine_unavailable": ("review", "Review solve", "Open Results to prepare the solve engine."),
         "engine_cannot_solve_return": ("review", "Review settings", "Review this model's solve settings."),
         "ready_to_solve": ("retry", "Solve", "Start the prepared solve when you are ready."),

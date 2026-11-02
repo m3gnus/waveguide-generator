@@ -56,7 +56,7 @@ from server.cadlink.interpretation.solver_frame import (
 )
 from server.cadlink.joblane.manual_solve import OperationConflict, SnapshotNotRetained, UnknownIngest
 from server.cadlink.joblane.project_setup import compose_solve_request
-from server.cadlink.operations import REASON_CODES, REASON_UPDATE_RESTART_PENDING, REJECTED
+from server.cadlink.operations import FINDINGS_REVIEW_MESSAGE, REASON_CODES, REASON_UPDATE_RESTART_PENDING, REJECTED
 from server.cadlink.roles import prepared_inventory_sha256
 from server.cadlink.store import UNFILED_MODEL_ID
 from server.contracts import JobModel
@@ -618,8 +618,7 @@ def _acknowledged(record: Mapping[str, Any], body: ModelSolveRequest) -> list[st
     missing = [finding for finding in blocking if finding not in reviewed]
     if missing:
         raise ModelSolveRefusal(
-            409, "findings_need_review",
-            "Review the preparation's findings before solving: " + ", ".join(missing),
+            409, "findings_need_review", FINDINGS_REVIEW_MESSAGE,
             details={"preparation_id": body.prepared_id, "finding_ids": missing},
         )
     return [f"{record.get('report_sha256')}:{finding}" for finding in blocking]

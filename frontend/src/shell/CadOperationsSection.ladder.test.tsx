@@ -154,7 +154,7 @@ describe('the needs_user_input ladder', () => {
     await vi.waitFor(() => expect(host.querySelector('button[aria-label="Approve and solve: PartyMEH"]')).not.toBeNull());
     expect(steps(ladder).map((step) => [step.gate, step.current])).toEqual([['findings', true]]);
     // In words, never by id.
-    expect(host.textContent).toContain('scope degradation — skipped bodies: Body11');
+    expect(host.textContent).toContain('Part of the model was left out when Fusion sent it (skipped bodies: Body11) — WG solves the model without it. Approve to go ahead, or include it in Fusion and send the model again.');
     expect(host.textContent).not.toContain(FINDING);
     await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Approve and solve: PartyMEH"]')!.click(); });
     // The approval continues the preparation it was given for, with its settings.

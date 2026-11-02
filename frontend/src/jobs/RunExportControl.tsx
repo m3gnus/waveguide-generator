@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import { modelKindForRun } from '../model/currentModel';
 import { runNormalizationAngle } from '../results/normalization';
 import { solveOptionsStoreForJob } from '../stores/solveOptionsContext';
@@ -10,7 +9,7 @@ import { writeToOutputFolder } from '../api/workspace';
 import { fetchJobResults } from '../api/results';
 import { sendDesignToCad } from '../api/designIo';
 import { ActionMenu, type ActionMenuItem } from '../design/ActionMenu';
-import { fusionSendOf, sentToCadMessage, useFusionDelivery, type FusionSend } from '../design/useSendToCad';
+import { followCadSend, fusionSendOf, sentToCadMessage, showCadSendOutcome } from '../design/useSendToCad';
 import { usePreferences, type ExportFormat } from '../prefs/preferences';
 import { parameterExportReason, resultExportSelection, resultExportSnapshot } from '../results/exportContext';
 import {
@@ -157,10 +156,7 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   const preferences = usePreferences();
   const operation = useRunExportStore((state) => state.jobs[job.id] ?? EMPTY_RUN_EXPORT_STATE);
   const execute = useRunExportStore((state) => state.execute);
-  const [fusionSend, setFusionSend] = useState<FusionSend | null>(null);
-  const delivery = useFusionDelivery(fusionSend);
   // Another export's own outcome replaces the earlier send's line.
-  useEffect(() => { if (operation.busy) setFusionSend(null); }, [operation.busy]);
   const designState = jobRerunState(job);
   const designExportable = canLoadJobDesign(job);
   const family = hydrateJobDesign(job)?.formula ?? '';
@@ -286,8 +282,11 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
       undefined,
       job.design_uid ?? undefined,
     );
-    setFusionSend(fusionSendOf(result));
-    return { notice: sentToCadMessage(result) };
+    // The floating status line owns what becomes of it, whichever run stays on screen.
+    const send = fusionSendOf(result);
+    if (send) followCadSend(send);
+    else showCadSendOutcome({ tone: 'status', text: sentToCadMessage(result) }, true);
+    return { notice: '' };
   });
 
   const items: ActionMenuItem[] = [
@@ -355,8 +354,8 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
       chevronLabel={`More export options for ${jobName(job)}`}
       onPrimary={preferences.exportFormats.length ? async () => { await exportPreferred(); } : undefined}
     />
-    {operation.lastError || delivery?.tone === 'error'
-      ? <div className="design-menu-status run-export-feedback error" role="alert">{operation.lastError ?? delivery?.text}</div>
-      : (delivery?.text ?? operation.lastNotice) && <div className="design-menu-status run-export-feedback" role="status">{delivery?.text ?? operation.lastNotice}</div>}
+    {operation.lastError
+      ? <div className="design-menu-status run-export-feedback error" role="alert">{operation.lastError}</div>
+      : operation.lastNotice && <div className="design-menu-status run-export-feedback" role="status">{operation.lastNotice}</div>}
   </div>;
 }

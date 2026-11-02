@@ -707,7 +707,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .job-card.collapsed:hover .run-export-control.compact,
 .job-card.collapsed:focus-within .run-export-control.compact,
 .run-export-control.compact:focus-within { opacity: 1; pointer-events: auto; }
-.run-export-feedback.error { border-color: rgba(var(--red-rgb), .35); color: var(--red); }
+.design-menu-status.error { border-color: rgba(var(--red-rgb), .35); color: var(--red); }
 .score { display: flex; gap: 6px; margin-top: 6px; }.score span { color: var(--amber); font-size: var(--text-micro); letter-spacing: 1px; }.score em { color: var(--fg4); font-style: normal; }.score b { color: var(--fg1); font: var(--text-micro) var(--mono); }
 
 .job-retention-note { margin-top: 5px; color: var(--fg3); font-size: var(--text-micro); }

@@ -424,6 +424,16 @@ it.each([false, true])('opens a newer same-path return with unchanged folder tim
   expect(prepare).toHaveBeenCalledOnce();
 });
 
+it('leaves the model on screen when a WG press solves it: its ingest path is not a return', async () => {
+  const controller = fixture();
+  useCadReturnStore.getState().selectBundle({ ...bundle, readable: true }, null, true);
+  // The child of an approval: no preparation of its own yet, and no claim until the POST answers.
+  const child = { ...preparing(null), cad_return: { bundle_path: 'ingest/wgi_source', return_id: bundle.returnId },
+    parent_job_id: 'held-parent' } as ReturnType<typeof job>;
+  await controller.observe([child]);
+  expect(useCadReturnStore.getState().selectedBundle).toMatchObject({ bundlePath: bundle.bundlePath, readable: true });
+});
+
 it('does not retain ownership for displayed, old, WG-owned, manual, or superseded runs', () => {
   const f = fixture(); const run = external();
   expect(f.ownsReturn(bundle, [run])).toBe(true);

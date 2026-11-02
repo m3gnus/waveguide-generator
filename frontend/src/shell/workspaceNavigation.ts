@@ -1,5 +1,7 @@
 export type WorkspaceRevealTarget = 'cad-requests' | 'cad-link';
 let revealTarget: WorkspaceRevealTarget | null = null;
+/** The one request a reveal was asked for; null for the first that waits. */
+let revealRequest: string | null = null;
 let reveals = 0;
 let claimedReveal: WorkspaceRevealTarget | null = null;
 
@@ -62,15 +64,17 @@ export const workspaceNavigation = {
     return workspaceNavigation.activate(panel);
   },
   /** Keep a reveal pending until its content has mounted and taken focus. */
-  reveal(target: WorkspaceRevealTarget): boolean {
+  reveal(target: WorkspaceRevealTarget, requestId: string | null = null): boolean {
     noteExplicitNavigation();
     revealTarget = target;
+    revealRequest = requestId;
     reveals += 1;
     const activated = revealWorkspaceTarget(target);
     emit();
     return activated;
   },
   getRevealTarget(): WorkspaceRevealTarget | null { return revealTarget; },
+  getRevealRequest(): string | null { return revealRequest; },
   /** A reveal owner scrolled and focused the target, rather than navigation cancelling it. */
   wasRevealed(target: WorkspaceRevealTarget): boolean { return claimedReveal === target; },
   claimReveal(target: WorkspaceRevealTarget): void {

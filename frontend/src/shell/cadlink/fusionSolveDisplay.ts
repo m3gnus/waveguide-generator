@@ -205,7 +205,9 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
       // Select the request immediately so Results owns its Preparing progress,
       // even before the server can name a displayable preparation. This is a
       // request pointer, never a second browser-driven mesh preparation.
-      if (typeof job.cad_return?.bundle_path === 'string') {
+      // A WG press solves a model already on screen: its `ingest/` path names
+      // a retained copy, not a return, and selecting it would drop that model.
+      if (typeof job.cad_return?.bundle_path === 'string' && !job.cad_return.bundle_path.startsWith('ingest/')) {
         workspaceModeStore.setImportedInput('cad');
         const name = job.cad_state?.snapshot?.document_name || 'Fusion model';
         useCadReturnStore.getState().selectBundle({ name, documentName: name,

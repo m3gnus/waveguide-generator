@@ -131,6 +131,7 @@ const NOT_FOR_USERS = [
   /\b(?:design|mesh|options|simulation|source)\.[a-z_]+\b/,
   /\b[A-Z][a-z]+[A-Za-z]*\.[A-Z][a-z]+[A-Za-z]*\b/,
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i,
+  /\bfinding-[a-z]+(?:-[a-z0-9]+)+\b/,
 ];
 
 /** Whether a sentence can be shown as it is. */

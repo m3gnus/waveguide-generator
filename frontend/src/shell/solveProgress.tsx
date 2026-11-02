@@ -135,7 +135,7 @@ export const OPERATION_REASON_WORDS: Record<string, string> = {
   excitation_refused: 'its drive cannot be solved as set',
   model_cut_unsolvable: 'arrived cut open',
   setup_required: 'needs its solve settings',
-  findings_need_review: 'blocking findings to review',
+  findings_need_review: 'something to check before solving',
   frame_confirmation_required: 'its solver frame changed; press Solve again',
   reduced_axis_not_allowed: 'its cut cannot be solved along its axis',
   update_restart_pending: 'held for the update restart',

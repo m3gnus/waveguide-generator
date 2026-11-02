@@ -31,6 +31,8 @@ from server.cadlink.joblane import preparation_inputs
 from server.cadlink.intake.ingest import read_snapshot, retain_snapshot
 from server.cadlink.intake.isolation import ChildRefusal
 from server.cadlink.operations import (
+    FINDINGS_REVIEW_MESSAGE,
+    FINDINGS_REVIEW_NEXT_STEP,
     PREPARE_AND_SOLVE,
     prepare_and_solve_request,
     request_digest,
@@ -701,7 +703,9 @@ def test_a_reloaded_ui_reads_the_same_stage(harness: Harness) -> None:
     assert (detail["state"], detail["stage"], detail["reason"]) == (
         "needs_user_input", "ready", "findings_need_review",
     )
-    assert detail["message"] == "Review the preparation's findings before solving: healing-1"
+    assert detail["message"] == FINDINGS_REVIEW_MESSAGE
+    assert detail["next_step"] == FINDINGS_REVIEW_NEXT_STEP
+    assert "healing-1" not in detail["message"] + detail["next_step"]
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
         cadlink_store=harness.store, jobs_runtime=harness.runtime, data_dir=str(harness.data_dir),
         cad_workspace=SimpleNamespace(selected_path=lambda: harness.workspace),

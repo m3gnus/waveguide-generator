@@ -101,6 +101,7 @@ describe('failureWords', () => {
     expect(readsPlain('The 500 mm mouth does not fit (400 mm).')).toBe(true);
     expect(readsPlain('Open “my_horn” again.')).toBe(true);
     expect(readsPlain('Throat.Diameter must be a positive finite number')).toBe(false);
+    expect(readsPlain("Review the preparation's findings before solving: finding-symmetry-cut-unverified-aeb61951b986acd4")).toBe(false);
     expect(readsPlain('Reduce Wall thickness. Then press Solve.')).toBe(true);
   });
 });

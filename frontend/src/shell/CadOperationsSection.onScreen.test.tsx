@@ -273,7 +273,7 @@ describe('operation cards for the model on screen', () => {
     stubReview();
     await show([solve({ reason: 'findings_need_review', message: null })]);
     const [card] = cards();
-    await vi.waitFor(() => expect(card.querySelector('.cad-operation-findings')?.textContent).toBe('scope degradation — skipped bodies: Body11'));
+    await vi.waitFor(() => expect(card.querySelector('.cad-operation-findings')?.textContent).toBe('Part of the model was left out when Fusion sent it (skipped bodies: Body11) — WG solves the model without it. Approve to go ahead, or include it in Fusion and send the model again.'));
     expect(card.textContent).not.toContain(FINDING);
     expect([...card.querySelectorAll('button')].some((button) => button.textContent === 'Approve and solve')).toBe(true);
   });

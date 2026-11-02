@@ -79,10 +79,10 @@ const LADDER_REASONS: ReadonlySet<string> = new Set(['frame_confirmation_require
  * blocking findings (published before the frame gate returns). Reading them
  * only at their own gate is what let a user fix the frame and then hit a second
  * wall with no warning it was coming. */
-function useFindingReview(operation: CadOperationSummary): FindingReview & { retry: () => void } {
+export function useFindingReview(operation: CadOperationSummary | null): FindingReview & { retry: () => void } {
   const jobs = useCadJobs();
-  const job = jobs.find((item) => item.id === operation.jobId);
-  const wanted = operation.kind === 'prepare_and_solve'
+  const job = jobs.find((item) => item.id === operation?.jobId);
+  const wanted = operation?.kind === 'prepare_and_solve'
     && operation.state === 'needs_user_input'
     && LADDER_REASONS.has(operation.reason ?? '');
   const [review, setReview] = useState<FindingReview>(NO_REVIEW);
@@ -114,7 +114,7 @@ function useFindingReview(operation: CadOperationSummary): FindingReview & { ret
       if (current) setReview({ ...NO_REVIEW, error: failureWords(reason) });
     });
     return () => { current = false; };
-  }, [wanted, operation.operationId, operation.preparationId, operation.attemptGeneration, operation.reason, job, attempt]);
+  }, [wanted, operation?.operationId, operation?.preparationId, operation?.attemptGeneration, operation?.reason, job, attempt]);
   return { ...(wanted ? review : NO_REVIEW), retry: () => setAttempt((count) => count + 1) };
 }
 
@@ -140,7 +140,7 @@ function findingCount(count: number): string {
 }
 
 /** A finding in words: what kind it is and what it says, never its id. */
-function findingWords(finding: CadReturnFinding): string {
+export function findingWords(finding: CadReturnFinding): string {
   const sentence = findingSentence(finding);
   return `${findingName(finding)}${sentence ? ` — ${sentence}` : ''}`;
 }
@@ -227,7 +227,7 @@ function guidance(operation: CadOperationSummary): Guidance {
       };
     case 'findings_need_review':
       return {
-        text: 'Approving applies to this preparation only; a new preparation needs its own review.',
+        text: 'Approving covers this send only. If you send the model again, WG checks it again.',
         action: 'approve',
       };
     case 'frame_confirmation_required':
@@ -536,7 +536,8 @@ export function CadOperationsSection({ record, solves = true, lineQuestion = nul
   const current = selected.current.filter((item) => (solves || item.operation.kind !== 'prepare_and_solve')
     && item.id !== lineCeiling);
   const earlier = selected.earlier;
-  const firstRequestId = earlier[0]?.id ?? selected.current[0]?.id;
+  // A reveal for one request goes to that request, not the oldest that waits.
+  const firstRequestId = workspaceNavigation.getRevealRequest() ?? earlier[0]?.id ?? selected.current[0]?.id;
   useEffect(() => {
     if (!visible || workspaceNavigation.getRevealTarget() !== 'cad-requests' || !firstRequestId || !host.current) return;
     // The model card can own the current request. Earlier rows stay here.

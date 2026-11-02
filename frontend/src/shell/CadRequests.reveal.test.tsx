@@ -152,6 +152,22 @@ describe('Show reveals the requests it counts', () => {
     expect(workspaceNavigation.getRevealTarget()).toBeNull();
   });
 
+  it('goes to the request it was asked for, past older ones about other models', async () => {
+    const job = migratedCadRequestFixture();
+    const older = cadJobFixture({ ...job.cad_state!, operationId: 'older' } as never);
+    older.id = 'older-request';
+    older.created_at = job.created_at;
+    older.cad_state = { ...job.cad_state!, operation_id: 'older', snapshot: { ...job.cad_state!.snapshot!, manifest_sha256: 'sha256:other', document_name: 'Other' } };
+    publishCadJobs([older, job]);
+    const record = { manifest_sha256: job.cad_state!.snapshot!.manifest_sha256 } as never;
+    vi.stubGlobal('fetch', vi.fn(async () => json({ findings: [] })));
+    await act(async () => root.render(<div className="cadlink-panel">
+      <CurrentModelRequests record={record}/><CadOperationsSection record={record} solves={false}/>
+    </div>));
+    await act(async () => { workspaceNavigation.reveal('cad-requests', job.id); });
+    expect(document.activeElement).toBe(host.querySelector(`.cad-operation[data-request-id="${job.id}"]`));
+  });
+
   it('waits for dock visibility before taking keyboard focus', async () => {
     let visible = false;
     const listeners = new Set<() => void>();

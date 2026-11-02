@@ -54,6 +54,8 @@ from server.cadlink.intake.isolation import ChildRefusal
 from server.cadlink.joblane.failure_codes import MODEL_NEEDS_CHANGE, refusal_code, return_failure_code
 from server.cadlink.intake.preflight import judged_refusal
 from server.cadlink.operations import (
+    FINDINGS_REVIEW_MESSAGE,
+    FINDINGS_REVIEW_NEXT_STEP,
     PREFLIGHT_BLOCKED,
     REASON_CODES,
     axis_not_allowed_message,
@@ -193,6 +195,10 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
     accepted = acceptance_details(row)
     held = user_hold(status, cad)
     hold = cad.get("hold") or (hold_details(str(reason), str(message or "")) if held else {})
+    if reason == "findings_need_review":
+        # Whatever a stored row says: its next step and its message, without ids.
+        hold = {**hold, "next_step": FINDINGS_REVIEW_NEXT_STEP}
+        message = FINDINGS_REVIEW_MESSAGE
     # A failed preparation reads in WG's calm words, whatever text a row holds
     # (rows written before this rule kept raw exception text).
     prepare_failed = status == "error" and refusal is not None and is_calm_failure(reason, message)
@@ -993,10 +999,7 @@ def prepare_job_sync(
     approved = {finding_id for (_prep, finding_id) in carried}
     missing = [finding for finding in blocking if finding not in approved]
     if missing:
-        return run.refuse(
-            "findings_need_review",
-            "Review the preparation's findings before solving: " + ", ".join(missing),
-        )
+        return run.refuse("findings_need_review", FINDINGS_REVIEW_MESSAGE)
     if not intent.submit:
         return run.refuse("ready_to_solve", "Prepared. Press Solve to start it.")
     try:

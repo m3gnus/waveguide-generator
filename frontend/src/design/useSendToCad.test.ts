@@ -4,7 +4,7 @@ import { expectNoJargon } from '../testing/expectNoJargon';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import type { CadOperationSummary } from '../api/cadOperations';
-import { fusionDeliveryWords, PICKUP_WAIT_MS, sentToCadMessage, watchFusionDelivery, type FusionDeliveryFacts } from './useSendToCad';
+import { followCadSend, fusionDeliveryWords, PICKUP_WAIT_MS, SEND_OUTCOME_SHOWN_MS, sentToCadMessage, showCadSendOutcome, useCadSendOutcome, watchFusionDelivery, type FusionDeliveryFacts } from './useSendToCad';
 
 const operation = (fusionDelivery: CadOperationSummary['fusionDelivery'], kind = 'insert_link') => ({ kind, fusionDelivery });
 
@@ -91,5 +91,36 @@ describe('watchFusionDelivery', () => {
     vi.advanceTimersByTime(PICKUP_WAIT_MS);
     stop();
     expect(seen).toEqual(['Opened in Fusion.']);
+  });
+});
+
+describe('the latest send on screen', () => {
+  const applied = (kind: 'insert_link' | 'update_link') => ({ operationId: 'r1', kind, fusionDelivery: 'applied' }) as never;
+  afterEach(() => { vi.useRealTimers(); showCadSendOutcome(null); useCadDeliveryHealthStore.setState({ outboundOperations: {} }); });
+
+  it('follows a send to its outcome, which leaves by itself', () => {
+    vi.useFakeTimers();
+    const stop = followCadSend({ requestId: 'r1', update: true });
+    expect(useCadSendOutcome.getState().outcome?.text).toBe('Waiting for Fusion to update this model.');
+    useCadDeliveryHealthStore.setState({ outboundOperations: { r1: applied('update_link') } });
+    expect(useCadSendOutcome.getState().outcome?.text).toBe('Updated in Fusion.');
+    vi.advanceTimersByTime(SEND_OUTCOME_SHOWN_MS);
+    expect(useCadSendOutcome.getState().outcome).toBeNull();
+    stop();
+  });
+  it('keeps a problem on screen until it is dismissed', () => {
+    vi.useFakeTimers();
+    const stop = followCadSend({ requestId: 'r1' });
+    useCadDeliveryHealthStore.setState({ outboundOperations: { r1: { operationId: 'r1', kind: 'insert_link', fusionDelivery: 'refused' } as never } });
+    vi.advanceTimersByTime(SEND_OUTCOME_SHOWN_MS * 3);
+    expect(useCadSendOutcome.getState().outcome?.tone).toBe('error');
+    stop();
+  });
+  it('lets the next send replace the one before', () => {
+    followCadSend({ requestId: 'r1' });
+    const stop = followCadSend({ requestId: 'r2', update: true });
+    useCadDeliveryHealthStore.setState({ outboundOperations: { r1: applied('insert_link') } });
+    expect(useCadSendOutcome.getState().outcome?.text).toBe('Waiting for Fusion to update this model.');
+    stop();
   });
 });

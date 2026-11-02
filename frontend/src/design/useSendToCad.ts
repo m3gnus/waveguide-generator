@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { create } from 'zustand';
 import type { CadOperationSummary } from '../api/cadOperations';
 import type { WgLinkExportResponse } from '../api/designIo';
 import { failureWords } from '../api/httpError';
@@ -7,8 +7,13 @@ import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 
 /** How long Fusion normally needs; past this the wait is worth explaining. */
 export const PICKUP_WAIT_MS = 10_000;
+/** How long a finished send stays on screen. A problem stays until dismissed. */
+export const SEND_OUTCOME_SHOWN_MS = 20_000;
 
 export interface FusionDeliveryWords { tone: 'status' | 'error'; text: string }
+
+/** Deliveries with nothing left to wait for or do. */
+const FINISHED_DELIVERIES: ReadonlySet<unknown> = new Set(['applied', 'cancelled']);
 
 export interface FusionDeliveryFacts {
   operation?: Pick<CadOperationSummary, 'kind' | 'fusionDelivery'> | null;
@@ -55,7 +60,7 @@ export function fusionSendOf(result: WgLinkExportResponse, update = false): Fusi
 }
 
 /** Follow one send until the caller stops. Reports each change of wording. */
-export function watchFusionDelivery(send: FusionSend, report: (words: FusionDeliveryWords) => void): () => void {
+export function watchFusionDelivery(send: FusionSend, report: (words: FusionDeliveryWords, finished: boolean) => void): () => void {
   let waited = false;
   let last: string | null = null;
   // The health store forgets finished operations; the answer they gave stands.
@@ -65,7 +70,7 @@ export function watchFusionDelivery(send: FusionSend, report: (words: FusionDeli
     const words = fusionDeliveryWords({ ...send, operation, waited, fusion: useCadConnectionStore.getState().fusionStatus });
     if (words.text === last) return;
     last = words.text;
-    report(words);
+    report(words, FINISHED_DELIVERIES.has(operation?.fusionDelivery));
   };
   const stops = [useCadDeliveryHealthStore.subscribe(read), useCadConnectionStore.subscribe(read)];
   const timer = setTimeout(() => { waited = true; read(); }, PICKUP_WAIT_MS);
@@ -81,12 +86,34 @@ export function sentToCadMessage(result: WgLinkExportResponse): string {
     : 'The model is ready. In Fusion, choose WGLink → Advanced → Insert.';
 }
 
-/** A surface's live line for its latest send; null before one. */
-export function useFusionDelivery(send: FusionSend | null): FusionDeliveryWords | null {
-  const [words, setWords] = useState<FusionDeliveryWords | null>(null);
-  useEffect(() => {
-    setWords(null);
-    return send ? watchFusionDelivery(send, setWords) : undefined;
-  }, [send]);
-  return words;
+/** The latest send's words, wherever it was sent from. The floating status
+ * line beside the File menu shows them, so they stay on screen with the menus
+ * closed and the panel that sent them out of sight. */
+export const useCadSendOutcome = create<{ outcome: FusionDeliveryWords | null }>(() => ({ outcome: null }));
+
+let stopFollowing: (() => void) | null = null;
+let fading: ReturnType<typeof setTimeout> | null = null;
+
+/** Put a send's words on screen. Finished words leave by themselves. */
+export function showCadSendOutcome(outcome: FusionDeliveryWords | null, finished = false): void {
+  if (fading !== null) clearTimeout(fading);
+  fading = outcome && finished
+    ? setTimeout(() => { fading = null; useCadSendOutcome.setState({ outcome: null }); }, SEND_OUTCOME_SHOWN_MS)
+    : null;
+  useCadSendOutcome.setState({ outcome });
+}
+
+/** Show this send's outcome until the next send replaces it. `report` also
+ * gets the words, for a caller keeping its own line. */
+export function followCadSend(send: FusionSend, report?: (words: FusionDeliveryWords) => void): () => void {
+  stopFollowing?.();
+  const stop = watchFusionDelivery(send, (words, finished) => {
+    report?.(words);
+    showCadSendOutcome(words, finished);
+  });
+  stopFollowing = stop;
+  return () => {
+    stop();
+    if (stopFollowing === stop) stopFollowing = null;
+  };
 }

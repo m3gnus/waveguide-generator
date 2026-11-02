@@ -55,7 +55,7 @@ import {
   openCadLinkedProject,
   takeDesignOpenTicket,
 } from './openCadProject';
-import { fusionSendOf, sentToCadMessage, useFusionDelivery, type FusionSend } from './useSendToCad';
+import { showCadSendOutcome, useCadSendOutcome } from './useSendToCad';
 import { failureWords } from '../api/httpError';
 
 // Extensions only. The macOS desktop window (pywebview on WKWebView) filters its
@@ -180,8 +180,9 @@ export function DesignFileMenu() {
   const [projects, setProjects] = useState<CadLinkedDesignSummary[]>([]);
   const [moveRunsOpen, setMoveRunsOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [fusionSend, setFusionSend] = useState<FusionSend | null>(null);
-  const delivery = useFusionDelivery(fusionSend);
+  const sendOutcome = useCadSendOutcome((state) => state.outcome);
+  /** What a send from this menu left out, said with what became of it. */
+  const [sendNote, setSendNote] = useState('');
   const [adoptionCandidate, setAdoptionCandidate] = useState<CadLinkOpenState['adoptionCandidate']>(null);
   const [sharedQuestion, setSharedQuestion] = useState<SharedDesignQuestion | null>(null);
   const pendingSharedQuestion = useRef<SharedDesignQuestion | null>(null);
@@ -207,7 +208,7 @@ export function DesignFileMenu() {
     busyRef.current = true;
     setBusy(true);
     setMessage(null);
-    setFusionSend(null);
+    setSendNote('');
     setAdoptionCandidate(null);
     try { await operation(); } catch (error) {
       if (isOutboundSupersededError(error)) return;
@@ -533,8 +534,8 @@ export function DesignFileMenu() {
       // The coordinator owns the send: it derives open-vs-update, attaches the
       // expected-document guard, and parks on the two-way conflict dialog.
       const result = await cadWorkspace.getSnapshot().sendWgToFusion();
-      setMessage(result ? `${sentToCadMessage(result)}${omitsWoofers}` : 'Both WG and Fusion changed — choose a direction in the dialog.');
-      if (result) setFusionSend(fusionSendOf(result));
+      if (result) setSendNote(omitsWoofers);
+      else setMessage('Both WG and Fusion changed — choose a direction in the dialog.');
     });
   }
 
@@ -610,8 +611,13 @@ export function DesignFileMenu() {
           onClick={() => { setOpen(false); setMoveRunsOpen(true); }}><span>Move earlier runs…</span></button>
       </>}
     </div>}
-    {(message || adoptionCandidate) && <div role="status" className="design-menu-status" onClick={() => { setMessage(null); setAdoptionCandidate(null); }}>
-      {delivery ? `${delivery.text}${omitsWoofers}` : message}
+    {(message || adoptionCandidate || sendOutcome) && <div
+      role={!message && sendOutcome?.tone === 'error' ? 'alert' : 'status'}
+      className={`design-menu-status${!message && sendOutcome?.tone === 'error' ? ' error' : ''}`}
+      data-outcome={!message && sendOutcome ? 'cad-send' : undefined}
+      onClick={() => { setMessage(null); setAdoptionCandidate(null); showCadSendOutcome(null); }}
+    >
+      {message ?? (sendOutcome && `${sendOutcome.text}${sendNote}`)}
       {adoptionCandidate && <button className="btn"
         type="button"
         onClick={(event) => { event.stopPropagation(); adoptCandidate(); }}
