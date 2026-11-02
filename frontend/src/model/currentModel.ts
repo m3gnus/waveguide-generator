@@ -189,7 +189,7 @@ export interface ShownResult {
   canRender: boolean;
 }
 
-/** One chart/export selection. D1: earlier versions never supply charts. */
+/** One chart/export selection. D1: earlier versions never supply the primary charts. */
 export function shownResult(model: CurrentModel, selection: ResultSelection, jobs: readonly JobItem[],
   provisional: Readonly<Record<string, unknown>> = {}): ShownResult {
   const drawable = (job: JobItem) => (job.status === 'complete' && job.has_results) || (isActiveJobStatus(job.status) && !!provisional[job.id]);
@@ -201,8 +201,10 @@ export function shownResult(model: CurrentModel, selection: ResultSelection, job
   const cleaned = selected?.status === 'complete' && !selected.has_results && !!selected.results_discarded_at;
   const releaseSelection = !!cleaned && selection.resultsSeenFor === selected?.id;
   const job = releaseSelection ? latest : selected && ((current(selected) && drawable(selected)) || legacy || (cleaned && !selection.following)) ? selected : latest;
+  // Only the primary is bound to the on-screen model. An overlay is a run the
+  // user added to compare against it, so comparing other designs is the point.
   const ids = job ? [job.id, ...(selection.overlays ?? []).filter(id => id !== job.id
-    && jobs.some(candidate => candidate.id === id && current(candidate) && drawable(candidate)))] : [];
+    && jobs.some(candidate => candidate.id === id && drawable(candidate)))] : [];
   return { job, latest, ids, verdict, modelNotLoaded: !!legacy, releaseSelection, canRender: !!job && drawable(job) };
 }
 

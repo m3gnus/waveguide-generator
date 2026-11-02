@@ -149,7 +149,28 @@ describe('one model display table', () => {
     for (const other of others) {
       expect(shownResult(model, { primary: other.id }, [other]).job).toBeNull();
     }
-    expect(shownResult(model, { primary: job.id, overlays: others.map(job => job.id) }, oldRuns).ids).toEqual([job.id]);
+  });
+
+  it.each(['parametric', 'file', 'cad'] as const)('compares any solved run against a %s primary', kind => {
+    const job = oldRuns.find(job => modelForRun(job).kind === kind)!;
+    const others = oldRuns.filter(job => modelForRun(job).kind !== kind && job.has_results);
+    const model = modelForRun(job);
+    const shown = shownResult(model, { primary: job.id, overlays: others.map(job => job.id) }, oldRuns);
+    expect(shown.job).toBe(job);
+    expect(shown.ids).toEqual([job.id, ...others.map(job => job.id)]);
+  });
+
+  it('keeps an overlay out until the run has something to draw', () => {
+    const [job, other] = oldRuns;
+    const model = modelForRun(job);
+    const unsolved = { ...other, status: 'complete' as const, has_results: false };
+    expect(shownResult(model, { primary: job.id, overlays: [unsolved.id] }, [job, unsolved]).ids).toEqual([job.id]);
+  });
+
+  it('does not let an overlay stand in for a primary the model no longer matches', () => {
+    const [job, other] = oldRuns;
+    const model = { ...modelForRun(job), key: 'new-return', ingestId: 'new-ingest' };
+    expect(shownResult(model, { primary: job.id, overlays: [other.id] }, [job, other]).ids).toEqual([]);
   });
 
   it('switches to the newest matching result after leaving a selected model', () => {

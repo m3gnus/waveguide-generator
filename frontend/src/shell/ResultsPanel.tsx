@@ -2665,7 +2665,7 @@ export function ResultsPanel() {
       })()}
       {shown && samplingNotes(shown).length > 0 && <span className="pill accent" role="note" title={samplingNotes(shown).join("\n")}>{samplingNotes(shown)[1]} · reconstructed estimates; narrow resonances can be missed</span>}
       {primaryIsProvisional && <span className="pill accent" role="status">Live · {liveCompleted}{liveExpected ? `/${liveExpected}` : ''} frequencies</span>}
-      <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) { const job = jobs.find(job => job.id === event.target.value); if (job && runVerdict(job, coherenceContext) !== 'current') selectJob(job); else compareSelection.toggleOverlay(event.target.value); } }}><option value="">+ compare</option>{available.map((job) => {
+      <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => {
         const marker = runContextMarker(job, coherenceContext);
         return <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}{marker ? ` · ${marker}` : ''}</option>;
       })}</select>

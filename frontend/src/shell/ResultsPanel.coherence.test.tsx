@@ -338,6 +338,37 @@ describe('results run coherence', () => {
     expect(cadOptions).toContain('#7 · current · Parametric');
   });
 
+  it('adds a run of another design to the comparison without loading it', async () => {
+    const current = job('current', 14, liveDesign());
+    const solved = designForFamily('OSSE');
+    solved.L = 321;
+    const other = job('other-design', 15, solved);
+    const imported = job('imported-design', 16, null, true);
+    publishJobs([imported, other, current]);
+    compareSelection.setPrimary(current.id);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(finalResult()), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+    const designBefore = useDesignStore.getState().design;
+
+    const pick = async (id: string) => {
+      const select = host.querySelector<HTMLSelectElement>('.result-compare-add')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, id);
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        await Promise.resolve();
+      });
+    };
+    await pick(other.id);
+    await pick(imported.id);
+
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: current.id, overlays: [other.id, imported.id] });
+    expect(modelMocks.showJobModel).not.toHaveBeenCalled();
+    expect(useDesignStore.getState().design).toBe(designBefore);
+    await vi.waitFor(() => expect(host.querySelector('[data-result-set]')?.getAttribute('data-result-set')).toBe([current.id, other.id, imported.id].join('\u0000')));
+    expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe(current.id);
+    expect([...host.querySelectorAll('.result-compare-add option')].map((option) => option.textContent)).toEqual(['+ compare']);
+  });
+
   it('offers a run this window did not ask for instead of showing it', async () => {
     const shown = job('shown', 12, liveDesign());
     publishJobs([shown]);
