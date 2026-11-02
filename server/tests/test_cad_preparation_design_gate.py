@@ -43,6 +43,7 @@ class MesherStandIn:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.role_findings: list[dict[str, Any]] = []
 
     def __call__(self, assembly_path: Any, manifest: Any, mesh: Any, **kwargs: Any) -> dict[str, Any]:
         anchor = manifest["coordinate_system"].get("solver_anchor_instance_id")
@@ -52,7 +53,7 @@ class MesherStandIn:
             "transformed_geometry_hash": "sha256:" + "3" * 64,
             "normalisation": {"anchor_instance_id": anchor},
             "role_resolution": {"source-hf": {"surfaces": [101]}},
-            "role_findings": [],
+            "role_findings": self.role_findings,
             "symmetry": _SYMMETRY,
             "healing": {"performed": False, "mode": "none", "options": []},
             "polar_grid_derivation": polar_grid_from_symmetry(_SYMMETRY),
@@ -159,6 +160,65 @@ def test_a_wg_exported_return_prepares_and_submits_through_the_real_ingest(real)
     assert record["anchor"]["design_id"] == design_id
     assert record["project"]["lineage_id"] == lineage_id == snapshot_project(harness.store, manifest)
     assert _freshness(record) == []
+
+
+@pytest.mark.parametrize("previously_held", [False, True])
+@pytest.mark.parametrize("other_blocker", [False, True])
+def test_a_fusion_body_edit_is_recorded_without_review(
+    real, monkeypatch, previously_held, other_blocker,
+) -> None:
+    harness, mesher = real
+    design_id, _ = _project(harness, 45.0)
+    step = b"STEP changed in Fusion"
+    manifest = _manifest(step)
+    manifest["instances"][0]["design_id"] = design_id
+    _current(harness, manifest, design_id)
+    evidence = manifest["instances"][0]["body_evidence"]
+    evidence["local_body_state"] = "modified"
+    evidence["observed_fingerprint"]["volume_mm3"] = 15
+    bundle_path = _received(harness, "edited", manifest, step)
+    revision = _revision(harness.store, _setup())
+    if other_blocker:
+        mesher.role_findings = [{"kind": "source-paint-missing", "source_id": "source-hf"}]
+
+    if previously_held:
+        # Write a genuine sealed preparation under the previous approval rule.
+        seal = ingest_module.seal_prepared_record
+
+        def old_seal(record, **kwargs):
+            for finding in record["findings"]:
+                if finding["kind"] == "freshness" and finding.get("verdict") == "body_modified":
+                    finding["blocking"] = True
+            return seal(record, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(ingest_module, "seal_prepared_record", old_seal)
+            held = _prepare(harness, setup_revision_id=revision)
+        assert (held["state"], held["reason"]) == ("needs_user_input", "findings_need_review")
+        old_record = _record(harness, held)
+        assert _freshness(old_record) == [("body_modified", True)]
+
+    summary = _prepare(harness, setup_revision_id=revision)
+    record = _record(harness, summary)
+    assert _freshness(record) == [("body_modified", False)]
+    assert record["freshness"]["instances"][0]["local_body_state"] == "modified"
+    assert record["freshness"]["instances"][0]["fingerprints_match"] is False
+    if previously_held:
+        assert record["ingest_id"] != old_record["ingest_id"]
+        assert _record(harness, held) == old_record  # Historical evidence stays sealed.
+    if other_blocker:
+        assert (summary["state"], summary["reason"]) == ("needs_user_input", "findings_need_review")
+        assert harness.submitted == []
+        assert [f["kind"] for f in record["findings"] if f["blocking"]] == ["source-paint-missing"]
+    else:
+        assert (summary["state"], summary["jobId"]) == ("accepted", "job-1"), summary
+        assert harness.submitted[0].geometry.ingest_id == record["ingest_id"]
+        assert harness.provenance[0]["preparation"]["approvals"] == []
+        # A second press creates another request and still needs no approval.
+        _accept(harness.store, "cmd-2", bundle_path, record["manifest_sha256"])
+        resent = _prepare(harness, "cmd-2", setup_revision_id=revision)
+        assert (resent["state"], resent["jobId"]) == ("accepted", "job-2"), resent
+        assert _freshness(_record(harness, resent)) == [("body_modified", False)]
 
 
 def test_a_design_repeated_in_the_assembly_resolves_to_its_solver_anchor_exactly(real) -> None:

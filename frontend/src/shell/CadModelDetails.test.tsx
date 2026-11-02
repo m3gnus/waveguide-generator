@@ -277,6 +277,24 @@ describe('Model details, and the run status Results shows for its model', () => 
     expectPlain(host.querySelector('.cad-check-findings')?.textContent);
   });
 
+  it('shows a Fusion body edit as one plain note without asking for review', async () => {
+    await act(async () => root.render(<Details value={record({
+      freshness: { verdict: 'per-instance', instances: [
+        { instance_id: 'instance-a', verdict: 'body_modified' },
+        { instance_id: 'instance-b', verdict: 'current' },
+      ] },
+      findings: [{ id: 'f-edit', kind: 'freshness', verdict: 'body_modified', blocking: false }],
+    } as never)}/>));
+    expect(head().querySelector('.cad-state-chip')?.textContent).toBe('1 note');
+    expect(host.querySelector('.cad-check-findings')).toBeNull();
+    expect(host.querySelectorAll('.cad-check-notes .cad-check')).toHaveLength(1);
+    expect(host.querySelector('.cad-check-notes b')?.textContent).toBe('The horn was changed in Fusion since WG sent it.');
+    expect(host.querySelector('.cad-check-notes .cad-check-verdict')?.textContent).toBe('WG solves the changed shape.');
+    expect(host.querySelector('.cad-check-warn')).toBeNull();
+    expect(host.textContent).not.toContain('Approve');
+    expectNoJargon(host);
+  });
+
   it('opens on a sweep whose frequency list cannot be read', async () => {
     useImportedSolveOptionsStore.getState().setFrequencyMode('list');
     useImportedSolveOptionsStore.getState().setFrequencyListText('not a frequency');

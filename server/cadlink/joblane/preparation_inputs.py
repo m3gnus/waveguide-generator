@@ -320,6 +320,15 @@ def resumable_record(
     if ingest is None:
         return None
     record = json.loads(ingest["record_json"])
+    # Older preparations asked for approval of ordinary Fusion body edits.
+    # Prepare again under the current rule, preserving the old sealed record.
+    if any(
+        finding.get("kind") == "freshness"
+        and finding.get("verdict") == "body_modified"
+        and finding.get("blocking")
+        for finding in record.get("findings") or []
+    ):
+        return None
     if frame is not None:
         # A record prepared under an earlier frame contract, or with another
         # roll, keeps its own meaning; a new attempt meshes in this frame.

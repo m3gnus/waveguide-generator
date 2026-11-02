@@ -201,12 +201,12 @@ describe('held CAD request dialog owner', () => {
       preparation: { ingest_id: 'wgi_1', preparation_id: 'wgi_1', blocking_finding_ids: blocking, report_sha256: 'sha256:r' },
       approvals: [] };
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      findings: [{ id: blocking[0], kind: 'freshness', blocking: true, verdict: 'body_modified' }],
+      findings: [{ id: blocking[0], kind: 'freshness', blocking: true, verdict: 'design_changed' }],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
     publishCadJobs([job]);
     await act(async () => root.render(<HeldCadRequestDialog/>));
     await vi.waitFor(() => expect(host.querySelector('.cad-operation-findings')?.textContent)
-      .toContain('The waveguide body was changed in Fusion after WG sent it'));
+      .toContain('The design in WG has changed since this model was sent'));
     expect(host.textContent).not.toContain('finding-freshness');
     expect(host.textContent).not.toContain('Review model');
     await act(async () => button('Approve and solve').click());
@@ -220,7 +220,7 @@ describe('held CAD request dialog owner', () => {
       preparation: { ingest_id: 'wgi_1', preparation_id: 'wgi_1', blocking_finding_ids: ['one', 'two'], report_sha256: 'sha256:r' },
       approvals: [] };
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      findings: [{ id: 'one', kind: 'freshness', blocking: true, verdict: 'body_modified' }],
+      findings: [{ id: 'one', kind: 'freshness', blocking: true, verdict: 'design_changed' }],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
     publishCadJobs([job]);
     await act(async () => root.render(<HeldCadRequestDialog/>));

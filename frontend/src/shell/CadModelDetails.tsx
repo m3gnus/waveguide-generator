@@ -274,7 +274,8 @@ function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
   if (freshness !== 'unlinked') checks.push({
     key: 'freshness',
     name: 'Freshness',
-    state: freshness === 'current' ? 'ok' : 'warn',
+    // Ordinary Fusion edits have their one line in the non-blocking notes.
+    state: record.freshness.instances.length > 0 && record.freshness.instances.every((instance) => ['current', 'body_modified'].includes(instance.verdict)) ? 'ok' : 'warn',
     verdict: freshness,
     title: FRESHNESS_COPY[freshness.replaceAll(' ', '_')] ?? 'Whether this returned geometry still matches the linked WG design and generator.',
     // Each linked instance's verdict, and an error to act on; which instance

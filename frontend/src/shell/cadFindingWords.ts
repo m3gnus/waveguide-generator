@@ -3,11 +3,11 @@ import type { CadReturnFinding } from '../api/cadlink';
 /** What WG found and what it means, in the user's words. */
 interface FindingWords { what: string; means: string }
 
-/** The same outcome for every way a Fusion body stops matching its design. */
+/** Freshness differences that still ask the user before solving. */
 const SOLVES_AS_IN_FUSION = 'WG solves the model as it is in Fusion. Approve to go ahead, or change it in Fusion and send it again.';
 
 const FRESHNESS_WORDS: Record<string, FindingWords> = {
-  body_modified: { what: 'The waveguide body was changed in Fusion after WG sent it', means: SOLVES_AS_IN_FUSION },
+  body_modified: { what: 'The horn was changed in Fusion since WG sent it.', means: 'WG solves the changed shape.' },
   design_changed: { what: 'The design in WG has changed since this model was sent', means: SOLVES_AS_IN_FUSION },
   generator_changed: { what: 'This version of WG builds this design differently from the copy in Fusion', means: SOLVES_AS_IN_FUSION },
   missing_design: { what: 'WG no longer has the design this model came from', means: SOLVES_AS_IN_FUSION },

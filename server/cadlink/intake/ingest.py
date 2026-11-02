@@ -1970,7 +1970,9 @@ def _ingest_bundle(
         findings.append({"id": freshness["finding_id"], "kind": "freshness", "blocking": False, "verdict": "unlinked"})
     for item in freshness_records:
         if item["verdict"] != "current":
-            findings.append({"id": item["finding_id"], "kind": "freshness", "blocking": True, "instance_id": item["instance_id"], "verdict": item["verdict"]})
+            # Editing the exported body in Fusion is normal modelling work.
+            # Keep the difference in the run's record, without asking to solve it.
+            findings.append({"id": item["finding_id"], "kind": "freshness", "blocking": item["verdict"] != "body_modified", "instance_id": item["instance_id"], "verdict": item["verdict"]})
     # A pre-1.1 bundle with no document signature cannot be compared for
     # staleness. Recording it on the bundle is not enough: an unsurfaced
     # degradation is the silent one this schema version exists to end, so it
