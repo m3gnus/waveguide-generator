@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import NamedTuple, Sequence
+
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
+
 import numpy as np
 
 
@@ -11,6 +16,72 @@ def open_edges(triangles: np.ndarray) -> int:
     edges = np.concatenate([triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]])
     _keys, counts = np.unique(np.sort(edges, axis=1), axis=0, return_counts=True)
     return int(np.count_nonzero(counts == 1))
+
+
+class SurfacePatches(NamedTuple):
+    """Triangles grouped into patches that share an edge, with each one's rim."""
+
+    count: int
+    labels: np.ndarray
+    edges: np.ndarray
+    edge_owners: np.ndarray
+    edge_counts: np.ndarray
+    rim_edges: np.ndarray
+    rim_labels: np.ndarray
+
+
+def surface_patches(triangles: np.ndarray) -> SurfacePatches:
+    """Split a surface at its open edges; an edge of three or more faces joins nothing."""
+
+    edges = np.sort(triangles[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
+    unique_edges, owners, counts = np.unique(edges, axis=0, return_inverse=True, return_counts=True)
+    order = np.argsort(owners, kind="stable")
+    starts = np.cumsum(counts) - counts
+    shared = starts[counts == 2]
+    left, right = order[shared] // 3, order[shared + 1] // 3
+    graph = coo_matrix((np.ones(len(left)), (left, right)), shape=(len(triangles), len(triangles)))
+    count, labels = connected_components(graph, directed=False)
+    return SurfacePatches(
+        count, labels, unique_edges, owners, counts,
+        unique_edges[counts == 1], labels[order[starts[counts == 1]] // 3],
+    )
+
+
+def cutting_axes(
+    points: np.ndarray, rim_edges: np.ndarray, axes: Sequence[int], tolerance: float
+) -> tuple[int, ...]:
+    """The coordinate planes through the origin that a patch's open rim lies along."""
+
+    return tuple(
+        axis for axis in axes
+        if np.any(np.all(np.abs(points[rim_edges, axis]) <= tolerance, axis=1))
+    )
+
+
+def completion_factor(
+    points: np.ndarray, triangles: np.ndarray, axes: Sequence[int], tolerance: float
+) -> float:
+    """How many times larger this surface is once the cut planes ``axes`` complete it.
+
+    A patch with an open rim along a plane continues in its own mirror image
+    there, so that plane doubles it; a patch clear of the plane is whole. The
+    area weighting keeps a source that holds both kinds exact.
+    """
+
+    if not len(triangles):
+        return 1.0
+    corners = points[triangles]
+    areas = 0.5 * np.linalg.norm(
+        np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]), axis=1
+    )
+    patches = surface_patches(triangles)
+    whole = sum(
+        float(areas[patches.labels == label].sum()) * 2 ** len(
+            cutting_axes(points, patches.rim_edges[patches.rim_labels == label], axes, tolerance)
+        )
+        for label in range(patches.count)
+    )
+    return whole / float(areas.sum())
 
 
 def orient_closed_surface(

@@ -83,6 +83,7 @@ from server.cadlink.interpretation.domain_interpretation import (
     oblique_cut_refusal_message,
     off_centre_cut_refusal_message,
     open_half_refusal_message,
+    source_completion_factors,
 )
 
 
@@ -166,11 +167,14 @@ def _source_mapping(
     *,
     reflection: Mapping[str, Any] | None = None,
     channels: Mapping[str, Any] | None = None,
+    completion: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Each source identity, its mesh tag, and what of it the solve mesh keeps.
 
     With a reflected mesh, each source's meshed area before and after the
     reflection (``reflect_triangle_mesh``): the same identity, tag and area.
+    ``completion_factor`` scales the source's area as drawn in CAD back to the
+    whole driver (``source_completion_factors``).
     """
 
     tag_areas = (reflection or {}).get("tag_areas") or {}
@@ -191,6 +195,7 @@ def _source_mapping(
             "tag": int(tag),
             "channel": (channels or {}).get(str(source_id)),
             "reflected": reflected,
+            "completion_factor": (completion or {}).get(str(source_id), 1.0),
             "retained_fraction": areas.get("retained_fraction"),
             "retained_area_mm2": areas.get("retained_child_area_mm2"),
             "parent_area_mm2": areas.get("parent_area_mm2"),
@@ -258,6 +263,7 @@ def decide_domain_and_frame(
         interpretation,
         observations,
         symmetry,
+        built=built,
         manifest_sha256=manifest_sha256,
         normalisation=normalisation,
         source_tags=source_tags,
@@ -282,6 +288,7 @@ def _decide(
     observations: Observations | None,
     symmetry: Mapping[str, Any],
     *,
+    built: Mapping[str, Any],
     manifest_sha256: str,
     normalisation: Mapping[str, Any],
     source_tags: Mapping[str, Any],
@@ -326,6 +333,7 @@ def _decide(
                 "status": "recovered" if recovered else "mirrored",
             }
         )
+    completion = source_completion_factors(built, [str(cut["solver_plane"]) for cut in cad_cuts])
     open_rim = (
         cut_shaped_open_rim({"observations": observed_json})
         if observed_json is not None and not domain_planes
@@ -504,6 +512,7 @@ def _decide(
             observed_planes,
             reflection=reflection,
             channels=channels,
+            completion=completion,
         ),
         "confidence": confidence,
         "evidence": {

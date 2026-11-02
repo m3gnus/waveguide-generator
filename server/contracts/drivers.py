@@ -43,6 +43,9 @@ class DriverSpec(JobModel):
     #: rating is quoted against, so it is the one honest divisor for turning a
     #: drive voltage into the watts a datasheet can be compared with.
     z_nom_ohm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    #: Drivers this channel's faces belong to in the returned model. A driver
+    #: the return cut through counts as one and a mirror image as none: a half
+    #: model holding one whole cone, or half of one, is count 1.
     count: int = Field(default=1, ge=1, le=64)
     rear_volume_l: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     #: A human name for this driver (e.g. from the driver library, or typed by

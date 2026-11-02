@@ -93,8 +93,16 @@ def imported_validity_metadata(record: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def record_source_area_m2(record: Mapping[str, Any], source_id: str) -> float:
-    """The source's full physical area from the ingestion record, in m²."""
+    """The source's full physical area from the ingestion record, in m².
 
+    A CAD return records its faces as drawn, so a driver cut through in CAD
+    reports only what is left of it; the domain decision restores the rest.
+    """
+
+    decision = record.get("domain_decision")
+    decided = (decision.get("sources") or {}).get("by_id") if isinstance(decision, Mapping) else None
+    decided = decided.get(source_id) if isinstance(decided, Mapping) else None
+    factor = decided.get("completion_factor", 1.0) if isinstance(decided, Mapping) else 1.0
     for source in record.get("sources") or []:
         if not isinstance(source, Mapping) or str(source.get("id")) != source_id:
             continue
@@ -102,7 +110,7 @@ def record_source_area_m2(record: Mapping[str, Any], source_id: str) -> float:
         observed = observed if isinstance(observed, Mapping) else {}
         area_mm2 = observed.get("total_area_mm2")
         if isinstance(area_mm2, (int, float)) and float(area_mm2) > 0.0:
-            return float(area_mm2) * 1.0e-6
+            return float(area_mm2) * float(factor) * 1.0e-6
     raise ValueError(
         f"driver coupling needs a recorded positive area for source {source_id!r}"
     )

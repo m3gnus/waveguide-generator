@@ -9,10 +9,9 @@ import hashlib
 import threading
 from typing import NamedTuple
 
-from scipy.sparse import coo_matrix
-from scipy.sparse.csgraph import connected_components
-
 import numpy as np
+
+from server.mesh.surface_topology import cutting_axes, surface_patches
 
 from .beat_adapter.preflight import UnsupportedPhysics
 
@@ -138,27 +137,17 @@ def _infer_component_symmetry(
         points[points == 0] = 0.  # Numeric edge records must equate +0 and -0.
         faces = inverse.reshape(-1, 3)
         check_geometry()
-        edges = np.sort(faces[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
-        unique_edges, owners, counts = np.unique(edges, axis=0, return_inverse=True, return_counts=True)
-        if np.any(counts > 2):
+        skin = surface_patches(faces)
+        if np.any(skin.edge_counts > 2):
             raise DriverSymmetryError(f"Channel {channel_id!r}: moving surface union is nonmanifold")
-        order = np.argsort(owners, kind="stable")
-        starts = np.cumsum(counts) - counts
-        shared = starts[counts == 2]
-        left, right = order[shared] // 3, order[shared + 1] // 3
-        graph = coo_matrix((np.ones(len(left)), (left, right)), shape=(len(faces), len(faces)))
-        count, labels = connected_components(graph, directed=False)
-        perimeter = unique_edges[counts == 1]
-        perimeter_labels = labels[order[starts[counts == 1]] // 3]
         mesh_cuts = []
-        for label in range(count):
+        for label in range(skin.count):
             check_geometry()
-            patch = labels == label
-            patch_edges = unique_edges[np.unique(owners.reshape(-1, 3)[patch])]
-            boundary = perimeter[perimeter_labels == label]
+            patch = skin.labels == label
+            patch_edges = skin.edges[np.unique(skin.edge_owners.reshape(-1, 3)[patch])]
+            boundary = skin.rim_edges[skin.rim_labels == label]
             patches.append((corners[patch], patch_edges, points))
-            mesh_cuts.append(tuple(a for a in active_axes if np.any(
-                np.all(np.abs(points[boundary, a]) <= tolerance_m, axis=1))))
+            mesh_cuts.append(cutting_axes(points, boundary, active_axes, tolerance_m))
         cuts.extend(mesh_cuts)
     if patches:
         # Compare all meshes, including separate FEM chambers and BEM skins.
