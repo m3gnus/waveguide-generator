@@ -4,7 +4,7 @@
  * screen, with the setup the shared Simulation sections show. The jobs
  * coordinator submits it, under the same lock and attention as every Solve.
  */
-import { fetchAssemblyContext } from '../api/assembly';
+import { assemblyContextRefused, fetchAssemblyContext } from '../api/assembly';
 import { placementProblems } from '../sketch/adapters/frontView';
 import { assemblyBuildCurrent, requestAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
 import { assemblyImportedSetup } from '../stores/assemblySimulation';
@@ -28,8 +28,12 @@ export async function prepareAssemblySolve(fetcher: typeof fetch = fetch,
   const changed = () => new Error('The design changed while it was being prepared. Press Solve again.');
   if (!assemblyBuildCurrent(useAssemblyBuildStore.getState(), design)) {
     // A woofer that does not fit never reaches the build, wherever Solve was pressed.
-    const context = await fetchAssemblyContext(serializeDesign(design), fetcher);
-    const [problem] = [...placementProblems(design.assembly, { context, assembly: design.assembly }).values()].flat();
+    // A check that cannot run leaves that to the build, which certifies the fit itself.
+    const context = await fetchAssemblyContext(serializeDesign(design), fetcher).catch((reason: unknown) => {
+      if (assemblyContextRefused(reason)) throw reason;
+      return null;
+    });
+    const [problem] = context ? [...placementProblems(design.assembly, { context, assembly: design.assembly }).values()].flat() : [];
     if (problem) throw new Error(`${problem} Open Sources and baffle to fix it.`);
     if (!sameRevision()) throw changed();
     const built = await requestAssemblyBuild(fetcher);

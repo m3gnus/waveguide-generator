@@ -13,7 +13,7 @@
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { assemblyProblemText, fetchAssemblyContext } from '../api/assembly';
+import { assemblyContextRefused, assemblyProblemText, fetchAssemblyContext } from '../api/assembly';
 import { DeveloperDetails } from '../shell/DeveloperDetails';
 import { useModalDialogFocus } from '../shell/dialogFocus';
 import { EmptyState } from '../shell/EmptyState';
@@ -64,11 +64,14 @@ export function FrontWorkspaceDialog() {
   return open ? createPortal(<FrontWorkspace onClose={closeFrontWorkspace}/>, document.body) : null;
 }
 
-interface FrontContextState { resolved: FrontViewContext | undefined; checkedRevision: number | null; failure: { text: string; detail: string } | null; retry(): void }
+/** Why the front context did not arrive for one revision; `refused` means the server's words are about the design. */
+interface FrontContextFailure { revision: number; text: string; detail: string; refused: boolean }
+interface FrontContextState { resolved: FrontViewContext | undefined; checkedRevision: number | null; failure: FrontContextFailure | null; retry(): void }
 
 /** The latest front context for the design on screen, refreshed when the design rests. */
 function useFrontContext(blank: DesignAssembly, fetcher: typeof fetch): FrontContextState {
   const design = useDesignStore(state => state.design);
+  const revision = useDesignStore(state => state.designRevision);
   const dragging = useDesignStore(state => !!state.dragSnapshot);
   const [resolved, setResolved] = useState<FrontViewContext>();
   const [checkedRevision, setCheckedRevision] = useState<number | null>(null);
@@ -76,22 +79,38 @@ function useFrontContext(blank: DesignAssembly, fetcher: typeof fetch): FrontCon
   const [attempt, setAttempt] = useState(0);
   const latest = useRef(0);
   useEffect(() => {
-    if (dragging) return;
     const ask = ++latest.current;
-    const revision = useDesignStore.getState().designRevision;
+    if (dragging) return;
     const assembly = structuredClone(design.assembly ?? blank);
+    const request = new AbortController();
     const timer = setTimeout(() => {
-      fetchAssemblyContext(serializeDesign({ ...design, assembly }), fetcher).then(context => {
+      fetchAssemblyContext(serializeDesign({ ...design, assembly }), fetcher, request.signal).then(context => {
         if (ask === latest.current) { setResolved({ context, assembly }); setCheckedRevision(revision); setFailure(null); }
       }, (reason: unknown) => {
         if (ask !== latest.current) return;
-        setFailure({ text: assemblyProblemText(reason, 'WG could not update the front view and has recorded the problem.'),
-          detail: reason instanceof Error ? reason.message : String(reason) });
+        setFailure({ revision, text: assemblyProblemText(reason, 'WG could not update the front view and has recorded the problem.'),
+          detail: reason instanceof Error ? reason.message : String(reason), refused: assemblyContextRefused(reason) });
       });
     }, FRONT_CONTEXT_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [design, dragging, fetcher, attempt]);
-  return { resolved, checkedRevision, failure, retry: () => setAttempt(value => value + 1) };
+    return () => { clearTimeout(timer); request.abort(); };
+  }, [design, revision, dragging, fetcher, attempt]);
+  return { resolved, checkedRevision, failure, retry: () => { setFailure(null); setAttempt(value => value + 1); } };
+}
+
+/**
+ * What the fit of the design on screen allows, and the line that says so. Only an
+ * answer about this revision can refuse. While one is on its way Build and Solve
+ * wait; if none can come they go ahead, because the build certifies the fit itself
+ * and refuses a woofer that does not fit.
+ */
+function fitHold(answered: boolean, failure: FrontContextFailure | null, refusal: string | undefined, problems: string[]): { held: boolean; line: string | null } {
+  if (answered && problems.length) {
+    return { held: true, line: problems.length > 1 ? `${problems[0]} ${problems.length - 1} more under Does not fit.` : problems[0] };
+  }
+  if (answered) return { held: !!refusal, line: refusal ?? null };
+  if (failure?.refused) return { held: true, line: failure.text };
+  if (failure) return { held: false, line: 'WG could not check the fit. Build and Solve check it themselves.' };
+  return { held: true, line: 'Checking that the woofers fit on the baffle…' };
 }
 
 function buildLine(hasAssembly: boolean, status: AssemblyBuildState['status'], published: boolean, current: boolean): string {
@@ -146,13 +165,8 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
   const building = build.status === 'building';
   const refusal = resolved?.context.refusal;
   const problems = [...placementProblems(shown, resolved).values()].flat();
-  const doesNotFit = problems.length > 0;
-  // The fit is known only for the revision the server answered about. Until
-  // then nothing may build: no answer is not the same as a clean answer.
   const revision = useDesignStore(store => store.designRevision);
-  const fitUnknown = !doesNotFit && (checkedRevision !== revision || !!refusal);
-  const held = doesNotFit || fitUnknown;
-  const heldWhy = doesNotFit ? problems[0] : refusal ?? (failure ? 'WG could not check the fit. Press Try again.' : 'Checking that everything fits…');
+  const fit = fitHold(checkedRevision === revision, failure?.revision === revision ? failure : null, refusal, problems);
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Sources and baffle" className="front-workspace">
     <header className="front-header">
       <h2>Sources and baffle</h2><ExperimentalBadge/>
@@ -179,10 +193,10 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
       </aside>
     </div>
     <footer className="front-footer">
-      <p role="status">{doesNotFit ? 'Fix what does not fit to build or solve.' : hasAssembly && fitUnknown ? heldWhy : buildLine(hasAssembly, build.status, !!build.published, assemblyBuildCurrent(build, design))}</p>
+      <p role="status">{hasAssembly && !building && fit.line || buildLine(hasAssembly, build.status, !!build.published, assemblyBuildCurrent(build, design))}</p>
       <div className="front-actions">
-        <button className="btn" type="button" disabled={!hasAssembly || building || held} title={held ? heldWhy : undefined} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
-        <button className="btn-primary" type="button" disabled={!hasAssembly || building || held || !solveControl?.solveAssembly || solveControl.submitting} title={held ? heldWhy : undefined} onClick={solve}>Solve</button>
+        <button className="btn" type="button" disabled={!hasAssembly || building || fit.held} title={fit.held && fit.line || undefined} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
+        <button className="btn-primary" type="button" disabled={!hasAssembly || building || fit.held || !solveControl?.solveAssembly || solveControl.submitting} title={fit.held && fit.line || undefined} onClick={solve}>Solve</button>
       </div>
     </footer>
   </div></div>;

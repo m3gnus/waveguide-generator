@@ -8,6 +8,7 @@ Gmsh artifact and that artifact is parsed back for solver statistics/tags.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import hashlib
 import importlib.metadata
@@ -1127,10 +1128,7 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
     return config, placement
 
 
-def _assembly_front_context_sync(
-    design_dump: dict[str, Any],
-    cancel_cb: CancelCallback | None = None,
-) -> dict[str, Any]:
+def _assembly_front_context_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
     """The front view's solver-free context: live outlines, placements and clearances.
 
     Distances are reference values from the same closed-form placement the
@@ -1180,9 +1178,15 @@ def _assembly_front_context_sync(
 
 
 async def assembly_front_context(design: DesignConfig) -> dict[str, Any]:
-    """Run ``_assembly_front_context_sync`` where a mesher failure cannot hurt the server."""
+    """Run ``_assembly_front_context_sync`` beside the mesher child, never behind it.
 
-    return await run_mesh_build(_assembly_front_context_sync, design.model_dump(mode="json"))
+    It is closed-form sampling that never touches gmsh, as the symmetry and
+    geometry-hash reads are, and Build and Solve wait on its answer. The child
+    runs one build at a time, so queueing there would make the fit wait for a
+    whole density pass or mesh that an earlier edit started.
+    """
+
+    return await asyncio.to_thread(_assembly_front_context_sync, design.model_dump(mode="json"))
 
 
 def _estimate_design_sync(design_dump: dict[str, Any], cancel_cb: CancelCallback | None = None) -> dict[str, Any]:

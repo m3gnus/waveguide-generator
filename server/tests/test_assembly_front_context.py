@@ -13,6 +13,7 @@ change of the placement contract.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import os
@@ -21,7 +22,8 @@ from pathlib import Path
 import pytest
 
 from server.design.schema import DesignConfig
-from server.mesh.builder import AssemblyRefusal, _assembly_front_context_sync, _build_assembly_sync, assembly_mesher_config
+from server.mesh.builder import AssemblyRefusal, _assembly_front_context_sync, _build_assembly_sync, assembly_front_context, assembly_mesher_config
+from server.mesh.child import get_mesher_child
 
 FIXTURE = Path(__file__).resolve().parents[2] / "frontend/src/sketch/adapters/frontView.fixture.json"
 HORN = {
@@ -132,3 +134,16 @@ def test_standalone_source_assembly_has_a_clear_refusal(with_woofer):
         assembly_mesher_config(DesignConfig.model_validate(dump))
     assert "inner_points" not in str(refused.value)
     assert _assembly_front_context_sync(dump) == {"refusal": str(refused.value)}
+
+
+def test_the_fit_answers_while_the_mesher_child_is_busy():
+    """The front context must not queue behind a density pass or a mesh build."""
+
+    host = get_mesher_child()
+    assert host._serial.acquire(timeout=5)
+    try:
+        design = DesignConfig.model_validate({**copy.deepcopy(HORN), "assembly": copy.deepcopy(BEFORE)})
+        context = asyncio.run(asyncio.wait_for(assembly_front_context(design), timeout=10))
+    finally:
+        host._serial.release()
+    assert "clearances" in context

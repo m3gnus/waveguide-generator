@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FRONT_CONTEXT_LIMIT_MS } from '../api/assembly';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
 import { assemblyContentKey, resetAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
@@ -11,6 +12,7 @@ const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '
 
 describe('assembly Solve press', () => {
   beforeEach(() => { counter = 0; resetDesignStore(); resetAssemblyBuild(); resetSolveOptionsStore(); });
+  afterEach(() => { vi.useRealTimers(); });
 
   it('binds the check, the build and the press to one revision', async () => {
     const { assembly } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
@@ -39,6 +41,35 @@ describe('assembly Solve press', () => {
       return new Response(JSON.stringify({ minimum_clearance_mm: 0.1, clearances: { [id]: { mouth_mm: 10, baffle_edge_mm: -30, woofers: {} } } }), { status: 200 });
     }) as unknown as typeof fetch;
     await expect(prepareAssemblySolve(fetcher, () => 'p1')).rejects.toThrow('Woofer 1 overlaps the edge of the baffle by 30 mm.');
+    expect(asked).toEqual(['/api/models/assembly/context']);
+  });
+
+  it('leaves the fit to the build when the check never answers, and shows what the build refuses', async () => {
+    vi.useFakeTimers();
+    const { assembly } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });
+    const asked: string[] = [];
+    const fetcher = ((url: string) => {
+      asked.push(url);
+      return url.endsWith('/context') ? new Promise<Response>(() => {})
+        : Promise.resolve(new Response(JSON.stringify({ error: { code: 'assembly_refused', message: 'A woofer opening is too close to the horn mouth or baffle edge.' } }), { status: 422 }));
+    }) as unknown as typeof fetch;
+    const pressed = prepareAssemblySolve(fetcher, () => 'p1');
+    const settled = expect(pressed).rejects.toThrow('too close to the horn mouth');
+    await vi.advanceTimersByTimeAsync(FRONT_CONTEXT_LIMIT_MS);
+    await settled;
+    expect(asked).toEqual(['/api/models/assembly/context', '/api/models/assembly/compile']);
+  });
+
+  it('does not build a design the check refuses', async () => {
+    const { assembly } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });
+    const asked: string[] = [];
+    const fetcher = (async (url: string) => {
+      asked.push(url);
+      return new Response(JSON.stringify({ error: { code: 'assembly_refused', message: 'Set an enclosure depth.' } }), { status: 422 });
+    }) as unknown as typeof fetch;
+    await expect(prepareAssemblySolve(fetcher, () => 'p1')).rejects.toThrow('Set an enclosure depth.');
     expect(asked).toEqual(['/api/models/assembly/context']);
   });
 

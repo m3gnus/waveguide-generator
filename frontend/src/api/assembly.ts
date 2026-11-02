@@ -51,9 +51,9 @@ export type AssemblyCompileResult =
   | { status: 'published'; reused: boolean; model: ImportedModelSummary; prepared: CompiledAssembly }
   | { status: 'superseded' };
 
-const post = <T>(path: string, body: unknown, fetcher: typeof fetch, what: string) =>
+const post = <T>(path: string, body: unknown, fetcher: typeof fetch, what: string, signal?: AbortSignal) =>
   requestImportedModel<T>(path, fetcher, what, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...(signal ? { signal } : {}),
   });
 
 /**
@@ -64,8 +64,25 @@ export function assemblyProblemText(reason: unknown, fallback: string): string {
   return reason instanceof ImportedModelApiError && reason.code !== null ? reason.message : fallback;
 }
 
-export const fetchAssemblyContext = (design: Record<string, unknown>, fetcher: typeof fetch = fetch) =>
-  post<AssemblyFrontContext>('/api/models/assembly/context', { design }, fetcher, 'The front view');
+/** Whether a failed front context is the server's refusal of the design, not a check that could not run. */
+export const assemblyContextRefused = (reason: unknown) => reason instanceof ImportedModelApiError && reason.code === 'assembly_refused';
+
+/** The most one fit check may take; Build and Solve wait on it. The answer normally takes well under 100 ms. */
+export const FRONT_CONTEXT_LIMIT_MS = 5000;
+
+/** The solver-free context of a design, or a rejection within `FRONT_CONTEXT_LIMIT_MS`. */
+export function fetchAssemblyContext(design: Record<string, unknown>, fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<AssemblyFrontContext> {
+  const request = new AbortController();
+  signal?.addEventListener('abort', () => request.abort(), { once: true });
+  return new Promise((resolve, reject) => {
+    const limit = setTimeout(() => {
+      reject(new Error(`No front context after ${FRONT_CONTEXT_LIMIT_MS} ms.`));
+      request.abort();
+    }, FRONT_CONTEXT_LIMIT_MS);
+    post<AssemblyFrontContext>('/api/models/assembly/context', { design }, fetcher, 'The front view', request.signal)
+      .then(resolve, reject).finally(() => clearTimeout(limit));
+  });
+}
 
 export const compileAssembly = (body: { design: Record<string, unknown>; design_uid: string; design_name: string;
   design_revision: number; build_session: string },

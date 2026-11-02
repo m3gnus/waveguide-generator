@@ -222,19 +222,24 @@ function bafflePlaces(radius: number, context: Context): Centre[] {
   return axis(baffle.x0_mm, baffle.x1_mm).flatMap(x => ys.map(y => ({ x, y }))).sort((a, b) => Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y));
 }
 
+/** One search per server answer: a context never changes, and the panel asks on every render. */
+const foundSpots = new WeakMap<Context, Map<number, Centre | null>>();
+
 /**
  * A centre where a new woofer fits, or null when none turned up: beside the
  * mouth by preference, otherwise a coarse search of the baffle. Null is grounds
  * for guidance, never for closing Free position: a finer place can still exist.
  */
 function freeSpot(radius: number, context: Context): Centre | null {
+  const found = foundSpots.get(context) ?? new Map<number, Centre | null>();
+  foundSpots.set(context, found);
+  if (found.has(radius)) return found.get(radius)!;
   const taken = context.woofers ?? [];
-  for (const side of ['below', 'above'] as const) {
-    const centre = anchoredCentre(side, radius, DEFAULT_WOOFER_GAP_MM, context);
-    if (centre && fitsAt(centre, radius, context, taken)) return centre;
-  }
-  if (!context.mouth_outline_mm?.length) return null;
-  return bafflePlaces(radius, context).find(centre => fitsAt(centre, radius, context, taken)) ?? null;
+  const beside = (['below', 'above'] as const).map(side => anchoredCentre(side, radius, DEFAULT_WOOFER_GAP_MM, context))
+    .find(centre => centre && fitsAt(centre, radius, context, taken));
+  const spot = beside ?? (context.mouth_outline_mm?.length ? bafflePlaces(radius, context).find(centre => fitsAt(centre, radius, context, taken)) ?? null : null);
+  found.set(radius, spot);
+  return spot;
 }
 
 /** Where a free woofer starts: a place that fits, or the clearest place there is, for the user to move. */

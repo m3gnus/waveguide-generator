@@ -1,6 +1,7 @@
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FRONT_CONTEXT_LIMIT_MS } from '../api/assembly';
 import fixture from '../sketch/adapters/frontView.fixture.json';
 import { addWoofer, emptyAssembly, type DesignAssembly } from '../stores/assembly';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
@@ -183,6 +184,8 @@ describe('looking at a design without an assembly', () => {
 });
 
 describe('front workspace status', () => {
+  const CHECKING = 'Checking that the woofers fit on the baffle…', UNCHECKED = 'WG could not check the fit. Build and Solve check it themselves.';
+  const status = () => document.querySelector('.front-footer [role="status"]')!.textContent;
   const failing = (status: number, body: unknown = {}) => (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
   const mountWith = async (with_fetcher: typeof fetch) => {
     await act(async () => root.render(<FrontWorkspace onClose={vi.fn()} fetcher={with_fetcher}/>));
@@ -221,7 +224,7 @@ describe('front workspace status', () => {
     const context = { ...fixture.before.context, minimum_clearance_mm: 0.1, clearances: { [W1]: { mouth_mm: 10, baffle_edge_mm: -30, woofers: {} } } };
     await mountWith((async () => new Response(JSON.stringify(context), { status: 200 })) as unknown as typeof fetch);
     expect(document.body.textContent).toContain('Does not fit');
-    expect(document.body.textContent).toContain('Fix what does not fit to build or solve.');
+    expect(status()).toContain('Reduce Radius');
     expect(button('Build').disabled).toBe(true);
     expect(button('Solve').disabled).toBe(true);
     expect(button('Build').title).toContain('Reduce Radius');
@@ -232,7 +235,7 @@ describe('front workspace status', () => {
     const pending = (() => new Promise<Response>(resolve => { answer = resolve; })) as unknown as typeof fetch;
     await act(async () => root.render(<FrontWorkspace onClose={vi.fn()} fetcher={pending}/>));
     await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
-    expect(document.body.textContent).toContain('Checking that everything fits…');
+    expect(status()).toBe(CHECKING);
     expect(button('Build').disabled).toBe(true);
     expect(button('Solve').disabled).toBe(true);
     await act(async () => { answer(new Response(JSON.stringify(fixture.before.context), { status: 200 })); });
@@ -240,13 +243,70 @@ describe('front workspace status', () => {
     // An edit makes that answer old at once, before the next one arrives.
     act(() => useDesignStore.getState().updateValue('enclosure.space_b', 40));
     expect(button('Build').disabled).toBe(true);
-    expect(document.body.textContent).toContain('Checking that everything fits…');
+    expect(status()).toBe(CHECKING);
   });
 
-  it('says so when the fit cannot be checked, and keeps Build and Solve held', async () => {
-    await mountWith((async () => new Response('', { status: 502 })) as unknown as typeof fetch);
-    expect(document.body.textContent).toContain('WG could not check the fit. Press Try again.');
+  it('asks again when the revision moves on, even with the same design', async () => {
+    await mountWith(fetcher);
+    expect(button('Build').disabled).toBe(false);
+    const asked = requests.length;
+    act(() => useDesignStore.setState(state => ({ designRevision: state.designRevision + 1 })));
     expect(button('Build').disabled).toBe(true);
+    await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
+    expect(requests.length).toBe(asked + 1);
+    expect(button('Build').disabled).toBe(false);
+  });
+
+  it('holds Build and Solve no longer than the limit when the check never answers', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const silent = ((_url: string, init?: RequestInit) => { signals.push(init!.signal!); return new Promise<Response>(() => {}); }) as typeof fetch;
+    await act(async () => root.render(<FrontWorkspace onClose={vi.fn()} fetcher={silent}/>));
+    await act(() => vi.advanceTimersByTimeAsync(FRONT_CONTEXT_DELAY_MS + FRONT_CONTEXT_LIMIT_MS - 1));
+    expect(button('Build').disabled).toBe(true);
+    expect(status()).toBe(CHECKING);
+    await act(() => vi.advanceTimersByTimeAsync(2));
+    expect(signals[0].aborted).toBe(true);
+    expect(status()).toBe(UNCHECKED);
+    expect(button('Build').disabled).toBe(false);
+    expect(button('Try again')).toBeTruthy();
+  });
+
+  it('checks again from Try again, and a refusal that answer brings holds', async () => {
+    const context = { ...fixture.before.context, minimum_clearance_mm: 0.1, clearances: { [W1]: { mouth_mm: -3, woofers: {} } } };
+    let answers = 0;
+    await mountWith((async () => ++answers === 1 ? new Response('', { status: 502 }) : new Response(JSON.stringify(context), { status: 200 })) as unknown as typeof fetch);
+    expect(button('Build').disabled).toBe(false);
+    await act(async () => { button('Try again').click(); });
+    expect(button('Build').disabled).toBe(true);
+    expect(status()).toBe(CHECKING);
+    await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
+    expect(status()).toContain('overlaps the mouth');
+    expect(button('Build').disabled).toBe(true);
+  });
+
+  it('does not refuse on an answer about an earlier revision', async () => {
+    const context = { ...fixture.before.context, minimum_clearance_mm: 0.1, clearances: { [W1]: { mouth_mm: -3, woofers: {} } } };
+    let answers = 0;
+    await mountWith((async () => ++answers === 1 ? new Response(JSON.stringify(context), { status: 200 }) : new Response('', { status: 502 })) as unknown as typeof fetch);
+    expect(button('Build').disabled).toBe(true);
+    act(() => useDesignStore.getState().updateValue('enclosure.space_b', 40));
+    await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
+    expect(status()).toBe(UNCHECKED);
+    expect(button('Build').disabled).toBe(false);
+  });
+
+  it('keeps Build and Solve held by a refusal, with the reason beside them', async () => {
+    await mountWith(failing(422, { error: { code: 'assembly_refused', message: 'Set an enclosure depth.' } }));
+    expect(status()).toBe('Set an enclosure depth.');
+    expect(button('Build').disabled).toBe(true);
+    expect(button('Solve').disabled).toBe(true);
+  });
+
+  it('leaves the fit to the build when it cannot be checked', async () => {
+    await mountWith((async () => new Response('', { status: 502 })) as unknown as typeof fetch);
+    expect(status()).toBe(UNCHECKED);
+    expect(button('Build').disabled).toBe(false);
   });
 
   it('offers the margin that makes room for a first woofer, and only applies it when asked', async () => {
