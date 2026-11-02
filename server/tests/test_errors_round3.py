@@ -262,7 +262,7 @@ def test_catalog_rejects_phantoms_and_covers_prose():
         for filename in root.rglob("*.py"):
             if "tests" in filename.parts:
                 continue
-            tree = ast.parse(filename.read_text())
+            tree = ast.parse(filename.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
                     continue
@@ -292,7 +292,7 @@ def test_all_authored_ingest_refusals_pass_the_shared_guard():
     from server.cadlink.intake import ingest
     from server.cadlink.wglink_protocol import user_text_violations
 
-    tree = ast.parse(Path(ingest.__file__).read_text())
+    tree = ast.parse(Path(ingest.__file__).read_text(encoding="utf-8"))
 
     # Exercise every authored user_worded sentence, including formatted region
     # names. Dynamic scope-owner messages are covered by its admission tests.
@@ -455,8 +455,8 @@ def test_ui_catalog_matches_the_installed_mesher_package(tmp_path):
         text=True,
         check=True,
     )
-    assert json.loads(output.read_text()) == json.loads(
-        files("hornlab_mesher").joinpath("control_labels.json").read_text()
+    assert json.loads(output.read_text(encoding="utf-8")) == json.loads(
+        files("hornlab_mesher").joinpath("control_labels.json").read_text(encoding="utf-8")
     )
 
 

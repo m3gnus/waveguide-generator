@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from server.design.text_import import ath_import_failure
 from server.design_io.api import open_design
 
-CASES = json.loads((Path(__file__).parents[2] / "shared/ath-refusal-fixtures.json").read_text())
+CASES = json.loads((Path(__file__).parents[2] / "shared/ath-refusal-fixtures.json").read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["name"])

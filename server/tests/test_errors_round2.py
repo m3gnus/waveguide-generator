@@ -181,7 +181,7 @@ def test_control_catalog_comes_from_the_mesher_package():
     from importlib.resources import files
     import json
     from hornlab_mesher.controls import CONTROL_CATALOG, ALIASES, control_label
-    assert CONTROL_CATALOG == json.loads(files('hornlab_mesher').joinpath('control_labels.json').read_text())
+    assert CONTROL_CATALOG == json.loads(files('hornlab_mesher').joinpath('control_labels.json').read_text(encoding="utf-8"))
     for key in ALIASES:
         assert control_label(key)
     with pytest.raises(KeyError):

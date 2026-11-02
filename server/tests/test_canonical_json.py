@@ -74,7 +74,7 @@ def serialize(site, value):
     if site["kind"] == "helper":
         module = importlib.import_module(site["path"][:-3].replace("/", "."))
         return getattr(module, site["symbol"])(value)
-    tree = ast.parse((ROOT / site["path"]).read_text())
+    tree = ast.parse((ROOT / site["path"]).read_text(encoding="utf-8"))
     calls = [node for scope, node in serializer_calls(tree) if scope == site["scope"]]
     node = copy.deepcopy(calls[site["ordinal"]])
     node.args = [ast.Name(id="value", ctx=ast.Load())]
@@ -90,7 +90,7 @@ def serialize(site, value):
     return eval(compile(ast.Expression(node), "<serialization boundary>", "eval"), namespace)
 
 
-GOLDENS = json.loads(FIXTURE.read_text())
+GOLDENS = json.loads(FIXTURE.read_text(encoding="utf-8"))
 CASES = [(site, case) for site in GOLDENS["sites"] for case in site["cases"]]
 
 
@@ -123,5 +123,5 @@ def test_no_unowned_sorted_compact_serializers():
                 continue
             if path.relative_to(ROOT).as_posix() == "server/solver/beat_runtime/registry.py":
                 continue  # BEAT host stays import-light; its bytes are pinned by the goldens.
-            for _, node in serializer_calls(ast.parse(path.read_text())):
+            for _, node in serializer_calls(ast.parse(path.read_text(encoding="utf-8"))):
                 assert ast.unparse(node.func) != "json.dumps", f"{path.relative_to(ROOT)}:{node.lineno}"
