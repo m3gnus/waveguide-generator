@@ -238,7 +238,6 @@ function acceptSubmittedLabel(designName: string): void {
 const CAD_VIEWPORT_MISMATCH =
   'The mesh on screen is not the selected model. Select the model again, then press Solve.';
 
-const ASSEMBLY_SOLVE_ELSEWHERE = 'This design has a Sources and baffle assembly. Solve it from Sources and baffle so every enabled source is included.';
 
 /** The complete CAD-mode readiness rule, read from live store state so the
  * Solve button, the keyboard shortcut, and every automatic caller apply one
@@ -403,11 +402,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   useJobAttention(jobs);
   useRecoveryNoticeAttention(recoveryNotices);
 
+  // An assembly solves its compiled model, never the horn alone, on every Solve.
+  const assemblyActive = workspaceMode === 'parametric' && !!design.assembly;
   let currentOptions: SolveOptions | null = null;
   let solveOptionsError: string | null = null;
   try {
     currentOptions = solveOptions.options();
-    if (workspaceMode === 'parametric') {
+    if (workspaceMode === 'parametric' && !assemblyActive) {
       solveOptionsError = nativeSymmetryLimitation(design.formula, currentOptions.symmetry);
       if (solveOptionsError) currentOptions = null;
     }
@@ -421,7 +422,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   } = useSolvePlan(
     design,
     currentOptions,
-    workspaceMode === 'parametric',
+    workspaceMode === 'parametric' && !assemblyActive,
   );
   // Mode owns solve intent. The viewport CAD slot is evidence for the mismatch
   // guard only; an empty slot must still route to the imported blocker so CAD
@@ -503,7 +504,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   const solveAvailable = cadGeometryActive || fileGeometryActive
     ? importedEngine !== null
-    : solvePlan !== null && !solvePlanPending && solvePlanError === null;
+    : assemblyActive || (solvePlan !== null && !solvePlanPending && solvePlanError === null);
   const planPending = cadGeometryActive || fileGeometryActive ? importedPlan.isPending : solvePlanPending;
   const planError = cadGeometryActive || fileGeometryActive ? importedPlan.error ?? (importedPlan.plan && !importedPlan.plan.engine ? importedPlan.plan.reason : null) : solvePlanError;
   // A press during the debounce or request belongs to the current inputs,
@@ -542,9 +543,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision, continuation: ModelSolveContinuation | null = null) => {
     let designName = '';
     const jobId = await acceptSubmission(async () => {
-      if (nextDesign.assembly) {
-        throw new Error(ASSEMBLY_SOLVE_ELSEWHERE);
-      }
       // Solve leaves the live document alone. The server applies BEMPP's
       // closed-wall default to its own stored request, not the editor's design.
       const options = useSolveOptionsStore.getState().options();
@@ -594,15 +592,16 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [acceptSubmission]);
 
   // One press of a design assembly's Solve: one POST /api/models/{id}/solve.
-  const solveDesignAssembly = useCallback(async () => {
+  const solveDesignAssembly = useCallback(async (continuation: ModelSolveContinuation | null = null) => {
     let notice: string | null = null;
     const jobId = await acceptSubmission(async () => {
-      const prepared = await prepareAssemblySolve().catch((error) => { throw importedSolveError(error); });
+      const prepared = await awaitSolveStep(prepareAssemblySolve().catch((error) => { throw importedSolveError(error); }), continuation);
       notice = prepared.notice;
+      if (!beforePost(continuation)) return null;
       return pressModelSolve(prepared.modelId, prepared.press, useDocumentStore.getState().designName, {});
-    }, { arm: true });
+    }, continuation ? { attention: continuation.attention } : { arm: true });
     return { jobId, notice };
-  }, [acceptSubmission, pressModelSolve]);
+  }, [acceptSubmission, beforePost, pressModelSolve]);
 
   // One press of a file model's Solve: one POST /api/models/{id}/solve.
   const solveFileModel = useCallback(async (continuation: ModelSolveContinuation | null = null) => {
@@ -837,6 +836,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       return solveCurrentCadImport(undefined, continuation);
     }
     const current = useDesignStore.getState();
+    if (current.design.assembly) {
+      const { jobId, notice } = await solveDesignAssembly(continuation);
+      if (jobId !== null && notice) setActionError(notice);
+      return jobId === null ? 'pending' as const : 'submitted' as const;
+    }
     return run(current.design, current.designRevision, continuation);
   };
   const solve = useCallback(async (inherited?: number) => {
@@ -876,10 +880,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
     await requested.press(engine, false, attention);
   };
-  // The server's plan refuses an assembly too; the words here are the ones a user can act on.
-  const assemblyBlocker = workspaceMode === 'parametric' && design.assembly ? ASSEMBLY_SOLVE_ELSEWHERE : null;
-  const readiness = assemblyBlocker || solveBlocker || solveOptionsError
-    ? messageBlocker(assemblyBlocker || solveBlocker || solveOptionsError!)
+  const readiness = solveBlocker || solveOptionsError
+    ? messageBlocker(solveBlocker || solveOptionsError!)
     : serverReadiness ?? (planError ? messageBlocker(planError) : null);
   const control = useMemo<SolveControl>(() => ({
     readiness,
@@ -912,6 +914,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ? fileBlocker ?? planError ?? (planPending ? 'Checking the imported mesh…' : 'Solve the prepared imported mesh')
         : solveBlocker
           ? solveBlocker
+          : assemblyActive
+            ? 'Solve this design with its Sources and baffle assembly'
           : cadGeometryActive && importedEngineLabel
             ? `Solve the displayed CAD Link model with ${importedEngineLabel}`
             : solvePlan
@@ -919,7 +923,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable),
-  }), [requested.state, requestCurrent, warming, actionError, engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveDesignAssembly, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
+  }), [requested.state, requestCurrent, warming, actionError, assemblyActive, engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveDesignAssembly, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
 
   useEffect(() => {
     publishSolveControl(control);

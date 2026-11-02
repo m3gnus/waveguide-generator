@@ -603,21 +603,58 @@ describe('solve invocation mutex', () => {
     client.clear();
   });
 
-  it.each(['toolbar', 'Cmd+Enter', 'Ctrl+Enter'])('visibly refuses an ordinary %s solve of an assembly instead of solving only its horn', async press => {
+  it.each(['toolbar', 'Cmd+Enter', 'Ctrl+Enter'])('solves the whole assembly from a %s press, never its horn alone', async press => {
+    const assemblyPress = { prepared_id: 'compiled', client_request_id: 'assembly-0', setup: { schema_version: 1 } };
+    mocks.prepareAssemblySolve.mockResolvedValue({ modelId: 'design-assembly:one', press: assemblyPress, notice: null });
+    mocks.solveModel.mockResolvedValueOnce('job-1');
     await act(async () => {
       const assembly = addWoofer(emptyAssembly(), { anchor: 'below' }).assembly;
       useDesignStore.getState().commitEmbedded({ assembly }, 'step');
       root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
     });
+    const control = solveControlStore.getSnapshot()!;
+    expect(control.disabled).toBe(false);
+    expect(control.title).toContain('Sources and baffle');
     await act(async () => {
-      if (press === 'toolbar') await solveControlStore.getSnapshot()!.solve();
+      if (press === 'toolbar') await control.solve();
       else window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter',
         metaKey: press === 'Cmd+Enter', ctrlKey: press === 'Ctrl+Enter', bubbles: true, cancelable: true }));
     });
-    expect(host.textContent).toContain('Solve it from Sources and baffle');
+    await vi.waitFor(() => expect(mocks.solveModel).toHaveBeenCalledTimes(1));
+    expect(mocks.solveModel).toHaveBeenCalledWith('design-assembly:one', assemblyPress);
     expect(mocks.postSolverMesh).not.toHaveBeenCalled();
     expect(mocks.submitDesign).not.toHaveBeenCalled();
+  });
+
+  it('leaves an assembly out of the horn-only plan the server would refuse', async () => {
+    mocks.useRealSolvePlan = true;
+    const fetcher = vi.fn(async (_url: string) => new Response(JSON.stringify(mocks.solvePlan)));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new QueryClient();
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: addWoofer(emptyAssembly(), { anchor: 'below' }).assembly }, 'step');
+      root.render(<QueryClientProvider client={client}><JobsCoordinator><SolveActions/></JobsCoordinator></QueryClientProvider>);
+    });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(fetcher.mock.calls.filter(([url]) => url.endsWith('/api/solve/plan'))).toHaveLength(0);
+    expect(solveControlStore.getSnapshot()!.disabled).toBe(false);
+    client.clear();
+  });
+
+  it('says a toolbar assembly solve that cannot build, and the assembly notice when it can', async () => {
+    mocks.prepareAssemblySolve.mockRejectedValueOnce(new Error('The woofer does not fit. Open Sources and baffle to fix it.'));
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: addWoofer(emptyAssembly(), { anchor: 'below' }).assembly }, 'step');
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    expect(solveControlStore.getSnapshot()!.actionError).toContain('The woofer does not fit.');
     expect(mocks.solveModel).not.toHaveBeenCalled();
+    mocks.prepareAssemblySolve.mockResolvedValueOnce({ modelId: 'design-assembly:one', press: { prepared_id: 'compiled', client_request_id: 'assembly-3', setup: { schema_version: 1 } }, notice: 'This engine solves every radiator at prescribed velocity.' });
+    mocks.solveModel.mockResolvedValueOnce('job-1');
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    expect(mocks.solveModel).toHaveBeenCalledTimes(1);
+    expect(solveControlStore.getSnapshot()!.actionError).toContain('prescribed velocity');
   });
 
   it('asks Solve anyway when an assembly mesh is over the limit, and sends the override', async () => {

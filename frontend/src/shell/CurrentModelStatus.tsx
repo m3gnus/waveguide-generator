@@ -73,6 +73,8 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
     || control?.actionError?.endsWith(status.message) || control?.preparationError?.endsWith(status.message));
   const solveButton = <button type="button" className="btn-primary" disabled={!control || control.disabled} title={control?.title ?? 'Solve is not available here.'} onClick={() => void control?.solve()}>Solve</button>;
   if (activeOnly && (!pending || !control) && !terminalFailure && status.kind !== 'running' && status.kind !== 'preparing') return null;
+  // A disabled Solve always says why, before anyone presses it.
+  const solveRefusal = actions && control?.disabled && !control.submitting && !pending ? control.title : null;
   const controls = actions || pending ? <>
     {pending && (!engineGate || terminalFailure) && <SolveProgressView showReadiness readiness={readiness}/>}
     {actions && (status.kind === 'failed' && latestJob
@@ -90,6 +92,7 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
       {latestJob && (status.kind === 'preparing' || status.kind === 'running')
         ? <SolveProgressView job={latestJob} variant="compact"/>
         : diagnosticCovered || (pending && !terminalFailure) ? null : status.message}
+      {solveRefusal && <div className="disabled-reason">{solveRefusal}</div>}
     </Notice>
   </div>;
 }

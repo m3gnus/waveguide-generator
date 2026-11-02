@@ -248,6 +248,22 @@ describe('results run coherence', () => {
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: null });
   });
 
+  it('says why Solve is disabled beside the disabled Solve, before anyone presses it', async () => {
+    const actual = await vi.importActual<typeof import('../jobs/showJobModel')>('../jobs/showJobModel');
+    modelMocks.showJobModel.mockImplementation(actual.showJobModel);
+    const solved = designForFamily('OSSE');
+    solved.L = 321;
+    const older = job('archive', 4, solved);
+    useDesignStore.getState().updateField('R', 180);
+    publishJobs([older]);
+    compareSelection.setPrimary(older.id);
+    vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve: vi.fn(), disabled: true, title: 'The directivity settings are not valid.' } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
+
+    await act(async () => { root.render(<ResultsPanel/>); });
+    expect(host.textContent).toContain('Not solved yet');
+    expect(host.querySelector('.current-model-status .disabled-reason')?.textContent).toBe('The directivity settings are not valid.');
+  });
+
   it('marks an edited-since run on its chip and offers restore and solve', async () => {
     const actual = await vi.importActual<typeof import('../jobs/showJobModel')>('../jobs/showJobModel');
     modelMocks.showJobModel.mockImplementation(actual.showJobModel);
