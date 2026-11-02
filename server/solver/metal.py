@@ -23,6 +23,7 @@ import numpy as np
 
 from hornlab_sim.methods import driver_coupling, radiation_impedance
 
+from server.cadlink.interpretation.domain_interpretation import source_completion_factors
 from server.jobs.models import (
     ImportedGeometrySource,
     passive_cardioid_apertures as _passive_cardioid_apertures,
@@ -75,6 +76,7 @@ from .formulation import (
 from .infinite_baffle import require_coupled_aperture_tag
 from .imported import (
     imported_anchor_frame,
+    imported_domain_planes,
     imported_record_symmetry,
     config_supports_source_axes,
     has_axial_channel,
@@ -1171,6 +1173,39 @@ def _run_passive_cardioid_campaign(
         frequencies_hz=np.asarray(result.frequencies_hz)[result_indices],
         impedance_matrix=np.asarray(result.impedance_matrix)[result_indices],
     )
+    # The request identifies the meshed port faces, before symmetry completes
+    # any cut apertures. Keep that identity check on the measured mesh area.
+    actual_bem_area = sum(float(result.aperture_area_m2[name]) for name in port_names)
+    expected_bem_area = float(geometry.bem_port_area_m2)
+    if not np.isclose(actual_bem_area, expected_bem_area, rtol=1.0e-6, atol=1.0e-12):
+        raise ValueError(
+            "passive-cardioid BEM port area does not match the requested face identity: "
+            f"matrix={actual_bem_area:.12g} m^2, request={expected_bem_area:.12g} m^2"
+        )
+
+    planes = imported_domain_planes(record)
+    if planes:
+        completion = source_completion_factors(
+            {"msh_text": mesh_path.read_text(encoding="utf-8"), "source_tags": source_tags},
+            planes,
+        )
+        factors = np.asarray([
+            completion.get(name if name in port_names else mf_source_id, 1.0)
+            for name in result.aperture_names
+        ])
+        if np.any(factors != 1.0):
+            # Z maps source volume flow to average receiver pressure. Complete
+            # each physical aperture on the same basis as the driver: divide
+            # source columns by A_completed/A_mesh; receiver averages stay put.
+            result = replace(
+                result,
+                aperture_area_m2={
+                    name: float(result.aperture_area_m2[name]) * factor
+                    for name, factor in zip(result.aperture_names, factors, strict=True)
+                },
+                impedance_matrix=result.impedance_matrix / factors[None, None, :],
+            )
+    actual_bem_area = sum(float(result.aperture_area_m2[name]) for name in port_names)
     diagnostics = radiation_impedance.matrix_diagnostics(result)
     if cancellation_callback:
         cancellation_callback()
@@ -1181,13 +1216,6 @@ def _run_passive_cardioid_campaign(
             "Completed passive-cardioid radiation-impedance campaign",
         )
 
-    actual_bem_area = sum(float(result.aperture_area_m2[name]) for name in port_names)
-    expected_bem_area = float(geometry.bem_port_area_m2)
-    if not np.isclose(actual_bem_area, expected_bem_area, rtol=1.0e-6, atol=1.0e-12):
-        raise ValueError(
-            "passive-cardioid BEM port area does not match the requested face identity: "
-            f"matrix={actual_bem_area:.12g} m^2, request={expected_bem_area:.12g} m^2"
-        )
     return {
         "result": result,
         "diagnostics": diagnostics,
