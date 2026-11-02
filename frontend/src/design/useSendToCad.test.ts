@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readsPlain } from '../api/httpError';
+import { expectNoJargon } from '../testing/expectNoJargon';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import type { CadOperationSummary } from '../api/cadOperations';
@@ -8,6 +9,18 @@ import { fusionDeliveryWords, PICKUP_WAIT_MS, sentToCadMessage, watchFusionDeliv
 const operation = (fusionDelivery: CadOperationSummary['fusionDelivery'], kind = 'insert_link') => ({ kind, fusionDelivery });
 
 describe('fusionDeliveryWords', () => {
+  it('keeps every delivery line to the CAD wording rules', () => {
+    for (const kind of ['insert_link', 'update_link']) {
+      for (const state of ['waiting', 'claimed', 'applied', 'refused', 'expired', 'uncertain', 'cancelled'] as const) {
+        expectNoJargon(fusionDeliveryWords({ operation: operation(state, kind) }).text);
+      }
+    }
+    for (const fusion of [{ processRunning: false }, { processRunning: true, wgRequestPickup: 1 },
+      { processRunning: true, addinDeliveryVersion: 3 }, { processRunning: true }]) {
+      expectNoJargon(fusionDeliveryWords({ waited: true, fusion }).text);
+    }
+  });
+
   it.each<[string, FusionDeliveryFacts, string]>([
     ['waiting', {}, 'Waiting for Fusion to open this model.'],
     ['waiting update', { update: true }, 'Waiting for Fusion to update this model.'],
