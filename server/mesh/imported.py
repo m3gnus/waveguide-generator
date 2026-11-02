@@ -987,7 +987,9 @@ def declared_disc_reduction(
             f"that plane crosses this throat's disc {offset:+.4g} mm off its "
             f"centre (disc reach {reach:.4g} mm). A declared cut is supported "
             "only where it misses a source or passes through its centre; this "
-            "one would leave a partial disc of no known area"
+            "one would leave a partial disc of no known area",
+            user_message="The symmetry cut crosses the throat away from its centre.",
+            next_step="Send the whole model, or move the cut through the throat centre before sending it again.",
         )
     if len(cuts) == 2:
         skew = abs(float(np.dot(np.asarray(cuts[0]), np.asarray(cuts[1]))))

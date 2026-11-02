@@ -124,7 +124,7 @@ def test_known_mesh_crash_remedy_survives():
 
 def test_assembly_program_fault_keeps_500(monkeypatch, tmp_path):
     import asyncio
-    import httpx
+    import httpx2 as httpx
     from test_models_api import app_for
     from server.cadlink.store import CadLinkStore
     from server.jobs import models_api
@@ -204,7 +204,7 @@ def test_assembly_owner_keeps_the_placement_prefix_and_refusal(monkeypatch):
 
 def test_assembly_known_mesher_crash_keeps_422_and_its_fix(tmp_path, monkeypatch):
     import asyncio
-    import httpx
+    import httpx2 as httpx
     from test_models_api import app_for
     from server.cadlink.store import CadLinkStore
     from server.jobs import models_api

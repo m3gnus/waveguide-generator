@@ -532,7 +532,7 @@ def test_auto_fem_role_asymmetry_drops_only_unsupported_candidate_planes(tmp_pat
     assert all(not note["blocking"] for note in notes)
     if failed_plane == "x0":
         assert notes[1]["plane"] == "y0"
-        assert "y0-only FEM" in notes[1]["reason"]
+        assert notes[1]["reason"].endswith("This solve cannot use only a horizontal symmetry cut. Send the whole model, or include the vertical symmetry cut when preparing it.")
     domain = read_fem_region_domain(read_verified_fem_region_mesh(record, region["region_id"]), region["region_id"])
     xyz = domain.points_mm[domain.tetrahedra]
     assert np.abs(np.linalg.det(xyz[:, 1:] - xyz[:, :1])).sum() / 6 == pytest.approx(24000 / 2 ** len(expected))
@@ -540,8 +540,12 @@ def test_auto_fem_role_asymmetry_drops_only_unsupported_candidate_planes(tmp_pat
 
 def test_author_cut_y_only_is_refused_at_ingest(tmp_path):
     bundle, _, _ = symmetry_bundle(tmp_path / "returns", ("y0",), authored=True, asymmetric_x=True)
-    with pytest.raises(ValueError, match="y0-only FEM returns cannot be solved by BEAT[.]"):
+    with pytest.raises(ValueError, match="This solve cannot use only a horizontal symmetry cut[.]") as caught:
         _ingest(bundle, tmp_path)
+    assert caught.value.stage == "stage 6 symmetry"
+    assert caught.value.symmetry_plane == "y0"
+    assert caught.value.user_worded
+    assert str(caught.value).endswith("Send the whole model, or include the vertical symmetry cut when preparing it.")
 
 
 def test_negative_author_cut_fem_return_has_accurate_refusal(tmp_path):
@@ -735,7 +739,9 @@ def test_y_only_refusal_names_supported_export_remedy():
     with pytest.raises(ingest.IngestRefusal) as raised:
         ingest._refuse_fem_domain({'scope': {'fem_regions': [_region()]}}, {}, ['y0'])
     message = str(raised.value)
-    assert 'Export without the y0 cut' in message and 'keep the x0 cut' in message
+    assert message.endswith('This solve cannot use only a horizontal symmetry cut. Send the whole model, or include the vertical symmetry cut when preparing it.')
+    assert raised.value.stage == 'stage 6 symmetry'
+    assert raised.value.user_worded
     assert 'Force full domain' not in message
     assert raised.value.symmetry_plane == 'y0'
 

@@ -79,6 +79,10 @@ def ath_import_failure(reason: Exception, *, setting: str | None = None) -> AthI
     else:
         settings = [setting] if setting in _ATH_SETTING_FIXES else []
     if not settings:
+        from hornlab_mesher.errors import UserRefusal
+
+        if isinstance(reason, UserRefusal):
+            return AthImportGuidance(f"{reason.user_message} {reason.next_step}".strip())
         return AthImportGuidance(
             "WG could not import this ATH configuration. Change or remove unsupported "
             "ATH settings in the source file, then re-import it.")

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -391,8 +391,9 @@ def test_arc_control_names_and_applied_remedy_cross_http(tmp_path):
 def test_existing_ath_public_guidance_is_not_wrapped_again(monkeypatch):
     from server.design import textcfg
 
-    error = textcfg.TextConfigError("original diagnostic")
-    error.public_message = "The ATH setting needs a change. Change the named ATH setting."
+    from server.design.text_import import AthImportGuidance
+    error = textcfg.TextConfigError(AthImportGuidance(
+        "The ATH setting needs a change. Change the named ATH setting."))
 
     def refuse(*args, **kwargs):
         raise error

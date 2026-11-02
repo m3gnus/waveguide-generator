@@ -233,7 +233,15 @@ def test_geometry_oracle_without_solver(name: str, tmp_path: Path):
                     data,
                     prep_options={"symmetry_mode": "auto"},
                 )
-            assert str(caught.value) == expected["message"]
+            if name == "onshape-linked":
+                assert caught.value.stage == "stage 2 project gate"
+                assert caught.value.user_worded
+                assert str(caught.value) == (
+                    "This model belongs to the WG design it was exported from (a design that is not in this workspace). "
+                    "Open its workspace and choose that design from File → CAD-linked designs before preparing it"
+                )
+            else:
+                assert str(caught.value) == expected["message"]
             return
         record = _run_in_gmsh_session(
             ingest.ingest_bundle,

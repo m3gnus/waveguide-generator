@@ -453,9 +453,9 @@ def test_browser_prepare_tells_wgs_own_failure_calmly_and_records_the_raw_text(m
     recorded.clear()
     # Modelling mistakes the user fixes keep their words and are not recorded.
     for modelling in (
-        IngestRefusal("stage 2 project gate", "the selected CAD return belongs to another CAD-linked project"),
-        IngestRefusal("stage 5 role resolution", "role resolution: required source 'HF' is missing"),
-        IngestRefusal("stage 5 role resolution", "role resolution: source 'HF' has no geometric throat candidate"),
+        IngestRefusal("stage 2 project gate", "the selected CAD return belongs to another CAD-linked project", user_worded=True),
+        IngestRefusal("stage 5 role resolution", "role resolution: required source 'HF' is missing", user_worded=True),
+        IngestRefusal("stage 5 role resolution", "role resolution: source 'HF' has no geometric throat candidate", user_worded=True),
         IngestRefusal("stage 7 meshing", "This return declares FEM regions; this Waveguide Generator has FEM "
                       "regions turned off.", user_worded=True),
         IngestRefusal("stage 7 meshing", "Horn: FEM symmetry supports only x0 and y0.", user_worded=True),
@@ -565,14 +565,18 @@ def test_source_model_rules_and_inconsistent_step_selectors_have_one_classificat
             _advanced_face_identifier_surfaces([999999], [17], [1])
         source_error = caught.value
     else:
-        source_error = RoleResolutionError("role resolution: required source 'HF' is missing")
+        source_error = RoleResolutionError("role resolution: required source 'HF' is missing",
+                                           user_message="A required driver has no selected faces in this model.",
+                                           next_step="Select its driver faces, then send the model again.")
     with pytest.raises(RoleResolutionError) as transported:
         _reraise_typed(ChildRefusal(
             "stage 7 meshing", str(source_error), error_type="RoleResolutionError",
-            details={"invalid_selector": source_error.invalid_selector},
+            details={"invalid_selector": source_error.invalid_selector,
+                     "user_message": source_error.user_message, "next_step": source_error.next_step},
         ))
     try:
-        raise IngestRefusal("stage 5 role resolution", str(transported.value)) from transported.value
+        raise IngestRefusal("stage 5 role resolution", str(transported.value),
+                                user_worded=bool(transported.value.user_message and transported.value.next_step)) from transported.value
     except IngestRefusal as refusal:
         error = refusal
     recorded = []

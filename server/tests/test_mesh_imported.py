@@ -694,8 +694,13 @@ def test_a_cut_that_clips_a_disc_off_centre_is_refused_with_the_measurement() ->
     """There is no honest fraction for a circular segment, so none is invented."""
 
     contract = _throat_contract(centre=(0.0, 4.0, 0.0))  # disc reaches 10 mm
-    with pytest.raises(RoleResolutionError, match=r"crosses this throat's disc \+4 mm off its centre"):
+    with pytest.raises(RoleResolutionError, match=r"crosses this throat's disc \+4 mm off its centre") as caught:
         declared_disc_reduction(contract, ["y0"])
+    from server.preview.errors import user_error_message
+    assert user_error_message(caught.value) == (
+        "The symmetry cut crosses the throat away from its centre. "
+        "Send the whole model, or move the cut through the throat centre before sending it again."
+    )
 
     removed = _throat_contract(centre=(0.0, -60.0, 0.0))
     with pytest.raises(RoleResolutionError, match="off its centre"):

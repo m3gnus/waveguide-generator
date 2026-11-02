@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI
-import httpx
+import httpx2 as httpx
 import pytest
 
 from server.preview.errors import user_error_message

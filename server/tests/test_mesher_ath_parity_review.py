@@ -16,6 +16,8 @@ from server.design.textcfg import TextConfigError, parse, serialize
 from server.design.throat_stretch import mesher_supports_stretch
 from server.design_io.api import open_design
 from server.preview.translate import design_to_mesher_config
+from server.preview.errors import user_error_message
+import re
 
 
 _V1_STAMP = "; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\n"
@@ -75,7 +77,8 @@ def test_rosse_alias_selects_same_family_and_reaches_capability_gate(family, top
             parse_text_config(text)
         with pytest.raises(TextConfigError) as imported:
             parse(text)
-        assert str(imported.value) == str(direct.value)
+        assert str(imported.value.__cause__) == str(direct.value)
+        assert user_error_message(imported.value) == user_error_message(direct.value)
     parsed = parse(prefix + text)
     assert parsed.design.formula == "R-OSSE"
     assert family not in parsed.extra_blocks
@@ -265,8 +268,14 @@ def test_r_osse_consumed_block_keys_match_real_importer(extra, target):
 ])
 def test_r_osse_refused_block_keys_do_not_become_ignored(family, extra, reason):
     text = _profile(family, extra)
-    with pytest.raises(TextConfigError, match=reason):
+    with pytest.raises(TextConfigError) as imported:
         parse(text)
+    assert re.search(reason, str(imported.value.__cause__ or imported.value))
+    if extra.startswith("Source.Contours"):
+        assert user_error_message(imported.value) == (
+            "“Source.Contours” cannot be imported. Use a single cap or disc throat source. "
+            "Change or remove “Source.Contours” in the source file, then re-import it."
+        )
     if mesher_supports_stretch():
         with pytest.raises(ValueError, match=reason):
             parse_text_config(text)

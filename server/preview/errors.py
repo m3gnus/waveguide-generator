@@ -204,14 +204,14 @@ def public_error_message(exc: BaseException, *, domain_values: bool = True) -> s
                  if isinstance(cause := row.get("ctx", {}).get("error"), BaseException)]
         if words and all(words):
             return " ".join(words)
-    if any(shape in str(exc).lower() for shape in _LIBRARY_DIAGNOSTICS):
-        return None
-    if str(exc).startswith("the acoustic control grid needed for the requested mm resolution"):
-        return "The requested mesh resolution needs too many surface samples. Increase Throat mesh resolution and Mouth mesh resolution to use a coarser mesh."
     # Historical geometry translations are explicit, diagnosed contracts.
     translated = mesher_error_message({"mode": "infinite-baffle"}, str(exc))
     if isinstance(translated, PublicMessage):
         return str(translated)
+    if any(shape in str(exc).lower() for shape in _LIBRARY_DIAGNOSTICS):
+        return None
+    if str(exc).startswith("the acoustic control grid needed for the requested mm resolution"):
+        return "The requested mesh resolution needs too many surface samples. Increase Throat mesh resolution and Mouth mesh resolution to use a coarser mesh."
     # ConfigError is mesher design validation, including during a job mesh stage.
     # Plain ValueError needs a WG domain boundary; solver workers opt out.
     config_error = getattr(sys.modules.get("hornlab_mesher.errors"), "ConfigError", None)

@@ -164,8 +164,14 @@ def test_realized_edge_guard_keeps_v2_millimetres_and_legacy_scaling(monkeypatch
     design.root.mesh.max_edge = Expr(value=8)
     guard = 8 if version in ('ath-2026-09a-v2', 'ath-2026-09a-v3') else 8 * scale
     if edge_mm > guard:
-        with pytest.raises(RuntimeError, match='exceeded mesh.max_edge guard'):
+        with pytest.raises(RuntimeError) as caught:
             mesh_builder._build_sync(design.model_dump(mode='json'))
+        assert 'exceeded mesh.max_edge guard' in str(caught.value.user_refusal)
+        assert caught.value.user_refusal.field == 'Maximum edge guard'
+        assert str(caught.value) == (
+            f'The mesh has an edge of {edge_mm:g} mm, above Maximum edge guard ({guard:g} mm). '
+            'Increase Maximum edge guard, or reduce Throat mesh resolution and Mouth mesh resolution to make smaller triangles.'
+        )
     else:
         result = mesh_builder._build_sync(design.model_dump(mode='json'))
         assert result['stats']['max_edge_guard_mm'] == guard

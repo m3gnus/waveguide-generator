@@ -86,8 +86,14 @@ def test_active_ath_refusal_scan_matches_all_mesher_locations(family, marker, pl
                   top=f"{marker} = {{\nValue = 1\n}}" if placement == "block" else statement if placement == "top" else "")
     with pytest.raises(ValueError) as error:
         parse_text_config(source)
-    with pytest.raises(ValueError, match=re.escape(str(error.value))):
+    with pytest.raises(ValueError) as imported:
         parse(source)
+    assert str(imported.value.__cause__ or imported.value) == str(error.value)
+    if marker == "Source.Contours":
+        assert user_error_message(imported.value) == (
+            "“Source.Contours” cannot be imported. Use a single cap or disc throat source. "
+            "Change or remove “Source.Contours” in the source file, then re-import it."
+        )
 
 
 @pytest.mark.parametrize("family", ["OSSE", "R-OSSE", "ROSSE"])
@@ -248,6 +254,7 @@ def test_populated_ath_profile_still_reports_ignored_flat_coefficients():
         parse_text_config(source)
     with pytest.raises(ValueError) as imported:
         parse(source)
-    assert str(imported.value) == str(direct.value)
+    assert str(imported.value.__cause__) == str(direct.value)
+    assert user_error_message(imported.value) == user_error_message(direct.value)
     parsed = parse("; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\n" + source)
     assert {item.key for item in parsed.ignored_profile} >= {"s1", "s2"}

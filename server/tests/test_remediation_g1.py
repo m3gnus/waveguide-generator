@@ -431,10 +431,16 @@ def test_realized_max_edge_guard_rejects_oversized_mesh() -> None:
     )
 
     async def scenario() -> None:
-        with pytest.raises(RuntimeError, match="exceeded mesh.max_edge guard"):
+        with pytest.raises(RuntimeError) as caught:
             await mesh_builder.build_solver_mesh(
                 design, {"mesh_validation_mode": "warn"}
             )
+        assert "exceeded mesh.max_edge guard" in str(caught.value.user_refusal)
+        assert caught.value.user_refusal.field == "Maximum edge guard"
+        assert str(caught.value) == (
+            "The mesh has an edge of 22.6828 mm, above Maximum edge guard (1 mm). "
+            "Increase Maximum edge guard, or reduce Throat mesh resolution and Mouth mesh resolution to make smaller triangles."
+        )
 
     asyncio.run(scenario())
 
