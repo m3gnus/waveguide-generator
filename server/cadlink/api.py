@@ -2053,28 +2053,14 @@ def _fusion_delivery_summary(row: Mapping[str, Any], data_dir: Path,
     return summary
 
 
-def _observe_fusion_operations(state: Any) -> list[dict[str, Any]]:
-    """Use the existing delivery pass to settle pending outbound commands."""
+def _observe_fusion_operations(state: Any) -> None:
+    """Settle outbound commands without consuming their delivery notification."""
     from server.cadlink.fusion.fusion_outcomes import settle_reported_outcomes
     store = state.cadlink_store
-    before = []
-    for kind in FUSION_KINDS:
-        cursor = 0
-        while page := store.operation_page(kind=kind, states=_PENDING_STATES, after_rowid=cursor):
-            for cursor, row in page:
-                before.append(row)
-    if not before:
-        return []
     data_dir = Path(state.data_dir)
     expire_unstarted_insert_handoffs(data_dir,
         record_expired=lambda operation_id: _record_expired_insert(store, operation_id))
     settle_reported_outcomes(store, data_dir)
-    changed = []
-    for previous in before:
-        current = store.get_operation(previous["operation_id"])
-        if current is not None and current != previous:
-            changed.append(_fusion_delivery_summary(current, data_dir))
-    return changed
 
 
 def _operation_detail(store: CadLinkStore, row: Mapping[str, Any], ctx: Any = None) -> dict[str, Any]:
@@ -2346,11 +2332,47 @@ async def _publish_request_status(state: Any, reported: str | None) -> str | Non
     """
 
     try:
-        changed = await asyncio.to_thread(_observe_fusion_operations, state)
+        await asyncio.to_thread(_observe_fusion_operations, state)
         events = getattr(getattr(state, "jobs_runtime", None), "events", None)
         if events is not None:
-            for summary in changed:
-                events.publish({"v": 1, "kind": "cadOperation", "operation": summary})
+            # Only this delivery pass owns what the page has been told. Other
+            # settlers (including GETs) may have changed the ledger already.
+            if not hasattr(state, "cad_fusion_reported"):
+                state.cad_fusion_reported = {}
+                state.cad_fusion_cursors = {}
+            reported_operations = state.cad_fusion_reported
+            cursors = state.cad_fusion_cursors
+            store = state.cadlink_store
+            data_dir = Path(state.data_dir)
+
+            def publish(row: Mapping[str, Any], summary: dict[str, Any]) -> None:
+                operation_id = row["operation_id"]
+                if summary != reported_operations.get(operation_id):
+                    events.publish({"v": 1, "kind": "cadOperation", "operation": summary})
+                if row["state"] in TERMINAL_STATES:
+                    reported_operations.pop(operation_id, None)
+                else:
+                    reported_operations[operation_id] = summary
+
+            # Revisit every unfinished row we have seen, even if another
+            # settler has since made it terminal. Forget it only after push.
+            for operation_id in tuple(reported_operations):
+                row = await asyncio.to_thread(store.get_operation, operation_id)
+                if row is not None:
+                    summary = await asyncio.to_thread(_fusion_delivery_summary, row, data_dir)
+                    publish(row, summary)
+            # Acceptance cursors also discover commands that appeared AND
+            # settled between passes. Advance only after a successful push;
+            # terminal ids need no retained entry or repeated history scan.
+            for kind in FUSION_KINDS:
+                while page := await asyncio.to_thread(
+                    store.operation_page, kind=kind, states=STATES,
+                    after_rowid=cursors.get(kind, 0),
+                ):
+                    for cursor, row in page:
+                        summary = await asyncio.to_thread(_fusion_delivery_summary, row, data_dir)
+                        publish(row, summary)
+                        cursors[kind] = cursor
         publisher = getattr(state, "cad_request_status", None)
         if publisher is None:
             publisher = RequestStatusPublisher(

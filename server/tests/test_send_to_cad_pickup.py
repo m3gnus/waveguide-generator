@@ -10,6 +10,7 @@ import pytest
 from server.cadlink import api
 from server.cadlink.fusion.fusion_outcomes import settle_reported_outcomes
 from server.cadlink.fusion.fusion_status import read_fusion_status
+from server.cadlink.fusion.recovery_api import recovery_notices
 from test_cad_fusion_outcomes import _accept, _heartbeat, _ipc, _store
 
 
@@ -38,7 +39,7 @@ def _state(tmp_path, monkeypatch):
         cad_request_status=SimpleNamespace(tick=lambda _: None))
     async def start(): pass
     monkeypatch.setattr(api, '_preparation_context', lambda _: SimpleNamespace(
-        runtime=SimpleNamespace(start=start), job_store=None))
+        store=store, runtime=SimpleNamespace(start=start), job_store=None))
     return store, state, events
 
 
@@ -84,13 +85,84 @@ def test_existing_delivery_loop_reads_late_completion_without_status_endpoint(mo
     store, state, events = _state(tmp_path, monkeypatch)
     assert api._DELIVERY_INTERVAL_S < 20
     assert asyncio.run(api._publish_request_status(state, None)) is None
-    assert not events and store.get_operation('update-1')['state'] == 'received'
+    assert [event['operation']['fusionDelivery'] for event in events] == ['waiting']
+    assert store.get_operation('update-1')['state'] == 'received'
     # No browser read for 45 seconds; terminal receipt survives the live TTL.
     _report(tmp_path, age=45, outcome='applied')
     assert asyncio.run(api._publish_request_status(state, None)) is None
     assert events[-1]['kind'] == 'cadOperation'
     assert events[-1]['operation']['fusionDelivery'] == 'applied'
     assert store.get_operation('update-1')['state'] == 'accepted'
+
+
+def test_recovery_poll_settles_before_delivery_pass_pushes_applied_once(monkeypatch, tmp_path):
+    store, state, events = _state(tmp_path, monkeypatch)
+    assert asyncio.run(api._publish_request_status(state, None)) is None
+    events.clear()
+    _report(tmp_path, outcome='applied')
+    recovery_notices(store, tmp_path)
+    assert store.get_operation('update-1')['state'] == 'accepted'
+    assert not events
+
+    assert asyncio.run(api._publish_request_status(state, None)) is None
+    assert [event['operation']['fusionDelivery'] for event in events] == ['applied']
+    assert not state.cad_fusion_reported
+    assert asyncio.run(api._publish_request_status(state, None)) is None
+    assert len(events) == 1
+
+
+@pytest.mark.parametrize('route', ['detail', 'list'])
+def test_get_settles_before_delivery_pass_pushes_applied_once(monkeypatch, tmp_path, route):
+    store, state, events = _state(tmp_path, monkeypatch)
+    assert asyncio.run(api._publish_request_status(state, None)) is None
+    events.clear()
+    _report(tmp_path, outcome='applied')
+    if route == 'detail':
+        assert _operation(state)['fusionDelivery'] == 'applied'
+    else:
+        request = SimpleNamespace(app=SimpleNamespace(state=state))
+        result = asyncio.run(api.list_cad_operations(request, pending=False, limit=100))
+        assert result['operations'][0]['fusionDelivery'] == 'applied'
+    assert not events
+    assert asyncio.run(api._publish_request_status(state, None)) is None
+    assert [event['operation']['fusionDelivery'] for event in events] == ['applied']
+    assert asyncio.run(api._publish_request_status(state, None)) is None
+    assert len(events) == 1
+
+
+def test_delivery_pass_pushes_received_to_claimed_once(monkeypatch, tmp_path):
+    _, state, events = _state(tmp_path, monkeypatch)
+    assert asyncio.run(api._publish_request_status(state, None)) is None
+    events.clear()
+    _report(tmp_path, outcome='claimed')
+    assert asyncio.run(api._publish_request_status(state, None)) is None
+    assert [event['operation']['fusionDelivery'] for event in events] == ['claimed']
+    assert events[0]['operation']['attemptGeneration'] == 1
+    assert asyncio.run(api._publish_request_status(state, None)) is None
+    assert len(events) == 1
+
+
+@pytest.mark.parametrize('prior_pass', [False, True])
+def test_delivery_pass_discovers_operation_already_settled_before_first_seen(
+        monkeypatch, tmp_path, prior_pass):
+    store, state, events = _state(tmp_path, monkeypatch)
+    if prior_pass:
+        assert asyncio.run(api._publish_request_status(state, None)) is None
+        _accept(store, operation_id='between-passes')
+    report = _report(tmp_path, outcome='applied')
+    operation_id = 'between-passes' if prior_pass else 'update-1'
+    report['diagnostics']['recentOutcomes'][0]['requestId'] = operation_id
+    (_ipc(tmp_path) / '.fusion-status.json').write_text(json.dumps(report))
+    recovery_notices(store, tmp_path)
+    assert store.get_operation(operation_id)['state'] == 'accepted'
+    events.clear()
+
+    assert asyncio.run(api._publish_request_status(state, None)) is None
+    assert [(event['operation']['operationId'], event['operation']['fusionDelivery'])
+            for event in events] == [(operation_id, 'applied')]
+    assert operation_id not in state.cad_fusion_reported
+    assert asyncio.run(api._publish_request_status(state, None)) is None
+    assert len(events) == 1
 
 
 def test_old_claim_report_is_not_treated_as_a_current_claim(monkeypatch, tmp_path):
