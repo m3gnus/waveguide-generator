@@ -18,11 +18,12 @@ from copy import deepcopy
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import shutil
 import uuid
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, Query, Request
 from fastapi.responses import JSONResponse
@@ -249,6 +250,15 @@ def register_mesh(
         return _register_mesh(store, data_dir, body, validate_record=validate_record, prepared=prepared, commit_guard=commit_guard)
 
 
+def _has_whole_areas(record: Mapping[str, Any], whole_areas_mm2: Mapping[str, float]) -> bool:
+    """A preparation saved before areas were whole drives its driver wrongly: prepare it again."""
+
+    return all(
+        math.isclose(source["observed"]["total_area_mm2"], whole_areas_mm2[source["id"].removeprefix("group_")], rel_tol=1e-9)
+        for source in record["sources"]
+    )
+
+
 def _register_mesh(
     store: Any,
     data_dir: Path,
@@ -277,9 +287,11 @@ def _register_mesh(
     digest = _sha256(solver_text.encode())
     original_digest = _sha256(source_bytes)
     hf_only = all(role == "HF" for role in roles.values())
+    # The areas follow from the transformed mesh, and preparation digests are pinned without them.
+    whole_areas_mm2 = transform["whole_source_areas_mm2"]
     spec = {
         "original_sha256": original_digest,
-        "transform": transform,
+        "transform": {key: value for key, value in transform.items() if key != "whole_source_areas_mm2"},
         "source_tags": sorted(roles) if hf_only else sorted(body.source_tags),
     }
     # HF-only assignments are the old source_tags request, including its
@@ -302,7 +314,7 @@ def _register_mesh(
     candidates = store.find_file_ingests(model_id, spec_digest)
     for row in candidates:
         existing = json.loads(row["record_json"])
-        if _intact(existing, source_bytes, solver_text):
+        if _intact(existing, source_bytes, solver_text) and _has_whole_areas(existing, whole_areas_mm2):
             if validate_record is not None:
                 validate_record(dict(existing))
             store.select_model_ingest(model_id, str(existing["ingest_id"]), commit_guard=commit_guard)
@@ -310,20 +322,13 @@ def _register_mesh(
 
     parent = data_dir / "imports" / "files"
     parent.mkdir(parents=True, exist_ok=True)
-    corners = mesh.points[mesh.triangles]
-    areas_mm2 = (
-        np.linalg.norm(
-            np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]), axis=1
-        )
-        * 0.5e6
-    )
     sources = [
         {
             "id": f"group_{tag}",
             "role": roles[tag],
             "required": True,
             "name": mesh.names.get(tag, "Untagged surface" if tag == 0 else f"Group {tag}"),
-            "observed": {"total_area_mm2": float(areas_mm2[mesh.tags == tag].sum())},
+            "observed": {"total_area_mm2": whole_areas_mm2[str(tag)]},
         }
         for tag in sorted(roles)
     ]

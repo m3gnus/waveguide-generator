@@ -19,6 +19,7 @@ from server.mesh.imported import (
     verify_symmetry_cut,
 )
 from server.mesh.integrity import mesh_integrity_report, mesh_self_intersection_report, on_coordinate_plane
+from server.mesh.surface_topology import completion_factor
 
 class FileMeshRefusal(ImportedMeshError):
     """A file or import setting the user can repair in the meshing tool."""
@@ -410,6 +411,21 @@ def prepare_file_mesh_input(
     return FileMeshPreparation(mesh, transform, declared, candidates, dict(roles or {}), input_triangle_count)
 
 
+def whole_source_areas_mm2(mesh: FileMesh, planes: tuple[str, ...]) -> dict[str, float]:
+    """Each group's area, with what the file's own cuts on ``planes`` took away restored."""
+
+    points_mm = mesh.points * 1000.0
+    corners = points_mm[mesh.triangles]
+    areas = 0.5 * np.linalg.norm(np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]), axis=1)
+    axes = [SYMMETRY_PLANE_AXIS[plane] for plane in planes]
+    return {
+        str(int(tag)): float(areas[mesh.tags == tag].sum()) * completion_factor(
+            points_mm, mesh.triangles[mesh.tags == tag], axes, SYMMETRY_SNAP_TOLERANCE_MM,
+        )
+        for tag in np.unique(mesh.tags)
+    }
+
+
 def finish_file_mesh_preparation(
     preparation: FileMeshPreparation, *, cancel_cb: Any = None,
 ) -> tuple[FileMesh, dict[str, Any]]:
@@ -418,6 +434,9 @@ def finish_file_mesh_preparation(
         cancel_cb()
     mesh, transform = preparation.mesh, preparation.transform
     declared, candidates, roles = preparation.declared_planes, preparation.candidate_planes, preparation.roles
+    # Before any cut of WG's own: as in a CAD return, a source's recorded area
+    # covers what the file holds, and only a file already cut needs completing.
+    transform["whole_source_areas_mm2"] = whole_source_areas_mm2(mesh, declared)
     if not candidates:
         if cancel_cb is not None:
             cancel_cb()

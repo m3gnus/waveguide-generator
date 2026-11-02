@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from server.cadlink.store import CadLinkStore, StaleAttempt, file_model_id
-from server.jobs.models_api import MeshRegistration, register_mesh, register_mesh_async
+from server.jobs.models_api import MeshRegistration, _has_whole_areas, register_mesh, register_mesh_async
 from server.mesh.file_import import mesh_text, prepare_file_mesh, file_mesh_integrity
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from server.mesh.preparation_fence import PreparationFence
@@ -182,6 +182,31 @@ def test_unit_and_axis_frames_cut_the_same_si_geometry(units, scale, forward, up
     np.testing.assert_allclose(np.ptp(reduced.points, axis=0), [.1, .1, .3])
 
 
+@pytest.mark.parametrize(
+    ("exported", "requested"),
+    [((), ("x0", "y0")), (("x0",), ("x0",)), (("x0", "y0"), ("x0", "y0")), (("x0",), ("x0", "y0"))],
+    ids=["wg-cut", "exported-half", "exported-quarter", "exported-half-wg-quarter"],
+)
+def test_a_driver_keeps_its_whole_area_however_the_file_was_reduced(tmp_path, exported, requested):
+    mesh = prepare(full_mesh(), domain_planes=exported)[0] if exported else full_mesh()
+    body = cutting_registration(mesh, domain_planes=list(requested))
+    store = CadLinkStore.for_data_dir(tmp_path)
+    try:
+        prepared = _run_in_gmsh_session(lambda: prepare_file_mesh(
+            mesh, "m", "+z", "+y", domain_planes=requested, roles=body.driven_roles()))
+        record = register_mesh(store, tmp_path, body, prepared=prepared)
+    finally:
+        store.close()
+    assert record["symmetry"]["domain_planes"] == list(requested)
+    assert [source["observed"]["total_area_mm2"] for source in record["sources"]] == pytest.approx([40000, 40000])
+
+
+def test_a_preparation_saved_with_the_cut_area_is_not_reused():
+    saved = {"sources": [{"id": "group_101", "observed": {"total_area_mm2": 10000.0}}]}
+    assert not _has_whole_areas(saved, {"101": 40000.0})
+    assert _has_whole_areas(saved, {"101": 10000.0})
+
+
 def test_record_reimport_setup_and_replay_share_effective_cut(tmp_path):
     from server.jobs.models_api import _file_import_memory, read_setup
     from server.cadlink.roles import prepared_inventory_sha256
@@ -196,7 +221,7 @@ def test_record_reimport_setup_and_replay_share_effective_cut(tmp_path):
         assert first["polar_grid_derivation"]["cut_planes"] == ["x0", "y0"]
         assert first["summary"]["dimensions_mm"] == pytest.approx([100, 100, 300])
         assert first["source_tags"] == {"group_101": 101, "group_102": 102}
-        assert [source["observed"]["total_area_mm2"] for source in first["sources"]] == pytest.approx([10000, 10000])
+        assert [source["observed"]["total_area_mm2"] for source in first["sources"]] == pytest.approx([40000, 40000])
         same = register_mesh(store, tmp_path, body, prepared=prepared)
         assert same["ingest_id"] == first["ingest_id"]
         model_id = file_model_id(first["artifact_sha256"])
@@ -507,7 +532,7 @@ def test_original_cut_admission_survives_lid_removal_without_native_entry(tmp_pa
             assert record["summary"]["triangle_count"] == 40
             assert record["source_tags"] == {"group_101": 101}
             assert record["sources"][0]["role"] == "HF"
-            assert record["sources"][0]["observed"]["total_area_mm2"] == pytest.approx(40000)
+            assert record["sources"][0]["observed"]["total_area_mm2"] == pytest.approx(80000)
             assert record["polar_grid_derivation"]["axes"]["horizontal"]["minimum_deg"] == 0
             assert record["polar_grid_derivation"]["axes"]["vertical"]["minimum_deg"] == -180
         finally:
