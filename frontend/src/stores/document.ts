@@ -37,7 +37,7 @@ export interface DocumentState {
   /**
    * The content key of the design as WG last opened it (captured once the open
    * had fully applied), or as WG itself last wrote it somewhere it can be
-   * opened from again: Export a copy, or the registry a Send to CAD commits
+   * opened from again: a design file export, or the registry a Send to CAD commits
    * to. Null when there is no such copy.
    *
    * One of the things a replacement check counts as "kept elsewhere" (see

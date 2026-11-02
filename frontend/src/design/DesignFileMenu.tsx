@@ -417,7 +417,7 @@ export function DesignFileMenu() {
       // Asked before the file is built: cancelling must cost nothing, and the
       // question is where this export goes, not whether it can be serialized.
       const destination = await askForExportDestination({
-        title: 'Export a copy',
+        title: 'Export design file',
         detail: 'A text copy of this design.',
       });
       if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
@@ -585,11 +585,11 @@ export function DesignFileMenu() {
         title="Read a design file without opening it, and show how WG parsed it"
         onClick={() => pickFile(reportInput.current)}><span>Check a design file…</span><kbd>cfg</kbd></button>}
       <div className="design-menu-divider"/>
-      <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={() => void exportCopy()}><span>Export a copy</span><kbd>{design.formula === 'LOOKUP' ? 'mwg' : 'cfg'}</kbd></button>
-      {copyReason && <div className="design-menu-item" role="note">{copyReason}</div>}
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
         {geometryReason && <div className="design-menu-item" role="note">Imported models cannot export geometry or profiles. Switch to Parametric to export them.</div>}
+        {copyReason && !geometryReason && <div className="design-menu-item" role="note">{copyReason}</div>}
+        <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={() => void exportCopy()}><span>Design file</span><kbd>{design.formula === 'LOOKUP' ? 'mwg' : 'cfg'}</kbd></button>
         {/* The .wglink bundle and its handoff are Fusion's transport; Onshape
             sends live in the CAD Link panel and go through its own adapter. */}
         {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason) || Boolean(cadSendLimit)} onClick={() => void sendToCad()} title={geometryReason ?? cadSendLimit ?? `Save this CAD model (.wglink) in the selected workspace.${omitsWoofers}`}><span>Send to CAD</span><span>.wglink</span></button>}

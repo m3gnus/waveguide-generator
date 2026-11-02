@@ -29,9 +29,9 @@ describe('the parametric document name', () => {
     act(() => input.blur());
 
     expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · winner1');
-    expect(input.title).toContain('Export a copy');
+    expect(input.title).toContain('design file');
     expect(input.title).not.toContain('saves as');
-    // The Export a copy filename follows the same edit -- this is the whole
+    // The design file's name follows the same edit -- this is the whole
     // point of the field.
     expect(useDocumentStore.getState()).toMatchObject({ designName: 'winner', filename: 'winner.cfg' });
 

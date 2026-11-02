@@ -434,21 +434,28 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
 
   const showSettings = useCallback(() => { setSettingsSection(undefined); setSettingsOpen(true); }, []);
   const closeSettings = useCallback(() => { setSettingsOpen(false); setSettingsSection(undefined); }, []);
-  const fileAction = (label: 'Open…' | 'Export a copy') => {
+  const fileAction = (label: 'Open…' | 'Design file') => {
     const menu = document.querySelector<HTMLButtonElement>('.file-chip');
     if (menu?.getAttribute('aria-expanded') !== 'true') menu?.click();
-    requestAnimationFrame(() => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-      .find((button) => button.querySelector('span')?.textContent === label)?.click());
+    const item = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.querySelector('span')?.textContent === text);
+    requestAnimationFrame(() => {
+      if (label === 'Open…') { item(label)?.click(); return; }
+      // Design file lives in the Export submenu, which renders once open.
+      const submenu = item('Export');
+      if (submenu?.getAttribute('aria-expanded') !== 'true') submenu?.click();
+      requestAnimationFrame(() => item(label)?.click());
+    });
   };
   // Naming a copy renames the design, and the file follows: the name is the one
   // thing WG keeps, and the `.cfg` is derived from it. Typing an extension is
   // therefore not part of the name -- it is stripped rather than stored.
   const exportCopyAs = () => {
     if (parameterExportReason(currentModel(), 'mwg_config')) return;
-    const requested = window.prompt('Export a copy as', useDocumentStore.getState().designName);
+    const requested = window.prompt('Export design file as', useDocumentStore.getState().designName);
     if (!requested?.trim()) return;
     useDocumentStore.getState().setDesignName(requested.trim().replace(/\.(cfg|txt|mwg)$/i, ''));
-    requestAnimationFrame(() => fileAction('Export a copy'));
+    requestAnimationFrame(() => fileAction('Design file'));
   };
   const paletteEntries = useMemo<PaletteEntry[]>(() => {
     const parameters = buildParameterPaletteEntries(family, { mode: workspaceMode, design, cadReturnReady, editableCadMesh, cadBundleAvailable });
@@ -483,8 +490,8 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       { id: 'undo', kind: 'Commands', label: 'Undo', detail: undoReason, disabled: !canUndo, run: undo },
       { id: 'redo', kind: 'Commands', label: 'Redo', detail: redoReason, disabled: !canRedo, run: redo },
       { id: 'open', kind: 'Commands', label: 'Open', detail: 'Open a design file', run: () => fileAction('Open…') },
-      { id: 'save', kind: 'Commands', label: 'Export a copy', detail: copyReason ?? 'Write a .cfg copy to the output folder', disabled: Boolean(copyReason), run: () => fileAction('Export a copy') },
-      { id: 'save-as', kind: 'Commands', label: 'Export a copy as…', detail: copyReason ?? 'Rename the current design and export a copy', disabled: Boolean(copyReason), run: exportCopyAs },
+      { id: 'save', kind: 'Commands', label: 'Export design file', detail: copyReason ?? 'Write a .cfg design file to the output folder', disabled: Boolean(copyReason), run: () => fileAction('Design file') },
+      { id: 'save-as', kind: 'Commands', label: 'Export design file as…', detail: copyReason ?? 'Rename the current design and export its design file', disabled: Boolean(copyReason), run: exportCopyAs },
       { id: 'reset-layout', kind: 'Commands', label: 'Reset layout', run: onResetLayout },
       { id: 'dark-theme', kind: 'Commands', label: 'Dark theme', run: () => setTheme('dark') },
       { id: 'light-theme', kind: 'Commands', label: 'Light theme', run: () => setTheme('light') },

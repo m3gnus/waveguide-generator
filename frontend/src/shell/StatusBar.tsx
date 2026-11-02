@@ -83,7 +83,7 @@ export function documentLabel(filename: string, family?: string): string {
   return named.trim() || 'untitled design';
 }
 
-const DRAFT_NOT_KEPT = 'WG cannot keep your work in progress. Use Export a copy in the File menu to keep this design.';
+const DRAFT_NOT_KEPT = 'WG cannot keep your work in progress. Use Export → Design file in the File menu to keep this design.';
 
 export function StatusBar() {
   const { engines } = useCapabilities();

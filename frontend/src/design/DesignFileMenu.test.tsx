@@ -84,10 +84,10 @@ function open(): HTMLButtonElement[] {
   const chip = container.querySelector<HTMLButtonElement>('button.file-chip');
   act(() => chip?.click());
   const items = [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')];
-  // Exactly 'Export', not a prefix: 'Export a copy' sits above the submenu
-  // toggle and would otherwise be opened in its place.
+  // Exactly 'Export', so a label that only starts with it never opens instead.
   const exportItem = items.find((item) => item.querySelector('span')?.textContent === 'Export');
-  act(() => exportItem?.click());
+  // The submenu stays open between uses of the menu; a second click would close it.
+  if (exportItem?.getAttribute('aria-expanded') !== 'true') act(() => exportItem?.click());
   return [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')];
 }
 
@@ -148,7 +148,7 @@ describe('design file export menu', () => {
     const items = open();
     const fetcher = vi.mocked(fetch);
     fetcher.mockClear();
-    for (const label of ['Export a copy', 'STEP solid', 'STEP inner surface', 'STL', 'Profiles CSV', 'Send to CAD']) {
+    for (const label of ['Design file', 'STEP solid', 'STEP inner surface', 'STL', 'Profiles CSV', 'Send to CAD']) {
       const item = items.find(button => button.querySelector('span')?.textContent === label)!;
       expect(item.disabled, label).toBe(true);
       act(() => item.click());
@@ -160,7 +160,7 @@ describe('design file export menu', () => {
     expect(useDocumentStore.getState().designName).toBe('Parked A');
   });
 
-  it.each(['STEP solid', 'STL', 'Profiles CSV', 'Export a copy'])('refuses %s if an imported arrival changes the model during the destination dialog', async label => {
+  it.each(['STEP solid', 'STL', 'Profiles CSV', 'Design file'])('refuses %s if an imported arrival changes the model during the destination dialog', async label => {
     const items = open();
     provideExportDestinationPrompt(async () => {
       workspaceModeStore.setMode('cad');
@@ -759,7 +759,7 @@ describe('design file export menu', () => {
     await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
 
     // One name: the opened file names the design, and the design names the
-    // runs and the filename used by Export a copy.
+    // runs and the filename of its design file.
     expect(useDocumentStore.getState()).toMatchObject({
       designName: '260701_horn_v13', filename: '260701_horn_v13.cfg',
     });
@@ -825,8 +825,10 @@ describe('design file export menu', () => {
 
     act(() => root.render(<DesignFileMenu/>));
     act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    act(() => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.querySelector('span')?.textContent === 'Export')!.click());
     const download = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-      .find((button) => button.textContent?.startsWith('Export a copy'))!;
+      .find((button) => button.textContent?.startsWith('Design file'))!;
     await act(async () => { download.click(); });
 
     const request = vi.mocked(fetch).mock.calls[0];
@@ -853,10 +855,10 @@ describe('design file export menu', () => {
   // Not "Save": the copy deliberately leaves the saved baseline alone (see
   // above), and not "Download" either -- it is written into the output folder,
   // and the desktop window has no download for it to mean.
-  it('labels serialization as Export a copy, never Save', () => {
+  it('labels serialization as Design file, never Save', () => {
     const labels = open().map((item) => item.querySelector('span')?.textContent ?? '');
 
-    expect(labels).toContain('Export a copy');
+    expect(labels).toContain('Design file');
     expect(labels).not.toContain('Save');
   });
 
@@ -954,8 +956,10 @@ describe('design file export menu', () => {
     ));
     act(() => root.render(<DesignFileMenu/>));
     act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    act(() => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.querySelector('span')?.textContent === 'Export')!.click());
     const download = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-      .find((button) => button.textContent?.startsWith('Export a copy'))!;
+      .find((button) => button.textContent?.startsWith('Design file'))!;
     await act(async () => { download.click(); });
 
     expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe('/api/design/serialize');
@@ -1075,8 +1079,10 @@ describe('replacing the design on screen', () => {
 
   async function chooseMenuItem(label: string) {
     act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
-    const item = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-      .find((button) => button.querySelector('span')?.textContent === label)!;
+    const itemNamedHere = (name: string) => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.querySelector('span')?.textContent === name);
+    if (!itemNamedHere(label)) act(() => itemNamedHere('Export')!.click());
+    const item = itemNamedHere(label)!;
     await act(async () => {
       item.click();
       await new Promise((settle) => setTimeout(settle, 0));
@@ -1200,10 +1206,10 @@ describe('replacing the design on screen', () => {
     expect(confirm).toHaveBeenCalledTimes(1);
     const message = String(confirm.mock.calls[0][0]);
     // There is no Save to point at: the ways to keep it are to solve it or
-    // to export a copy.
+    // to export its design file.
     expect(message).not.toMatch(/save/i);
     expect(message).toMatch(/solve/i);
-    expect(message).toMatch(/export a copy/i);
+    expect(message).toMatch(/export its design file/i);
     expect(useDesignStore.getState().design.R).toBe(321);
     expect(useDocumentStore.getState().designName).toBe('horn');
   });
@@ -1221,7 +1227,7 @@ describe('replacing the design on screen', () => {
     act(() => useDesignStore.getState().updateField('R', 321));
 
     // Exporting is one of the two things the question tells the user to do.
-    await chooseMenuItem('Export a copy');
+    await chooseMenuItem('Design file');
     expect(container.querySelector('[role="status"]')?.textContent).toContain('Exported a copy as horn.cfg');
     await chooseMenuItem('New design');
     expect(confirm).not.toHaveBeenCalled();
@@ -1556,7 +1562,7 @@ it('groups the menu as new and open, import, export, and has no duplicate comman
   expect(rows).toEqual([
     'New design', 'Open…', 'CAD-linked designs', '|',
     'Import mesh…', 'Open solve setup…', '|',
-    'Export a copy', 'Export', '|',
+    'Export', '|',
     'Move earlier runs…',
   ]);
 });
@@ -1744,7 +1750,7 @@ it('keeps New design in memory until explicit export, asks on unsaved reopen, an
   await answerSharedCopy('Cancel');
   expect(useDocumentStore.getState().designUid).toBe(newUid);
   expect(durableSettings.get('designFiles')).toBe(observed);
-  const exportCopy = itemNamed('Export a copy');
+  const exportCopy = itemNamed('Design file');
   await act(async () => { exportCopy.click(); });
   expect(writes).toEqual([stamp(newUid) + 'cfg']);
   expect(diskText.match(/Waveguide Generator design-id:/g)).toHaveLength(1);
