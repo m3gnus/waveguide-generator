@@ -266,13 +266,13 @@ def _record_expired(store: CadLinkStore, operation_id: str) -> None:
     )
 
 
-@pytest.mark.parametrize("active_document", ["fusion:doc-live", None])
-def test_an_insert_names_its_destination_document_or_a_new_one(
-    tmp_path: Path, active_document: str | None
+@pytest.mark.parametrize("heartbeat_age", [None, 0, 19, 21, 60])
+def test_an_insert_always_requests_a_new_document_regardless_of_heartbeat_age(
+    tmp_path: Path, heartbeat_age: int | None
 ) -> None:
     data_dir = tmp_path / "data"
     workspace = tmp_path / "workspace"
-    if active_document:
+    if heartbeat_age is not None:
         marker = data_dir / "ipc" / "wglink" / ".fusion-status.json"
         marker.parent.mkdir(parents=True)
         marker.write_text(json.dumps({
@@ -281,8 +281,8 @@ def test_an_insert_names_its_destination_document_or_a_new_one(
             "deliveryVersion": 3,
             "sessionId": "session-a",
             "adapterVersion": "0.3.3",
-            "updatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "document": {"id": active_document, "name": "Speaker", "links": []},
+            "updatedAt": (datetime.now(timezone.utc) - timedelta(seconds=heartbeat_age)).isoformat().replace("+00:00", "Z"),
+            "document": {"id": "fusion:doc-live", "name": "Speaker", "links": []},
         }))
     published = publish_fusion_handoff(
         data_dir,
@@ -293,11 +293,9 @@ def test_an_insert_names_its_destination_document_or_a_new_one(
     )
 
     destination = json.loads(published.path.read_text())["destination"]
-    assert destination == (
-        {"kind": "document", "value": active_document}
-        if active_document
-        else {"kind": "new_document", "value": published.request_id}
-    )
+    assert destination == {"kind": "new_document", "value": published.request_id}
+    row = _store(data_dir).get_operation(published.request_id)
+    assert json.loads(row["target_json"])["destination"] == destination
 
 
 def test_the_v3_handoff_keys_are_unchanged_for_the_pinned_addin(tmp_path: Path) -> None:

@@ -16,6 +16,8 @@ import { designNameSlug } from '../../stores/designName';
 import { polarConfigFromUi, useSolveOptionsStore } from '../../stores/solveOptions';
 import { runGuardedFusionSend } from './send';
 import { reportCadAutomationError } from './caughtErrors';
+import { fusionSendOf, sentToCadMessage, watchFusionDelivery } from '../../design/useSendToCad';
+import { useCadDeliveryHealthStore } from '../../stores/cadDeliveryHealth';
 import { failureWords } from '../../api/httpError';
 
 export class OutboundSupersededError extends Error {}
@@ -49,6 +51,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
   let folderPick: ReturnType<typeof selectCadWorkspace> | null = null;
   // Confirmation authorizes only the exact target and WG revision displayed.
   let conflict: { evidence: string; model: CurrentModel } | null = null;
+  let stopWatching: (() => void) | null = null;
   const evidenceKey = (status: CadConnectionStatus | null) => JSON.stringify([
     currentDocumentLoad(), useDesignStore.getState().designRevision, documentSettingsSignature(),
     useDocumentStore.getState().identity,
@@ -89,6 +92,8 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
       }
       assertCurrentModelExport(model, 'step');
     };
+    stopWatching?.();
+    stopWatching = null;
     store.setState({ sendingToFusion: true, error: null, status: null });
     options.noteCadActivity?.();
     let evidence: CadConnectionStatus | null = null;
@@ -158,10 +163,11 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
           if (result.identity) useDocumentStore.getState().setCadLink(result.identity, 'current');
           const superseded = result.cadHandoffSuperseded?.length
             ? ' It replaced an earlier update Fusion had not started yet.' : '';
-          const waiting = result.cadHandoffWaiting ? ` ${result.cadHandoffWaiting}` : '';
-          store.setState({ status: target
-            ? `Update sent to Fusion 360 · sequence ${result.sequence}.${superseded}${waiting}`
-            : `Opening in Fusion 360 · sequence ${result.sequence}.${waiting}` });
+          const send = fusionSendOf(result, Boolean(target));
+          if (send) {
+            stopWatching = watchFusionDelivery(send, ({ tone, text }) => store.setState(tone === 'error'
+              ? { error: text, status: null } : { status: `${text}${superseded}` }));
+          } else store.setState({ status: sentToCadMessage(result) });
           await options.refresh?.();
           return result;
         },
@@ -195,6 +201,9 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
           const operation = await getCadOperation(id, fetcher);
           if (operation.operationId !== id || !active) return;
           store.setState({ requests: { ...store.getState().requests, [id]: operation.state } });
+          useCadDeliveryHealthStore.setState({ outboundOperations: {
+            ...useCadDeliveryHealthStore.getState().outboundOperations, [id]: operation,
+          } });
           settled.add(id);
         } catch { /* The exact outcome remains retryable. */ }
       }));
@@ -202,7 +211,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
     },
     confirmFusionConflict: () => sendWgToFusion({ confirmed: true }),
     cancelFusionConflict() { conflict = null; store.setState({ pendingFusionConflict: false }); },
-    dispose() { active = false; generation += 1; conflict = null;
+    dispose() { active = false; generation += 1; conflict = null; stopWatching?.();
       store.setState({ sendingToFusion: false, pendingFusionConflict: false }); },
   });
 }

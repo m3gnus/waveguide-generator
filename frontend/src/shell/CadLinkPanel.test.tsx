@@ -3070,7 +3070,7 @@ describe('CadLinkPanel', () => {
     await act(async () => { await cadWorkspace.getSnapshot().sendWgToFusion(); await Promise.resolve(); });
 
     expect(requested).toContain('/api/export/wglink');
-    expect(host.textContent).toContain('Opening in Fusion 360 · sequence 4');
+    expect(host.textContent).toContain('The model is ready. In Fusion, choose WGLink → Advanced → Insert.');
     // The bundle just written is what CAD picks up, so the listing is re-read.
     expect(requested.filter((path) => path.endsWith('/returns')).length).toBeGreaterThan(1);
     expect(useDocumentStore.getState().identity?.baseEditVersion).toBe(2);

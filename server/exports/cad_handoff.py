@@ -27,7 +27,6 @@ from server.cadlink.fusion.fusion_delivery import (
     publish_fusion_request,
 )
 from server.cadlink.ipc import IPC_SUBDIRECTORY
-from server.cadlink.fusion.fusion_status import read_fusion_status
 from server.cadlink.operations import (
     CANCELLED,
     INSERT_LINK,
@@ -76,17 +75,7 @@ def publish_fusion_handoff(
     request_id = request_id or str(uuid.uuid4())
     destination = None
     if not expected_instance_id:
-        status = read_fusion_status(
-            data_dir, current_design_hash="", current_formula="", design_id=None
-        )
-        document_id = str(status.get("documentId") or "")
-        destination = (
-            {"kind": "document", "value": document_id}
-            if status.get("running")
-            and int(status.get("addinDeliveryVersion") or 0) >= 3
-            and document_id
-            else {"kind": "new_document", "value": request_id}
-        )
+        destination = {"kind": "new_document", "value": request_id}
     payload = {
         "target": "fusion360",
         "bundlePath": str(bundle_path),

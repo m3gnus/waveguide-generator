@@ -258,6 +258,8 @@ export interface FusionCadStatus {
   staleDetectionExplanation: string | null;
   /** The delivery version the add-in reports; below WG's, the state is `addin_outdated`. */
   addinDeliveryVersion?: number | null;
+  /** Set when the running add-in picks up WG's requests by itself. */
+  wgRequestPickup?: number | null;
   recoveryRequired?: FusionRecoveryRequired | null;
   /** WG's WGLink activation, once it has decided: every state can name a pending,
    * activated or failed one, and `addin_outdated` names the remedy from it. */

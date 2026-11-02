@@ -20,6 +20,7 @@ from server.cadlink.intake.ingest import (
 )
 from server.cadlink.operations import (
     ACCEPTED,
+    fusion_delivery_state,
     PREPARE_AND_SOLVE,
     PROCESSING,
     RECEIVE_SNAPSHOT,
@@ -151,6 +152,7 @@ def operation_summary(row: Mapping[str, Any], job_store: Any = None) -> dict[str
         stage = "submitted" if row.get("job_id") else ("received" if state == RECEIVED else None)
     summary = {
         "operationId": row["operation_id"],
+        "fusionDelivery": fusion_delivery_state(row),
         "acceptedSeq": int(row["accepted_seq"]) if row.get("accepted_seq") is not None else None,
         "kind": row["kind"],
         "state": state,

@@ -851,6 +851,13 @@ async def request_fusion_return(
         instance_id=payload.instance_id,
         process_running=await asyncio.to_thread(fusion_process_running),
     )
+    from server.cadlink.fusion.fusion_status import last_fusion_heartbeat, observation_policy
+    last_report = await asyncio.to_thread(last_fusion_heartbeat, Path(request.app.state.data_dir))
+    if (status.get("observationPolicy") == "command"
+            or last_report is not None and observation_policy(last_report) == "command"):
+        raise HTTPException(status_code=409, detail=(
+            "Fusion reports changes only after a command. Press Send in Fusion "
+            "to bring the current model into WG."))
     session_id = str(status.get("sessionId") or "")
     if not status.get("running") or not session_id:
         raise HTTPException(
@@ -1887,6 +1894,7 @@ class CadOperationSummary(BaseModel):
     operation_id: str = Field(alias="operationId")
     accepted_seq: int | None = Field(alias="acceptedSeq")
     kind: str
+    fusion_delivery: Literal["waiting", "claimed", "applied", "refused", "expired", "uncertain", "cancelled"] | None = Field(default=None, alias="fusionDelivery")
     state: str
     stage: str | None
     reason: str | None
@@ -2029,6 +2037,32 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
     )
 
 
+def _fusion_delivery_summary(row: Mapping[str, Any], data_dir: Path,
+                             job_store: Any = None) -> dict[str, Any]:
+    from server.cadlink.fusion.fusion_status import last_fusion_heartbeat, observation_policy, wg_request_pickup
+    summary = operation_summary(row, job_store)
+    if summary.get("fusionDelivery") == "waiting":
+        report = last_fusion_heartbeat(data_dir)
+        if report is not None and wg_request_pickup(report) is None and observation_policy(report) == "command":
+            summary["message"] = ("The last reported Fusion add-in cannot pick up Send to CAD requests "
+                                  "with automatic coordination off. Install the updated Fusion add-in "
+                                  "from WG, then restart the add-in in Fusion and send again.")
+        else:
+            summary["message"] = ("Waiting for Fusion to receive this request. Finish any active "
+                                  "Fusion command; if it keeps waiting, start or restart the add-in in Fusion.")
+    return summary
+
+
+def _observe_fusion_operations(state: Any) -> None:
+    """Settle outbound commands without consuming their delivery notification."""
+    from server.cadlink.fusion.fusion_outcomes import settle_reported_outcomes
+    store = state.cadlink_store
+    data_dir = Path(state.data_dir)
+    expire_unstarted_insert_handoffs(data_dir,
+        record_expired=lambda operation_id: _record_expired_insert(store, operation_id))
+    settle_reported_outcomes(store, data_dir)
+
+
 def _operation_detail(store: CadLinkStore, row: Mapping[str, Any], ctx: Any = None) -> dict[str, Any]:
     if ctx is not None and row["kind"] == PREPARE_AND_SOLVE:
         return operation_detail(ctx, row)
@@ -2106,10 +2140,11 @@ async def list_cad_operations(
                 if not page:
                     break
                 for cursor, row in page:
-                    summary = operation_summary(row, ctx.job_store)
+                    summary = _fusion_delivery_summary(row, Path(request.app.state.data_dir), ctx.job_store)
                     if not pending or summary["state"] in _PENDING_STATES:
                         result.append(summary)
         return sorted(result, key=lambda item: item["acceptedSeq"] or 0, reverse=True)[:limit]
+    await asyncio.to_thread(_observe_fusion_operations, request.app.state)
     return {"operations": await asyncio.to_thread(load)}
 
 
@@ -2142,12 +2177,16 @@ async def accept_manual_solve(state: Any, operation_id: str, ingest_id: str) -> 
 @router.get("/operations/{operation_id}")
 async def get_cad_operation(operation_id: str, request: Request) -> dict[str, Any]:
     store: CadLinkStore = request.app.state.cadlink_store
+    await asyncio.to_thread(_observe_fusion_operations, request.app.state)
     row = await asyncio.to_thread(store.get_operation, operation_id)
     if row is None:
         raise HTTPException(status_code=404, detail="WG cannot find this CAD request. Send it again from Fusion.")
     ctx = _preparation_context(request.app.state)
     await ctx.runtime.start()
-    return await asyncio.to_thread(_operation_detail, store, row, ctx)
+    detail = await asyncio.to_thread(_operation_detail, store, row, ctx)
+    if row["kind"] in FUSION_KINDS:
+        detail.update(await asyncio.to_thread(_fusion_delivery_summary, row, Path(request.app.state.data_dir)))
+    return detail
 
 
 @router.post(
@@ -2293,6 +2332,47 @@ async def _publish_request_status(state: Any, reported: str | None) -> str | Non
     """
 
     try:
+        await asyncio.to_thread(_observe_fusion_operations, state)
+        events = getattr(getattr(state, "jobs_runtime", None), "events", None)
+        if events is not None:
+            # Only this delivery pass owns what the page has been told. Other
+            # settlers (including GETs) may have changed the ledger already.
+            if not hasattr(state, "cad_fusion_reported"):
+                state.cad_fusion_reported = {}
+                state.cad_fusion_cursors = {}
+            reported_operations = state.cad_fusion_reported
+            cursors = state.cad_fusion_cursors
+            store = state.cadlink_store
+            data_dir = Path(state.data_dir)
+
+            def publish(row: Mapping[str, Any], summary: dict[str, Any]) -> None:
+                operation_id = row["operation_id"]
+                if summary != reported_operations.get(operation_id):
+                    events.publish({"v": 1, "kind": "cadOperation", "operation": summary})
+                if row["state"] in TERMINAL_STATES:
+                    reported_operations.pop(operation_id, None)
+                else:
+                    reported_operations[operation_id] = summary
+
+            # Revisit every unfinished row we have seen, even if another
+            # settler has since made it terminal. Forget it only after push.
+            for operation_id in tuple(reported_operations):
+                row = await asyncio.to_thread(store.get_operation, operation_id)
+                if row is not None:
+                    summary = await asyncio.to_thread(_fusion_delivery_summary, row, data_dir)
+                    publish(row, summary)
+            # Acceptance cursors also discover commands that appeared AND
+            # settled between passes. Advance only after a successful push;
+            # terminal ids need no retained entry or repeated history scan.
+            for kind in FUSION_KINDS:
+                while page := await asyncio.to_thread(
+                    store.operation_page, kind=kind, states=STATES,
+                    after_rowid=cursors.get(kind, 0),
+                ):
+                    for cursor, row in page:
+                        summary = await asyncio.to_thread(_fusion_delivery_summary, row, data_dir)
+                        publish(row, summary)
+                        cursors[kind] = cursor
         publisher = getattr(state, "cad_request_status", None)
         if publisher is None:
             publisher = RequestStatusPublisher(
@@ -2318,7 +2398,8 @@ def _deliver_solve_commands(application: FastAPI):
         # (CAD-OPERATIONS.md, "Delivery"); the UI only issues and observes.
         state = application.state
         status = delivery_status(state)
-        if not delivery_consumer_enabled():
+        solves_enabled = delivery_consumer_enabled()
+        if not solves_enabled:
             # Said, not silent: the live route refuses and the add-in is not
             # told WG collects requests (C3), and the panel names the cause.
             status.disabled()
@@ -2326,7 +2407,6 @@ def _deliver_solve_commands(application: FastAPI):
                 "CAD Link request consumer is off (%s=0): WG collects no Send or Solve from Fusion.",
                 CAD_DELIVERY_ENV,
             )
-            return
         # A pass in progress holds headless retirement; the jobs runtime
         # separately tracks preparation and execution.
         pass_active = [False]
@@ -2350,11 +2430,12 @@ def _deliver_solve_commands(application: FastAPI):
             addin_signature: tuple[str | None, bool] | None = None
             reported_addin_errors: set[str] = set()
             status_error: str | None = None
-            status.started()
+            if solves_enabled:
+                status.started()
             try:
                 while True:
                     hold = getattr(state, "retirement_hold", None)
-                    if hold is not None and hold.held:
+                    if not solves_enabled or hold is not None and hold.held:
                         # A retiring backend takes no new Fusion solves; the
                         # files stay on disk for the next backend, as during an
                         # update. The check and the mark below have no await

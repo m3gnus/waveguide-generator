@@ -3198,6 +3198,8 @@ export interface components {
             createdAt: string | null;
             /** Frameaxisautomatic */
             frameAxisAutomatic?: string | null;
+            /** Fusiondelivery */
+            fusionDelivery?: ("waiting" | "claimed" | "applied" | "refused" | "expired" | "uncertain" | "cancelled") | null;
             /** Jobid */
             jobId: string | null;
             /** Kind */

@@ -103,7 +103,7 @@ def test_link_evidence_must_match_the_expected_export_and_update_document(
     _accept(store)
 
     for heartbeat, changed in (
-        (_heartbeat(links=[{"operationId": "update-1", "exportId": "wge_other"}]), 1),
+        (_heartbeat(links=[{"operationId": "update-1", "exportId": "wge_other"}]), 0),
         ({
             **_heartbeat(links=[{"operationId": "update-1", "exportId": "wge_1"}]),
             "document": {
@@ -113,7 +113,7 @@ def test_link_evidence_must_match_the_expected_export_and_update_document(
         }, 0),
     ):
         assert settle_from_heartbeat(store, heartbeat, _ipc(tmp_path)) == changed
-        assert store.get_operation("update-1")["state"] == "processing"
+        assert store.get_operation("update-1")["state"] == "received"
 
 
 def test_a_return_request_is_not_accepted_from_mutation_link_evidence(
@@ -128,7 +128,7 @@ def test_a_return_request_is_not_accepted_from_mutation_link_evidence(
         _ipc(tmp_path),
     )
 
-    assert store.get_operation("return-1")["state"] == "processing"
+    assert store.get_operation("return-1")["state"] == "received"
 
 
 def test_an_applying_mark_is_recovery_required_after_the_heartbeat_goes_and_wg_restarts(
@@ -244,7 +244,7 @@ def test_nonsettling_recent_outcomes_leave_processing(
         }]),
         _ipc(tmp_path),
     )
-    assert store.get_operation("update-1")["state"] == "processing"
+    assert store.get_operation("update-1")["state"] == "received"
 
 
 def test_recent_outcome_from_another_channel_cannot_settle_a_colliding_id(
@@ -259,7 +259,7 @@ def test_recent_outcome_from_another_channel_cannot_settle_a_colliding_id(
         }]),
         _ipc(tmp_path),
     )
-    assert store.get_operation("update-1")["state"] == "processing"
+    assert store.get_operation("update-1")["state"] == "received"
 
 
 @pytest.mark.parametrize("outcome", ["applied", "failed", "running", "requested"])
@@ -276,7 +276,7 @@ def test_last_request_without_document_evidence_never_accepts_a_mutation(
         }),
         _ipc(tmp_path),
     )
-    assert store.get_operation("update-1")["state"] == "processing"
+    assert store.get_operation("update-1")["state"] == ("processing" if outcome == "running" else "received")
 
 
 def test_last_request_requires_the_exact_channel_and_correlation_id(tmp_path: Path) -> None:
@@ -293,16 +293,16 @@ def test_last_request_requires_the_exact_channel_and_correlation_id(tmp_path: Pa
         },
     ):
         settle_from_heartbeat(store, _heartbeat(last=last), _ipc(tmp_path))
-    assert store.get_operation("update-1")["state"] == "processing"
+    assert store.get_operation("update-1")["state"] == "received"
 
 
-def test_request_file_gone_marks_the_operation_processing(tmp_path: Path) -> None:
+def test_request_file_gone_is_not_pickup_evidence(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _accept(store)
     settle_from_heartbeat(store, _heartbeat(), _ipc(tmp_path))
     row = store.get_operation("update-1")
-    assert row is not None and row["state"] == "processing"
-    assert row["attempt_generation"] == 1
+    assert row is not None and row["state"] == "received"
+    assert row["attempt_generation"] == 0
 
 
 def test_a_staged_delivery_is_not_mistaken_for_a_fusion_claim(tmp_path: Path) -> None:
@@ -331,7 +331,7 @@ def test_dismissal_does_not_guess_an_outcome_after_fusion_claims_the_request(
 ) -> None:
     store = _store(tmp_path)
     _accept(store)
-    settle_from_heartbeat(store, _heartbeat(), _ipc(tmp_path))
+    settle_from_heartbeat(store, _heartbeat(recent=[{"channel": "handoff", "requestId": "update-1", "outcome": "claimed"}]), _ipc(tmp_path))
 
     dismissed = store.request_cancel("update-1")
 
@@ -361,7 +361,7 @@ def test_applying_never_marks_a_return_as_recovery_required(tmp_path: Path) -> N
         _heartbeat(applying={"operationId": "return-1"}),
         _ipc(tmp_path),
     )
-    assert store.get_operation("return-1")["state"] == "processing"
+    assert store.get_operation("return-1")["state"] == "received"
 
 
 def test_terminal_backlog_does_not_hide_an_unsettled_operation(tmp_path: Path) -> None:
