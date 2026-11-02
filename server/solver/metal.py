@@ -1190,7 +1190,11 @@ def _run_passive_cardioid_campaign(
             planes,
         )
         factors = np.asarray([
-            completion.get(name if name in port_names else mf_source_id, 1.0)
+            # A port tag represents all its driven exits, including whole
+            # mirrored partners. Every domain plane doubles that total area,
+            # whether it bisects an exit or creates a separate image of it.
+            # MF completion still describes one physical diaphragm.
+            2.0 ** len(planes) if name in port_names else completion.get(mf_source_id, 1.0)
             for name in result.aperture_names
         ])
         if np.any(factors != 1.0):
@@ -1378,6 +1382,18 @@ def _coupled_cardioid_result(
         source_indices=port_indices,
     )
     frequencies = np.asarray(matrix_result.frequencies_hz, dtype=np.float64)
+    bem_port_area_m2 = float(campaign["actual_bem_port_area_m2"])
+    # The request validates BEM-derived model area against the measured mesh
+    # area. Once the campaign completes the domain, both coupling and radiation
+    # must use the completed physical area. Without reduction retain the
+    # requested area exactly, including accepted measurement tolerance.
+    # User-entered model areas already
+    # describe the physical port and are independent of the BEM aperture.
+    model_port_area_m2 = (
+        bem_port_area_m2
+        if geometry.port_area_source == "bem_aperture" and imported_domain_planes(record)
+        else float(geometry.model_port_area_m2)
+    )
     coupled = driver_coupling.coupled_cardioid_response(
         frequencies,
         driver=hornlab_driver(mf_channel.driver),
@@ -1386,7 +1402,7 @@ def _coupled_cardioid_result(
         z_port_from_mf=z_port_from_mf,
         termination_load=termination_load,
         chamber_volume_m3=float(geometry.passive_cardioid_rear_volume_l) * 1.0e-3,
-        port_area_m2=float(geometry.model_port_area_m2),
+        port_area_m2=model_port_area_m2,
         port_length_m=float(geometry.passive_cardioid_port_length_mm) * 1.0e-3,
         series_resistance_pa_s_m3=float(
             geometry.passive_cardioid_foam_resistance_pa_s_m3
@@ -1413,7 +1429,6 @@ def _coupled_cardioid_result(
     mf_result = _slice_native_result(mf_source_result, mf_indices)
     port_result = _slice_native_result(port_source_result, port_result_indices)
     mf_area_m2 = record_source_area_m2(record, mf_source_id)
-    bem_port_area_m2 = float(campaign["actual_bem_port_area_m2"])
     relative_port_acceleration = (
         mf_area_m2 / bem_port_area_m2
     ) * coupled.port_to_cone_ratio
@@ -1461,7 +1476,7 @@ def _coupled_cardioid_result(
         "drive_voltage_v": geometry.drive_voltage_v,
         "rg_ohm": geometry.rg_ohm,
         "rear_drive_sign": -1.0 if geometry.passive_cardioid_invert_port else 1.0,
-        "model_port_area_m2": float(geometry.model_port_area_m2),
+        "model_port_area_m2": model_port_area_m2,
         "bem_port_area_m2": bem_port_area_m2,
         "port_area_source": geometry.port_area_source,
         "electrical_input_impedance_ohm": coupled.electrical_input_impedance,
