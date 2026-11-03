@@ -82,7 +82,9 @@ describe('viewport wheel gestures', () => {
   it.each([
     ['small vertical sample', { deltaY: 40, wheelDeltaY: -120 }, { deltaY: 3, wheelDeltaY: -9 }],
     ['diagonal sample', { deltaY: 40, wheelDeltaY: -120 }, { deltaX: 2, deltaY: 40, wheelDeltaY: -120 }],
-    ['varying proportional sample', { deltaY: 40, wheelDeltaY: -120 }, { deltaY: 80, wheelDeltaY: -240 }],
+    ['non-multiple', { deltaY: 40, wheelDeltaY: -120 }, { deltaY: 52 }],
+    ['independently wheel-shaped non-multiple', { deltaY: 40, wheelDeltaY: -120 }, { deltaY: 100 }],
+    ['fractional sample', { deltaY: 40, wheelDeltaY: -120 }, { deltaY: 3.5 }],
     ['accelerated start', { deltaY: 80, wheelDeltaY: -240 }, { deltaY: 7, wheelDeltaY: -21 }],
     ['negative start', { deltaY: -40, wheelDeltaY: 120 }, { deltaY: -3, wheelDeltaY: 9 }],
     ['legacy fallback', { deltaY: 40, wheelDelta: -120 }, { deltaY: 3, wheelDelta: -9 }],
@@ -100,6 +102,69 @@ describe('viewport wheel gestures', () => {
     expect(h.pan.mock.calls).toEqual([
       [first.deltaX ?? 0, first.deltaY], [second.deltaX ?? 0, second.deltaY], [0, 100],
     ]);
+    expect(h.zoom).not.toHaveBeenCalled();
+  });
+
+  it.each(['pixel', 'wheelDeltaY', 'wheelDelta'] as const)
+  ('zooms accelerated WebKit notches on one common step (%s)', (legacyField) => {
+    vi.useFakeTimers();
+    const h = harness();
+    // Include deceleration and direction changes; the first sample need not
+    // be the smallest notch and acceleration must not restart the probe.
+    [80, 40, -120].forEach((deltaY, i) => {
+      vi.advanceTimersByTime(i === 0 ? 0 : 16);
+      h.send({ deltaY, ...(legacyField === 'pixel' ? {} : { [legacyField]: -3 * deltaY }) }, i * 16);
+      expect(h.pan).not.toHaveBeenCalled();
+      expect(h.zoom).not.toHaveBeenCalled();
+    });
+    vi.advanceTimersByTime(8);
+    expect(h.zoom.mock.calls.map(([event]) => event.deltaY)).toEqual([80, 40, -120]);
+    // The decision stays latched after the probe, even for precise input.
+    h.send({ deltaY: 7 }, 48);
+    expect(h.zoom).toHaveBeenCalledTimes(4);
+    expect(h.pan).not.toHaveBeenCalled();
+  });
+
+  it('zooms 40/80/120 accelerated notches within 40 ms', () => {
+    vi.useFakeTimers();
+    const h = harness();
+    [40, 80, 120].forEach((deltaY, i) => {
+      vi.advanceTimersByTime(i === 0 ? 0 : 8);
+      h.send({ deltaY, wheelDeltaY: -3 * deltaY }, i * 8);
+    });
+    vi.advanceTimersByTime(24);
+    expect(h.pan).not.toHaveBeenCalled();
+    expect(h.zoom.mock.calls.map(([event]) => event.deltaY)).toEqual([40, 80, 120]);
+  });
+
+  it('pans a trackpad start of 40/-120 followed by 7, 3.5 and 12', () => {
+    vi.useFakeTimers();
+    const h = harness();
+    [40, 7, 3.5, 12].forEach((deltaY, i) => {
+      vi.advanceTimersByTime(i === 0 ? 0 : 8);
+      h.send({ deltaY, wheelDeltaY: -3 * deltaY }, i * 8);
+    });
+    vi.runAllTimers();
+    expect(h.pan.mock.calls).toEqual([[0, 40], [0, 7], [0, 3.5], [0, 12]]);
+    expect(h.zoom).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['small', { deltaY: 7 }],
+    ['fractional', { deltaY: 80.5 }],
+    ['non-multiple', { deltaY: 100 }],
+    ['diagonal', { deltaX: 0.5, deltaY: 120 }],
+  ] satisfies [string, Sample][])('keeps probing after compatible notches until a %s sample', (_, sample: Sample) => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.send({ deltaY: 40, wheelDeltaY: -120 });
+    vi.advanceTimersByTime(8);
+    h.send({ deltaY: 80, wheelDeltaY: -240 }, 8);
+    expect(h.zoom).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(8);
+    h.send(sample, 16);
+    expect(h.pan.mock.calls).toEqual([[0, 40], [0, 80], [sample.deltaX ?? 0, sample.deltaY]]);
+    vi.runAllTimers();
     expect(h.zoom).not.toHaveBeenCalled();
   });
 
@@ -148,6 +213,20 @@ describe('viewport wheel gestures', () => {
     vi.advanceTimersByTime(40);
     expect(h.pan).not.toHaveBeenCalled();
     expect(h.zoom).toHaveBeenCalledTimes(2);
+  });
+
+  it('zooms a pinch immediately during the probe without deciding plain scroll', () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.send({ deltaY: 40, wheelDeltaY: -120 });
+    vi.advanceTimersByTime(8);
+    const pinch = h.send({ deltaY: -1.5, ctrlKey: true }, 8);
+    expect(h.zoom).toHaveBeenCalledExactlyOnceWith(pinch);
+    vi.advanceTimersByTime(8);
+    h.send({ deltaY: 7 }, 16);
+    expect(h.pan.mock.calls).toEqual([[0, 40], [0, 7]]);
+    vi.runAllTimers();
+    expect(h.zoom).toHaveBeenCalledTimes(1);
   });
 
   it('buffers an ambiguous start and pans both samples of a rapid varying stream', () => {
