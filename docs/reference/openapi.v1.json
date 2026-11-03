@@ -18178,6 +18178,20 @@
               "title": "Body",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "delivery",
+            "required": false,
+            "schema": {
+              "default": "download",
+              "enum": [
+                "download",
+                "staged"
+              ],
+              "title": "Delivery",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -18219,6 +18233,22 @@
     "/api/export/stl": {
       "post": {
         "operationId": "export_stl_api_export_stl_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "delivery",
+            "required": false,
+            "schema": {
+              "default": "download",
+              "enum": [
+                "download",
+                "staged"
+              ],
+              "title": "Delivery",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -22583,6 +22613,19 @@
                   "ExportMember": {
                     "additionalProperties": false,
                     "properties": {
+                      "artifact_id": {
+                        "anyOf": [
+                          {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "title": "Artifact Id"
+                      },
                       "content_base64": {
                         "anyOf": [
                           {

@@ -1,51 +1,27 @@
-import type { FrameHeader } from '../api/frame';
-
-type PreviewLod = NonNullable<FrameHeader['lod']>;
-
-function requestKey(epoch: number, revision: number, lod: PreviewLod): string {
-  return `${epoch}:${revision}:${lod}`;
-}
-
+/** Bounded timestamps owned by actual sends on one socket connection. */
 export class ClientLatencyClock {
-  private epoch: number | null = null;
-  private epochStartedAt = 0;
-  private readonly requests = new Map<string, number>();
+  private generation = 0;
+  private readonly requests = new Map<number, number>();
 
   constructor(private readonly maxRequests = 256) {}
 
-  beginEpoch(epoch: number, revision: number, startedAt: number): void {
-    if (this.epoch === epoch) return;
-    this.epoch = epoch;
-    this.epochStartedAt = startedAt;
-    this.requests.clear();
-    this.recordRequest(epoch, revision, 'coarse', startedAt);
-    this.recordRequest(epoch, revision, 'fine', startedAt);
-  }
-
-  disconnect(): void {
-    this.epoch = null;
+  beginConnection(generation: number): void {
+    this.generation = generation;
     this.requests.clear();
   }
 
-  recordRequest(epoch: number, revision: number, lod: PreviewLod, startedAt: number): void {
-    if (epoch !== this.epoch || startedAt < this.epochStartedAt) return;
-    const key = requestKey(epoch, revision, lod);
-    // Refresh insertion order when a request supersedes the same revision/LOD.
-    this.requests.delete(key);
-    this.requests.set(key, startedAt);
+  recordRequest(generation: number, seq: number, startedAt: number): void {
+    if (generation !== this.generation) return;
+    this.requests.set(seq, startedAt);
     while (this.requests.size > Math.max(1, this.maxRequests)) {
-      const oldest = this.requests.keys().next().value as string | undefined;
+      const oldest = this.requests.keys().next().value as number | undefined;
       if (oldest === undefined) break;
       this.requests.delete(oldest);
     }
   }
 
-  requestStartedAt(header: Pick<FrameHeader, 'epoch' | 'designRevision' | 'lod'>): number | null {
-    const { epoch, designRevision, lod } = header;
-    if (epoch === undefined || designRevision === undefined || lod === undefined || epoch !== this.epoch) return null;
-    const startedAt = this.requests.get(requestKey(epoch, designRevision, lod));
-    if (startedAt === undefined || startedAt < this.epochStartedAt) return null;
-    return startedAt;
+  requestStartedAt(generation: number, seq: number): number | null {
+    return generation === this.generation ? this.requests.get(seq) ?? null : null;
   }
 }
 

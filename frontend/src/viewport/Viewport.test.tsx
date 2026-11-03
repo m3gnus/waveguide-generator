@@ -22,6 +22,7 @@ import type { PreviewSnapshot } from '../api/previewSocket';
 import { compareSelection } from '../api/results';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { preferencesStore } from '../prefs/preferences';
+import { viewerPreferences } from '../viewerprefs/viewerPreferences';
 import { currentDocumentLoad, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -191,6 +192,53 @@ describe('Viewport preview errors', () => {
     wording.forEach(element => expectNoJargon(element));
   });
 
+  it('resolves unchanged auto symmetry once across coarse and fine arrivals', async () => {
+    act(() => root.unmount());
+    root = createRoot(host);
+    vi.useFakeTimers();
+    const replies: Array<(response: Response) => void> = [];
+    const posts = vi.fn((_url: unknown, _init: unknown) => new Promise<Response>(resolve => replies.push(resolve)));
+    vi.stubGlobal('fetch', posts);
+    try {
+      act(() => {
+        useSolveOptionsStore.setState({ symmetry: 'auto' });
+        previewSnapshot.frame = null;
+        root.render(<Viewport />);
+      });
+      const arrive = (seq: number, lod: 'coarse' | 'fine') => act(() => {
+        previewSnapshot.frame = { ...frame, header: { ...frame.header, seq, lod, designRevision: useDesignStore.getState().designRevision } };
+        root.render(<Viewport />);
+      });
+      act(() => vi.advanceTimersByTime(100));
+      arrive(10, 'coarse');
+      act(() => vi.advanceTimersByTime(400));
+      expect(posts).toHaveBeenCalledTimes(1);
+      act(() => vi.advanceTimersByTime(200));
+      arrive(11, 'fine');
+      act(() => vi.advanceTimersByTime(400));
+      expect(posts).toHaveBeenCalledTimes(1);
+      const oldBody = (posts.mock.calls[0][1] as RequestInit).body;
+      act(() => useDesignStore.getState().updateField('a', 47));
+      act(() => vi.advanceTimersByTime(400));
+      expect(posts).toHaveBeenCalledTimes(2);
+      expect((posts.mock.calls[1][1] as RequestInit).body).not.toBe(oldBody);
+      await act(async () => {
+        replies[1](json({ quadrants: 1 }));
+        await Promise.resolve();
+      });
+      const label = host.querySelector('[aria-label="Solved domain"]')?.textContent;
+      await act(async () => {
+        replies[0](json({ quadrants: 1234 }));
+        await Promise.resolve();
+      });
+      expect(host.querySelector('[aria-label="Solved domain"]')?.textContent).toBe(label);
+      expect(label).toContain('Quarter model');
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it('shows a dismissible alert while a retained scene is present', () => {
     const alert = host.querySelector<HTMLElement>('[role="alert"]');
     expect(alert?.textContent).toContain('The view still shows the last design that worked');
@@ -201,6 +249,51 @@ describe('Viewport preview errors', () => {
 
     act(() => alert?.querySelector<HTMLButtonElement>('[aria-label="Dismiss preview error"]')?.click());
     expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('updates untinted vertex ownership when tint, display mode or clipping changes', () => {
+    vi.spyOn(canvasModule, 'canRenderWebGL').mockReturnValue(true);
+    const canvas = vi.spyOn(canvasModule.ViewportCanvas as unknown as { type: (props: { scene: FrameScene; sceneMarker: string; frameStartedAt: number | null }) => import('react').ReactNode }, 'type')
+      .mockImplementation(() => null);
+    const originalTint = viewerPreferences.getSnapshot().tintSolvedRegion;
+    try {
+      act(() => {
+        useSolveOptionsStore.setState({ symmetry: 'quarter' });
+        viewerPreferences.update({ tintSolvedRegion: false });
+        previewSnapshot.frame = { ...frame, connectionGeneration: 1, requestStartedAt: 100, sections: {
+          ...frame.sections,
+          'horn.positions': new Float32Array([1, 1, 0, 2, 1, 0, 1, 2, 0, -1, -1, 0, -2, -1, 0, -1, -2, 0]),
+          'horn.normals': new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
+          'horn.indices': new Uint32Array([0, 1, 2, 3, 4, 5]),
+        } };
+        root.render(<Viewport />);
+      });
+      const props = () => canvas.mock.calls.at(-1)![0];
+      expect(props().scene.surfaces).toHaveLength(1);
+      expect(props().scene.symmetryPlanes).toEqual(['x0', 'y0']);
+      expect(props().frameStartedAt).toBe(100);
+      const marker = props().sceneMarker;
+      act(() => {
+        previewSnapshot.frame = { ...previewSnapshot.frame!, connectionGeneration: 2, requestStartedAt: 200 };
+        root.render(<Viewport />);
+      });
+      expect(props().sceneMarker).not.toBe(marker);
+      expect(props().frameStartedAt).toBe(200);
+      act(() => viewerPreferences.update({ tintSolvedRegion: true }));
+      expect(props().scene.surfaces).toHaveLength(2);
+      act(() => viewerPreferences.update({ tintSolvedRegion: false }));
+      expect(props().scene.surfaces).toHaveLength(1);
+      const mode = host.querySelector<HTMLButtonElement>('.display-mode-tools button')!;
+      act(() => mode.click()); // Solid + wireframe retains partitioning.
+      expect(props().scene.surfaces).toHaveLength(2);
+      for (let i = 0; i < 8 && !mode.getAttribute('aria-label')?.includes('Display mode: Clay'); i += 1) act(() => mode.click());
+      expect(props().scene.surfaces).toHaveLength(1);
+      act(() => host.querySelector<HTMLButtonElement>('.section-cut-toggle')!.click());
+      expect(props().scene.surfaces).toHaveLength(2);
+    } finally {
+      act(() => viewerPreferences.update({ tintSolvedRegion: originalTint }));
+      resetSolveOptionsStore();
+    }
   });
 
   it('renders the design-size readout in the parametric viewport and removes it in CAD mode', () => {
@@ -261,7 +354,7 @@ describe('Viewport preview errors', () => {
       act(() => root.render(<Viewport />));
       const timing = host.querySelector('.viewport-timing');
       // 'request→paint' was developer telemetry sitting in a user-facing readout.
-      expect(timing?.textContent).toBe('Geometry 1388.0 msOn screen —');
+      expect(timing?.textContent).toBe('Geometry 1388.0 msTo render —');
       expect(timing?.textContent).not.toContain('+ client');
     } finally {
       act(() => preferencesStore.update({ showDeveloperDetails: false }));

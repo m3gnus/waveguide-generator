@@ -9617,6 +9617,7 @@ export interface operations {
         parameters: {
             query?: {
                 body?: "solid" | "surface";
+                delivery?: "download" | "staged";
             };
             header?: never;
             path?: never;
@@ -9650,7 +9651,9 @@ export interface operations {
     };
     export_stl_api_export_stl_post: {
         parameters: {
-            query?: never;
+            query?: {
+                delivery?: "download" | "staged";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -12921,6 +12924,8 @@ export interface operations {
                     job_id?: string | null;
                     /** Members */
                     members: {
+                        /** Artifact Id */
+                        artifact_id?: string | null;
                         /** Content Base64 */
                         content_base64?: string | null;
                         /** Relative Path */

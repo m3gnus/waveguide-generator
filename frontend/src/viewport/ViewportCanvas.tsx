@@ -658,6 +658,7 @@ function CameraGizmo({ controls, center, scheduler, theme, onDirection }: {
   </GizmoHelper>;
 }
 
+/** Request-to-render-callback time; GPU presentation is not observed. */
 function PaintObserver({ marker, startedAt, onClientFrame }: {
   marker: string;
   startedAt: number | null;

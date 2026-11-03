@@ -221,14 +221,14 @@ def _point_grid(
     before this point; keep those transient keys in every candidate grid.
     """
 
-    from hornlab_mesher.config_builder import build_point_grid
+    from hornlab_mesher.profile_sampling import build_point_grid_arrays
 
-    grid = build_point_grid(
+    grid = build_point_grid_arrays(
         {**params, "angularSegments": int(angular), "lengthSegments": int(length)}
     )
     n_phi = int(grid["grid_n_phi"])
     n_length = int(grid["grid_n_length"])
-    points = np.asarray(grid["inner_points"], dtype=float)
+    points = np.asarray(grid["inner_grid"], dtype=float)
     if points.size != n_phi * (n_length + 1) * 3:
         raise RuntimeError("HornLab inner point grid has an inconsistent size")
     return points.reshape(n_phi, n_length + 1, 3), n_phi, n_length
@@ -574,7 +574,8 @@ def axial_band_of_column(reference_columns: int, n_length: int) -> np.ndarray:
 
 
 def _non_nested_deviation(
-    params: Mapping[str, Any], angular: int, coarse: np.ndarray, n_phi: int, n_length: int
+    params: Mapping[str, Any], angular: int, coarse: np.ndarray, n_phi: int, n_length: int,
+    *, point_grid: Callable | None = None,
 ) -> tuple[SurfaceDeviation, int, int] | None:
     """Measure a candidate whose doubled angular lattice does not nest.
 
@@ -601,7 +602,8 @@ def _non_nested_deviation(
     is already accounted for exactly.
     """
 
-    axial, axial_phi, axial_length = _point_grid(params, angular, 2 * n_length)
+    point_grid = point_grid or _point_grid
+    axial, axial_phi, axial_length = point_grid(params, angular, 2 * n_length)
     if axial_phi != n_phi or axial_length != 2 * n_length:
         return None
     if not np.allclose(axial[:, ::2], coarse, rtol=0.0, atol=1e-9):
@@ -619,7 +621,7 @@ def _non_nested_deviation(
     angular_edge = 0.0
     face = 0.0
     for offset in _NON_NESTED_REFERENCE_OFFSETS:
-        reference, reference_phi, reference_length = _point_grid(
+        reference, reference_phi, reference_length = point_grid(
             params, 2 * angular + offset, 2 * n_length
         )
         if reference_length != 2 * n_length or reference_phi <= n_phi:
@@ -646,7 +648,8 @@ def _non_nested_deviation(
 
 
 def measure_deviation(
-    params: Mapping[str, Any], angular: int, length: int
+    params: Mapping[str, Any], angular: int, length: int,
+    *, linear_only: bool = False, point_grid: Callable | None = None,
 ) -> tuple[SurfaceDeviation, int, int] | None:
     """Measure how far the analytic surface strays from what will be written.
 
@@ -664,14 +667,17 @@ def measure_deviation(
     back to a fixed conservative size instead of trusting a bad number.
     """
 
-    coarse, n_phi, n_length = _point_grid(params, angular, length)
-    fine, fine_phi, fine_length = _point_grid(params, 2 * n_phi, 2 * n_length)
+    point_grid = point_grid or _point_grid
+    coarse, n_phi, n_length = point_grid(params, angular, length)
+    fine, fine_phi, fine_length = point_grid(params, 2 * n_phi, 2 * n_length)
     if (
         fine_phi != 2 * n_phi
         or fine_length != 2 * n_length
         or not np.allclose(fine[::2, ::2], coarse, rtol=0.0, atol=1e-9)
     ):
-        return _non_nested_deviation(params, angular, coarse, n_phi, n_length)
+        return _non_nested_deviation(
+            params, angular, coarse, n_phi, n_length, point_grid=point_grid
+        )
 
     # A facet export contains the coarse cells themselves, so each analytic
     # sample is measured against the cell it falls inside. A fitted export
@@ -683,22 +689,32 @@ def measure_deviation(
     linear = _distance_to_cells(
         fine, coarse, rows // 2, np.minimum(cols // 2, n_length - 1), ((0, 0),)
     )
-    cubic = _distance_to_cells(
-        fine, _refined(coarse, "cubic"), rows, cols, _NEIGHBOURING_CELLS
-    )
-
     # A nested 2x lattice alone can alias an expression-capable surface.  For
     # example, cos(192*p) has exactly the same value at every point of a 96-ring
     # candidate and its 192-ring reference, despite changing between them.  A
     # slightly detuned lattice probes different phases.  This is a bounded
     # numerical check rather than a proof over arbitrary user expressions, but
     # accepting requires both independent samplings to agree.
-    detuned, detuned_phi, detuned_length = _point_grid(
+    detuned, detuned_phi, detuned_length = point_grid(
         params, 2 * n_phi + 4, 2 * n_length + 1
     )
     if detuned_phi == fine_phi and detuned_length == fine_length:
         return None
     detuned_linear = float(_distance_to_surface(detuned, coarse).max())
+    # Samples on an angular edge speak for the ring direction and those on an
+    # axial edge for the profile direction; a cell's own middle belongs to both,
+    # and is where a two-triangle facet is furthest from the surface.
+    face_linear = float(linear[1::2, 1::2].max())
+    angular_linear = max(float(linear[1::2, ::2].max()), face_linear, detuned_linear)
+    axial_linear = max(float(linear[::2, 1::2].max()), face_linear, detuned_linear)
+    if linear_only:
+        return SurfaceDeviation(
+            angular_linear, angular_linear, axial_linear, axial_linear,
+            cubic_modelled=False,
+        ), n_phi, n_length
+    cubic = _distance_to_cells(
+        fine, _refined(coarse, "cubic"), rows, cols, _NEIGHBOURING_CELLS
+    )
     detuned_cubic = float(
         np.linalg.norm(
             detuned
@@ -706,15 +722,11 @@ def measure_deviation(
             axis=2,
         ).max()
     )
-    # Samples on an angular edge speak for the ring direction and those on an
-    # axial edge for the profile direction; a cell's own middle belongs to both,
-    # and is where a two-triangle facet is furthest from the surface.
-    face_linear = float(linear[1::2, 1::2].max())
     face_cubic = float(cubic[1::2, 1::2].max())
     deviation = SurfaceDeviation(
-        angular_linear=max(float(linear[1::2, ::2].max()), face_linear, detuned_linear),
+        angular_linear=angular_linear,
         angular_cubic=max(float(cubic[1::2, ::2].max()), face_cubic, detuned_cubic),
-        axial_linear=max(float(linear[::2, 1::2].max()), face_linear, detuned_linear),
+        axial_linear=axial_linear,
         axial_cubic=max(float(cubic[::2, 1::2].max()), face_cubic, detuned_cubic),
     )
     return deviation, n_phi, n_length
@@ -755,6 +767,7 @@ def _next_distinct_request(
     request: tuple[int, int],
     previous_request: tuple[int, int],
     previous_resolved: tuple[int, int],
+    *, point_grid: Callable | None = None,
 ) -> tuple[int, int]:
     """Push a request until each moving direction resolves somewhere new.
 
@@ -768,6 +781,7 @@ def _next_distinct_request(
     a fraction of its count so the move stays proportional at any grid size.
     """
 
+    point_grid = point_grid or _point_grid
     angular, length = request
     direction = (
         (angular > previous_request[0]) - (angular < previous_request[0]),
@@ -776,7 +790,7 @@ def _next_distinct_request(
     if direction == (0, 0):
         return request
     for _ in range(_REQUEST_STEP_ATTEMPTS):
-        _, n_phi, n_length = _point_grid(params, angular, length)
+        _, n_phi, n_length = point_grid(params, angular, length)
         stuck = (
             direction[0] != 0 and n_phi == previous_resolved[0],
             direction[1] != 0 and n_length == previous_resolved[1],
@@ -839,6 +853,17 @@ def plan_grid(
     angular_fit, angular_tolerance = angular
     axial_fit, axial_tolerance = axial
     wants_cubic = "cubic" in (angular_fit, axial_fit)
+    # One request-local grid, primarily the candidate just resolved by the
+    # distinct-request check. No global cache or retained geometry ownership.
+    last_grid = None
+
+    def point_grid(grid_params, angular_request, length_request):
+        nonlocal last_grid
+        if last_grid is None or last_grid[:2] != (angular_request, length_request):
+            last_grid = (angular_request, length_request, _point_grid(grid_params, angular_request, length_request))
+        return last_grid[2]
+
+    native_measurement = measure is measure_deviation
     exponent = _CUBIC_EXPONENT if wants_cubic else _LINEAR_EXPONENT
     angular_count, length_count = _PROBE_ANGULAR, _PROBE_LENGTH
     tolerance_for_report = min(angular_tolerance, axial_tolerance)
@@ -850,7 +875,11 @@ def plan_grid(
     finest_validated = True
     stalled = False
     for _ in range(max_attempts):
-        measured = measure(params, angular_count, length_count)
+        measured = (
+            measure_deviation(params, angular_count, length_count,
+                              linear_only=not wants_cubic, point_grid=point_grid)
+            if native_measurement else measure(params, angular_count, length_count)
+        )
         if measured is None:
             plan = GridPlan(
                 angular_count,
@@ -921,6 +950,7 @@ def plan_grid(
             (next_angular, next_length),
             (angular_count, length_count),
             (resolved_angular, resolved_length),
+            point_grid=point_grid if native_measurement else None,
         )
         if (next_angular, next_length) == (angular_count, length_count):
             stalled = True

@@ -97,11 +97,12 @@ class ExportMember(BaseModel):
     relative_path: str = Field(min_length=1)
     text: str | None = None
     content_base64: str | None = None
+    artifact_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def one_content_source(self) -> "ExportMember":
-        if (self.text is None) == (self.content_base64 is None):
-            raise ValueError("exactly one of text or content_base64 is required")
+        if sum(value is not None for value in (self.text, self.content_base64, self.artifact_id)) != 1:
+            raise ValueError("exactly one of text, content_base64 or artifact_id is required")
         return self
 
 
@@ -222,6 +223,13 @@ def _workspace_unavailable_response(exc: WorkspaceUnavailableError) -> JSONRespo
 
 
 def _member_bytes(member: ExportMember, remaining: int = MAX_EXPORT_BYTES) -> bytes:
+    if member.artifact_id is not None:
+        from server.exports.artifacts import STAGED_EXPORTS
+
+        content = STAGED_EXPORTS.read(member.artifact_id)
+        if len(content) > remaining:
+            raise ValueError(f"Export set exceeds the {MAX_EXPORT_BYTES}-byte binary size limit")
+        return content
     if member.text is not None:
         content = member.text.encode("utf-8")
         if len(content) > remaining:
@@ -1391,10 +1399,12 @@ def create_workspace_router(
             return _workspace_unavailable_response(exc)
 
     async def workspace_write_export_guarded(request: Request) -> Any:
+        artifact_ids: list[str] = []
         try:
             if isinstance(request, WriteExportRequest):
                 # Direct endpoint calls in unit tests retain the legacy model
                 # shape; actual ASGI requests always take one branch below.
+                artifact_ids = [m.artifact_id for m in request.members if m.artifact_id is not None]
                 subdirectory, existing, members, destination, job_id = await asyncio.to_thread(
                     _decode_json_export_request, request
                 )
@@ -1406,8 +1416,10 @@ def create_workspace_router(
                 )
             else:
                 raw = await request.body()
+                payload = await asyncio.to_thread(WriteExportRequest.model_validate_json, raw)
+                artifact_ids = [m.artifact_id for m in payload.members if m.artifact_id is not None]
                 subdirectory, existing, members, destination, job_id = await asyncio.to_thread(
-                    _decode_json_export_request, raw
+                    _decode_json_export_request, payload
                 )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1465,6 +1477,11 @@ def create_workspace_router(
                 await asyncio.to_thread(export_destinations.remember, root)
             except OSError:
                 logger.warning("Could not remember the export folder %s", root)
+        if artifact_ids:
+            from server.exports.artifacts import STAGED_EXPORTS
+
+            for artifact_id in artifact_ids:
+                STAGED_EXPORTS.discard(artifact_id)
         return written
 
     return router

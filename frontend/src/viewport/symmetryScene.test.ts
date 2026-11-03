@@ -1,3 +1,5 @@
+import { SurfaceBufferManager } from './bufferManager';
+import { createMaterialLibrary } from './materials';
 import { Box3, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import type { FrameScene } from './frameScene';
@@ -18,6 +20,49 @@ function scene(value: SceneSurface): FrameScene {
 }
 
 describe('symmetry display geometry', () => {
+  it('keeps one vertex owner for untinted solid display and retains plane metadata', () => {
+    const full = scene(surface([1, 1, 0, 2, 1, 0, 1, 2, 0, -1, -1, 0, -2, -1, 0, -1, -2, 0], [0, 1, 2, 3, 4, 5]));
+    const unpartitioned = markParametricSolvedDomain(full, 1, false);
+    expect(unpartitioned.surfaces).toHaveLength(1);
+    expect(unpartitioned.surfaces[0].indices).toBe(full.surfaces[0].indices);
+    expect(unpartitioned.symmetryPlanes).toEqual(['x0', 'y0']);
+    const tinted = markParametricSolvedDomain(full, 1);
+    expect(tinted.surfaces).toHaveLength(2);
+    const triangles = tinted.surfaces.flatMap(s => [...s.indices]);
+    expect(triangles).toEqual([...full.surfaces[0].indices]);
+    const materials = createMaterialLibrary('clay', null, 'dark', false);
+    expect(materials.solvedSurfaces).toBe(materials.surfaces);
+    materials.all.forEach(m => m.dispose());
+  });
+
+  it('measures 60 updates of a 50000-vertex untinted quarter display', () => {
+    const vertices = 50_000;
+    const positions = Array.from({ length: vertices * 3 }, (_, i) => i % 3 === 2 ? 0 : (Math.floor(i / 9) % 4 < 2 ? 1 : -1) * (1 + i % 11));
+    const full = scene(surface(positions, Array.from({ length: 49_998 }, (_, i) => i)));
+    const results = [true, false].map(partition => {
+      const managers: SurfaceBufferManager[] = [];
+      const start = performance.now();
+      let attributes = 0;
+      let uploadBytes = 0;
+      for (let update = 0; update < 60; update += 1) {
+        const marked = markParametricSolvedDomain(full, 1, partition);
+        marked.surfaces.forEach((s, index) => {
+          const manager = managers[index] ??= new SurfaceBufferManager();
+          manager.update(s);
+          uploadBytes += s.positions.byteLength + s.normals.byteLength;
+        });
+      }
+      const ms = performance.now() - start;
+      attributes = new Set(managers.flatMap(m => [m.geometry.getAttribute('position'), m.geometry.getAttribute('normal')])).size;
+      const disposed = managers.map(m => { let count = 0; m.geometry.addEventListener('dispose', () => { count += 1; }); m.dispose(); return count; });
+      expect(disposed.every(n => n === 1)).toBe(true);
+      return { ms, attributes, uploadBytes };
+    });
+    expect(results.map(r => r.attributes)).toEqual([4, 2]);
+    expect(results.map(r => r.uploadBytes)).toEqual([144_000_000, 72_000_000]);
+    console.log({ symmetryUpdates: 60, before: results[0], after: results[1] });
+  });
+
   it('reflects a quarter solver mesh into a full model and reverses reflected winding', () => {
     const expanded = expandImportedSymmetry(scene(surface(
       [0, 0, 0, 1, 0, 0, 0, 1, 0],

@@ -24,7 +24,7 @@ from server.design.migrate import apply_migrations
 from server.design.schema import DesignConfig
 from server.integration.mesher_identity import mesher_identity
 from server.platform.gmsh_openmp import pin_gmsh_openmp_initial_thread
-from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES, FrameError, encode
+from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES, FrameError, PreparedFrame, encode
 from server.preview.construction import retain_mesher_construction
 from server.preview.translate import design_to_mesher_config
 from server.preview.errors import user_error_message
@@ -104,7 +104,7 @@ class PreviewComputeService:
         *,
         size_of: Callable[[Any], int],
     ) -> Any:
-        """Reuse immutable geometry for exact undo/redo and repeated requests."""
+        """Reuse owned immutable values for exact undo/redo and repeat requests."""
 
         with self._cache_lock:
             cached = self._cache.pop(key, None)
@@ -258,43 +258,15 @@ def preview_options(lod: Literal["coarse", "fine"], *, curvature: bool = True):
     )
 
 
-#: Mesh fields the preview builder overwrites before it samples anything.
-#: ``hornlab_mesher.preview.api._lod_config`` assigns ``angular_segments`` and
-#: ``length_segments`` from the LOD preset and drops the camel-case aliases the
-#: translation emits, which is the same fact ``preview_options`` documents at
-#: length. Imported lips and Opus rears instead keep their authored grids.
-_PREVIEW_OVERWRITTEN_MESH_FIELDS = frozenset(
-    {"angular_segments", "angularSegments", "length_segments", "lengthSegments"}
-)
-
-
 def _cache_relevant_config(config: Mapping[str, Any]) -> Any:
-    """Drop config the builder discards, so it cannot invalidate the cache.
+    """Keep the full inputs to geometry, dimensions and validation.
 
-    Two designs that differ only in "Surface sampling" produce byte-identical
-    frames, and those controls sit next to the solve settings a user adjusts
-    while looking at the viewport. Keying on them charged a full rebuild --
-    tens to hundreds of milliseconds -- for a change the preview never sees.
+    Surface LOD overrides sampling budgets, but canonical dimensions and some
+    enclosure checks still read them. Retain authored construction through its
+    existing owner without discarding any of those inputs.
     """
 
-    mesh = config.get("mesh")
-    if not isinstance(mesh, Mapping):
-        return config
-    if mesh.get("athRoundover") or mesh.get("athRearShape") == 3:
-        # Lip chord angles and Opus ring selection depend on the authored grid.
-        return config
-    if not _PREVIEW_OVERWRITTEN_MESH_FIELDS.intersection(mesh):
-        return config
-    # Native preview retains the authored no-shrink construction before LOD
-    # replacement. Key on that same construction before dropping the budgets.
-    config = retain_mesher_construction(config)
-    relevant = dict(config)
-    relevant["mesh"] = {
-        name: value
-        for name, value in config["mesh"].items()
-        if name not in _PREVIEW_OVERWRITTEN_MESH_FIELDS
-    }
-    return relevant
+    return retain_mesher_construction(config)
 
 
 def _recentred_preview_config(design: DesignConfig) -> dict[str, Any]:
@@ -316,20 +288,6 @@ def _recentred_preview_config(design: DesignConfig) -> dict[str, Any]:
     return config
 
 
-def _geometry_nbytes(geometry: Any) -> int:
-    total = 0
-    for surface in geometry.surfaces:
-        for field in (
-            "positions",
-            "indices",
-            "normals",
-            "curvature_mean",
-            "curvature_principal",
-        ):
-            values = getattr(surface, field, None)
-            if isinstance(values, np.ndarray):
-                total += values.nbytes
-    return total
 
 
 def _json_safe(value: Any) -> Any:
@@ -508,6 +466,18 @@ def encode_preview_geometry(
         arrays,
         max_frame_bytes=max_frame_bytes,
     )
+
+
+def prepare_preview_geometry(
+    geometry: Any, *, max_frame_bytes: int = DEFAULT_MAX_FRAME_BYTES,
+) -> PreparedFrame:
+    """Validate and detach the wire payload before it enters the bounded cache."""
+
+    frame = encode_preview_geometry(
+        geometry, epoch=0, seq=0, design_revision=0, lod="fine", eval_ms=0,
+        max_frame_bytes=max_frame_bytes,
+    )
+    return PreparedFrame._from_validated_frame(frame)
 
 
 def _validation_fields(error: ValidationError, *, prefix: str | None = None) -> dict[str, str]:
@@ -886,6 +856,7 @@ class PreviewProtocol:
             # session on this executor thread, which exits at shutdown.
             pin_gmsh_openmp_initial_thread()
             builder = build_preview_geometry
+        relevant_config = _cache_relevant_config(config)
         cache_key = canonical_ascii_strict_json(
             {
                 # Test/application-injected builders use the production cache
@@ -898,29 +869,28 @@ class PreviewProtocol:
                 # fine frames ever have them, so coarse keeps one entry either
                 # way and a drag never splits its cache.
                 "curvature": request.curvature and request.lod == "fine",
-                "config": _cache_relevant_config(config),
+                "config": relevant_config,
             }
         )
         # Only production fine frames certify the solve advisory. Coarse and
         # injected builders cannot establish the dense-preview wall outcome.
         certify_wall = request.lod == "fine" and self._preview_builder is None
         try:
-            geometry = self._preview_service.get_or_build(
+            prepared = self._preview_service.get_or_build(
                 cache_key,
-                lambda: builder(
+                lambda: prepare_preview_geometry(builder(
                     config, preview_options(request.lod, curvature=request.curvature)
-                ),
-                size_of=_geometry_nbytes,
+                ), max_frame_bytes=self.max_frame_bytes),
+                size_of=lambda value: value.nbytes,
             )
         except ValueError as exc:
             if certify_wall:
-                wall_check.remember(_cache_relevant_config(config), str(exc))
+                wall_check.remember(relevant_config, str(exc))
             raise
         if certify_wall:
-            wall_check.remember(_cache_relevant_config(config), None)
+            wall_check.remember(relevant_config, None)
         elapsed = (time.perf_counter() - began) * 1000.0
-        return encode_preview_geometry(
-            geometry,
+        return prepared.encode(
             epoch=self.epoch,
             seq=request.seq,
             design_revision=request.design_revision,

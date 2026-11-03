@@ -1,0 +1,68 @@
+[
+  {
+    "design": {
+      "formula": "OSSE",
+      "L": 120,
+      "a": "45+10*sin(2*p)",
+      "a0": 15.5,
+      "r0": 12.7,
+      "k": 1,
+      "s": 0
+    },
+    "plan": {
+      "angular": 145,
+      "length": 75,
+      "deviation_mm": 0.09057460166714643,
+      "triangles": 22800,
+      "warning": null
+    },
+    "grid_sha256": "fa6f9f6fbb7439a7ebe7f468fcfa984662d33a436054f9fee8c947f6e143f07a"
+  },
+  {
+    "design": {
+      "formula": "R-OSSE",
+      "R": 140,
+      "r0": 12.7,
+      "a0": 15.5,
+      "a": 25,
+      "k": 2,
+      "m": 0.85,
+      "b": 0.2,
+      "r": 0.4,
+      "q": 3.4,
+      "tmax": 1
+    },
+    "plan": {
+      "angular": 102,
+      "length": 60,
+      "deviation_mm": 0.09784421253908746,
+      "triangles": 12480,
+      "warning": null
+    },
+    "grid_sha256": "f0a51de6bfbf0d6376035d3eb92719ac7ca9001b333454d3a70514d9c027177c"
+  },
+  {
+    "design": {
+      "formula": "OSSE",
+      "L": 120,
+      "a": 55,
+      "a0": 10,
+      "r0": 12.7,
+      "morph": {
+        "target_shape": 1,
+        "target_width": 120,
+        "target_height": 80,
+        "corner_radius": 12,
+        "rate": 3
+      }
+    },
+    "plan": {
+      "angular": 96,
+      "length": 56,
+      "deviation_mm": 0.0804941140749889,
+      "triangles": 12096,
+      "warning": null
+    },
+    "grid_sha256": "f6779b3e27009e649c6e249242bed368556f1dd5408e7709c8b8b7ff98330f8a"
+  }
+]

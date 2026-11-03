@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from contextlib import AbstractContextManager, nullcontext
 
 import copy
@@ -1036,9 +1038,9 @@ def _build_ath_stl_mesh(design: DesignConfig) -> dict[str, Any]:
             "written in full; slicers may be slow to load it."
         )
     return {
-        "vertices": (np.asarray(inner.positions) * .001).reshape(-1).tolist(),
-        "indices": inner.indices.reshape(-1).astype(int).tolist(),
-        "surfaceTags": [1] * triangles,
+        "vertices": (np.asarray(inner.positions) * .001).reshape(-1),
+        "indices": inner.indices.reshape(-1).astype(int, copy=False),
+        "surfaceTags": np.ones(triangles, dtype=int),
         "warnings": warnings,
     }
 
@@ -1071,9 +1073,9 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any], work_dir: str | None = Non
             parsed = meshio.read(path)
             triangles, tags = _triangles_and_tags(parsed)
         return {
-            "vertices": np.asarray(parsed.points, dtype=float).reshape(-1).tolist(),
-            "indices": triangles.reshape(-1).astype(int).tolist(),
-            "surfaceTags": tags.astype(int).tolist(), "warnings": [],
+            "vertices": np.asarray(parsed.points, dtype=float).reshape(-1),
+            "indices": triangles.reshape(-1).astype(int, copy=False),
+            "surfaceTags": tags.astype(int, copy=False), "warnings": [],
         }
     plan, params = _stl_grid_plan(design)
     config = _stl_mesher_config(design, grid=(plan.angular, plan.length))
@@ -1124,9 +1126,9 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any], work_dir: str | None = Non
             "written in full; slicers may be slow to load it."
         )
     return {
-        "vertices": vertices.reshape(-1).tolist(),
-        "indices": triangles.reshape(-1).astype(int).tolist(),
-        "surfaceTags": tags.astype(int).tolist(),
+        "vertices": vertices.reshape(-1),
+        "indices": triangles.reshape(-1).astype(int, copy=False),
+        "surfaceTags": tags.astype(int, copy=False),
         "warnings": warnings,
     }
 
@@ -1140,7 +1142,8 @@ async def build_stl(design: DesignConfig, model_name: str = "MWG Horn", *, cance
     canonical = await _export_child(_build_stl_mesh_sync, design, cancel_cb, progress_cb)
     warnings = [str(item) for item in canonical.get("warnings") or []]
     result = StlResult(
-        data=binary_stl(
+        data=await asyncio.to_thread(
+            binary_stl,
             canonical.get("vertices", []),
             canonical.get("indices", []),
             canonical.get("surfaceTags", []),

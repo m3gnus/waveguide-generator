@@ -53,6 +53,8 @@ export interface OutputFolderWrite {
   replaced: string[];
 }
 
+type OutputMember = { filename: string; blob: Blob } | { filename: string; artifactId: string };
+
 /**
  * Write files into the output folder through the backend.
  *
@@ -66,7 +68,7 @@ export interface OutputFolderWrite {
  */
 export async function writeToOutputFolder(
   subdirectory: string,
-  members: readonly { filename: string; blob: Blob }[],
+  members: readonly OutputMember[],
   fetcher: typeof fetch = fetch,
   existing: 'reject' | 'merge_identical' | 'overwrite' | 'confirm' = 'overwrite',
   destination?: string,
@@ -74,17 +76,31 @@ export async function writeToOutputFolder(
   jobId?: string,
 ): Promise<OutputFolderWrite> {
   const post = async (policy: string): Promise<OutputFolderWrite> => {
-    const body = new FormData();
-    // A folder the user chose for this export receives the files themselves.
-    // The subdirectory groups exports inside the shared output folder, and
-    // grouping is exactly what someone answering "put it here" did not ask for.
-    body.append('subdirectory', destination ? '' : subdirectory);
-    body.append('existing', policy);
-    if (destination) body.append('destination', destination);
-    if (jobId) body.append('job_id', jobId);
-    members.forEach(({ filename }) => body.append('relative_path', filename));
-    members.forEach(({ filename, blob }) => body.append('file', blob, filename));
-    const response = await fetcher('/api/workspace/write-export', { method: 'POST', body });
+    let body: FormData | string;
+    let headers: Record<string, string> | undefined;
+    // Retained geometry uses the same destination and collision owner. Only
+    // the content source changes; no file payload crosses the browser.
+    if (members.every((m): m is { filename: string; artifactId: string } => 'artifactId' in m)) {
+      body = JSON.stringify({
+        subdirectory: destination ? '' : subdirectory, existing: policy,
+        ...(destination ? { destination } : {}), ...(jobId ? { job_id: jobId } : {}),
+        members: members.map(m => ({ relative_path: m.filename, artifact_id: m.artifactId })),
+      });
+      headers = { 'Content-Type': 'application/json' };
+    } else {
+      const form = new FormData();
+      form.append('subdirectory', destination ? '' : subdirectory);
+      form.append('existing', policy);
+      if (destination) form.append('destination', destination);
+      if (jobId) form.append('job_id', jobId);
+      members.forEach(member => {
+        if (!('blob' in member)) throw new Error('WG could not combine these exports. Export the files separately.');
+        form.append('relative_path', member.filename);
+        form.append('file', member.blob, member.filename);
+      });
+      body = form;
+    }
+    const response = await fetcher('/api/workspace/write-export', { method: 'POST', body, ...(headers ? { headers } : {}) });
     if (!response.ok) {
       throw await collisionFrom(response) ?? new Error(await httpErrorMessage(response, 'WG could not read the Runs folder. Choose the WG folder in Settings.'));
     }

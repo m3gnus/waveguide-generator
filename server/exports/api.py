@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 from server.cadlink.store import CadLinkStore
@@ -19,6 +19,7 @@ from server.jobs.request_cancellation import ClientDisconnected
 from server.platform.cad_launch import focus_cad
 from server.cadlink.fusion.fusion_status import ADDIN_OUTDATED_MESSAGE, read_fusion_status
 
+from .artifacts import STAGED_EXPORTS
 from .cad_handoff import UPDATE_TARGET_REQUIRED
 from .core import build_profiles, build_step, build_step_solid, build_stl
 from .wglink_publication import recover_publications
@@ -96,11 +97,30 @@ def _headers(
     return headers
 
 
+def _file_response(
+    request: ExportRequest, payload: bytes, filename: str, media_type: str,
+    warning: str | None, delivery: str,
+) -> Response:
+    headers = _headers(request, filename, warning, payload)
+    if delivery == "staged":
+        try:
+            artifact_id = STAGED_EXPORTS.stage(payload)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return JSONResponse(
+            {"artifactId": artifact_id, "filename": filename, "sizeBytes": len(payload),
+             **({"warning": headers["X-Export-Warning"]} if "X-Export-Warning" in headers else {})},
+            headers=headers,
+        )
+    return Response(content=payload, media_type=media_type, headers=headers)
+
+
 @router.post("/step")
 async def export_step(
     request: ExportRequest,
     http_request: Request = None,
     body: Literal["solid", "surface"] = Query(default="solid"),
+    delivery: Literal["download", "staged"] = Query(default="download"),
 ) -> Response:
     """Export STEP. ``solid`` is the manufacturable part; ``surface`` the bore."""
 
@@ -128,12 +148,9 @@ async def export_step(
         payload = content.encode("utf-8")
         operation.check()
         operation.progress("check")
-        response = Response(
-            content=payload,
-            media_type="model/step",
-            headers=_headers(
-                request, f"{normalize_base_name(request.base_name)}.step", warning, payload
-            ),
+        response = _file_response(
+            request, payload, f"{normalize_base_name(request.base_name)}.step",
+            "model/step", warning, delivery,
         )
         operation.progress("write")
         operation.attach(response)
@@ -141,7 +158,10 @@ async def export_step(
 
 
 @router.post("/stl")
-async def export_stl(request: ExportRequest, http_request: Request = None) -> Response:
+async def export_stl(
+    request: ExportRequest, http_request: Request = None,
+    delivery: Literal["download", "staged"] = Query(default="download"),
+) -> Response:
     with request_operation(http_request, ("resolve", "mesh", "check", "write")) as operation:
         callbacks = {"cancel_cb": operation.check, "progress_cb": operation.progress} if http_request else {}
         try:
@@ -154,12 +174,9 @@ async def export_stl(request: ExportRequest, http_request: Request = None) -> Re
             logger.warning("STL export sizing: %s", result.warning)
         operation.check()
         operation.progress("check")
-        response = Response(
-            content=result.data,
-            media_type="application/sla",
-            headers=_headers(
-                request, f"{normalize_base_name(request.base_name)}.stl", result.warning, result.data
-            ),
+        response = _file_response(
+            request, result.data, f"{normalize_base_name(request.base_name)}.stl",
+            "application/sla", result.warning, delivery,
         )
         operation.progress("write")
         operation.attach(response)
