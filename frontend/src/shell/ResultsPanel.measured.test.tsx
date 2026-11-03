@@ -123,4 +123,22 @@ describe('measured overlay controls in the results panel', () => {
     expect(trigger.hasAttribute('disabled')).toBe(true);
     expect(host.querySelector('[role="alert"]')?.textContent).toContain(`at most ${MAX_MEASURED_OVERLAYS}`);
   });
+
+  it('keeps measurement failures visible without dismissal and shows the same invalid file on every attempt', async () => {
+    const invalid = new File(['not a response curve\n'], 'bad.txt');
+    await choose(invalid);
+    const failure = host.querySelector('[role="alert"]')!;
+    expect(failure.textContent).toContain('bad holds 0 usable measurement points');
+    expect(failure.textContent).toContain('Expected an FRD or REW export');
+    expect(failure.querySelector('.results-message-dismiss')).toBeNull();
+    const words = failure.textContent;
+
+    await choose(invalid);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(words);
+    await choose(new File(['100 90\n200 91\n'], 'good.frd'));
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    await choose(invalid);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(words);
+    expect(host.querySelector('[role="alert"] .results-message-dismiss')).toBeNull();
+  });
 });

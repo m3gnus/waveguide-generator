@@ -1,11 +1,12 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { collapsedResultsMessages, orderResultsMessages, ResultsMessageArea, type ResultsMessage } from './ResultsMessages';
 
 const host = document.createElement('div');
 document.body.append(host);
 const root = createRoot(host);
+beforeEach(() => { (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true; });
 afterEach(() => { act(() => root.render(null)); });
 
 const message = (key: string, severity: ResultsMessage['severity'], extra: Partial<ResultsMessage> = {}): ResultsMessage =>
@@ -68,4 +69,14 @@ it('dismisses only messages that block nothing, until their key changes', () => 
   expect(rows()).toEqual(['error']);
   render('stale:2');
   expect(rows()).toEqual(['error', 'warning']);
+});
+
+it('never dismisses an error, even when its caller opts in or its key was dismissed as information', () => {
+  const onDismiss = vi.fn();
+  act(() => root.render(<ResultsMessageArea messages={[message('retry', 'info', { dismissible: true })]}/>));
+  act(() => host.querySelector<HTMLButtonElement>('.results-message-dismiss')!.click());
+  act(() => root.render(<ResultsMessageArea messages={[message('retry', 'error', { dismissible: true, onDismiss })]}/>));
+  expect(rows()).toEqual(['error']);
+  expect(host.querySelector('.results-message-dismiss')).toBeNull();
+  expect(onDismiss).not.toHaveBeenCalled();
 });

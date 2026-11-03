@@ -2889,7 +2889,7 @@ export function ResultsPanel() {
     }] : []),
     ...(modelLoad === 'failed' ? [{ key: 'model-load', severity: 'error' as const, content: 'Could not load run model. Try Show this model again.' }]
       : modelLoad === 'loading' ? [{ key: 'model-load', severity: 'progress' as const, content: 'Loading run model…' }] : []),
-    ...(measuredError ? [{ key: `measured:${measuredError}`, severity: 'error' as const, content: measuredError, dismissible: true, onDismiss: () => setMeasuredError(null) }] : []),
+    ...(measuredError ? [{ key: 'measured-error', severity: 'error' as const, content: measuredError }] : []),
     ...staleMeshes.map((job) => ({
       key: `stale-mesh:${job.id}`, severity: 'warning' as const, dismissible: true,
       content: <>The mesh for {runDisplayName(job)} may differ from the one used to solve it. WG or the geometry has changed since. Solve again to update these results.</>,

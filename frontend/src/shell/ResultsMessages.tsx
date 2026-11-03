@@ -22,7 +22,7 @@ export interface ResultsMessage {
   content: ReactNode;
   /** The message's own fix, beside it on its line. */
   actions?: ReactNode;
-  /** Only for a message that blocks nothing; an error that blocks an action stays. */
+  /** Only for a message that blocks nothing; errors always stay. */
   dismissible?: boolean;
   onDismiss?: () => void;
   /** `null` leaves the role to the content, which may carry its own. */
@@ -32,6 +32,10 @@ export interface ResultsMessage {
 
 const SEVERITY_RANK: Record<ResultsMessageSeverity, number> = { error: 0, warning: 1, progress: 2, info: 3 };
 const SEVERITY_LABEL: Record<ResultsMessageSeverity, string> = { error: 'Error', warning: 'Warning', progress: 'In progress', info: 'Information' };
+
+function canDismiss(message: ResultsMessage): boolean {
+  return message.severity !== 'error' && message.dismissible === true;
+}
 
 /** Most severe first; equal severities keep the order they were given in. */
 export function orderResultsMessages(messages: readonly ResultsMessage[]): ResultsMessage[] {
@@ -61,7 +65,7 @@ export function ResultsMessageArea({ messages, label = 'Results messages' }: { m
   const [truncated, setTruncated] = useState(false);
   const [collapsedHeight, setCollapsedHeight] = useState<number | null>(null);
   const area = useRef<HTMLElement>(null);
-  const live = orderResultsMessages(messages.filter((message) => !message.dismissible || !dismissed.has(message.key)));
+  const live = orderResultsMessages(messages.filter((message) => !canDismiss(message) || !dismissed.has(message.key)));
   const rows = expanded ? live : collapsedResultsMessages(live);
   const hidden = live.length - rows.length;
   const open = expanded && live.length > 0;
@@ -102,7 +106,7 @@ export function ResultsMessageArea({ messages, label = 'Results messages' }: { m
         <Glyph severity={message.severity}/>
         <div className="results-message-body">{message.content}</div>
         {message.actions && <div className="results-message-actions">{message.actions}</div>}
-        {message.dismissible && <button
+        {canDismiss(message) && <button
           type="button"
           className="results-message-dismiss"
           aria-label="Dismiss message"
