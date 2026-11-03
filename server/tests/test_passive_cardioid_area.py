@@ -1,7 +1,11 @@
 """Coupled cardioid matrices and synthesis use completed physical apertures."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import asyncio
+import copy
+import hashlib
 from io import BytesIO
+import json
 from pathlib import Path
 from typing import Any
 
@@ -9,9 +13,16 @@ import numpy as np
 import pytest
 
 from server.cadlink.interpretation.domain_interpretation import source_completion_factors
+from server.cadlink.interpretation.domain_decision import (
+    CONTRACT, decision_problem, decision_sha256, source_map_sha256,
+)
+from server.contracts.canonical import canonical_normalized_bytes
 from server.jobs.models import ImportedGeometrySource
 from server.solver import metal
-from test_imported_jobs import _coupled_failure_fixture, _native_result_3f
+from test_imported_jobs import (
+    _AlwaysDeclaredRegistry, _METAL_IMPORTED, _coupled_failure_fixture,
+    _native_result_3f, _record, _runtime_fixture,
+)
 
 
 @dataclass(frozen=True)
@@ -103,10 +114,11 @@ def _physical_matrix():
 
 
 @pytest.mark.parametrize("port_area_source", ["user", "bem_aperture"])
+@pytest.mark.parametrize("record_kind", ["cad", "file"])
 @pytest.mark.parametrize("port_kind", ["cut", "whole", "paired", "x-only", "mixed"])
 @pytest.mark.parametrize("wg_cut", [False, True], ids=["cad-cut", "wg-cut"])
 def test_half_and_quarter_coupled_synthesis_match_full(
-    tmp_path, monkeypatch, port_kind, wg_cut, port_area_source,
+    tmp_path, monkeypatch, port_kind, wg_cut, port_area_source, record_kind,
 ):
     full_result = None
     full_payload = None
@@ -116,6 +128,13 @@ def test_half_and_quarter_coupled_synthesis_match_full(
         mesh, geometry, record, areas = _case(
             tmp_path, planes, port_kind, wg_cut=wg_cut, port_area_source=port_area_source,
         )
+        if record_kind == "file":
+            # File preparation records completed observations directly, with
+            # explicit unit factors instead of a CAD domain decision.
+            for source in record["sources"]:
+                source["observed"]["total_area_mm2"] *= record["domain_decision"]["sources"]["by_id"][source["id"]]["completion_factor"]
+                source["completion_factor"] = 1.0
+            record.pop("domain_decision")
         # Independent physical areas, not completion helper output: the native
         # matrix divides the same receiver pressure by reduced source flows.
         factors = np.array([0.021 / areas["source-mf"], full_port_area / areas["PORT_EXIT"]])
@@ -220,3 +239,103 @@ def test_full_bem_aperture_preserves_requested_area_within_measurement_tolerance
         assert getattr(actual, field).tobytes() == getattr(expected, field).tobytes()
     for field in ["cone_volume_velocity", "port_volume_velocity", "electrical_input_impedance_ohm"]:
         assert payload[field].tobytes() == old_payload[field].tobytes()
+
+
+@pytest.mark.parametrize("planes", [("x0",), ("x0", "y0")], ids=["half", "quarter"])
+@pytest.mark.parametrize("wg_cut", [False, True], ids=["cad-cut", "wg-cut"])
+@pytest.mark.parametrize("port_area_source", ["user", "bem_aperture"])
+@pytest.mark.parametrize("has_decision", [False, True], ids=["pre-decision", "sealed-decision"])
+def test_legacy_retry_preserves_campaign_and_coupling(
+    tmp_path, monkeypatch, planes, wg_cut, port_area_source, has_decision,
+):
+    mesh, geometry, case, areas = _case(
+        tmp_path, planes, "paired", wg_cut=wg_cut, port_area_source=port_area_source,
+    )
+    # Historical requests may differ from the measured BEM area within the
+    # accepted tolerance. Replay must retain that exact model area as well.
+    if port_area_source == "bem_aperture":
+        values = geometry.model_dump()
+        requested_area = areas["PORT_EXIT"] * (1 + 5e-7)
+        values.update(model_port_area_m2=requested_area, bem_port_area_m2=requested_area)
+        geometry = ImportedGeometrySource.model_validate(values)
+    record = {**_record(mesh), **case, "tag_map": {}, "mesh_sizes": geometry.mesh.model_dump(mode="json")}
+    record.pop("domain_decision")
+    if has_decision:
+        # An intact old decision is admitted without being upgraded. Unlike
+        # removing the decision entirely, this also exercises its saved hash.
+        decision = {
+            "contract": CONTRACT,
+            "solver_domain": {"planes": list(planes)},
+            "sources": {"by_id": {source: {"tag": tag} for source, tag in record["source_tags"].items()}},
+            "identity": {
+                "snapshot_sha256": record["manifest_sha256"],
+                "mesh_content_sha256": record["mesh_content_sha256"],
+                "observations_sha256": "sha256:" + hashlib.sha256(
+                    canonical_normalized_bytes(record["domain_interpretation"]["observations"])
+                ).hexdigest(),
+                "source_map_sha256": source_map_sha256(record["source_tags"], record["tag_map"]),
+            },
+        }
+        decision["identity"]["decision_sha256"] = decision_sha256(decision)
+        record["domain_decision"] = decision
+    assert decision_problem(record) is None
+    raw = metal.radiation_impedance.RadiationImpedanceResult(
+        frequencies_hz=np.array([100., 500., 1000.]), aperture_names=["MF", "PORT_EXIT"],
+        aperture_area_m2={"MF": areas["source-mf"], "PORT_EXIT": areas["PORT_EXIT"]},
+        impedance_matrix=_physical_matrix() * np.array([2., 4.])[None, None, :], solver_logs=[],
+    )
+    monkeypatch.setattr(metal.radiation_impedance, "solve_aperture_matrix", lambda *args: raw)
+
+    async def scenario():
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, record, mesh_text=mesh.read_text())
+        runtime.engine_registry = _AlwaysDeclaredRegistry(
+            replace(_METAL_IMPORTED, imported_features=("passive-cardioid",)),
+        )
+        runtime._ensure_scheduler = lambda: None
+        try:
+            request, _ = _coupled_failure_fixture()
+            request.geometry = geometry.model_copy(update={"ingest_id": ingest_id})
+            parent = await runtime.submit(request)
+            before = runtime.cadlink_store.get_ingest(ingest_id)["record_json"]
+            child = await runtime.retry(parent)
+            row = runtime.store.get_job_row(child)
+            assert row["parent_job_id"] == parent
+            retried = type(request).model_validate(row["config_json"])
+            after = runtime.cadlink_store.get_ingest(ingest_id)["record_json"]
+            assert after == before
+            retained = json.loads(after)
+            assert decision_problem(retained) is None
+            return retried.geometry, retained
+        finally:
+            await runtime.shutdown()
+
+    geometry, retained = asyncio.run(scenario())
+    before = copy.deepcopy(retained)
+    campaign = metal._run_passive_cardioid_campaign(
+        Path(retained["mesh_store_path"]), _Config(), geometry, retained, raw.frequencies_hz,
+        stage_callback=None, cancellation_callback=None,
+    )
+    # Before completion was introduced, the campaign kept the native matrix
+    # and meshed areas, including every port column and mutual load.
+    assert campaign["result"].impedance_matrix.tobytes() == raw.impedance_matrix.tobytes()
+    assert campaign["result"].aperture_area_m2 == raw.aperture_area_m2
+    assert campaign["actual_bem_port_area_m2"] == areas["PORT_EXIT"]
+    assert campaign["artifact"] == metal._radiation_matrix_npz(
+        raw, metal.radiation_impedance.matrix_diagnostics(raw),
+        aperture_tags=campaign["aperture_tags"], port_names=campaign["port_names"],
+    )
+    bases = {"mf": _native_result_3f(), "port": _native_result_3f()}
+    for index, result in enumerate(bases.values(), 1):
+        result.pressure_complex *= index + .3j
+        result.sphere_pressure_complex = result.pressure_complex[:, 0, :].copy()
+    actual, payload, _ = metal._coupled_cardioid_result(campaign, geometry, retained, bases)
+    # The old coupling always used the requested model area, independently of
+    # provenance. The user-area branch is that same numerical convention.
+    oracle_geometry = geometry.model_copy(update={"port_area_source": "user"})
+    expected, old_payload, _ = metal._coupled_cardioid_result(campaign, oracle_geometry, retained, bases)
+    for field in ["pressure_complex", "sphere_pressure_complex", "directivity_db"]:
+        assert getattr(actual, field).tobytes() == getattr(expected, field).tobytes()
+    for field in ["cone_volume_velocity", "port_volume_velocity", "electrical_input_impedance_ohm"]:
+        assert payload[field].tobytes() == old_payload[field].tobytes()
+    assert payload["model_port_area_m2"] == geometry.model_port_area_m2
+    assert retained == before

@@ -252,10 +252,11 @@ def register_mesh(
 
 
 def _has_whole_areas(record: Mapping[str, Any], whole_areas_mm2: Mapping[str, float]) -> bool:
-    """A preparation saved before areas were whole drives its driver wrongly: prepare it again."""
+    """Reuse only an explicitly completed preparation with matching whole areas."""
 
     return all(
-        math.isclose(source["observed"]["total_area_mm2"], whole_areas_mm2[source["id"].removeprefix("group_")], rel_tol=1e-9)
+        source.get("completion_factor") == 1.0
+        and math.isclose(source["observed"]["total_area_mm2"], whole_areas_mm2[source["id"].removeprefix("group_")], rel_tol=1e-9)
         for source in record["sources"]
     )
 
@@ -330,6 +331,9 @@ def _register_mesh(
             "required": True,
             "name": mesh.names.get(tag, "Untagged surface" if tag == 0 else f"Group {tag}"),
             "observed": {"total_area_mm2": whole_areas_mm2[str(tag)]},
+            # Observations already describe the whole source. Mark the current
+            # area contract explicitly; retained unmarked records replay as saved.
+            "completion_factor": 1.0,
         }
         for tag in sorted(roles)
     ]

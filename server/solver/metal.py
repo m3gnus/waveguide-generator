@@ -94,6 +94,7 @@ from .imported_channels import (
     imported_validity_metadata,
     prepare_imported_solve_facts,
     record_source_area_m2,
+    record_source_completion_factor,
 )
 from .result_mapping import (
     build_provisional_frequency_response,
@@ -1184,7 +1185,11 @@ def _run_passive_cardioid_campaign(
         )
 
     planes = imported_domain_planes(record)
-    if planes:
+    # Completion was introduced together with the saved per-source factor.
+    # Legacy replay must retain the entire old campaign (ports included), on
+    # the same area basis as synthesis; even an explicit 1.0 opts into the
+    # current convention for whole diaphragms in a reduced solver domain.
+    if planes and record_source_completion_factor(record, mf_source_id) is not None:
         completion = source_completion_factors(
             {"msh_text": mesh_path.read_text(encoding="utf-8"), "source_tags": source_tags},
             planes,
@@ -1389,9 +1394,14 @@ def _coupled_cardioid_result(
     # requested area exactly, including accepted measurement tolerance.
     # User-entered model areas already
     # describe the physical port and are independent of the BEM aperture.
+    # Legacy records always coupled with the exact requested model area.
     model_port_area_m2 = (
         bem_port_area_m2
-        if geometry.port_area_source == "bem_aperture" and imported_domain_planes(record)
+        if (
+            geometry.port_area_source == "bem_aperture"
+            and imported_domain_planes(record)
+            and record_source_completion_factor(record, mf_source_id) is not None
+        )
         else float(geometry.model_port_area_m2)
     )
     coupled = driver_coupling.coupled_cardioid_response(

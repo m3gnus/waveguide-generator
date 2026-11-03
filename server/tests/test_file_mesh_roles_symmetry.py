@@ -1,5 +1,8 @@
 """Generated file surfaces exercise the shared import owners, without local assets."""
 
+import json
+import sqlite3
+
 import numpy as np
 import pytest
 
@@ -9,7 +12,7 @@ from server.cadlink.wglink_protocol import source_physical_name
 from server.mesh.imported import parse_source_physical_name
 from server.jobs.runtime.cad_lane import _imported_symmetry_metadata
 from server.solver.bempp_imported import imported_bempp_preflight
-from server.solver.imported_channels import channel_source_identity
+from server.solver.imported_channels import channel_source_identity, record_source_completion_factor
 from server.mesh.file_import import FileMesh, group_role_guess, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh
 from test_mesh_import import registration, register_mesh, request
 
@@ -188,6 +191,29 @@ def test_legacy_preparation_keeps_its_pinned_digest_and_id(tmp_path):
         store.close()
 
 
+def test_repreparing_an_unmarked_file_keeps_its_retained_record(tmp_path):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    try:
+        body = registration()
+        legacy = register_mesh(store, tmp_path, body)
+        for source in legacy["sources"]:
+            source.pop("completion_factor")
+        saved = json.dumps(legacy)
+        with sqlite3.connect(store.db_path) as connection:
+            connection.execute(
+                "UPDATE ingests SET record_json=? WHERE ingest_id=?", (saved, legacy["ingest_id"]),
+            )
+        current = register_mesh(store, tmp_path, body)
+        assert current["ingest_id"] != legacy["ingest_id"]
+        assert current["manifest_sha256"] == legacy["manifest_sha256"]
+        assert record_source_completion_factor(current, current["sources"][0]["id"]) == 1.0
+        assert record_source_completion_factor(legacy, legacy["sources"][0]["id"]) is None
+        assert store.get_ingest(legacy["ingest_id"])["record_json"] == saved
+        assert register_mesh(store, tmp_path, body)["ingest_id"] == current["ingest_id"]
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("planes,mode", [(["x0"], "half_yz"), (["y0"], "half_xz"), (["x0", "y0"], "quarter")])
 def test_declared_domain_uses_shared_verification_and_solver_metadata(tmp_path, planes, mode):
     original = box_mesh(planes=planes)
@@ -201,6 +227,7 @@ def test_declared_domain_uses_shared_verification_and_solver_metadata(tmp_path, 
                                roles={101: "HF", 102: "MF"}, domain_planes=planes))
         assert record["symmetry"] == {"domain_planes": planes, "cut_planes": [], "reflected_planes": []}
         assert [s["role"] for s in record["sources"]] == ["HF", "MF"]
+        assert all(record_source_completion_factor(record, s["id"]) == 1.0 for s in record["sources"])
         resolved = _imported_symmetry_metadata(record, requested="auto")
         assert resolved["resolved"] == mode
         assert imported_bempp_preflight(record, planes) is None
