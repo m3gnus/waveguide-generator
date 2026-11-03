@@ -1,6 +1,6 @@
 # Dependency compatibility
 
-The mesher pin `4e68f4ec` declares version 0.2.8 and includes later development
+The mesher pin `b6f2b743` declares version 0.2.8 and includes later development
 changes, including version-gated ATH v3 controls and typed public refusals with
 a shipped, checked control-label catalog. Saved v1/v2 retain their prior geometry.
 It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
@@ -134,3 +134,13 @@ optional None field in a frozen dataclass snapshot; affected checks passed
 without another full run or changes to the captured historical values. The consumer uses this shared
 owner and retains its existing memory admission guard. No OCC triangulation
 fix or triangle-cut limit increase is included.
+
+The mesher pin scopes partial OCC boolean glue to the two woofer assembly
+fragments and restores the caller's option on success and failure. Mac
+qualification retained exact point, triangle, physical-tag and complete MSH
+bytes on twelve cases, including ATH imports, reduced domains and nearby
+woofers. The improvement targets woofer Build time; the ordinary horn path
+retains its existing fragment behavior. The WG consumer's new-woofer default
+is the ATH contour, and an actual Build with that default is qualified on
+the exact installed pin. Hosted platform and installed-candidate evidence
+remain separate from these source comparisons.
