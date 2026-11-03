@@ -1,7 +1,6 @@
 # 0.3.7 — unreleased draft
 
-Draft checked against the 0.3.7 additions source, based on Waveguide Generator
-`d17767bb9`.
+Draft notes for the changes planned for 0.3.7.
 This is not a release announcement or a statement of platform qualification.
 
 ## Added
@@ -30,6 +29,17 @@ This is not a release announcement or a statement of platform qualification.
   `Mesh.ThroatExtSegments` settings. Designs saved before this release build
   exactly as they did.
 - Overlay any solved run under **+ compare**, including runs of other designs.
+- Choose **Fixed velocity (1 m/s RMS)**, **Driver (T/S)** or **Rigid** for each
+  baffle woofer. Set up a driver from the library or enter its values under
+  **Drivers** in **Simulation**. BEAT CPU and BEAT Metal solve the driver with
+  its air load; other engines solve the woofers at fixed velocity, 1 m/s RMS,
+  with a notice explaining how to select an engine that solves the drivers.
+- Get a suggested bare moving mass, **Mmd**, from **Mms** and **Sd**, with the
+  free-air air load removed. The suggestion appears in grams under Mmd and is
+  used only when you press **Use suggested Mmd**; it can be undone.
+- Move between runs and chart panels inside an expanded chart, using its
+  buttons or arrow keys. The view stays open while another run's model loads
+  and keeps its comparison selection and chart preferences.
 
 ## Changed
 
@@ -52,6 +62,43 @@ This is not a release announcement or a statement of platform qualification.
   Build and Solve with its reason. Margins change only when you change them.
 - The run list shows each run's time, mesh, sweep and engine, and Settings has
   a section list.
+- **Solve** has one path for a design with a Sources and baffle assembly:
+  every Solve builds the current revision if needed and solves the assembly.
+  Its runs use the design's name and normal run numbers. A disabled Solve says
+  what needs attention beside the button.
+- Assembly runs belong to the design they were solved from, including their
+  saved design exports. Field planes use the matching compiled mesh and remain
+  available when that mesh is shown on the design.
+- Assemblies use the same combined-response controls and defaults as CAD
+  imports. Multiple signal groups get a combined response by default unless
+  you turn it off; retained channel results can be combined again without a
+  new solve.
+- **Build** in **Sources and baffle…** closes the dialog and shows the built
+  horn, enclosure and woofers in the viewport. **Mesh** shows the assembly mesh
+  used by Solve and builds it when needed. After an edit, the geometry preview
+  follows the design; the last mesh stays labelled while its replacement builds.
+- New baffle woofers start with the ATH contour. Saved woofers with an explicit
+  shape keep it. ATH imports also accept nested enclosure `LFSource` blocks.
+- The viewport has one line of dimensions and solve facts, each with its own
+  unit. It fits the available width without wrapping. Click the design's name
+  beside **File** in the top bar to rename it; Enter or leaving the field
+  accepts the name, and Escape cancels.
+- Pan the viewport with a two-finger trackpad scroll or middle-button drag;
+  mouse wheels and trackpad pinches zoom. Trackpad scrolling is a viewer
+  preference. Geometry and Mesh keep their own display modes.
+- Opening a field plane cuts away the model in front of it as the camera
+  moves, keeping the plane visible and the section cap visible from both sides.
+- Directivity and beam maps render smoothly at plot resolution, and the 3D
+  balloon uses the same continuous colour ramp. Frequency and polar curves
+  draw smooth lines through the solved points without overshooting them;
+  tooltips still report the solved values. Chart labels, units, legends and
+  frequency ticks are clearer, with fewer collisions on compact cards.
+- Long operations share status-bar progress, including elapsed time and an
+  estimate when available. **Build**, geometry exports and **Send to CAD** show
+  their stages and offer **Stop**, including during long mesh builds.
+- CAD models load faster by reusing discovery work and deferring hidden
+  parametric geometry. Mesh checks are faster, and the quick triangle forecast
+  avoids a full background build whenever a design opens or changes.
 
 ## Fixed
 
@@ -66,6 +113,28 @@ This is not a release announcement or a statement of platform qualification.
   solve has used it. A refused Solve no longer loses the change or shows it as
   used.
 - Find room for a free woofer beside the mouth as well as above and below it.
+- Load a driver split by a CAD symmetry cut as the whole driver, correcting
+  its level and air load. **CAD returns made before this fix must be sent
+  again** to replace their recorded source areas. Reduced mesh-file imports
+  also use the whole driver's area and refresh older preparations automatically.
+- Include mirrored ports in coupled Passive cardioid aperture areas, so the
+  air load and radiation use the same complete physical area.
+- Let edited Fusion bodies solve without an unnecessary review hold, while
+  keeping holds for stale models. CAD send outcomes and findings have one
+  shared state, and **Approve and solve** requires a description of every finding.
+  The linked throat is shown in Fusion's HF row.
+- Answer woofer fit checks promptly without queuing behind meshing. A missing
+  or outdated answer no longer leaves Build and Solve disabled indefinitely;
+  the build still refuses a woofer that does not fit.
+- Keep polar observation points visible when they are nearer the camera than
+  the model, and keep missing chart samples transparent rather than painting
+  over them. Hovering a map no longer leaves a blank patch.
+- Cancelled requests now stop their work on the server, including the mesher.
+  A stopped Build restores its previous state; a stopped geometry export leaves
+  no partial output. Send to CAD rolls back while Stop is still possible; after
+  publication can no longer be stopped, it finishes and reports the send.
+- Export STL successfully for ATH imports with an enclosure by removing the
+  inactive enclosure from the bore export. The saved design keeps its enclosure.
 
 ## Known limitations
 
@@ -79,14 +148,20 @@ This is not a release announcement or a statement of platform qualification.
 - Flush enclosure construction has geometry guards; zero margin does not make
   every horn shape supported. Fusion and other CAD export routes keep their own
   stated capability limits.
-- Solve a design assembly from **Sources and baffle**, rather than ordinary
-  toolbar Solve. Remove the assembly to return to ordinary Solve. Assembly solves
-  were checked to complete at 200, 500, 1,000 and 2,000 Hz on BEAT CPU and
-  Metal-BEM; BEAT Metal was not run. BEMPP cannot solve these compiled assembly
-  meshes. Drivers and crossovers cannot be set in this workspace. STEP solid, STL
-  and Send to CAD carry the horn and enclosure only, and say so at the export.
-  Assembly geometry export, wiring, boxes and arrays are not part of this first
-  phase.
+- Sources and baffle remains experimental and is not acoustically qualified.
+  Earlier assembly checks completed at 200, 500, 1,000 and 2,000 Hz on BEAT CPU
+  and Metal-BEM; those checks did not run BEAT Metal. BEMPP cannot solve these
+  compiled assembly meshes. Woofer drivers require adaptive sampling and the
+  ground plane to be off.
+- Assembly and CAD-import solves still differ in fixed-velocity normalisation
+  and engine fallback. Sharing the Solve path and combined-response controls
+  does not establish acoustic equivalence between them.
+- **Send to CAD → Stop** is covered by automated tests only; it has not been
+  checked end to end in Fusion.
+- STEP solid and Send to CAD carry the horn and enclosure; STL exports the horn
+  bore. These exports omit the woofers and their baffle cutouts and state their
+  scope at the export. Assembly geometry export, wiring, boxes and arrays are
+  not part of this first phase.
 
 The solve Mesh section includes an optional **Max surface deviation** control and
 live triangle estimate. New horn designs start **Off**. An explicit setting or
