@@ -1,4 +1,4 @@
-import type { ImportedMeshScene } from './importedMesh';
+import type { ImportedMeshScene, SolverSceneOwner } from './importedMesh';
 
 type Listener = () => void;
 export type ImportedMeshShowing = 'parametric' | 'cad' | 'cadSolver' | 'file' | 'solver';
@@ -80,6 +80,20 @@ class ImportedMeshStore {
    * activates when the solver view is what the user is already looking at. */
   setSolver(scene: ImportedMeshScene, generation = this.beginIntent(), activate = true): boolean {
     return this.setSlot('solver', scene, generation, activate);
+  }
+
+  ownsSolver(owner: SolverSceneOwner | undefined): boolean {
+    const current = this.value.solver?.solverOwner;
+    return !!owner && current?.producer === owner.producer && current.key === owner.key;
+  }
+
+  /** Reuse only the scene belonging to this producer/key; otherwise install
+   * it lazily without changing viewport intent. Both producers use this rule. */
+  ensureSolver(owner: SolverSceneOwner, scene: () => ImportedMeshScene,
+    generation = this.captureGeneration()): boolean {
+    if (!this.isCurrentGeneration(generation)) return false;
+    if (this.ownsSolver(owner)) return true;
+    return this.setSolver({ ...scene(), solverOwner: owner }, generation, this.value.showing === 'solver');
   }
 
   showParametric(): void {

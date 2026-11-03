@@ -9,7 +9,7 @@
  * label, and every consumer can tell whether it is the design on screen.
  */
 import { create } from 'zustand';
-import { assemblyProblemText, compileAssembly, type AssemblyCompileResult } from '../api/assembly';
+import { assemblyProblemText, compileAssembly, type AssemblyCompileResult, type CompiledAssembly } from '../api/assembly';
 import { currentDocumentLoad, isCurrentDocumentLoad, serializeDesign, subscribeRevision, useDesignStore, type DesignDocument } from './design';
 import { designContentKey } from './designContentKey';
 import { useDocumentStore } from './document';
@@ -84,6 +84,7 @@ export function prepareDesignModel(fetcher: typeof fetch = fetch): Promise<Assem
   const slot = useDesignModelStore.getState();
   const record = designPreparedRecord();
   if (record && slot.model && state.status !== 'building' && designModelCurrent(design, slot)) {
+    installAssemblyScene(slot.model.display_name || 'Assembly', record);
     return Promise.resolve({ status: 'published', reused: true, model: slot.model, prepared: record });
   }
   return requestAssemblyBuild(fetcher);
@@ -108,12 +109,7 @@ async function compileRequested(design: DesignDocument, requested: NonNullable<A
       adoptDesignBuild({ record: result.prepared, model: result.model }, {
         designUid: designUid ?? null, revision: designRevision, load, contentKey: requested.contentKey,
       });
-      const viewport = importedMeshStore.getSnapshot();
-      if (viewport.solver?.ingestId !== result.prepared.ingest_id) {
-        const scene = { ...assemblyMeshScene(result.model.display_name || 'Assembly', result.prepared, 'solver'),
-          modelKey: `prepared:${result.prepared.ingest_id}` };
-        importedMeshStore.setSolver(scene, importedMeshStore.captureGeneration(), viewport.showing === 'solver');
-      }
+      installAssemblyScene(result.model.display_name || 'Assembly', result.prepared);
       useAssemblyBuildStore.setState({ status: 'published', refusal: null });
     }
     return result;
@@ -124,6 +120,12 @@ async function compileRequested(design: DesignDocument, requested: NonNullable<A
     }
     throw error;
   }
+}
+
+function installAssemblyScene(name: string, record: CompiledAssembly): void {
+  importedMeshStore.ensureSolver({ producer: 'wg-build', key: record.ingest_id }, () => ({
+    ...assemblyMeshScene(name, record, 'solver'), modelKey: `prepared:${record.ingest_id}`,
+  }));
 }
 
 /** What a failed build tells the user. */

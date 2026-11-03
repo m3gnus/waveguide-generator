@@ -106,7 +106,8 @@ export function currentModelScene(model: CurrentModel, viewport: ImportedMeshSta
   if (showsRetainedMesh(model.kind)) return viewport.file && (!model.ingestId || viewport.file.ingestId === model.ingestId) ? viewport.file : null;
   // An assembly is solved from its compile, never from the horn-only solver mesh.
   if (model.kind === 'parametric') {
-    if (!model.design?.assembly) return viewport.showing === 'solver' ? viewport.solver : null;
+    if (!model.design?.assembly) return viewport.showing === 'solver' && viewport.solver?.solverOwner?.producer === 'horn'
+      ? viewport.solver : null;
     const slot = useDesignModelStore.getState();
     return slot.prepared && viewport.solver?.ingestId === slot.prepared.ingest_id
       && (viewport.showing === 'solver' || designModelCurrent(model.design, slot)) ? viewport.solver : null;

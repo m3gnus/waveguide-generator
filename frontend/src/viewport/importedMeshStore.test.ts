@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ImportedMeshScene } from './importedMesh';
 import { importedMeshStore } from './importedMeshStore';
 
@@ -147,5 +147,44 @@ describe('importedMeshStore', () => {
 
     expect(importedMeshStore.setSolver(solverScene, generation)).toBe(false);
     expect(importedMeshStore.getSnapshot().solver).toBeNull();
+  });
+
+  it('reuses a solver scene only while its producer and key still own the slot', () => {
+    const horn = { producer: 'horn', key: 'same-key' } as const;
+    const assembly = { producer: 'wg-build', key: 'same-key' } as const;
+    const scene = vi.fn(() => solverScene);
+    const generation = importedMeshStore.captureGeneration();
+    importedMeshStore.ensureSolver(horn, scene);
+    const first = importedMeshStore.getSnapshot();
+    expect(importedMeshStore.ownsSolver(horn)).toBe(true);
+    importedMeshStore.ensureSolver(horn, scene);
+    expect(scene).toHaveBeenCalledOnce();
+    expect(importedMeshStore.getSnapshot()).toBe(first);
+
+    importedMeshStore.ensureSolver(assembly, scene);
+    expect(importedMeshStore.ownsSolver(horn)).toBe(false);
+    expect(importedMeshStore.ownsSolver(assembly)).toBe(true);
+    importedMeshStore.ensureSolver({ ...assembly, key: 'another-key' }, scene);
+    expect(importedMeshStore.ownsSolver(assembly)).toBe(false);
+    expect(scene).toHaveBeenCalledTimes(3);
+    expect(importedMeshStore.captureGeneration()).toBe(generation);
+    expect(importedMeshStore.getSnapshot().showing).toBe('parametric');
+    importedMeshStore.clear('solver');
+    expect(importedMeshStore.ownsSolver({ ...assembly, key: 'another-key' })).toBe(false);
+  });
+
+  it('rejects stale owned installs before creating a scene and detects unowned displacement', () => {
+    const owner = { producer: 'horn', key: 'request' } as const;
+    importedMeshStore.showSolver();
+    importedMeshStore.ensureSolver(owner, () => solverScene);
+    expect(importedMeshStore.getSnapshot().showing).toBe('solver');
+    importedMeshStore.setSolver(secondSolverScene);
+    expect(importedMeshStore.ownsSolver(owner)).toBe(false);
+    const generation = importedMeshStore.captureGeneration();
+    importedMeshStore.showParametric();
+    const scene = vi.fn(() => solverScene);
+    expect(importedMeshStore.ensureSolver(owner, scene, generation)).toBe(false);
+    expect(scene).not.toHaveBeenCalled();
+    expect(importedMeshStore.getSnapshot().solver).toBe(secondSolverScene);
   });
 });

@@ -17,6 +17,7 @@ import { assemblyBuildFailure, designMeshProducer, prepareDesignModel, useAssemb
 import { useDesignStore } from '../stores/design';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { importedMeshStore } from './importedMeshStore';
+import type { SolverSceneOwner } from './importedMesh';
 import { solverMeshScene } from './solverMeshScene';
 
 /** Prepare the design's solve artifact through its geometry producer. */
@@ -30,9 +31,12 @@ export async function prepareDesignSolverMesh({ signal, generation, onRefusal }:
     const design = useDesignStore.getState().design;
     if (designMeshProducer(design) === 'wg-build') {
       onRefusal(null);
-      const ok = await prepareDesignModel().then(() => true, () => false);
+      const result = await prepareDesignModel().catch(() => null);
+      const owner: SolverSceneOwner | undefined = result?.status === 'published'
+        ? { producer: 'wg-build', key: result.prepared.ingest_id } : undefined;
+      const ok = importedMeshStore.ownsSolver(owner);
       const error = ok ? undefined : useAssemblyBuildStore.getState().refusal ?? assemblyBuildFailure(null);
-      return { ok: ok && !signal.aborted, durationMs: durationMs(), error };
+      return { ok: ok && !signal.aborted, durationMs: durationMs(), error, owner };
     }
     const modelKey = designFingerprint(design);
     const body = JSON.stringify({ design: toSolveDesign(design), options: solverMeshOptions(useSolveOptionsStore.getState()) });
@@ -40,14 +44,12 @@ export async function prepareDesignSolverMesh({ signal, generation, onRefusal }:
     if (signal.aborted) return { ok: false, durationMs: durationMs() };
     onRefusal(result.plan?.refusal ?? null);
     const token = solverMeshArtifactToken(result.stats.mesh_cache_key);
+    const owner: SolverSceneOwner = { producer: 'horn', key: JSON.stringify([body, token]) };
     const current = importedMeshStore.getSnapshot().solver;
-    if (current?.artifactToken !== token || current.modelKey !== modelKey) {
-      importedMeshStore.setSolver(
-        current?.artifactToken === token ? { ...current, modelKey } : { ...solverMeshScene('Simulation mesh', result), modelKey },
-        generation, importedMeshStore.getSnapshot().showing === 'solver',
-      );
-    }
-    return { ok: true, durationMs: durationMs() };
+    const ok = importedMeshStore.ensureSolver(owner, () => (
+      current?.artifactToken === token ? { ...current, modelKey } : { ...solverMeshScene('Simulation mesh', result), modelKey }
+    ), generation);
+    return { ok, durationMs: durationMs(), owner };
   } catch (error) {
     if (!signal.aborted) onRefusal(null);
     return { ok: false, durationMs: durationMs(), error: failureWords(error) };
@@ -74,6 +76,7 @@ export interface SolverMeshBuildOutcome {
   ok: boolean;
   durationMs: number;
   error?: string;
+  owner?: SolverSceneOwner;
 }
 
 export interface SolverMeshRefreshOptions {
@@ -123,7 +126,8 @@ export class SolverMeshRefreshController {
   activate(revision: MeshRevision): void {
     this.active = true;
     this.latestRevision = revision;
-    if (this.builtRevision === revision && this.builtEpoch === this.loadEpoch && this.lastOutcome?.ok) {
+    if (this.builtRevision === revision && this.builtEpoch === this.loadEpoch && this.lastOutcome?.ok
+      && importedMeshStore.ownsSolver(this.lastOutcome.owner)) {
       this.publish(FRESH);
       return;
     }

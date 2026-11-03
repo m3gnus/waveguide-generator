@@ -1,6 +1,6 @@
 import { mesh } from '../shell/cadlink/selection.fixtures';
 import { commitAssembly, emptyAssembly } from '../stores/assembly';
-import { resetAssemblyBuild } from '../stores/assemblyBuild';
+import { designModelCurrent, prepareDesignModel, requestAssemblyBuild, resetAssemblyBuild } from '../stores/assemblyBuild';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { designPreparedRecord } from '../stores/importedModel';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -8,6 +8,8 @@ import { importedMeshStore } from './importedMeshStore';
 import { solverMeshOptions } from '../api/solverMesh';
 import { toSolveDesign } from '../jobs/actions';
 import { designFingerprint } from '../results/runCoherence';
+import { currentModel, currentModelScene } from '../model/currentModel';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   prepareDesignSolverMesh, SolverMeshRefreshController,
@@ -47,11 +49,15 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
-const ok = (durationMs = 100): SolverMeshBuildOutcome => ({ ok: true, durationMs });
+const ok = (durationMs = 100): SolverMeshBuildOutcome => {
+  const owner = { producer: 'horn', key: 'test-request' } as const;
+  importedMeshStore.ensureSolver(owner, () => ({ source: 'solver' } as never));
+  return { ok: true, durationMs, owner };
+};
 
 describe('SolverMeshRefreshController', () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+  beforeEach(() => { vi.useFakeTimers(); importedMeshStore.clear(); });
+  afterEach(() => { vi.useRealTimers(); importedMeshStore.clear(); });
 
   it('builds immediately on activation and settles fresh', async () => {
     const h = harness();
@@ -243,6 +249,7 @@ describe('design solver mesh preparation', () => {
     resetSolveOptionsStore();
     importedMeshStore.clear();
     importedMeshStore.showSolver();
+    workspaceModeStore.setMode('parametric');
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -285,6 +292,72 @@ describe('design solver mesh preparation', () => {
     expect(importedMeshStore.captureGeneration()).toBe(generation);
     expect(await prepare()).toMatchObject({ ok: true });
     expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('replaces a horn artifact when the server returns a new mesh for the same request', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(hornResult())));
+    expect(await prepare()).toMatchObject({ ok: true });
+    const scene = importedMeshStore.getSnapshot().solver;
+    fetcher.mockResolvedValue(new Response(JSON.stringify({ ...hornResult(),
+      stats: { ...hornResult().stats, mesh_cache_key: 'new-artifact' } })));
+    expect(await prepare()).toMatchObject({ ok: true });
+    expect(importedMeshStore.getSnapshot().solver?.artifactToken).not.toBe(scene?.artifactToken);
+  });
+
+  const refreshController = () => new SolverMeshRefreshController({
+    runBuild: signal => prepareDesignSolverMesh({ signal, generation: importedMeshStore.captureGeneration(), onRefusal: () => {} }),
+    isSolveActive: () => false,
+    onState: () => {},
+  });
+
+  it('rebuilds the horn after a Geometry assembly build displaced its cached Mesh scene and was undone', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async url => new Response(JSON.stringify(
+      url === '/api/solver-mesh' ? hornResult() : assemblyResult(),
+    )));
+    const controller = refreshController();
+    const hornKey = designFingerprint(useDesignStore.getState().design)!;
+    controller.activate(hornKey);
+    await vi.waitFor(() => expect(controller.getState().building).toBe(false));
+    const horn = importedMeshStore.getSnapshot().solver;
+    controller.deactivate();
+    importedMeshStore.showParametric();
+    commitAssembly(emptyAssembly());
+    await requestAssemblyBuild();
+    expect(importedMeshStore.getSnapshot().solver?.ingestId).toBe('wgi_build');
+    useDesignStore.getState().undo();
+    importedMeshStore.showSolver();
+    expect(currentModelScene(currentModel())).toBeNull();
+    controller.activate(hornKey);
+    try {
+      await vi.waitFor(() => expect(controller.getState().building).toBe(false));
+      expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+        '/api/solver-mesh', '/api/models/assembly/compile', '/api/solver-mesh',
+      ]);
+      expect(currentModelScene(currentModel())).toMatchObject({ artifactToken: horn?.artifactToken, ingestId: null });
+      expect(currentModel().viewportShowing).toBe(true);
+      expect(controller.getState()).toMatchObject({ building: false, stale: false });
+    } finally { controller.deactivate(); }
+  });
+
+  it('restores a cached assembly scene after undo, horn Mesh preparation, and redo without recompiling', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async url => new Response(JSON.stringify(
+      url === '/api/solver-mesh' ? hornResult() : assemblyResult(),
+    )));
+    commitAssembly(emptyAssembly());
+    await requestAssemblyBuild();
+    const record = designPreparedRecord();
+    useDesignStore.getState().undo();
+    expect(await prepare()).toMatchObject({ ok: true });
+    expect(importedMeshStore.getSnapshot().solver?.ingestId).toBeNull();
+    useDesignStore.getState().redo();
+    expect(designModelCurrent(useDesignStore.getState().design)).toBe(true);
+    const generation = importedMeshStore.captureGeneration();
+    expect(await prepareDesignModel()).toMatchObject({ status: 'published', reused: true });
+    expect(designPreparedRecord()).toBe(record);
+    expect(currentModelScene(currentModel())).toMatchObject({ ingestId: 'wgi_build' });
+    expect(currentModel().viewportShowing).toBe(true);
+    expect(importedMeshStore.captureGeneration()).toBe(generation);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/models/assembly/compile', '/api/solver-mesh']);
   });
 
   it.each(['horn', 'wg-build'])('reports a refusal from the %s producer', async producer => {

@@ -7,6 +7,11 @@ import { completeCadCutDisplay, expandImportedSymmetry } from './symmetryScene';
 
 let nextArtifactToken = 1;
 
+export interface SolverSceneOwner {
+  producer: 'horn' | 'wg-build';
+  key: string;
+}
+
 export interface ImportedMeshScene {
   tessellation?: {
     /** The target this mesh was built to: null is Off, undefined is not recorded. */
@@ -28,6 +33,8 @@ export interface ImportedMeshScene {
   artifactToken: string;
   /** Parametric content captured when this solver artifact was requested. */
   modelKey?: string;
+  /** The producer and request/artifact key occupying the shared solver slot. */
+  solverOwner?: SolverSceneOwner;
 }
 
 export interface ImportedMeshSceneOptions {
