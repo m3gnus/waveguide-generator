@@ -30,7 +30,8 @@ vi.mock('../jobs/useCapabilities', () => ({
   useCapabilityRefreshOnReconnect: () => undefined,
   useLegacyBeatEngineMigration: () => undefined,
 }));
-vi.mock('../jobs/useImportedSolvePlan', () => ({
+vi.mock('../jobs/useImportedSolvePlan', async importOriginal => ({
+  ...await importOriginal<typeof import('../jobs/useImportedSolvePlan')>(),
   useImportedSolvePlan: () => ({ plan: null, error: null, isPending: false }),
 }));
 vi.mock('../jobs/useSolvePlan', () => ({

@@ -77,7 +77,8 @@ vi.mock('../jobs/useCapabilities', () => ({
 vi.mock('../jobs/useSolvePlan', () => ({
   useSolvePlan: () => ({ plan: null, error: null, isPending: false }),
 }));
-vi.mock('../jobs/useImportedSolvePlan', () => ({
+vi.mock('../jobs/useImportedSolvePlan', async importOriginal => ({
+  ...await importOriginal<typeof import('../jobs/useImportedSolvePlan')>(),
   useImportedSolvePlan: (enabled: boolean) => (enabled ? {
     plan: {
       ingest_id: 'wgi_first', requested: 'auto', engine: 'metal', code: null,

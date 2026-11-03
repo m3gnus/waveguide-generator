@@ -17,7 +17,8 @@ vi.mock('../jobs/useCapabilities', () => ({
   useLegacyBeatEngineMigration: () => undefined,
 }));
 vi.mock('../jobs/useSolvePlan', () => ({ useSolvePlan: () => ({ plan: null, error: null, isPending: false }) }));
-vi.mock('../jobs/useImportedSolvePlan', () => ({ useImportedSolvePlan: () => ({ plan: null, error: null, isPending: false }) }));
+vi.mock('../jobs/useImportedSolvePlan', async importOriginal => ({
+  ...await importOriginal<typeof import('../jobs/useImportedSolvePlan')>(), useImportedSolvePlan: () => ({ plan: null, error: null, isPending: false }) }));
 
 function publish(jobs: JobItem[], cursor: number | null = 1): void {
   const manager = jobsSocket as unknown as { snapshot: JobsSnapshot; listeners: Set<() => void> };

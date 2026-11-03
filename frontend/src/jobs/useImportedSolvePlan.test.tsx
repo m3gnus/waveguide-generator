@@ -143,3 +143,46 @@ it('fingerprints every eligibility field with stable ordering', () => {
     { ...numba, name: 'metal' }, opencl,
   ]));
 });
+
+it('plans and deduplicates the live assembly snapshot body', async () => {
+  const { emptyAssembly } = await import('../stores/assembly');
+  const { resetDesignStore, useDesignStore } = await import('../stores/design');
+  const { workspaceModeStore } = await import('../stores/workspaceMode');
+  const { adoptCurrentDesignAssembly } = await import('./assemblySolve.fixtures');
+  const { activeReadyMeshSubmission } = await import('./useImportedSolvePlan');
+  const { planSubmission } = await import('./importedSubmission');
+  const { importedSolvePlanRequestBody } = await import('./actions');
+  const { useCurrentModel } = await import('../model/currentModel');
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  resetDesignStore(); resetSolveOptionsStore(); workspaceModeStore.setMode('parametric');
+  useDesignStore.getState().commitEmbedded({ assembly: emptyAssembly() }, 'step');
+  expect(activeReadyMeshSubmission({ kind: 'parametric' })).toBe('needs-build');
+  adoptCurrentDesignAssembly();
+  const snapshot = activeReadyMeshSubmission({ kind: 'parametric' });
+  if (!snapshot || typeof snapshot === 'string' || snapshot instanceof Error) throw new Error('Expected a live snapshot');
+  const expected = importedSolvePlanRequestBody(planSubmission(snapshot));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(CAPABILITIES_QUERY_KEY, { engines: [opencl] });
+  const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ ingest_id: 'wgi_live', requested: 'auto', engine: 'bempp', reason: 'Ready', engines: [] }));
+  vi.stubGlobal('fetch', fetcher);
+  const host = document.createElement('div'); document.body.append(host);
+  const root = createRoot(host);
+  function Consumer() {
+    const submission = activeReadyMeshSubmission(useCurrentModel());
+    const ready = submission && typeof submission !== 'string' && !(submission instanceof Error) ? submission : null;
+    const { plan } = useImportedSolvePlan(ready !== null, ready ? planSubmission(ready) : null);
+    return <span>{plan?.engine ?? 'pending'}</span>;
+  }
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><Consumer/><Consumer/></QueryClientProvider>));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(host.textContent).toBe('bemppbempp');
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0]).toEqual(['/api/solve/imported-plan', expect.objectContaining({ body: expected })]);
+    act(() => useDesignStore.getState().updateValue('simulation.f1', 123));
+    expect(activeReadyMeshSubmission({ kind: 'parametric' })).toBe('needs-build');
+  } finally {
+    act(() => root.unmount()); host.remove(); client.clear();
+    resetDesignStore(); resetSolveOptionsStore(); vi.unstubAllGlobals();
+  }
+});

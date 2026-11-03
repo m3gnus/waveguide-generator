@@ -1,3 +1,6 @@
+import { adoptCurrentDesignAssembly, compiledDesignAssembly } from '../jobs/assemblySolve.fixtures';
+import { designAssemblySnapshot } from '../jobs/assemblySolve';
+import { planSubmission } from '../jobs/importedSubmission';
 import { expectNoJargon } from '../testing/expectNoJargon';
 import { saveImportedSetup } from '../api/importedModels';
 import './cadlink/restores';
@@ -69,9 +72,12 @@ function SolveActions() {
   return <><div data-toolbar-solve><ToolbarSolveActions/></div><CurrentReadiness solveStatus/></>;
 }
 
-vi.mock('../jobs/assemblySolve', () => ({ prepareAssemblySolve: () => mocks.prepareAssemblySolve() }));
+vi.mock('../jobs/assemblySolve', async importOriginal => ({
+  ...await importOriginal<typeof import('../jobs/assemblySolve')>(),
+  prepareDesignAssembly: () => mocks.prepareDesignAssembly(),
+}));
 const mocks = vi.hoisted(() => ({
-  prepareAssemblySolve: vi.fn(),
+  prepareDesignAssembly: vi.fn(),
   capabilityGeneration: 1,
   lastCapabilityEngines: null as EngineCapability[] | null,
   refreshCapabilities: vi.fn(),
@@ -171,8 +177,9 @@ vi.mock('../jobs/useSolvePlan', async (importOriginal) => {
 vi.mock('../jobs/useImportedSolvePlan', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../jobs/useImportedSolvePlan')>();
   return {
-  useImportedSolvePlan: (enabled: boolean) => (
-    mocks.useRealImportedPlan ? actual.useImportedSolvePlan(enabled)
+  ...actual,
+  useImportedSolvePlan: (enabled: boolean, submission?: ImportedSolveSubmission | null) => (
+    mocks.useRealImportedPlan ? actual.useImportedSolvePlan(enabled, submission)
       : enabled ? mocks.importedPlan : { plan: null, error: null, isPending: false }
   ),
   };
@@ -309,6 +316,8 @@ describe('solve invocation mutex', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     mocks.refreshCapabilities.mockReset().mockResolvedValue(undefined);
     mocks.prewarmSelectedEngine.mockReset().mockResolvedValue(undefined);
+    mocks.postImportedSolvePlan.mockReset().mockImplementation(async () => mocks.importedPlan.plan);
+    mocks.prepareDesignAssembly.mockReset();
     mocks.importedPlan.isPending = false;
     mocks.importedPlan.error = null;
     mocks.importedPlan.plan.readiness = null;
@@ -603,9 +612,14 @@ describe('solve invocation mutex', () => {
     client.clear();
   });
 
+  const assemblySnapshot = (notice: string | null = null) => ({
+    modelId: 'design-assembly:one', prepared: { ingest_id: 'compiled', manifest_sha256: 'm', artifact_sha256: 'a' },
+    setup: { geometry: { drive_channels: [], skipped_source_ids: [] }, options: { engine: 'auto' } },
+    replay: null, runName: 'horn', pressPrefix: 'assembly' as const, notice,
+  });
+
   it.each(['toolbar', 'Cmd+Enter', 'Ctrl+Enter'])('solves the whole assembly from a %s press, never its horn alone', async press => {
-    const assemblyPress = { prepared_id: 'compiled', client_request_id: 'assembly-0', setup: { schema_version: 1 } };
-    mocks.prepareAssemblySolve.mockResolvedValue({ modelId: 'design-assembly:one', press: assemblyPress, notice: null });
+    mocks.prepareDesignAssembly.mockResolvedValue(assemblySnapshot());
     mocks.solveModel.mockResolvedValueOnce('job-1');
     await act(async () => {
       const assembly = addWoofer(emptyAssembly(), { anchor: 'below' }).assembly;
@@ -621,9 +635,145 @@ describe('solve invocation mutex', () => {
         metaKey: press === 'Cmd+Enter', ctrlKey: press === 'Ctrl+Enter', bubbles: true, cancelable: true }));
     });
     await vi.waitFor(() => expect(mocks.solveModel).toHaveBeenCalledTimes(1));
-    expect(mocks.solveModel).toHaveBeenCalledWith('design-assembly:one', assemblyPress);
+    expect(mocks.solveModel).toHaveBeenCalledWith('design-assembly:one', expect.objectContaining({
+      prepared_id: 'compiled', label: 'horn1', client_request_id: expect.stringMatching(/^assembly-/),
+      setup: { schema_version: 1, ...assemblySnapshot().setup },
+    }));
+    expect(preferencesStore.getSnapshot().runSequenceNext).toBe(2);
+    expect(mocks.postImportedSolvePlan).toHaveBeenCalledOnce();
     expect(mocks.postSolverMesh).not.toHaveBeenCalled();
     expect(mocks.submitDesign).not.toHaveBeenCalled();
+  });
+
+  it('plans a current live assembly through the imported planner and disables an unsupported solve', async () => {
+    mocks.useRealImportedPlan = true;
+    mocks.useRealSolvePlan = true;
+    const bodies: string[] = [];
+    mocks.postImportedSolvePlan.mockImplementation(async (body: string) => {
+      bodies.push(body);
+      return { ...mocks.importedPlan.plan, engine: null, reason: 'No engine supports this assembly.' };
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: emptyAssembly() }, 'step');
+      adoptCurrentDesignAssembly();
+      root.render(<QueryClientProvider client={client}><JobsCoordinator><SolveActions/></JobsCoordinator></QueryClientProvider>);
+    });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(solveControlStore.getSnapshot()!.title).toContain('No engine supports');
+    expect(solveControlStore.getSnapshot()!.disabled).toBe(true);
+    expect(bodies).toEqual([JSON.stringify(planSubmission(designAssemblySnapshot()))]);
+    expect(mocks.prepareDesignAssembly).not.toHaveBeenCalled();
+    client.clear();
+  });
+
+  it('keeps the build under the press lock and checks its fresh plan before submitting', async () => {
+    const actual = await vi.importActual<typeof import('../jobs/assemblySolve')>('../jobs/assemblySolve');
+    mocks.prepareDesignAssembly.mockImplementation(() => actual.prepareDesignAssembly());
+    const build = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/context')
+      ? json({ minimum_clearance_mm: 0.1, clearances: {} }) : build.promise));
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: emptyAssembly() }, 'step');
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    expect(solveControlStore.getSnapshot()!.disabled).toBe(false);
+    expect(solveControlStore.getSnapshot()!.title).toContain('builds it first');
+    let first!: Promise<unknown>;
+    await act(async () => { first = solveControlStore.getSnapshot()!.solve(); });
+    await act(async () => { expect(await solveControlStore.getSnapshot()!.solve()).toBe('busy'); });
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+    await act(async () => { build.resolve(json(compiledDesignAssembly())); await first; });
+    expect(mocks.postImportedSolvePlan).toHaveBeenCalledOnce();
+    expect(mocks.postImportedSolvePlan.mock.invocationCallOrder[0]).toBeLessThan(mocks.solveModel.mock.invocationCallOrder[0]);
+    expect(mocks.solveModel).toHaveBeenCalledWith('design-assembly:one', expect.objectContaining({
+      prepared_id: 'wgi_live', design: serializeDesign(useDesignStore.getState().design), label: 'horn1',
+    }));
+    const plan = JSON.parse(mocks.postImportedSolvePlan.mock.calls[0][0]);
+    const press = mocks.solveModel.mock.calls[0][1] as ModelSolvePress;
+    expect(plan.options).toEqual(press.setup!.options);
+    expect(preferencesStore.getSnapshot().runSequenceNext).toBe(2);
+  });
+
+  it.each(['build', 'plan'].flatMap(stage => ['edit', 'open', 'engine'].map(change => [stage, change])))
+  ('cancels assembly Solve during %s after %s without submitting', async (stage, change) => {
+    const actual = await vi.importActual<typeof import('../jobs/assemblySolve')>('../jobs/assemblySolve');
+    mocks.prepareDesignAssembly.mockImplementation(() => actual.prepareDesignAssembly());
+    const build = deferred<Response>();
+    const plan = deferred<typeof mocks.importedPlan.plan>();
+    const fetcher = vi.fn(async (url: string) => url.endsWith('/context')
+      ? json({ minimum_clearance_mm: 0.1, clearances: {} })
+      : stage === 'build' ? build.promise : json(compiledDesignAssembly()));
+    vi.stubGlobal('fetch', fetcher);
+    if (stage === 'plan') mocks.postImportedSolvePlan.mockReturnValueOnce(plan.promise);
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: emptyAssembly() }, 'step');
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    let first!: Promise<unknown>;
+    await act(async () => { first = solveControlStore.getSnapshot()!.solve(); });
+    expect(stage === 'plan' ? mocks.postImportedSolvePlan : fetcher).toHaveBeenCalled();
+    await act(async () => {
+      if (change === 'edit') useDesignStore.getState().updateValue('simulation.f1', 123);
+      else if (change === 'open') useDesignStore.getState().replaceDocument(structuredClone(useDesignStore.getState().design));
+      else useSolveOptionsStore.getState().setEngine('bempp');
+      if (stage === 'build') build.resolve(json(compiledDesignAssembly()));
+      else plan.resolve(mocks.importedPlan.plan);
+      await first;
+    });
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+    expect(preferencesStore.getSnapshot().runSequenceNext).toBe(1);
+  });
+
+  it('waits for a current assembly engine and resumes through the shared request once', async () => {
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: emptyAssembly() }, 'step');
+      adoptCurrentDesignAssembly();
+      useSolveOptionsStore.getState().setEngine('beat-metal');
+      mocks.importedPlan.plan.engine = null;
+      mocks.importedPlan.plan.readiness = { code: 'engine_unavailable', engine: 'beat-metal',
+        message: 'BEAT Metal is getting ready.', remedies: [{ kind: 'wait' }] };
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: 'preparing' } as EngineCapability];
+      mocks.prepareDesignAssembly.mockResolvedValue(designAssemblySnapshot());
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    expect(solveControlStore.getSnapshot()!.waitingForEngine).toBe(true);
+    expect(mocks.prepareDesignAssembly).not.toHaveBeenCalled();
+    await act(async () => {
+      mocks.importedPlan.plan.engine = 'beat-metal';
+      mocks.importedPlan.plan.readiness = null;
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability];
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    expect(mocks.prepareDesignAssembly).toHaveBeenCalledOnce();
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
+    expect(mocks.solveModel.mock.calls[0][1]).toMatchObject({ prepared_id: 'wgi_live', label: 'horn1' });
+  });
+
+  it('refuses the fresh build plan with the server reason before any solve', async () => {
+    mocks.prepareDesignAssembly.mockResolvedValue(assemblySnapshot());
+    mocks.postImportedSolvePlan.mockResolvedValueOnce({ ...mocks.importedPlan.plan, engine: null, reason: 'This engine cannot solve the assembly.' });
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: emptyAssembly() }, 'step');
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    await act(async () => { expect(await solveControlStore.getSnapshot()!.solve()).toBe('blocked'); });
+    expect(solveControlStore.getSnapshot()!.actionError).toBe('This engine cannot solve the assembly.');
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+    expect(preferencesStore.getSnapshot().runSequenceNext).toBe(1);
+  });
+
+  it('keeps the step-3 driver blocker visible before building', async () => {
+    const { setWooferDrive } = await import('../stores/assembly');
+    const { assembly, id } = addWoofer(emptyAssembly(), { anchor: 'below' });
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: setWooferDrive(assembly, id, 'driver') }, 'step');
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    expect(solveControlStore.getSnapshot()!.title).toContain('Woofer 1 needs its driver');
+    expect(solveControlStore.getSnapshot()!.disabled).toBe(true);
+    expect(mocks.prepareDesignAssembly).not.toHaveBeenCalled();
   });
 
   it('leaves an assembly out of the horn-only plan the server would refuse', async () => {
@@ -642,7 +792,7 @@ describe('solve invocation mutex', () => {
   });
 
   it('says a toolbar assembly solve that cannot build, and the assembly notice when it can', async () => {
-    mocks.prepareAssemblySolve.mockRejectedValueOnce(new Error('The woofer does not fit. Open Sources and baffle to fix it.'));
+    mocks.prepareDesignAssembly.mockRejectedValueOnce(new Error('The woofer does not fit. Open Sources and baffle to fix it.'));
     await act(async () => {
       useDesignStore.getState().commitEmbedded({ assembly: addWoofer(emptyAssembly(), { anchor: 'below' }).assembly }, 'step');
       root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
@@ -650,7 +800,7 @@ describe('solve invocation mutex', () => {
     await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(solveControlStore.getSnapshot()!.actionError).toContain('The woofer does not fit.');
     expect(mocks.solveModel).not.toHaveBeenCalled();
-    mocks.prepareAssemblySolve.mockResolvedValueOnce({ modelId: 'design-assembly:one', press: { prepared_id: 'compiled', client_request_id: 'assembly-3', setup: { schema_version: 1 } }, notice: 'This engine solves every radiator at prescribed velocity.' });
+    mocks.prepareDesignAssembly.mockResolvedValueOnce(assemblySnapshot('This engine solves every radiator at prescribed velocity.'));
     mocks.solveModel.mockResolvedValueOnce('job-1');
     await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(mocks.solveModel).toHaveBeenCalledTimes(1);
@@ -658,33 +808,31 @@ describe('solve invocation mutex', () => {
   });
 
   it('asks Solve anyway when an assembly mesh is over the limit, and sends the override', async () => {
-    const press = { prepared_id: 'compiled', client_request_id: 'assembly-1', setup: { schema_version: 1 } };
-    mocks.prepareAssemblySolve.mockResolvedValue({ modelId: 'design-assembly:one', press, notice: null });
+    mocks.prepareDesignAssembly.mockResolvedValue(assemblySnapshot());
     mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused('large', 409, 'mesh_too_large', { triangles: 22001, limit: 22000 }))
       .mockResolvedValueOnce('job-1');
     await act(async () => {
       useDesignStore.getState().commitEmbedded({ assembly: addWoofer(emptyAssembly(), { anchor: 'below' }).assembly }, 'step');
       root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
     });
-    await act(async () => { await solveControlStore.getSnapshot()!.solveAssembly!(); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(mocks.solveModel).toHaveBeenCalledTimes(1);
     const choice = meshCeilingChoice.getSnapshot();
     expect(choice?.meshLimit).toEqual({ triangles: 22001, limit: 22000 });
     await act(async () => { await choice!.continueSolve!(); });
-    expect(mocks.solveModel).toHaveBeenLastCalledWith('design-assembly:one', { ...press, mesh_limit_override: true });
+    expect(mocks.solveModel).toHaveBeenLastCalledWith('design-assembly:one', { ...mocks.solveModel.mock.calls[0][1], mesh_limit_override: true });
   });
 
   it('says a refused assembly solve in the imported model words, without a raw code', async () => {
-    mocks.prepareAssemblySolve.mockResolvedValue({ modelId: 'design-assembly:one', press: { prepared_id: 'compiled', client_request_id: 'assembly-2', setup: { schema_version: 1 } }, notice: null });
+    mocks.prepareDesignAssembly.mockResolvedValue(assemblySnapshot());
     mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused('stale_prepared: The mesh moved on.', 409, 'stale_prepared'));
     await act(async () => {
       useDesignStore.getState().commitEmbedded({ assembly: addWoofer(emptyAssembly(), { anchor: 'below' }).assembly }, 'step');
       root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
     });
-    let shown = '';
-    await act(async () => { await solveControlStore.getSnapshot()!.solveAssembly!().catch((error: Error) => { shown = error.message; }); });
-    expect(`${shown} ${host.textContent}`).toContain('The mesh moved on.');
-    expect(`${shown} ${host.textContent}`).not.toContain('stale_prepared');
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    expect(solveControlStore.getSnapshot()!.actionError).toContain('The mesh moved on.');
+    expect(solveControlStore.getSnapshot()!.actionError).not.toContain('stale_prepared');
   });
 
   const blocker: SolveBlocker = { code: 'engine_unavailable', engine: 'beat-metal',
@@ -3157,6 +3305,28 @@ describe('solve invocation mutex', () => {
     expect(press().client_request_id).toMatch(/^mesh-/);
     await act(async () => { accepted.resolve('replayed-run'); await accepted.promise; });
     act(() => resetImportedModelStore());
+  });
+
+  it('replays a retained assembly through the same mesh press with its saved setup revision', async () => {
+    const compiled = compiledDesignAssembly();
+    const setup = { schema_version: 1, geometry: { drive_channels: compiled.prepared.excitations,
+      required_features: ['wg-design-assembly-v1'], skipped_source_ids: [], exterior_only: false },
+      options: { engine: 'metal', solver_mode: 'full_3d', symmetry: 'auto', frequency_range: [100, 200], num_frequencies: 2 } };
+    const job = { ...failedJob(), config_summary: { geometry_type: 'imported', import_origin: 'design-assembly' },
+      cad_source: { ingest_id: compiled.prepared.ingest_id, model_id: compiled.model.model_id } } as unknown as JobItem;
+    const fetcher = vi.fn<typeof fetch>(async () => json({ job_id: job.id, model: compiled.model,
+      prepared: compiled.prepared, setup: { revision_id: 'wgs_assembly', content: setup },
+      solve_options: setup.options, original_available: false }));
+    await act(async () => { expect(await openImported({ kind: 'run', job }, fetcher)).toBe(true); });
+    expect(currentModel().kind).toBe('assembly');
+    await act(async () => { expect(await solveControlStore.getSnapshot()!.solve()).toBe('submitted'); });
+    expect(mocks.solveModel).toHaveBeenCalledWith(compiled.model.model_id, {
+      prepared_id: compiled.prepared.ingest_id, client_request_id: expect.stringMatching(/^mesh-/),
+      label: 'Assembly1', setup_revision_id: 'wgs_assembly',
+    });
+    expect(mocks.prepareDesignAssembly).not.toHaveBeenCalled();
+    expect(mocks.postImportedSolvePlan).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 
   it('submits the same complete file setup before and after recording its setup', async () => {

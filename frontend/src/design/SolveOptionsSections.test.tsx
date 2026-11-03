@@ -26,7 +26,8 @@ vi.mock('../jobs/useSolvePlan', () => ({ useSolvePlan: () => parametricPlan.curr
 const importedPlan = vi.hoisted(() => ({
   current: { plan: null, error: null, isPending: false } as ImportedSolvePlanSnapshot,
 }));
-vi.mock('../jobs/useImportedSolvePlan', () => ({
+vi.mock('../jobs/useImportedSolvePlan', async importOriginal => ({
+  ...await importOriginal<typeof import('../jobs/useImportedSolvePlan')>(),
   useImportedSolvePlan: (enabled: boolean): ImportedSolvePlanSnapshot => (
     enabled ? importedPlan.current : { plan: null, error: null, isPending: false }
   ),

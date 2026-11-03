@@ -1,3 +1,6 @@
+import { showsRetainedMesh, type CurrentModel } from '../model/currentModel';
+import { designAssemblySnapshot, NEEDS_BUILD } from './assemblySolve';
+import { useDesignStore } from '../stores/design';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -7,7 +10,7 @@ import {
   type ImportedSolvePlan,
   type ImportedSolveSubmission,
 } from './actions';
-import { buildImportedSubmission } from './importedSubmission';
+import { buildImportedSubmission, type PreparedSubmission } from './importedSubmission';
 import { capabilityFingerprint } from './capabilityFingerprint';
 import { useCapabilities } from './useCapabilities';
 import {
@@ -18,11 +21,23 @@ import {
 } from './planQueryPolicy';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { fileMeshSubmission, useMeshImportStore } from '../stores/meshImport';
+import { fileMeshSubmission, fileSubmissionSnapshot, useMeshImportStore } from '../stores/meshImport';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { useImportedModelStore } from '../stores/importedModel';
 import { failureWords } from '../api/httpError';
+
+/** Producer dispatch for every ready-mesh consumer. An unbuilt live design can prepare on press. */
+export function activeReadyMeshSubmission(model: Pick<CurrentModel, 'kind'>): PreparedSubmission | 'needs-build' | Error | null {
+  try {
+    if (showsRetainedMesh(model.kind)) return fileSubmissionSnapshot();
+    if (model.kind === 'parametric' && useDesignStore.getState().design.assembly) return designAssemblySnapshot();
+    return null;
+  } catch (error) {
+    if (error instanceof Error && error.message === NEEDS_BUILD) return 'needs-build';
+    return error instanceof Error ? error : new Error(failureWords(error));
+  }
+}
 
 export interface ImportedSolvePlanSnapshot {
   plan: ImportedSolvePlan | null;

@@ -107,3 +107,22 @@ it('keeps adaptive and field controls enabled through their own toggles, sweep e
   expect(adaptive.checked).toBe(false);
   expect(adaptive.disabled).toBe(true);
 });
+
+it('uses the imported plan for a current Parametric assembly, with the live snapshot body', async () => {
+  const { emptyAssembly } = await import('../stores/assembly');
+  const { adoptCurrentDesignAssembly } = await import('./assemblySolve.fixtures');
+  const { designAssemblySnapshot } = await import('./assemblySolve');
+  const { planSubmission } = await import('./importedSubmission');
+  const { importedSolvePlanRequestBody } = await import('./actions');
+  useDesignStore.getState().commitEmbedded({ assembly: emptyAssembly() }, 'step');
+  adoptCurrentDesignAssembly();
+  const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ ingest_id: 'wgi_live', requested: 'auto', engine: 'beat-cpu', reason: 'Assembly', engines: [] }));
+  vi.stubGlobal('fetch', fetcher);
+  act(() => root.render(<QueryClientProvider client={client}><Subject /></QueryClientProvider>));
+  await flushReact();
+  expect(host.textContent).toBe('beat-cpu / beat-cpu');
+  expect(fetcher).toHaveBeenCalledOnce();
+  expect(fetcher.mock.calls[0]).toEqual(['/api/solve/imported-plan', expect.objectContaining({
+    body: importedSolvePlanRequestBody(planSubmission(designAssemblySnapshot())),
+  })]);
+});

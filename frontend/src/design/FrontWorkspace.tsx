@@ -31,7 +31,6 @@ import { ExperimentalBadge } from './ExperimentalBadge';
 import { frontViewProperties } from './FrontProperties';
 import './frontWorkspace.css';
 import './sourceContourEditor.css';
-import { failureWords } from '../api/httpError';
 
 /** How long the design must rest before the front context is refreshed. */
 export const FRONT_CONTEXT_DELAY_MS = 150;
@@ -161,8 +160,7 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
   const solve = () => {
     setNotice('');
     // The jobs coordinator owns every submission; it reports a refusal itself.
-    solveControl?.solveAssembly?.().then(result => setNotice(result.jobId ? result.notice ?? 'Solve submitted. Close this window to follow it in Results.' : ''),
-      (reason: unknown) => { if (useAssemblyBuildStore.getState().status !== 'refused') setNotice(failureWords(reason)); });
+    void solveControl?.solve().then(result => setNotice(result === 'submitted' ? 'Solve submitted. Close this window to follow it in Results.' : ''));
   };
   const building = build.status === 'building';
   const refusal = resolved?.context.refusal;
@@ -189,6 +187,7 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
           {build.refusal && <Notice tone="error" title="Could not build">{build.refusal}
             {build.failureDetail && <DeveloperDetails><pre>{build.failureDetail}</pre></DeveloperDetails>}</Notice>}
           {failure && <DeveloperDetails><pre>{failure.detail}</pre></DeveloperDetails>}
+          {solveControl?.actionError && <Notice tone="error">{solveControl.actionError}</Notice>}
           {notice && <Notice tone="info">{notice}</Notice>}
         </div>
         <div ref={setPanel}/>
@@ -198,7 +197,7 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
       <p role="status">{hasAssembly && !building && fit.line || buildLine(hasAssembly, build.status, !!slot.prepared, designModelCurrent(design, slot))}</p>
       <div className="front-actions">
         <button className="btn" type="button" disabled={!hasAssembly || building || fit.held} title={fit.held && fit.line || undefined} onClick={() => { void prepareDesignModel(fetcher).catch(() => {}); onClose(); }}>Build</button>
-        <button className="btn-primary" type="button" disabled={!hasAssembly || building || fit.held || !solveControl?.solveAssembly || solveControl.submitting} title={fit.held && fit.line || undefined} onClick={solve}>Solve</button>
+        <button className="btn-primary" type="button" disabled={!hasAssembly || building || fit.held || !solveControl || solveControl.disabled} title={fit.held && fit.line || undefined} onClick={solve}>Solve</button>
       </div>
     </footer>
   </div></div>;

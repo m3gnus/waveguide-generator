@@ -7,6 +7,12 @@ import { addWoofer, emptyAssembly, type DesignAssembly } from '../stores/assembl
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { FRONT_CONTEXT_DELAY_MS, FrontWorkspace, FrontWorkspaceLauncher, openFrontWorkspace, closeFrontWorkspace } from './FrontWorkspace';
 
+const solveControl = vi.hoisted(() => ({ current: null as Pick<NonNullable<ReturnType<typeof import('../shell/JobsCoordinator')['useOptionalSolveControl']>>, 'solve' | 'disabled' | 'actionError'> | null }));
+vi.mock('../shell/JobsCoordinator', async importOriginal => ({
+  ...await importOriginal<typeof import('../shell/JobsCoordinator')>(),
+  useOptionalSolveControl: () => solveControl.current,
+}));
+
 const BEFORE = fixture.before.assembly as DesignAssembly;
 const [W1] = BEFORE.woofers!.map(woofer => woofer.id);
 let host: HTMLDivElement, root: Root, frames: Map<number, FrameRequestCallback>, frameId: number;
@@ -20,6 +26,7 @@ const fetcher = (async (_url: string, init?: RequestInit) => {
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  solveControl.current = null;
   frames = new Map(); frameId = 0; requests = [];
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
@@ -56,6 +63,25 @@ async function mount(onClose = vi.fn()) {
 }
 
 describe('front workspace', () => {
+  it('submits through the shared solve control and shows the submitted words', async () => {
+    const solve = vi.fn().mockResolvedValue('submitted');
+    solveControl.current = { solve, disabled: false, actionError: null };
+    await mount();
+    expect(button('Solve').disabled).toBe(false);
+    await act(async () => button('Solve').click());
+    expect(solve).toHaveBeenCalledOnce();
+    expect(document.body.textContent).toContain('Solve submitted. Close this window to follow it in Results.');
+  });
+
+  it('shows the shared action error and respects the shared disabled state', async () => {
+    const solve = vi.fn().mockResolvedValue('blocked');
+    solveControl.current = { solve, disabled: true, actionError: 'Choose an engine for this mesh.' };
+    await mount();
+    expect(button('Solve').disabled).toBe(true);
+    expect(document.body.textContent).toContain('Choose an engine for this mesh.');
+    expect(solve).not.toHaveBeenCalled();
+  });
+
   it('asks the server for the context of the assembly on screen', async () => {
     await mount();
     expect((requests[0].design as { assembly: DesignAssembly }).assembly).toEqual(BEFORE);

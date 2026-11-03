@@ -70,7 +70,10 @@ export function captureSolveInputs(): SolveInputs { return solveInputs(); }
 export function solveCancellationReason(request: SolveInputs & { jobId?: string }): string | null {
   const inputs = solveInputs();
   const model = inputs.model;
-  if (model.key !== request.model.key || model.kind !== request.model.kind || model.ingestId !== request.model.ingestId
+  if (model.key !== request.model.key || model.kind !== request.model.kind
+    // A live design owns its identity; its preparation can change during this very press.
+    || (model.kind !== 'parametric' && model.ingestId !== request.model.ingestId)
+    || model.designUid !== request.model.designUid
     || inputs.mode !== request.mode) return 'Solve cancelled: the model on screen changed. Press Solve again.';
   if (!model.viewportShowing) return 'Solve cancelled: the model left the view. Open it, then press Solve.';
   if (inputs.engine !== request.engine) return 'Solve cancelled: the selected engine changed. Press Solve again.';

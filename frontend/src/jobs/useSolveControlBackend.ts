@@ -1,3 +1,5 @@
+import { useCurrentModel } from '../model/currentModel';
+import { planSubmission } from './importedSubmission';
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useDesignStore } from '../stores/design';
@@ -8,7 +10,7 @@ import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode'
 import { activeBackendCapability } from '../design/backendSupport';
 import { useCapabilities } from './useCapabilities';
 import { useSolvePlan } from './useSolvePlan';
-import { useImportedSolvePlan } from './useImportedSolvePlan';
+import { activeReadyMeshSubmission, useImportedSolvePlan } from './useImportedSolvePlan';
 
 /** Controls share the submission planner; routing may depend on geometry and mounting. */
 export function useSolveControlBackend(modeOverride?: WorkspaceMode) {
@@ -28,9 +30,15 @@ export function useSolveControlBackend(modeOverride?: WorkspaceMode) {
   const options = useMemo<SolveOptions | null>(() => {
     try { return store.options(); } catch { return null; }
   }, [store]);
-  const parametric = useSolvePlan(design, options, mode === 'parametric');
-  const imported = useImportedSolvePlan(mode === 'cad');
-  const snapshot = mode === 'cad' ? imported : parametric;
+  const model = useCurrentModel();
+  const planningModel = mode === workspace.mode ? model
+    : { kind: mode === 'parametric' ? 'parametric' as const : 'cad' as const };
+  const readyMesh = activeReadyMeshSubmission(planningModel);
+  const readyMeshActive = readyMesh !== null;
+  const submission = readyMesh && typeof readyMesh !== 'string' && !(readyMesh instanceof Error) ? planSubmission(readyMesh) : null;
+  const parametric = useSolvePlan(design, options, mode === 'parametric' && !readyMeshActive);
+  const imported = useImportedSolvePlan(mode === 'cad' || submission !== null, readyMeshActive ? submission : undefined);
+  const snapshot = mode === 'cad' || readyMeshActive ? imported : parametric;
   // A control may keep its last routing answer during edits; submission must
   // still use only the current plan returned by the planner hooks.
   const routingKey = `${mode}/${store.engine}/${store.accuracy}`;

@@ -9,53 +9,58 @@ import { placementProblems } from '../sketch/adapters/frontView';
 import { designModelCurrent, requestAssemblyBuild } from '../stores/assemblyBuild';
 import { designPreparedRecord, useDesignModelStore } from '../stores/importedModel';
 import { assemblyImportedSetup, assemblyRadiatorLabel } from '../stores/assemblySimulation';
-import { serializeDesign, useDesignStore } from '../stores/design';
+import { currentDocumentLoad, serializeDesign, useDesignStore } from '../stores/design';
 import { useSolveOptionsStore } from '../stores/solveOptions';
-import type { ImportedSolveSubmission, ModelSolvePress } from './actions';
-import { assemblyDriverBlocker, resolveAssemblySetup } from './importedSubmission';
+import { useDocumentStore } from '../stores/document';
+import type { ImportedSolveSubmission } from './actions';
+import { assemblyDriverBlocker, resolveAssemblySetup, type PreparedSubmission } from './importedSubmission';
 
-export interface AssemblySolvePress { modelId: string; press: ModelSolvePress; notice: string | null }
+/** The live document has to own a current prepared mesh before it can be planned. */
+export const NEEDS_BUILD = 'NEEDS_BUILD';
 
-/** Build the design's assembly if it is not current, then the press for its record. */
-export async function prepareAssemblySolve(fetcher: typeof fetch = fetch,
-  newPressId: () => string = () => globalThis.crypto.randomUUID()): Promise<AssemblySolvePress> {
-  const { design, designRevision } = useDesignStore.getState();
+export function designAssemblySnapshot(): PreparedSubmission {
+  const { design } = useDesignStore.getState();
   if (!design.assembly) throw new Error('This design has no Sources and baffle assembly.');
-  // Everything below answers for what was on screen at this press: the check,
-  // the build and the settings all belong to one revision, or none goes out.
-  const optionsAtPress = useSolveOptionsStore.getState().options() as ImportedSolveSubmission['options'];
-  const sameRevision = () => useDesignStore.getState().designRevision === designRevision;
-  const changed = () => new Error('The design changed while it was being prepared. Press Solve again.');
-  const label = (id: string) => assemblyRadiatorLabel(design, id);
-  // A driver that cannot be solved as set up is refused before anything is built.
-  const driverProblem = assemblyDriverBlocker(assemblyImportedSetup(), optionsAtPress, label);
+  const record = designPreparedRecord();
+  const slot = useDesignModelStore.getState();
+  if (!record || !slot.modelId || !designModelCurrent(design)) throw new Error(NEEDS_BUILD);
+  const options = useSolveOptionsStore.getState().options() as ImportedSolveSubmission['options'];
+  const { setup, notice } = resolveAssemblySetup(assemblyImportedSetup(), design.assembly, options,
+    design.simulation, id => assemblyRadiatorLabel(design, id));
+  return {
+    modelId: slot.modelId,
+    prepared: { ingest_id: record.ingest_id, manifest_sha256: record.manifest_sha256, artifact_sha256: record.artifact_sha256 },
+    setup, replay: null, design: serializeDesign(design),
+    runName: useDocumentStore.getState().designName, pressPrefix: 'assembly', notice,
+  };
+}
+
+/** The WG adapter adds only placement and preparation to a ready-mesh submission. */
+export async function prepareDesignAssembly(fetcher: typeof fetch = fetch): Promise<PreparedSubmission> {
+  const { design, designRevision } = useDesignStore.getState();
+  const { designUid } = useDocumentStore.getState();
+  const load = currentDocumentLoad();
+  if (!design.assembly) throw new Error('This design has no Sources and baffle assembly.');
+  const assertCurrent = () => {
+    if (useDesignStore.getState().designRevision !== designRevision || currentDocumentLoad() !== load
+      || useDocumentStore.getState().designUid !== designUid) {
+      throw new Error('The design changed while it was being prepared. Press Solve again.');
+    }
+  };
+  const options = useSolveOptionsStore.getState().options() as ImportedSolveSubmission['options'];
+  const driverProblem = assemblyDriverBlocker(assemblyImportedSetup(), options, id => assemblyRadiatorLabel(design, id));
   if (driverProblem) throw new Error(driverProblem);
   if (!designModelCurrent(design)) {
-    // A woofer that does not fit never reaches the build, wherever Solve was pressed.
-    // A check that cannot run leaves that to the build, which certifies the fit itself.
     const context = await fetchAssemblyContext(serializeDesign(design), fetcher).catch((reason: unknown) => {
       if (assemblyContextRefused(reason)) throw reason;
       return null;
     });
+    assertCurrent();
     const [problem] = context ? [...placementProblems(design.assembly, { context, assembly: design.assembly }).values()].flat() : [];
     if (problem) throw new Error(`${problem} Open Sources and baffle to fix it.`);
-    if (!sameRevision()) throw changed();
     const built = await requestAssemblyBuild(fetcher);
+    assertCurrent();
     if (built?.status !== 'published') throw new Error('A newer revision of this design is being built. Solve again when it is ready.');
   }
-  const record = designPreparedRecord();
-  const slot = useDesignModelStore.getState();
-  if (!record || !slot.modelId || !sameRevision() || !designModelCurrent(design)) throw changed();
-  // Channels are the compiled record's excitations, so this reads the build above.
-  const { setup, notice } = resolveAssemblySetup(assemblyImportedSetup(), design.assembly, optionsAtPress, design.simulation, label);
-  return {
-    modelId: slot.modelId, notice,
-    press: {
-      prepared_id: record.ingest_id,
-      // The run keeps the design it was pressed from, so it is this design's run.
-      design: serializeDesign(design),
-      client_request_id: `assembly-${newPressId()}`,
-      setup: { schema_version: 1, ...setup } as unknown as ModelSolvePress['setup'],
-    },
-  };
+  return designAssemblySnapshot();
 }

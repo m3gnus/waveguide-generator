@@ -26,7 +26,8 @@ import { resetCadSolverFrameStore, useCadSolverFrameStore } from '../stores/cadS
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { resetSolveStageClocksForTests } from './solveProgress';
 
-vi.mock('../jobs/useImportedSolvePlan', () => ({ useImportedSolvePlan: () => ({ plan: null }) }));
+vi.mock('../jobs/useImportedSolvePlan', async importOriginal => ({
+  ...await importOriginal<typeof import('../jobs/useImportedSolvePlan')>(), useImportedSolvePlan: () => ({ plan: null }) }));
 
 const { CadModelDetails } = await import('./CadModelDetails');
 const { CurrentModelStatus } = await import('./CurrentModelStatus');
