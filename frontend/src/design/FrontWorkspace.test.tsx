@@ -8,7 +8,7 @@ import { addWoofer, emptyAssembly, type DesignAssembly } from '../stores/assembl
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { FRONT_CONTEXT_DELAY_MS, FrontWorkspace, FrontWorkspaceLauncher, openFrontWorkspace, closeFrontWorkspace } from './FrontWorkspace';
 
-const solveControl = vi.hoisted(() => ({ current: null as Pick<NonNullable<ReturnType<typeof import('../shell/JobsCoordinator')['useOptionalSolveControl']>>, 'solve' | 'disabled' | 'title' | 'actionError'> | null }));
+const solveControl = vi.hoisted(() => ({ current: null as Pick<NonNullable<ReturnType<typeof import('../shell/JobsCoordinator')['useOptionalSolveControl']>>, 'solve' | 'disabled' | 'title' | 'actionError' | 'solveNotice'> | null }));
 vi.mock('../shell/JobsCoordinator', async importOriginal => ({
   ...await importOriginal<typeof import('../shell/JobsCoordinator')>(),
   useOptionalSolveControl: () => solveControl.current,
@@ -81,6 +81,29 @@ describe('front workspace', () => {
     expect(button('Solve').disabled).toBe(true);
     expect(document.body.textContent).toContain('Choose an engine for this mesh.');
     expect(solve).not.toHaveBeenCalled();
+  });
+
+  it('shows an accepted solve\'s fixed-velocity notice as information while the dialog stays open', async () => {
+    const notice = 'This engine solves every woofer at fixed velocity (1 m/s RMS), without its driver. To solve the drivers, set Advanced backend under Solver to Automatic, BEAT CPU or BEAT Metal.';
+    const solve = vi.fn(async () => {
+      solveControl.current = { ...solveControl.current!, solveNotice: { id: 1, message: notice } };
+      return 'submitted' as const;
+    });
+    solveControl.current = { solve, disabled: false, title: 'Solve', actionError: null };
+    await mount();
+    expect(host.textContent).not.toContain(notice);
+    await act(async () => button('Solve').click());
+    expect(solve).toHaveBeenCalledOnce();
+    const information = [...host.querySelectorAll('.front-messages .notice-info')].find(row => row.textContent === notice);
+    expect(information?.getAttribute('role')).toBe('status');
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(host.querySelector('.front-messages [role="alert"]')).toBeNull();
+    expect(host.textContent).toContain('Solve submitted. Close this window to follow it in Results.');
+
+    // The coordinator clears the notice on the next press; the dialog follows it.
+    solveControl.current = { ...solveControl.current!, solveNotice: null };
+    await act(async () => root.render(<FrontWorkspace onClose={vi.fn()} fetcher={fetcher}/>));
+    expect(host.textContent).not.toContain(notice);
   });
 
   it.each([

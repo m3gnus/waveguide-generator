@@ -193,6 +193,7 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
             {build.failureDetail && <DeveloperDetails><pre>{build.failureDetail}</pre></DeveloperDetails>}</Notice>}
           {failure && <DeveloperDetails><pre>{failure.detail}</pre></DeveloperDetails>}
           {solveControl?.actionError && <Notice tone="error">{solveControl.actionError}</Notice>}
+          {solveControl?.solveNotice && <Notice tone="info">{solveControl.solveNotice.message}</Notice>}
           {notice && <Notice tone="info">{notice}</Notice>}
         </div>
         <div ref={setPanel}/>
