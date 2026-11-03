@@ -206,7 +206,7 @@ describe('one current model and shown result owner', () => {
     expect(canvas).toContain('const fieldCurrent = spatialResultId !== null && spatialResultId === fieldJobId;');
     expect(canvas).toContain('active={fieldCurrent}');
     expect(sources['../viewport/FieldPlane.tsx']).toContain('props.active && state.enabled');
-    expect(canvas).toContain("if (clipMode === 'field-plane' && fieldCurrent && fieldPlane)");
+    expect(canvas).toContain("if (clipMode === 'field-plane' && fieldCurrent && fieldClipBase)");
   });
 
   it.each(['fieldPlaneJob', 'femFieldJob', 'FieldPlaneProbeTooltip'])('rejects a spatial-selector bypass in %s even if the other paths are guarded', name => {
