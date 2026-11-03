@@ -25,6 +25,7 @@ export interface WorkspaceFolderStore extends WorkspaceFolder {
 /** Ordered against every writer, so a slow read cannot revive a stale path. */
 let generation = 0;
 let loading: Promise<void> | null = null;
+let mutation: Promise<WorkspaceFolder> | null = null;
 
 function message(error: unknown): string {
   return failureWords(error);
@@ -38,6 +39,9 @@ export const useWorkspaceFolderStore = create<WorkspaceFolderStore>((set) => ({
   error: null,
 
   load() {
+    // A newly mounted consumer shares the writer's folder response. Its read
+    // must not supersede that writer's result or ownership of the busy flag.
+    if (mutation) return mutation.then(() => {}, () => {});
     // Three mounted surfaces would otherwise ask three times on every open.
     if (loading) return loading;
     const request = ++generation;
@@ -51,14 +55,17 @@ export const useWorkspaceFolderStore = create<WorkspaceFolderStore>((set) => ({
   async open() {
     const request = ++generation;
     set({ busy: 'open', error: null });
+    const pending = openWorkspaceFolder();
+    mutation = pending;
     try {
-      const folder = await openWorkspaceFolder();
+      const folder = await pending;
       // Only the path: this response says nothing about whether the folder was
       // explicitly chosen, and spreading it would report the default as chosen.
       if (request === generation) set({ path: folder.path, loaded: true });
     } catch (reason) {
       if (request === generation) set({ error: message(reason) });
     } finally {
+      if (mutation === pending) mutation = null;
       if (request === generation) set({ busy: null });
     }
   },
@@ -66,14 +73,17 @@ export const useWorkspaceFolderStore = create<WorkspaceFolderStore>((set) => ({
   async select(path?: string) {
     const request = ++generation;
     set({ busy: 'select', error: null });
+    const pending = selectWorkspaceFolder(path);
+    mutation = pending;
     try {
-      const folder = await selectWorkspaceFolder(path);
+      const folder = await pending;
       if (request === generation) set({ ...folder, loaded: true });
       return folder.selected;
     } catch (reason) {
       if (request === generation) set({ error: message(reason) });
       return false;
     } finally {
+      if (mutation === pending) mutation = null;
       if (request === generation) set({ busy: null });
     }
   },
@@ -81,6 +91,7 @@ export const useWorkspaceFolderStore = create<WorkspaceFolderStore>((set) => ({
   resetForTests() {
     generation += 1;
     loading = null;
+    mutation = null;
     set({ path: null, selected: false, loaded: false, busy: null, error: null });
   },
 }));
@@ -94,5 +105,6 @@ export function resetWorkspaceFolderStore(): void {
 export function applyWorkspaceFolderChoice(folder: WorkspaceFolder): void {
   generation += 1;
   loading = null;
+  mutation = null;
   useWorkspaceFolderStore.setState({ ...folder, loaded: true, busy: null, error: null });
 }
