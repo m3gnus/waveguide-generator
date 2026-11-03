@@ -290,13 +290,22 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     const rg = finite(driveMetadata?.rg_ohm) ?? finite(object(metadata('passive_cardioid'))?.rg_ohm);
     row(drive, 'Voltage', `${Number(driveVoltage.toPrecision(4))} V rms${rg ? ` · Rg ${Number(rg.toPrecision(3))} Ω` : ''}`);
   }
+  // An assembly radiator without a driver moves at a fixed velocity, and its
+  // levels are per that velocity, not per volt.
+  const driveVelocity = finite(driveMetadata?.velocity_rms_m_per_s);
+  if (driveVoltage === undefined && driveVelocity !== undefined) {
+    row(drive, 'Velocity', `${Number(driveVelocity.toPrecision(4))} m/s rms`,
+      'Fixed diaphragm velocity with no driver model: levels are per this velocity, and there is no voltage, power or excursion.');
+  }
   // `DriverSpec` now carries an optional `label`, and the solver copies it to
   // `metadata.driver.label` beside the spec (`server/solver/driver_lem.py`).
   // Only a driver picked from the library or explicitly named has one, so the
   // row appears exactly when there is a name to show.
   const driverMetadata = object(metadata('driver'));
   const driverLabel = string(driverMetadata?.label) ?? string(object(driverMetadata?.spec)?.label);
-  if (driverLabel) {
+  // A coupled exterior driver is labelled with its drive channel's id, which
+  // names the channel, not the driver: an assembly woofer's is an opaque UUID.
+  if (driverLabel && driverLabel !== string(metadata('drive_channel_id'))) {
     row(drive, 'Driver', driverLabel, 'The driver this channel was solved with, as named in the drive-channel rail.');
   }
   const excursion = excursionSeries(result);

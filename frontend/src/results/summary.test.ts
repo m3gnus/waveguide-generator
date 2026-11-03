@@ -511,6 +511,25 @@ describe('simulation summary groups', () => {
     expect(row(groups, 'Drive', 'Driver')?.value).toBe('Acme HD-1');
   });
 
+  it('does not call a coupled driver\'s channel id its name', () => {
+    // A coupled exterior driver carries its drive channel id as its label; an
+    // assembly woofer's channel id is a UUID, not a driver anyone picked.
+    const id = '00000000-0000-4000-8000-000000000001';
+    const groups = summaryGroups({
+      result: { frequencies: [100], metadata: { drive_channel_id: id, drive: { voltage_v: 2.83 }, driver: { label: id, spec: { re_ohm: 6 } } } },
+    });
+    expect(row(groups, 'Drive', 'Voltage')?.value).toBe('2.83 V rms');
+    expect(row(groups, 'Drive', 'Driver')).toBeUndefined();
+  });
+
+  it('states the fixed velocity an assembly radiator without a driver was solved at', () => {
+    const groups = summaryGroups({
+      result: { frequencies: [100], metadata: { drive: { velocity_rms_m_per_s: 1, motion: 'axial' } } },
+    });
+    expect(row(groups, 'Drive', 'Velocity')?.value).toBe('1 m/s rms');
+    expect(row(groups, 'Drive', 'Voltage')).toBeUndefined();
+  });
+
   it('retains count-only diagnostics from a partial legacy payload', () => {
     const groups = summaryGroups({ result: { frequencies: [], metadata: { warning_count: 2, failure_count: 1 } } });
     expect(groups.find(({ title }) => title === 'Diagnostics')).toMatchObject({
