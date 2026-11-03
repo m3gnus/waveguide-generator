@@ -14,6 +14,7 @@ import { AssemblyDriverStatus } from './WooferDrivers';
 import { HF_RADIATOR_ID } from '../stores/assembly';
 import { outerBodyUpdates } from './outerBodyUpdates';
 import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOptions';
+import { ExteriorMmdSuggestion } from './ExteriorMmdSuggestion';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -987,7 +988,8 @@ function CadDriveChannels() {
             <ExteriorDriverLibraryPicker channel={channel} displayName={channelName}
               roleHint={activeSources.find(source => source.id === channel.source_ids[0])?.role}/>
             <ExteriorDriverFields channelId={channelName} form={channel.exterior_transducer}
-              onChange={form => state.setExteriorTransducer(channel.id, form)}/>
+              onChange={form => state.setExteriorTransducer(channel.id, form)}
+              mmdNote={<ExteriorMmdSuggestion channelId={channel.id}/>}/>
             <ExteriorDriverOptions channelId={channelName} form={channel.exterior_transducer}
               onChange={form => state.setExteriorTransducer(channel.id, form)}/>
             {!designAssembly && <><p className="cad-driver-hint">Motion axis in the returned mesh frame:</p>

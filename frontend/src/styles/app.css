@@ -1280,6 +1280,20 @@ textarea:disabled { opacity: .48; }
 .cad-driver-field { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-micro); color: var(--fg3); }
 .cad-driver-field input { height: 20px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
 .cad-driver-hint { grid-column: 1 / -1; margin: 2px 0 0; font-size: var(--text-micro); color: var(--fg3); }
+/* The Mmd suggestion spans the row under the Mmd field; dense flow lets the
+   following fields backfill the cell beside Mmd at any column count. The
+   subgrid keeps the Mms input exactly one T/S column wide. */
+.exterior-driver-grid { grid-auto-flow: row dense; }
+.mmd-suggest { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; gap: 4px 8px; }
+.mmd-suggest > :not(.cad-driver-field) { grid-column: 1 / -1; }
+.mmd-suggest p { margin: 0; }
+.mmd-suggest-hint { color: var(--fg3); font-size: var(--text-micro); }
+.mmd-suggest-hint .btn-link { font-size: var(--text-micro); }
+.mmd-suggest-note { display: grid; gap: 4px; padding: 4px 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font-size: var(--text-micro); }
+.mmd-suggest-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
+.mmd-suggest-note b { color: var(--fg1); font-weight: 600; white-space: nowrap; }
+.mmd-suggest-note.warn { border-color: rgba(var(--amber-rgb), .38); background: rgba(var(--amber-rgb), .08); }
+.mmd-suggest-warning { color: var(--amber); }
 
 /* Driver picker: an inline search whose hits drop under it, and the picked
    driver collapsed to chips. Same density and tokens as the grid above. */

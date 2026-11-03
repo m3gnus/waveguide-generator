@@ -1,16 +1,25 @@
-import { useRef } from 'react';
+import { Fragment, useRef, type ReactNode } from 'react';
+import { formatGrams } from './ExteriorMmdSuggestion';
 import { EXTERIOR_FIELDS, EXTERIOR_LIMIT_FIELDS, EXTERIOR_SD_FIELD, SEMI_INDUCTANCE_FIELDS, exteriorDisplayScale,
   normalizeExteriorOptions, isExteriorDriverReplacement, type ExteriorTransducerForm } from '../stores/exteriorTransducer';
 
-export function ExteriorDriverFields({ channelId, form, onChange }: {
-  channelId: string; form: ExteriorTransducerForm; onChange: (form: ExteriorTransducerForm) => void;
+/** Unit scaling leaves float noise (850.0000000000001); show the number the user typed. */
+const shown = (value: number) => Number(value.toPrecision(12));
+
+/** `mmdNote` sits directly under the Mmd field; dense flow backfills the cell it leaves. */
+export function ExteriorDriverFields({ channelId, form, onChange, mmdNote }: {
+  channelId: string; form: ExteriorTransducerForm; onChange: (form: ExteriorTransducerForm) => void; mmdNote?: ReactNode;
 }) {
-  return <div className="cad-driver-grid">{EXTERIOR_FIELDS.map(([key, label, unit]) => <label key={key} className="cad-driver-field">
-    <span>{label} ({unit}) *</span><input type="number" aria-label={`${label} for ${channelId}`}
-      value={form[key] === undefined ? '' : form[key] * exteriorDisplayScale(key)}
-      onChange={event => onChange({ ...form, [key]: event.target.value === '' ? undefined : Number(event.target.value) / exteriorDisplayScale(key) })}/>
-    {key === 'le_h' && form[key] !== undefined && <small>{form[key]} H</small>}
-  </label>)}</div>;
+  return <div className="cad-driver-grid exterior-driver-grid">{EXTERIOR_FIELDS.map(([key, label, unit]) => <Fragment key={key}>
+    <label className="cad-driver-field">
+      <span>{label} ({unit}) *</span><input type="number" aria-label={`${label} for ${channelId}`}
+        value={form[key] === undefined ? '' : shown(form[key] * exteriorDisplayScale(key))}
+        onChange={event => onChange({ ...form, [key]: event.target.value === '' ? undefined : Number(event.target.value) / exteriorDisplayScale(key) })}/>
+      {key === 'le_h' && form[key] !== undefined && <small>{shown(form[key])} H</small>}
+      {key === 'mmd_kg' && form[key] !== undefined && <small>{formatGrams(form[key])} g</small>}
+    </label>
+    {key === 'mmd_kg' && mmdNote}
+  </Fragment>)}</div>;
 }
 
 /** Optional physical models; disabled models retain their values in this editor. */
@@ -31,7 +40,7 @@ export function ExteriorDriverOptions({ channelId, form, onChange }: {
   return <>
     <label className="cad-driver-field"><span>Sd (cm², optional)</span>
       <input type="number" min="0" step="any" aria-label={`Sd for ${channelId}`}
-        value={form.sd_m2 === undefined ? '' : form.sd_m2 * exteriorDisplayScale(EXTERIOR_SD_FIELD[0])}
+        value={form.sd_m2 === undefined ? '' : shown(form.sd_m2 * exteriorDisplayScale(EXTERIOR_SD_FIELD[0]))}
         onChange={event => onChange(normalizeExteriorOptions({ ...form,
           sd_m2: event.target.value === '' ? undefined : Number(event.target.value) / 10000 }))}/>
     </label>

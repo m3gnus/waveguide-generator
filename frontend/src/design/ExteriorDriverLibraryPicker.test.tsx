@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ExteriorDriverLibraryPicker } from './DriverPicker';
 import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOptions';
+import { ExteriorMmdSuggestion } from './ExteriorMmdSuggestion';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { useDriverLibraryStore } from '../stores/driverLibrary';
 import { type ExteriorTransducerForm } from '../stores/exteriorTransducer';
@@ -24,7 +25,8 @@ function Editor() {
   const form = channel.exterior_transducer!;
   const onChange = (next: ExteriorTransducerForm) => useCadReturnStore.getState().setExteriorTransducer(channel.id, next);
   return <><ExteriorDriverLibraryPicker channel={channel}/>
-    <ExteriorDriverFields channelId={channel.id} form={form} onChange={onChange}/>
+    <ExteriorDriverFields channelId={channel.id} form={form} onChange={onChange}
+      mmdNote={<ExteriorMmdSuggestion channelId={channel.id}/>}/>
     <ExteriorDriverOptions channelId={channel.id} form={form} onChange={onChange}/></>;
 }
 function input(label: string) {
@@ -133,7 +135,10 @@ it.each(['library', 'manual'])('offers %s Mms explicitly, accepts once, edits no
   await act(async () => {});
   expect(suggestMmd).toHaveBeenLastCalledWith(17.9, 124.7);
   expect(input('Bare moving mass (Mmd)').value).toBe('');
-  expect(host.textContent).toContain('Suggested from Mms and Sd (free-air air-load removed)');
+  expect(host.textContent).toContain('Suggested Mmd 16.29 g');
+  expect(host.textContent).toContain('Mms minus 1.61 g free-air load (9.0% of Mms).');
+  // The suggestion renders in the T/S grid directly after the Mmd field it fills.
+  expect(input('Bare moving mass (Mmd)').closest('label')!.nextElementSibling!.classList.contains('mmd-suggest')).toBe(true);
   const accept = buttons().find(button => button.textContent === 'Use suggested Mmd')!;
   act(() => accept.click());
   expect(input('Bare moving mass (Mmd)').valueAsNumber).toBe(derived.mmd_kg);
@@ -146,14 +151,14 @@ it.each(['library', 'manual'])('offers %s Mms explicitly, accepts once, edits no
   act(() => buttons().find(button => button.textContent === 'Use suggested Mmd')!.click());
   enter('Bare moving mass (Mmd)', '.02');
   expect(input('Bare moving mass (Mmd)').valueAsNumber).toBe(0.02);
-  expect(host.textContent).toContain('edited after derivation');
+  expect(host.textContent).toContain('Mmd edited by hand. The suggestion was 16.29 g, from Mms 17.9 g and Sd 124.7 cm².');
 });
 
 it('withholds a refused correction and displays its reason', async () => {
   vi.mocked(suggestMmd).mockResolvedValue({ suggestion: null, reason: 'Correction exceeds 50% of Mms; check Sd/Mms' });
   enter('Mms', '55'); enter('Sd', '850');
   await act(async () => {});
-  expect(host.textContent).toContain('No Mmd suggestion: Correction exceeds 50%');
+  expect(host.textContent).toContain('No Mmd suggestion. Correction exceeds 50% of Mms; check Sd/Mms. Enter Mmd from the datasheet.');
   expect(buttons().find(button => button.textContent === 'Use suggested Mmd')).toBeUndefined();
   expect(input('Bare moving mass (Mmd)').value).toBe('');
 });

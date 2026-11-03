@@ -1,7 +1,6 @@
 import { importedSimulationSetup, useImportedSimulationSetup } from '../stores/importedSimulationSetup';
 import { EmptyState } from '../shell/EmptyState';
 import { prefillExteriorDriver } from '../stores/exteriorTransducer';
-import { ExteriorMmdSuggestion } from './ExteriorMmdSuggestion';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   getDriver,
@@ -957,6 +956,5 @@ export function ExteriorDriverLibraryPicker({ channel, roleHint, displayName }: 
         ? "This library driver lists no Sd. Enter Sd in the driver options to use a lumped rear chamber."
         : "This library driver lists no Sd. You can enter Sd from the datasheet for acoustic impedance."}
     </p>}
-    <ExteriorMmdSuggestion channelId={channel.id}/>
   </>;
 }
