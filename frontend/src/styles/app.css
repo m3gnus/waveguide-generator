@@ -769,6 +769,11 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .status-item { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 12px; border-right: 1px solid var(--hair-soft); white-space: nowrap; }
 .status-item:first-child { padding-left: 0; }.status-item.right { border-right: 0; border-left: 1px solid var(--hair-soft); }
 .status-item b { color: var(--fg1); font-weight: 500; }.status-item svg { width: 10px; height: 10px; color: var(--fg4); }
+.status-activity { color: var(--fg2); }
+.status-activity .progress { flex: none; width: 72px; margin-top: 0; }
+.status-activity-label { color: var(--fg1); }
+.status-activity-meta { font-variant-numeric: tabular-nums; }
+.status-activity-more { color: var(--fg3); }
 .preview-error-status { min-width: 0; max-width: 340px; overflow: hidden; color: var(--red); text-overflow: ellipsis; }
 .engine-badge { display: flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid rgba(var(--blue-rgb), .3); border-radius: var(--r3); background: rgba(var(--blue-rgb), .12); color: var(--blue); font-size: var(--text-micro); letter-spacing: .04em; }
 .engine-badge svg { width: 9px; color: currentColor; }

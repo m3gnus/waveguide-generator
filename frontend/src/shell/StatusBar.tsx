@@ -1,3 +1,4 @@
+import { ActivityStatus } from './ActivityStatus';
 import { runCadStatusAction, useCadModelStatusLine } from './CadModelStatusLine';
 import { resolveEngineLabel } from './solveProgress';
 import { useSyncExternalStore } from 'react';
@@ -139,6 +140,7 @@ export function StatusBar() {
       : <>preview {meshMetrics ? <><b>{meshMetrics.triangles.toLocaleString()}</b> tri · <b>{meshMetrics.vertices.toLocaleString()}</b> vert</> : <b>no frame</b>}</>}</div>
     {mode === 'parametric' && previewError && <div className="status-item preview-error-status" title={previewError}>{previewError}</div>}
     {draftNotKept && <div className="status-item preview-error-status" role="alert" title={DRAFT_NOT_KEPT}>{DRAFT_NOT_KEPT}</div>}
+    <ActivityStatus/>
     <span className="spacer"/>
     <div className="status-item right">{summary}</div>
     <div className="status-item right status-drop-1"><Icon name="folder"/>{document}</div>
