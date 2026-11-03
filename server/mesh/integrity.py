@@ -472,95 +472,88 @@ def _edge_plane_crossings(
     )
 
 
-def _coplanar_overlap(first: np.ndarray, second: np.ndarray, axis: int) -> float:
-    """Area of the overlap of two coplanar triangles, projected off ``axis``.
+def _coplanar_overlaps(first: np.ndarray, second: np.ndarray, axes: np.ndarray) -> np.ndarray:
+    """Batch the scalar polygon clip, preserving its arithmetic and vertex order."""
+    count = len(first)
+    rows = np.arange(count)
+    keep = np.array([[1, 2], [0, 2], [0, 1]])[axes]
+    subject = np.take_along_axis(first, keep[:, None, :], axis=2)
+    clip = np.take_along_axis(second, keep[:, None, :], axis=2)
 
-    Sutherland-Hodgman clipping. Only reached for the rare pair whose vertices
-    all sit within tolerance of the other's plane, so a Python-level polygon
-    clip costs nothing measurable.
-    """
+    def area(polygon, lengths):
+        total = np.zeros(count)
+        for vertex in range(polygon.shape[1]):
+            live = vertex < lengths
+            following = (vertex + 1) % np.maximum(lengths, 1)
+            start, end = polygon[:, vertex], polygon[rows, following]
+            total += np.where(live, start[:, 0] * end[:, 1] - end[:, 0] * start[:, 1], 0.0)
+        return total
 
-    keep = [index for index in range(3) if index != axis]
-    subject = [tuple(point[keep]) for point in first]
-    clip = [tuple(point[keep]) for point in second]
+    lengths = np.full(count, 3)
+    signed = area(clip, lengths)
+    valid = (np.abs(signed) / 2.0 != 0.0) & (np.abs(area(subject, lengths)) / 2.0 != 0.0)
+    clip[signed < 0] = clip[signed < 0, ::-1]
+    # Each clip pass emits at most two vertices per input vertex, so three passes
+    # over a triangle can never exceed 24 slots, even when rounding makes a
+    # near-collinear polygon alternate sides. Convex inputs use six at most.
+    polygon = np.zeros((count, 24, 2))
+    polygon[:, :3] = subject
+    lengths[~valid] = 0
+    for edge in range(3):
+        start, end = clip[:, edge], clip[:, (edge + 1) % 3]
+        current = polygon
+        polygon = np.zeros_like(current)
+        new_lengths = np.zeros(count, dtype=int)
 
-    def area(polygon: list[tuple[float, float]]) -> float:
-        if len(polygon) < 3:
-            return 0.0
-        total = 0.0
-        for index, (x0, y0) in enumerate(polygon):
-            x1, y1 = polygon[(index + 1) % len(polygon)]
-            total += x0 * y1 - x1 * y0
-        return abs(total) / 2.0
+        def side(point):
+            return ((end[:, 0] - start[:, 0]) * (point[:, 1] - start[:, 1])
+                    - (end[:, 1] - start[:, 1]) * (point[:, 0] - start[:, 0]))
 
-    def side(point, start, end) -> float:
-        return (end[0] - start[0]) * (point[1] - start[1]) - (end[1] - start[1]) * (
-            point[0] - start[0]
-        )
-
-    if area(clip) == 0.0 or area(subject) == 0.0:
-        return 0.0
-    # Clip against a consistently wound window.
-    if sum(
-        clip[index][0] * clip[(index + 1) % 3][1]
-        - clip[(index + 1) % 3][0] * clip[index][1]
-        for index in range(3)
-    ) < 0:
-        clip = clip[::-1]
-
-    output = subject
-    for index in range(len(clip)):
-        if not output:
-            return 0.0
-        start, end = clip[index], clip[(index + 1) % len(clip)]
-        current, output = output, []
-        for position, point in enumerate(current):
-            previous = current[position - 1]
-            point_in = side(point, start, end) >= 0.0
-            previous_in = side(previous, start, end) >= 0.0
-            if point_in != previous_in:
-                # The crossing sits where ``side`` reaches zero between the two,
-                # so the parameter is previous/(previous - point). Writing the
-                # denominator the other way round mirrors the point through
-                # ``previous`` and invents vertices outside the subject.
-                denominator = side(previous, start, end) - side(point, start, end)
-                if denominator != 0.0:
-                    ratio = side(previous, start, end) / denominator
-                    output.append(
-                        (
-                            previous[0] + (point[0] - previous[0]) * ratio,
-                            previous[1] + (point[1] - previous[1]) * ratio,
-                        )
-                    )
-            if point_in:
-                output.append(point)
-    return area(output)
+        for vertex in range(int(lengths.max(initial=0))):
+            live = vertex < lengths
+            point = current[:, vertex]
+            previous = current[rows, (vertex - 1) % np.maximum(lengths, 1)]
+            point_side, previous_side = side(point), side(previous)
+            point_in, previous_in = point_side >= 0.0, previous_side >= 0.0
+            denominator = previous_side - point_side
+            crossing = live & (point_in != previous_in) & (denominator != 0.0)
+            selected = rows[crossing]
+            ratio = previous_side[crossing] / denominator[crossing]
+            polygon[selected, new_lengths[crossing]] = (
+                previous[crossing] + (point[crossing] - previous[crossing]) * ratio[:, None]
+            )
+            new_lengths[crossing] += 1
+            inside = live & point_in
+            polygon[rows[inside], new_lengths[inside]] = point[inside]
+            new_lengths[inside] += 1
+        lengths = new_lengths
+    return np.where(lengths >= 3, np.abs(area(polygon, lengths)) / 2.0, 0.0)
 
 
-def _shared_edge_separates(
-    first: np.ndarray, second: np.ndarray, shared: np.ndarray, normal: np.ndarray
-) -> bool:
-    """True when two coplanar triangles merely tile across the edge they share."""
-
-    edge_points = first[shared]
-    if len(edge_points) < 2:
-        return False
-    start, end = edge_points[0], edge_points[1]
+def _shared_edges_separate(first, second, shared, normals):
+    """Whether coplanar neighbours tile across their shared edge, including seams."""
+    rows = np.arange(len(first))
+    order = np.argsort(~shared, axis=1, kind="stable")
+    start, end = first[rows, order[:, 0]], first[rows, order[:, 1]]
     direction = end - start
-    if not np.any(direction):
-        return False
-    free_first = first[~shared]
-    # The partner's free corners are the ones not coincident with the edge.
-    offsets = second - start
-    along = np.linalg.norm(np.cross(np.broadcast_to(direction, offsets.shape), offsets), axis=1)
-    free_second = second[along > 0.0]
-    if not len(free_first) or not len(free_second):
-        return False
+    free_first = first[rows, np.argmin(shared, axis=1)]
+    offsets = second - start[:, None]
+    along = np.linalg.norm(np.cross(direction[:, None], offsets), axis=2)
+    free = along > 0.0
+    free_second = second[rows, np.argmax(free, axis=1)]
+    def side(offset):
+        cross = np.cross(direction, offset)
+        value = np.einsum("ij,ij->i", cross, normals)
+        # BLAS dot and a batched reduction can round a nearly cancelling sum
+        # differently. Preserve the scalar sign at that boundary; ordinary
+        # neighbours stay entirely vectorised.
+        bound = 8 * np.finfo(float).eps * np.sum(np.abs(cross * normals), axis=1)
+        uncertain = np.abs(value) <= np.maximum(bound, np.finfo(float).tiny)
+        for row in np.flatnonzero(uncertain):
+            value[row] = np.dot(cross[row], normals[row])
+        return value
 
-    def side(point: np.ndarray) -> float:
-        return float(np.dot(np.cross(direction, point - start), normal))
-
-    return side(free_first[0]) * side(free_second[0]) < 0.0
+    return free.any(axis=1) & (side(free_first - start) * side(free_second - start) < 0.0)
 
 def mesh_self_intersection_report(
     vertices: Any, triangles: Any, *, max_samples: int = 20
@@ -786,21 +779,25 @@ def mesh_self_intersection_report(
     # mean they are disjoint: a fold-over hinges on a shared edge and lands on
     # top of its neighbour. They tile only when their free vertices fall on
     # opposite sides of the edge they share, which is what is tested here.
-    for row in np.flatnonzero(coplanar):
-        if shared_count[row] >= 2 and _shared_edge_separates(
-            corners[left[row]], corners[right[row]], shared[row], normals[left[row]]
-        ):
-            continue
-        first, second = int(left[row]), int(right[row])
-        axis = int(np.argmax(np.abs(normals[first])))
-        overlap = _coplanar_overlap(corners[first], corners[second], axis)
-        reference = 0.5 * float(normal_length[first])
-        if overlap > reference * SELF_INTERSECTION_SEGMENT_EPS:
-            # Reported as the side of the equivalent square, so the sample's
-            # "extent" stays a length and can be ranked and printed alongside a
-            # crossing's segment length instead of being an area labelled mm.
+    coplanar_rows = np.flatnonzero(coplanar)
+    adjacent = coplanar_rows[shared_count[coplanar_rows] >= 2]
+    separates = _shared_edges_separate(
+        corners[left[adjacent]], corners[right[adjacent]], shared[adjacent], normals[left[adjacent]],
+    )
+    coplanar[adjacent[separates]] = False
+    remaining = np.flatnonzero(coplanar)
+    # Broadphase boxes were already pruned by _sweep_and_prune. Clip the
+    # survivors in bounded batches rather than one Python polygon per pair.
+    for begin in range(0, len(remaining), _SELF_INTERSECTION_CHUNK):
+        rows = remaining[begin:begin + _SELF_INTERSECTION_CHUNK]
+        first, second = left[rows], right[rows]
+        axes = np.argmax(np.abs(normals[first]), axis=1)
+        overlaps = _coplanar_overlaps(corners[first], corners[second], axes)
+        hits = overlaps > 0.5 * normal_length[first] * SELF_INTERSECTION_SEGMENT_EPS
+        for index in np.flatnonzero(hits):
+            a, b = int(first[index]), int(second[index])
             coplanar_pairs.append(
-                (math.sqrt(overlap), first, second, corners[first].mean(axis=0))
+                (math.sqrt(float(overlaps[index])), a, b, corners[a].mean(axis=0))
             )
 
     involved: set[int] = set()

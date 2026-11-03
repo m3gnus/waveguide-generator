@@ -585,3 +585,23 @@ def test_a_crossing_is_located_from_the_low_end_whatever_the_winding() -> None:
             sample = report["samples"][0]
             assert sample["location_m"][0] == pytest.approx(1.375), (first, second)
             assert sample["extent_m"] == pytest.approx(0.25), (first, second)
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+@pytest.mark.parametrize("scale", [1.0e-6, 1.0, 1.0e6])
+def test_batched_coplanar_clip_preserves_area_contacts_and_winding(axis, scale):
+    from server.mesh.integrity import _coplanar_overlaps
+
+    first = np.array([[0, 0], [2, 0], [0, 2]], dtype=float)
+    seconds = np.array([
+        [[0, 0], [2, 0], [2, 2]],  # half of each triangle overlaps
+        [[0, 0], [2, 0], [0, -2]],  # a shared edge only
+        [[2, 0], [4, 0], [2, 2]],  # a shared vertex only
+        [[0, 0], [2, 0], [0, 1]],  # fold onto a neighbour
+    ], dtype=float)
+    first3 = np.insert(np.broadcast_to(first, seconds.shape), axis, 0.0, axis=2) * scale
+    second3 = np.insert(seconds, axis, 0.0, axis=2) * scale
+    expected = np.array([1, 0, 0, 1], dtype=float) * scale**2
+    for a in (first3, first3[:, ::-1]):
+        for b in (second3, second3[:, ::-1]):
+            assert _coplanar_overlaps(a, b, np.full(4, axis)) == pytest.approx(expected)
