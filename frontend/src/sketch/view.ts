@@ -1,4 +1,5 @@
 import type { XY } from './solver/types';
+import { hasHorizontalScroll, legacyWheelDeviceEvidence } from '../input/wheelDevice';
 export interface View { scale: number; offsetX: number; offsetY: number }
 export interface Bounds { minX: number; minY: number; maxX: number; maxY: number }
 export interface Viewport { width: number; height: number }
@@ -53,8 +54,9 @@ export function wheelGesture(event: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'delt
   // Sketch navigation decides each event immediately. Keep its established
   // magnitude fallback, including large fractional deltas; the viewport's
   // start-of-stream evidence serves a different, buffered gesture policy.
-  const trackpad = deltaX !== 0 || (wheelDeltaY !== undefined && wheelDeltaY !== 0
-    ? wheelDeltaY % 120 !== 0 : deltaMode === 0 && Math.abs(deltaY) < 40);
+  const legacyEvidence = legacyWheelDeviceEvidence(wheelDeltaY ?? 0);
+  const trackpad = hasHorizontalScroll(deltaX) || (legacyEvidence !== null
+    ? legacyEvidence === 'trackpad' : deltaMode === 0 && Math.abs(deltaY) < 40);
   if (!ctrlKey && trackpad)
     return { kind: 'pan', dx: -deltaX, dy: -deltaY };
   const pixels = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? 360 : 1);
