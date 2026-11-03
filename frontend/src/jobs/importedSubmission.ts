@@ -1,7 +1,8 @@
+import type { CadSolveSetup } from '../api/cadOperations';
 import { effectiveImportedSetup, importedModelBlocker } from '../stores/importedModel';
 import { exteriorTransducerError } from '../stores/exteriorTransducer';
-import type { ImportedSolvePlan, ImportedSolveSubmission } from './actions';
-import { bindImportedSetup, type ImportedSetup } from './importedSetup';
+import type { ImportedSolvePlan, ImportedSolveSubmission, ModelSolvePress } from './actions';
+import { bindImportedSetup, type ImportedSetup, type PreparedMeshIdentity } from './importedSetup';
 import {
   blockingFindingWire,
   cadPassiveCardioidTopology,
@@ -20,6 +21,32 @@ import {
 import type { SimulationData, CadDriveChannel, PassiveCardioidTopology, RoleSource } from '../stores/cadReturn';
 import { parseFrequencyList, polarValidationError, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { frequencyText } from '../results/crossoverSpec';
+
+/** One captured ready mesh and its effective physics, shared by plan and press. */
+export interface PreparedSubmission {
+  modelId: string;
+  prepared: PreparedMeshIdentity;
+  setup: ImportedSetup;
+  replay: { setup_revision_id: string } | { setup: CadSolveSetup } | null;
+  design?: ModelSolvePress['design'];
+  runName: string;
+  pressPrefix: 'mesh' | 'assembly';
+  notice: string | null;
+}
+
+export function planSubmission(snapshot: PreparedSubmission): ImportedSolveSubmission {
+  return bindImportedSetup(snapshot.prepared, snapshot.setup);
+}
+
+export function modelSolvePress(snapshot: PreparedSubmission, label: string, requestId: string): ModelSolvePress {
+  return structuredClone({
+    prepared_id: snapshot.prepared.ingest_id,
+    ...(snapshot.design === undefined ? {} : { design: snapshot.design }),
+    client_request_id: `${snapshot.pressPrefix}-${requestId}`,
+    label,
+    ...(snapshot.replay ?? { setup: { schema_version: 1, ...snapshot.setup } as unknown as CadSolveSetup }),
+  });
+}
 
 /** Read the server projection without changing the user's retained setup. */
 export function importedPolarFromPlan(plan: ImportedSolvePlan | null | undefined) {

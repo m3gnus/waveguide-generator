@@ -6,7 +6,7 @@ import { combineWire } from './cadReturn';
 import { savedChannelDrivers } from './cadSetupRestore';
 import type { CadSetup } from '../api/jobsSocket';
 import type { SimulationData } from './cadReturn';
-import { crossoverBandBlocker, exteriorModeBlocker, importedSweepRangeInvalid, incompleteDriverBlocker, resolveAssemblySetup, simulationGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
+import { planSubmission, type PreparedSubmission, crossoverBandBlocker, exteriorModeBlocker, importedSweepRangeInvalid, incompleteDriverBlocker, resolveAssemblySetup, simulationGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
 import { create } from 'zustand';
 import {
   inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
@@ -24,11 +24,11 @@ import {
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import { subscribeSolveSettingsEdits } from './solveSettingsEdits';
 import { openMeshReplay } from '../api/meshReplay';
-import { bindImportedSetup, importedSetupOf, type ImportedSetup } from '../jobs/importedSetup';
+import { importedSetupOf, type ImportedSetup } from '../jobs/importedSetup';
 import { ImportedModelApiError } from '../api/importedModels';
 import {
   editFileDraft, effectiveImportedSetup, flushImportedSetupWrites, importedModelBlocker, isCurrentOpen, openImported,
-  registerImportedPreparationFlush, registerImportedSetupControls, registerImportedView, useImportedModelStore,
+  unchangedSetup, registerImportedPreparationFlush, registerImportedSetupControls, registerImportedView, useImportedModelStore,
   type ImportedView, type FileDraft,
 } from './importedModel';
 import { failureWords } from '../api/httpError';
@@ -333,8 +333,21 @@ function setupForPreparedFile(retained: ImportedSetup, record: RegisteredMesh, p
 }
 
 export function fileMeshSubmission(): ImportedSolveSubmission {
+  return planSubmission(fileSubmissionSnapshot());
+}
+
+/** A file or retained assembly contributes the same snapshot to planning and submission. */
+export function fileSubmissionSnapshot(): PreparedSubmission {
   const setup = fileMeshSetup();
-  return bindImportedSetup(useImportedModelStore.getState().prepared!, setup);
+  const model = useImportedModelStore.getState();
+  const record = model.prepared!;
+  return {
+    modelId: model.modelId!, prepared: { ingest_id: record.ingest_id,
+      manifest_sha256: record.manifest_sha256, artifact_sha256: record.artifact_sha256 }, setup,
+    replay: unchangedSetup(model.input === 'assembly' ? 'assembly' : 'file', record.ingest_id),
+    runName: model.input === 'assembly' ? model.model?.display_name || 'Assembly' : useMeshImportStore.getState().filename,
+    pressPrefix: 'mesh', notice: null,
+  };
 }
 
 /** The same effective setup Save records and Solve submits. */

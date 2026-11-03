@@ -1,4 +1,5 @@
 import { activityStore } from '../shell/activity';
+import { modelSolvePress, planSubmission } from '../jobs/importedSubmission';
 import { saveImportedSetup } from '../api/importedModels';
 import { importedSolvePlanRequestBody, solveModel } from '../jobs/actions';
 import { readFileSync } from 'node:fs';
@@ -8,7 +9,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
-import { editMeshImport, fileMeshSubmission, loadMeshFile, prepareMeshFile, loadMeshReplay, registeredMesh,
+import { editMeshImport, fileSubmissionSnapshot, fileMeshSubmission, loadMeshFile, prepareMeshFile, loadMeshReplay, registeredMesh,
   fileMeshSetup, fileSetupForSave, useMeshImportStore } from './meshImport';
 import { openImported, reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore, editFileDraft } from './importedModel';
 import { fileSimulationSetup, importedSimulationSetup } from './importedSimulationSetup';
@@ -119,10 +120,9 @@ describe('standalone imported mesh', () => {
 
   it('keeps the exact file press and plan body', () => {
     showPrepared();
-    const model = useImportedModelStore.getState();
-    const setup = fileMeshSetup();
-    const press = { prepared_id: model.prepared!.ingest_id, client_request_id: 'mesh-p1', label: 'speaker1',
-      ...(unchangedSetup('file', model.prepared!.ingest_id) ?? { setup: { schema_version: 1, ...setup } }) };
+    const snapshot = fileSubmissionSnapshot();
+    const press = modelSolvePress(snapshot, 'speaker1', 'p1');
+    expect(fileMeshSubmission()).toEqual(planSubmission(snapshot));
     expect(JSON.stringify(press)).toMatchSnapshot();
     expect(importedSolvePlanRequestBody(fileMeshSubmission())).toMatchSnapshot();
   });
