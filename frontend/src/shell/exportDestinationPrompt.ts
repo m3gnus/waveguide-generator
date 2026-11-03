@@ -75,6 +75,7 @@ export function askForExportDestination(
 /** The message every entry point shows when the dialog was dismissed. */
 export const EXPORT_CANCELLED_MESSAGE = 'Export cancelled. No files were written.';
 export const EXPORT_OMITS_WOOFERS = 'This file has the horn and enclosure only: the woofers and their baffle cutouts are not in it.';
+export const EXPORT_INNER_SURFACE_ONLY = 'This file has the horn inner surface only, with no enclosure; the woofers and their baffle cutouts are not in it.';
 
 /**
  * What to add to an export's message when it replaced files that were there.

@@ -4,20 +4,23 @@ Status: current overview, checked against current source on 2026-11-01.
 
 ## Launching
 
-The platform launcher normally opens the compact status window, where **Open
-in browser** shows the interface and **Quit** stops the local server. On macOS
-and Windows, pass `--window` to the command launcher to show the same interface
-in a native desktop window instead; closing it also stops the server. Pass
-`--browser` to select the normal status-window workflow explicitly. Linux
-reports that the native window is unavailable in this release and falls back
-to the status window. `--no-gui` keeps the terminal-only mode on every platform.
+Installed builds on macOS, Windows and Linux open a native desktop window by
+default; closing it also stops the local server. This includes the installed
+Linux menu entry and `waveguide-generator` command. If the Linux Qt check fails,
+WG explains the problem and opens the status window and browser instead.
+Pass `--browser` for the status-window and browser workflow explicitly, or
+`--no-gui` for terminal-only mode.
 
-The installed Linux build behaves the same way: its menu entry and the
-`waveguide-generator` command both open the status window, and the standalone
-bundle carries the Tcl/Tk that window needs, so nothing has to be installed for
-it. What it does need from the system are the ordinary OpenGL and X11 libraries
-the mesher loads; the installer checks for those before it copies anything and
-names the ones that are missing.
+Source-checkout scripts (`launch-wg.command`, `launch-wg.bat` and
+`launch-wg.sh`) enter `launchers.statusapp` and normally open the compact status
+window, where **Open in browser** shows the interface and **Quit** stops the
+server. Pass `--window` to request the native window, `--browser` for the
+browser workflow, or `--no-gui` for terminal-only mode.
+
+The standalone Linux bundle carries the Tcl/Tk needed by the status-window
+fallback. The system still needs the ordinary OpenGL and X11 libraries the
+mesher loads; the installer checks for those before copying anything and names
+the ones that are missing.
 
 ## Design and preview
 
@@ -124,9 +127,11 @@ to **Parametric** with the design open.
 Result curves and run archives use the normal export actions. Assembly
 geometry export (STEP/STL), wiring, boxes and arrays are later phases. Keep
 an exported copy for editable geometry; an assembly run's imported-model view does
-not provide a WG parameter-config export. **STEP solid**, **STL** and **Send to CAD**
-carry the horn and enclosure only: the woofers and their baffle cutouts are not in
-the file, and WG says so at the export.
+not provide a WG parameter-config export. **STEP solid** and **Send to CAD** carry
+the horn and enclosure only: the woofers and their baffle cutouts are not in the
+file. **STL** and **STEP inner surface** carry only the horn's inner surface,
+without the enclosure, woofers or baffle cutouts. WG states these omissions at
+the export when woofers are enabled.
 
 ### Optional solve surface deviation
 
@@ -396,8 +401,10 @@ These are part of the solve. Changing either means solving again.
 
 **Normalization angle** is a display reference and nothing else. Every polar curve in a
 directivity map is shifted so that this angle reads 0 dB, which is what makes the map
-show pattern rather than level. It is applied when the map is drawn, so changing it
-redraws immediately and also re-references runs that were solved earlier — no re-solve.
+show pattern rather than level. Each run with a recorded normalization angle keeps
+that reference when the current setting changes. New solves record the current angle.
+Legacy runs without a recorded angle follow the live setting for their model kind
+(parametric or imported), redrawing without a re-solve.
 
 Because it is only a shift applied to the directivity maps, the normalization angle does
 not move the frequency response, the phase, the group delay, the directivity index, or
@@ -406,8 +413,8 @@ the maps are relative ones. If you want to see how the response itself changes o
 that is the measurement-angle control, below — not this.
 
 Two other things are worth knowing about it. The **3D balloon** is referenced to its own
-on-axis pole rather than to this angle, so setting a normalization angle of 30° moves the
-heatmaps and leaves the balloon where it was. And the results setting called **Map
+on-axis pole rather than to this angle, so a run referenced to 30° has heatmaps relative
+to that angle while the balloon stays on-axis. And the results setting called **Map
 reference** is unrelated: that one picks which contour is highlighted and how far down the
 colour scale runs, in dB, not an angle.
 
@@ -441,9 +448,10 @@ absolute. The on-axis FRD is the one that carries absolute SPL re 20 µPa.
 The Group Delay card carries a small **ms / cycles** switch in the corner of the plot,
 next to the axis it renames. Milliseconds answers "how late"; cycles answers "how late
 for this frequency", counting the same delay in periods of the frequency it occurs at
-(`tau[s] × f`). It is one estimate drawn two ways — 0.3 ms is a third of a period at
-1 kHz and three periods at 10 kHz — and cycles is usually the reading a group delay is
-judged by, because a fixed time is negligible up high and is not down low.
+(`tau[s] × f`). It is one estimate drawn two ways: 0.3 ms is 0.3 cycles at 1 kHz
+and 3 cycles at 10 kHz. A fixed delay spans more periods at higher frequencies.
+The cycles view shows that frequency relationship; it does not by itself say
+whether a delay is audible.
 
 The choice is remembered, and it is the unit the run report and the results preferences
 popover use as well; changing it in either place changes it in both.
@@ -478,22 +486,22 @@ Windows and Linux; Metal supports eligible Apple GPUs on macOS. GPU readiness
 reports the detected hardware and any runtime preparation needed. BEMPP remains
 available for infinite-baffle and rigid-ground-plane solves.
 
-**The first launch after upgrading prepares the official runtime once**, even
-if an HBB runtime was already prepared. WG downloads a private Julia runtime
+**Automatic prepares the official CPU runtime in the background after launch**,
+even if an HBB runtime was already prepared. An explicit BEAT choice prepares
+that runtime instead. WG downloads a private Julia runtime
 and its packages, then compiles and verifies the engine in the background.
 This requires an internet connection and can take several minutes. Offline
 users need connectivity once to complete preparation; later launches reuse the
 prepared runtime without downloading it again. If preparation fails (for
 example because you were offline), WG does not retry it automatically on later
-launches. In **Simulation → Solver**, beside **Advanced backend**, the selected BEAT
-runtime and runtimes that can prepare, are preparing or have failed show their
-state and a readable reason. Click **Prepare** for an
-unprepared or stale runtime, or **Retry** after a failure, once you are online.
-Preparation runs in the background; its current step appears there, and the
-backend becomes selectable when its verification finishes. Only one runtime
-can prepare at a time. Opening this panel does not start a download. While BEAT
-prepares, Fast on Auto uses BEMPP where native Metal is not available (Solve
-options say so in one line), and Accurate asks you to wait for BEAT.
+launches. Once you are online, in **Simulation → Solver → Advanced backend**,
+select a runtime that can prepare to start setup. Such runtimes are selectable
+while unprepared or preparing; being selectable does not mean setup is complete.
+The picker row reports the setup state and current step. Solve readiness can
+offer **Prepare … and solve** to prepare or retry the required runtime and then
+solve. Only one runtime can prepare at a time. Opening the panel alone does not
+start a download. While BEAT prepares, Fast + AUTO uses a compatible ready engine
+(BEMPP where native Metal and BEAT are unavailable); Accurate waits for BEAT.
 
 CPU, Metal, CUDA and ROCm use the same preparation path as the launcher. GPU
 preparation requires matching hardware, and installation opt-out settings are
@@ -505,7 +513,7 @@ preparation from a source checkout, run
 checkout's Python environment. Replace `cpu` with `metal`, `cuda` or `rocm` as
 needed, and add `--force` for a fresh attempt. Use `status` in place of
 `provision` to inspect readiness. Packaged installations use the in-app
-**Prepare** / **Retry** controls.
+runtime selection and solve-readiness preparation actions described above.
 
 WG uses the official `beat-engine` package for every BEAT solve. The former
 HBB (`hornlab-beat-bem`) rollback was removed. A stale
@@ -535,9 +543,11 @@ The Solver backend list offers these BEAT engines:
 | **BEAT · CPU** | any machine, once its Julia runtime has been provisioned |
 
 The available engines solve the same problem and differ in speed, so on a
-machine with both a GPU and the CPU path you can pick either and compare. Any engine this
-machine cannot run stays in the list, greyed out, with the reason on the row —
-so a missing driver or an uninstalled runtime says so instead of vanishing.
+machine with both a GPU and the CPU path you can pick either and compare. Engines
+that cannot run or prepare are disabled with a reason in the parametric and file-mesh
+pickers. The CAD picker hides refused engines unless they are already selected,
+so an existing override stays visible for recovery. Cold runtimes that can prepare
+remain selectable and show their setup state.
 
 **BEAT · CPU needs a runtime, and says so until it has one.** It runs on a
 private Julia runtime that has to be downloaded, instantiated, and then proved
@@ -550,18 +560,27 @@ on Windows, Linux and macOS, without restarting. The first setup takes about
 5 minutes: a 280 MB Julia download, then a compile of about 4 minutes. The
 picker row says where it is: "Not set up: select to set up (about 5 min)",
 "Setting up… (step)", "ready", or "Setup failed: reason". A solve that asked for
-BEAT · CPU waits, shows the same words, and then runs. **Automatic** keeps
+BEAT · CPU waits, shows the same words, and then runs. **Fast + Automatic** keeps
 solving with engines that are already ready (on CPU-only computers, BEMPP) and
 uses BEAT · CPU for the next solve once it is ready; a solve that is already
-running keeps its solver. WG always uses its own Julia 1.12.7, even when another
+running keeps its solver. Accurate + AUTO waits for a compatible BEAT runtime
+instead of using BEMPP. WG always uses its own Julia 1.12.7, even when another
 Julia (for example from juliaup or the Microsoft Store) is on PATH.
 `WG2_SKIP_BEAT_CPU_PROVISION=1` switches preparation off.
 
-On Apple Silicon, AUTO prefers Metal. AUTO walks the same order on every
-platform: Metal, then the BEAT GPU engines, then BEAT · CPU, then BEMPP.
-BEAT · CPU is the fastest measured CPU engine after the 0.3.4 SIMD work.
-BEMPP remains the fallback when BEAT · CPU is unavailable or refuses the
-request, and the CPU engine for infinite baffle.
+**Fast + AUTO** walks the same order on every platform, using the first ready
+engine compatible with the model: Metal → BEAT · CUDA → BEAT · ROCm → BEAT · Metal
+→ BEAT · CPU → BEMPP. On Apple Silicon this normally prefers native Metal.
+BEMPP remains Fast's fallback when BEAT is unavailable or refuses the request,
+and the CPU engine for infinite baffle.
+
+**Accurate + AUTO** walks only BEAT · Metal → BEAT · CUDA → BEAT · ROCm → BEAT · CPU.
+It does not fall back to native Metal or BEMPP; if no compatible BEAT runtime is
+ready, solve readiness explains what to prepare or wait for.
+
+Changing **Accuracy** resets **Advanced backend** to **Automatic**, clearing any
+explicit override. Selecting a non-BEAT override resets Accuracy to **Fast**;
+an explicit BEAT backend keeps the chosen accuracy.
 
 BEMPP prefers a CPU OpenCL runtime whose device passes a real assembly/solve smoke test. It never uses
 GPU OpenCL devices. CPU vendor does not decide eligibility: Intel's CPU runtime
@@ -786,9 +805,9 @@ folder automatically. The run archive also includes the exact retained solve mes
 Choose **Settings → WG folder**, or use the same chooser in Results & export
 preferences. The default is `Documents/Waveguide Generator`, with the **WGLink
 folder** in `cadlink/` and the **Runs folder** in `runs/`. With an explicit data
-folder override, the WG folder is `<data>/workspace-root`. Fresh setups use
-its `runs/` child; an existing Runs folder at `<data>/workspace` stays effective
-as a separate folder.
+folder override, the WG folder is `<data>/workspace-root`, but fresh isolated
+setups also use `<data>/workspace` for runs as a separate folder, rather than
+`<data>/workspace-root/runs`. A saved Runs folder choice still takes priority.
 
 Changing the WG folder moves no files. Earlier choices appear as
 “Separate folder from an earlier setup: <path>”. Choose “Use the WG folder

@@ -377,6 +377,17 @@ describe('solve and directivity control help', () => {
     }
   });
 
+  it('separates mandatory closed-model topology from optional mesh checks (DOC-04)', () => {
+    render(<MeshValidationControl />);
+    const help = hoverText(host.querySelector('#mesh-validation-mode')!.closest('.select-row')!);
+    expect(help).toContain('Closed freestanding, enclosure and infinite-baffle models always reject invalid topology or openings away from symmetry planes');
+    expect(help).toContain('Warn and Off cannot bypass those checks');
+    expect(help).toContain('self-intersections');
+    expect(help).toContain('Strict refuses');
+    expect(help).not.toContain('Warn solves anyway');
+    expect(help).not.toContain('Off hides the warning entirely');
+  });
+
   it.each(['parametric', 'cad'] as const)('retains Accurate when the %s picker selects a BEAT backend and migrates the legacy family', (mode) => {
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
       engines: [{ name: 'beat-cpu', available: true, geometry_sources: ['parametric', 'imported'], fast_paths: [] }],

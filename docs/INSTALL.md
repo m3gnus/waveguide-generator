@@ -405,16 +405,18 @@ data lock.
 
 Manual and automatic run exports default to `Documents/Waveguide Generator/runs`.
 This folder is user-visible and does not require browser download permission or
-approval for a protected operating-system data directory. A different output
-folder can be selected once in **Settings → Workspace**; the path displayed
-there is authoritative. Internal databases, logs, and process locks remain
+approval for a protected operating-system data directory. Use **Settings → WG folder**
+to choose the parent of `runs/` and `cadlink/`; the displayed **Runs folder** is
+authoritative. A separate folder choice stays effective until you select
+**Use the WG folder instead**. Internal databases, logs, and process locks remain
 under the platform application-data directory; result exports do not.
 
 With `--data-dir` or a non-empty `WG2_DATA_DIR`, the implicit output folder is
-`<data dir>/workspace` instead. A workspace already saved in that data directory
+`<data dir>/workspace` instead, even on a fresh setup. A workspace already saved in that data directory
 still takes priority, including one outside it. Existing Documents runs are not
-moved; select their folder in **Settings → Workspace** to see them, or remove the
-override to use the normal default and checkout-output adoption.
+moved. To see them, remove the override to use the normal default and
+checkout-output adoption, or choose `Documents/Waveguide Generator` in
+**Settings → WG folder** and select **Use the WG folder instead** for runs.
 
 The Fusion WGLink exchange folder is configured separately under **Settings →
 CAD Link**. Changing the output folder never moves or disconnects Fusion's

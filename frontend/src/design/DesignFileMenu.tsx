@@ -28,6 +28,7 @@ import {
   replacedNotice,
   EXPORT_CANCELLED_MESSAGE,
   EXPORT_OMITS_WOOFERS,
+  EXPORT_INNER_SURFACE_ONLY,
 } from '../shell/exportDestinationPrompt';
 import { designHasEnabledWoofers } from '../stores/assembly';
 import { resetDesignStore, useDesignStore } from '../stores/design';
@@ -183,6 +184,7 @@ export function DesignFileMenu() {
   const geometryReason = parameterExportReason(model, 'step');
   const design = useDesignStore((state) => state.design);
   const omitsWoofers = designHasEnabledWoofers(design) ? ` ${EXPORT_OMITS_WOOFERS}` : '';
+  const innerSurfaceOnly = omitsWoofers ? ` ${EXPORT_INNER_SURFACE_ONLY}` : '';
   const revision = useDesignStore((state) => state.designRevision);
   const designName = useDocumentStore((state) => state.designName);
   const moveIdentity = useDocumentStore((state) => state.identity);
@@ -497,9 +499,10 @@ export function DesignFileMenu() {
   async function exportOne(kind: 'step' | 'stl', stepBody: StepBody = 'solid') {
     await act(async () => {
       assertCurrentModelExport(model, kind);
+      const exportNotice = kind === 'step' && stepBody === 'solid' ? omitsWoofers : innerSurfaceOnly;
       const destination = await askForExportDestination({
         title: `Export ${kind.toUpperCase()}`,
-        detail: `${designNameSlug(designName)}.${kind} from revision ${revision}.${omitsWoofers}`,
+        detail: `${designNameSlug(designName)}.${kind} from revision ${revision}.${exportNotice}`,
       });
       if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
       assertCurrentModelExport(model, kind);
@@ -513,7 +516,7 @@ export function DesignFileMenu() {
       const warning = written.warning ? ` Warning: ${written.warning}` : '';
       setMessage(
         `Exported ${kind.toUpperCase()} from revision ${revision} to ${written.directory}.`
-        + `${replacedNotice(written.replaced)}${warning}${omitsWoofers}`,
+        + `${replacedNotice(written.replaced)}${warning}${exportNotice}`,
       );
     });
   }
@@ -631,8 +634,8 @@ export function DesignFileMenu() {
         {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason) || Boolean(cadSendLimit)} onClick={() => void sendToCad()} title={geometryReason ?? cadSendLimit ?? `Save this CAD model (.wglink) in the selected workspace.${omitsWoofers}`}><span>Send to CAD</span><span>.wglink</span></button>}
         {cadApplication === 'fusion360' && !geometryReason && cadSendLimit && <div className="design-menu-item" role="note">{cadSendLimit}</div>}
         <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} onClick={() => void exportOne('step')} title={geometryReason ?? `Closed solid with walls and enclosure — imports straight into Fusion 360 or Onshape.${omitsWoofers}`}><span>STEP solid</span><span>.step</span></button>
-        <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} onClick={() => void exportOne('step', 'surface')} title={geometryReason ?? 'Inner acoustic surface only, for thickening or lofting yourself'}><span>STEP inner surface</span><span>.step</span></button>
-        <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} title={parameterExportReason(model, 'stl') ?? (omitsWoofers.trim() || undefined)} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>
+        <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} onClick={() => void exportOne('step', 'surface')} title={geometryReason ?? `Inner acoustic surface only, for thickening or lofting yourself.${innerSurfaceOnly}`}><span>STEP inner surface</span><span>.step</span></button>
+        <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} title={parameterExportReason(model, 'stl') ?? (innerSurfaceOnly.trim() || undefined)} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} title={parameterExportReason(model, 'fusion_csv')} onClick={() => void exportProfiles()}><span>Profiles CSV</span><span>2 files</span></button>
       </div>}
       {!copyReason && <>

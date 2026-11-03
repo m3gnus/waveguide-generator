@@ -366,6 +366,19 @@ describe('design file export menu', () => {
     expect(details).toEqual([expect.stringContaining('woofers and their baffle cutouts are not in it')]);
   });
 
+  it.each(['STL', 'STEP inner surface'])('describes the %s assembly export as an inner surface (DOC-05)', async label => {
+    useDesignStore.getState().commitEmbedded({ assembly: addWoofer(emptyAssembly(), { anchor: 'below' }).assembly }, 'step');
+    const details: string[] = [];
+    provideExportDestinationPrompt(async request => { details.push(request.detail ?? ''); return null; });
+    const item = itemNamed(label);
+    expect(item.title).toContain('horn inner surface only');
+    expect(item.title).toContain('no enclosure');
+    await act(async () => { item.click(); });
+    expect(details).toEqual([expect.stringContaining('horn inner surface only')]);
+    expect(details[0]).toContain('no enclosure');
+    expect(details[0]).not.toContain('horn and enclosure only');
+  });
+
   it('says nothing about woofers at an export when they are all disabled', async () => {
     const assembly = addWoofer(emptyAssembly(), { anchor: 'below' }).assembly;
     useDesignStore.getState().commitEmbedded({ assembly: { ...assembly, woofers: assembly.woofers!.map(woofer => ({ ...woofer, enabled: false })) } }, 'step');

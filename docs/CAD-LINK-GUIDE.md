@@ -12,7 +12,10 @@ introduction, read the [user manual](USER-MANUAL.md) first. The
 viewer. The add-in's own guide is in the `wglink` repository
 (`docs/WGLINK-GUIDE.md`).
 
-The three Fusion commands, and what they mean:
+The Fusion commands used in this guide:
+
+**Sources & Mesh…**, **Solve in WG** and **Show Panel** are on the panel.
+Use **Advanced → Send to WG** to send without solving.
 
 | Command | Meaning |
 |---|---|
@@ -64,8 +67,9 @@ missing **Run on Startup**; fix those in Fusion's add-in list.
 The add-in inserts native Fusion features with throat and mouth sketches and
 datums. Build your features from these references where you can, and move or
 joint the whole inserted component, not the bodies inside it. If you change the
-waveguide in WG later, send it again and use **Update** in Fusion, then check
-your own features.
+waveguide in WG later, send it again: the add-in automatically updates the linked
+waveguide in Fusion. Then check your own features. Use **Advanced → Update**
+only for manual recovery if the automatic update did not complete.
 
 A model in WG is a snapshot. After editing in Fusion, use **Send to WG** or
 **Solve in WG** again; the two apps do not stay in sync on their own.
@@ -179,7 +183,7 @@ selected. WG prepares it automatically when it arrives, when you choose it
 under **Model versions**, and when WG reopens it after a restart. There is no
 prepare button.
 
-Under the model's name is **one status line** with at most one button:
+In **Results**, **one status line** shows the model's state with at most one button:
 
 | The line says | Button |
 |---|---|
@@ -190,8 +194,8 @@ Under the model's name is **one status line** with at most one button:
 | Solved · run #1 · just now | **Show results** |
 | Waveguide Generator could not prepare <name>. | **Try again**, when it can help |
 
-**Solve** is also at the top right of the window. Results shows charts and
-progress; it has no Solve button of its own for a CAD model.
+Use **Solve** on this Results status line or at the top right of the window.
+Results also shows charts, run progress and solve-readiness recovery actions.
 
 **Model details** (folded; it opens by itself when something needs a look)
 holds:

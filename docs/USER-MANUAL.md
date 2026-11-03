@@ -54,8 +54,8 @@ macOS and Windows.
 4. Start Fusion. Open **Utilities → Scripts and Add-Ins → Add-Ins**, select
    **WGLink**, click **Run**, and tick **Run on Startup**.
 5. In Fusion, look for the **Waveguide Generator** panel under **Utilities**.
-   It holds **Sources & Mesh…**, **Send to WG**, **Solve in WG** and
-   **Requests…**.
+   It shows **Sources & Mesh…**, **Solve in WG** and **Show Panel**.
+   Use **Advanced → Send to WG** to send without solving.
 
 Keep only one **WGLink** entry in Fusion's add-in list.
 
@@ -107,8 +107,13 @@ Every solved run also keeps a copy of its design.
    coupled Passive cardioid.
 
 WG saves setup changes automatically. Importing the same file again restores
-its last settings. A full symmetric file mesh cannot be cut automatically to a
-half or quarter; export the reduced mesh from your meshing tool first. See the
+its last settings. For a full symmetric mesh, **Auto · cut for speed** checks the
+geometry and source groups and cuts to a half or quarter when they mirror.
+You can also choose an explicit half or quarter, or **Full model** to keep the
+whole mesh. Cutting supports up to **5,000 input triangles**. If the cut is too
+large, unsafe or unverifiable, the valid full mesh remains ready to solve and
+the status explains why. You can export a reduced mesh from your meshing tool
+for larger inputs. See the
 [import and solve a mesh](USER-GUIDE.md#import-and-solve-a-mesh) section for
 file formats, role guesses and retained runs.
 
@@ -122,8 +127,8 @@ Fusion.
 1. In WG, choose **File → Export → Send to CAD**.
 2. Fusion opens and inserts the waveguide, and WG says what happened there. If
    Fusion is busy, for example with a sketch open, the send waits and continues
-   when you finish. If the waveguide still does not arrive, use **Manage
-   Link… → Insert** in Fusion's **Waveguide Generator** panel.
+   when you finish. If the waveguide still does not arrive, use **Advanced → Insert**
+   in Fusion's **Waveguide Generator** panel.
 3. Save and name the Fusion document. WG uses that name for your runs.
 4. Add the baffle, enclosure or other parts around the waveguide. Move the
    whole inserted component, not the bodies inside it.
@@ -149,9 +154,9 @@ Fusion.
 
 ### Send or Solve
 
-The panel has two commands. Pick the one you need:
+Choose one of these commands:
 
-- **Send to WG**: "Open this model in WG to inspect or set up. Does not
+- **Advanced → Send to WG**: "Open this model in WG to inspect or set up. Does not
   solve." Use it the first time, so you can choose drivers in WG.
 - **Solve in WG**: "Send and solve now."
 
@@ -164,7 +169,7 @@ The panel has two commands. Pick the one you need:
 4. Click **Send** or **Solve**.
 5. Fusion's **Waveguide Generator** progress panel opens. It shows each step:
    preparing, solving with a frequency count, then solved. Close it any time;
-   **Requests…** opens it again.
+   **Show Panel** opens it again.
 
 If WG is not running, the add-in starts it in the background where it can;
 open the WG window to follow along. In WG, the model appears on the

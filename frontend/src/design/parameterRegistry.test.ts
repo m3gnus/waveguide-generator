@@ -38,6 +38,27 @@ const TRACEABILITY_KEYS = {
 } as const;
 
 describe('complete parameter registry', () => {
+  it.each(['mesh.throat_resolution', 'mesh.mouth_resolution'])('qualifies export sizing in %s help (DOC-11)', (id) => {
+    for (const registry of [PARAMETER_REGISTRY, LEGACY_PARAMETER_REGISTRY]) {
+      const help = registry.find((field) => field.id === id)!.description!;
+      expect(help).toContain('solve mesh');
+      expect(help).toContain('native OSSE features');
+      expect(help).toContain('ordinary OSSE, R-OSSE, ICW and FREEFORM STL');
+      expect(help).toContain('independent chord-tolerance tessellation');
+      expect(help).toContain('STEP uses its own CAD tolerance');
+      expect(help).not.toContain('solved and exported mesh');
+    }
+  });
+
+  it('names the Report.Title exception in passthrough help (DOC-13)', () => {
+    for (const registry of [PARAMETER_REGISTRY, LEGACY_PARAMETER_REGISTRY]) {
+      const help = registry.find((field) => field.id === 'passthrough.report')!.description!;
+      expect(help).toContain('Report.Title follows the design name on export');
+      expect(help).toContain('other Report fields are preserved');
+      expect(help).not.toContain('written back out unchanged');
+    }
+  });
+
   it.each(NATIVE_FAMILIES)('excludes morph, enclosure and simulation type from %s, including search', (family) => {
     const fields = PARAMETER_REGISTRY.filter((field) => field.id.startsWith('morph.')
       || field.id.startsWith('enclosure.') || field.id === 'simulation.sim_type');

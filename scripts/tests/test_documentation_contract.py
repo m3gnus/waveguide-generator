@@ -20,6 +20,105 @@ def _between(text: str, start: str, end: str | None = None) -> str:
     return section if end is None else section.split(end, 1)[0]
 
 
+def _words(relative: str, start: str, end: str | None = None) -> str:
+    return " ".join(_between(_read(relative), start, end).split())
+
+
+def test_doc_01_normalization_distinguishes_recorded_and_legacy_runs() -> None:
+    section = _words("docs/USER-GUIDE.md", "### Where the microphone is", "### Reading group delay")
+    assert "recorded normalization angle keeps that reference" in section
+    assert "Legacy runs without a recorded angle follow the live setting for their model kind" in section
+    assert "New solves record the current angle" in section
+    assert "also re-references runs that were solved earlier" not in section
+
+
+def test_doc_02_auto_accuracy_and_override_rules() -> None:
+    section = _words("docs/USER-GUIDE.md", "### What each backend can solve", "BEMPP prefers")
+    assert "Fast + AUTO" in section
+    assert "Metal → BEAT · CUDA → BEAT · ROCm → BEAT · Metal → BEAT · CPU → BEMPP" in section
+    assert "Accurate + AUTO" in section
+    assert "BEAT · Metal → BEAT · CUDA → BEAT · ROCm → BEAT · CPU" in section
+    assert "does not fall back to native Metal or BEMPP" in section
+    assert "Changing **Accuracy** resets **Advanced backend** to **Automatic**" in section
+    assert "non-BEAT override resets Accuracy to **Fast**" in section
+
+
+def test_doc_03_runtime_setup_uses_selection_and_readiness_actions() -> None:
+    section = _words("docs/USER-GUIDE.md", "### What each backend can solve", "BEMPP prefers")
+    assert "select a runtime that can prepare to start setup" in section
+    assert "**Prepare … and solve**" in section
+    assert "selectable while unprepared or preparing" in section
+    assert "CAD picker hides refused engines unless they are already selected" in section
+    assert "beside **Advanced backend**" not in section
+    assert "becomes selectable when its verification finishes" not in section
+    assert "**Prepare** / **Retry** controls" not in section
+
+
+def test_doc_05_geometry_exports_distinguish_solid_and_inner_surface() -> None:
+    section = _words("docs/USER-GUIDE.md", "Result curves and run archives", "### Optional solve surface")
+    assert "**STEP solid** and **Send to CAD** carry the horn and enclosure only" in section
+    assert "**STL** and **STEP inner surface** carry only the horn's inner surface" in section
+    assert "without the enclosure, woofers or baffle cutouts" in section
+
+
+def test_doc_06_isolated_runs_and_settings_labels() -> None:
+    section = _words("docs/USER-GUIDE.md", "### WG folder", "### The run archive")
+    assert "fresh isolated setups also use `<data>/workspace` for runs" in section
+    assert "rather than `<data>/workspace-root/runs`" in section
+    install = _words("docs/INSTALL.md", "### Output workspace", "## Run the server directly")
+    assert "**Settings → WG folder**" in install
+    assert "**Settings → Workspace**" not in install
+    assert "`<data dir>/workspace`" in install
+
+
+def test_doc_07_cad_status_and_solve_live_in_results() -> None:
+    section = _words("docs/CAD-LINK-GUIDE.md", "## 6. In WG:", "## 7.")
+    assert "In **Results**, **one status line**" in section
+    assert "**Solve** on this Results status line" in section
+    assert "Under the model's name" not in section
+    assert "has no Solve button" not in section
+
+
+def test_doc_08_manual_describes_file_mesh_cutting_and_fallback() -> None:
+    section = _words("docs/USER-MANUAL.md", "## 3. Import", "## 4.")
+    assert "**Auto · cut for speed**" in section
+    assert "**5,000 input triangles**" in section
+    assert "explicit half or quarter" in section
+    assert "valid full mesh remains ready to solve" in section
+    assert "cannot be cut automatically" not in section
+
+
+def test_doc_09_installed_and_checkout_launch_modes() -> None:
+    section = _words("docs/USER-GUIDE.md", "## Launching", "## Design and preview")
+    assert "Installed builds on macOS, Windows and Linux open a native desktop window by default" in section
+    assert "Linux Qt check fails" in section
+    assert "`--browser`" in section and "`--no-gui`" in section
+    assert "Source-checkout scripts" in section and "`launchers.statusapp`" in section
+    assert "native window is unavailable in this release" not in section
+
+
+def test_doc_10_fusion_command_labels_and_automatic_update() -> None:
+    manual = " ".join(_read("docs/USER-MANUAL.md").split())
+    guide = " ".join(_read("docs/CAD-LINK-GUIDE.md").split())
+    for text in (manual, guide):
+        assert "**Show Panel**" in text
+        assert "**Advanced → Send to WG**" in text
+        assert "Requests…" not in text
+        assert "Manage Link…" not in text
+    assert "**Advanced → Insert**" in manual
+    assert "automatically updates the linked waveguide" in guide
+    assert "**Advanced → Update**" in guide
+    assert "send it again and use **Update**" not in guide
+
+
+def test_doc_12_cycles_increase_with_frequency_for_fixed_delay() -> None:
+    section = _words("docs/USER-GUIDE.md", "### Reading group delay", "### Seeing the measurement")
+    assert "0.3 cycles at 1 kHz and 3 cycles at 10 kHz" in section
+    assert "fixed delay spans more periods at higher frequencies" in section
+    assert "negligible up high" not in section
+    assert "usually the reading a group delay is judged by" not in section
+
+
 def test_frame_performance_note_describes_current_preview_frames() -> None:
     performance = _between(
         _read("docs/reference/FRAME-SPEC.md"), "## Performance notes"
