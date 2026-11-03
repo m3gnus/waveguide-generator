@@ -5944,7 +5944,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Target triangle edge length near the throat in the solved and exported mesh. The element size is blended from here to the mouth value. Smaller values cost solve time and memory."
+      "description": "Target triangle edge length near the throat in the solve mesh, blended to the mouth value. Smaller values cost solve time and memory. STL for native OSSE features uses mesh sizing; ordinary OSSE, R-OSSE, ICW and FREEFORM STL use independent chord-tolerance tessellation. STEP uses its own CAD tolerance for ordinary horns."
     },
     {
       "id": "mesh.mouth_resolution",
@@ -5979,7 +5979,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Target triangle edge length near the mouth in the solved and exported mesh. It has to resolve the shortest wavelength you solve: for 20 kHz, λ/6 is approximately 2.86 mm."
+      "description": "Target triangle edge length near the mouth in the solve mesh. Resolve the shortest wavelength you solve: for 20 kHz, λ/6 is approximately 2.86 mm. STL for native OSSE features uses mesh sizing; ordinary OSSE, R-OSSE, ICW and FREEFORM STL use independent chord-tolerance tessellation. STEP uses its own CAD tolerance for ordinary horns."
     },
     {
       "id": "mesh.surface_deviation_mm",
@@ -6774,7 +6774,7 @@
       "step": null,
       "precision": null,
       "options": [],
-      "description": "Whether the imported file carried ATH's Report block. It is written back out unchanged on export; this app's own plots are configured in the results dock instead."
+      "description": "Whether the imported file carried ATH's Report block. Report.Title follows the design name on export; other Report fields are preserved. This app's own plots are configured in the results dock instead."
     },
     {
       "id": "passthrough.extra",
