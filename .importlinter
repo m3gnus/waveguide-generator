@@ -15,6 +15,7 @@ layers =
     tools
     __main__
     app : cli
+    request_middleware
     updates
     diagnostics
     exports | design_io | source_editor
