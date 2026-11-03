@@ -11,7 +11,7 @@ import { JobModelProtectionError, jobsSocket, type JobItem, type JobsSnapshot } 
 import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetDesignStore } from '../stores/design';
+import { designForFamily, resetDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -25,7 +25,7 @@ const designMocks = vi.hoisted(() => ({ replaceWithJobDesign: vi.fn() }));
 vi.mock('../jobs/jobDesign', () => ({
   canLoadJobDesign: () => true,
   canOpenJobModel: (job: JobItem) => job.config_summary.geometry_type === 'imported' || job.script_snapshot !== null,
-  hydrateJobDesign: () => ({ formula: 'OSSE' }),
+  hydrateJobDesign: () => designForFamily('OSSE'),
   jobDesignAvailability: () => ({ reopenable: true, source: 'v2-snapshot', reason_code: 'ok', reason: null, note: null }),
   jobRerunState: () => ({ enabled: true, reason: null }),
   replaceWithJobDesign: designMocks.replaceWithJobDesign,
