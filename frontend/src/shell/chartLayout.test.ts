@@ -3,7 +3,7 @@ import type { ChartTokens } from '../results/EChart';
 import { beamShapeSeries } from '../results/mappers';
 import type { NamedResult } from '../results/mappers';
 import type { ResultPayload } from '../results/types';
-import { chartDensity, directivityIndexOption, heatmapOption, impedanceOption, lineOption, middleEllipsis, type ChartDensity } from './ResultsPanel';
+import { chartDensity, clearingRail, directivityIndexOption, heatmapOption, impedanceOption, lineOption, middleEllipsis, type ChartDensity } from './ResultsPanel';
 
 /**
  * Layout locks for the result dock.
@@ -94,8 +94,35 @@ describe('result dock chart layout', () => {
   });
 
   it('scrolls a compact legend in one row rather than wrapping it over the plot', () => {
-    expect(lineCharts('compact')[0].legend).toMatchObject({ type: 'scroll', width: '46%' });
+    // At most a third of the row: the title chip holds the other two thirds.
+    expect(lineCharts('compact')[0].legend).toMatchObject({ show: true, type: 'scroll', width: '30%' });
     expect(lineCharts('full')[0].legend.type).toBeUndefined();
+  });
+
+  it('drops a one-name legend on a compact card, where the title chip already names the chart', () => {
+    const single = [{ name: 'Run A', type: 'line' as const, data: [[100, 1], [1_000, 2]] }];
+    expect((lineOption(single, tokens, 'dB', 'compact').legend as { show?: boolean }).show).toBe(false);
+    expect((lineOption(single, tokens, 'dB', 'regular').legend as { show?: boolean }).show).toBeUndefined();
+  });
+
+  it('lifts the detail view plot clear of a control rail, and leaves cards alone', () => {
+    const series = [{ name: 'Run A', type: 'line' as const, data: [[100, 1], [1_000, 2]] }];
+    const bottom = (density: ChartDensity) => (clearingRail(lineOption(series, tokens, 'dB', density), density).grid as Inset).bottom;
+    expect(bottom('full')).toBe((lineOption(series, tokens, 'dB', 'full').grid as Inset).bottom + 20);
+    expect(bottom('compact')).toBe((lineOption(series, tokens, 'dB', 'compact').grid as Inset).bottom);
+  });
+
+  it('keeps the top value label out of the title chip band on a card', () => {
+    const series = [{ name: 'Run A', type: 'line' as const, data: [[100, 1], [1_000, 2]] }];
+    const label = (density: ChartDensity, secondary?: string) => {
+      const yAxis = lineOption(series, tokens, 'dB', density, undefined, secondary).yAxis;
+      return (Array.isArray(yAxis) ? yAxis : [yAxis]).map((axis) => (axis as { axisLabel: { showMaxLabel?: boolean } }).axisLabel.showMaxLabel);
+    };
+    expect(label('compact')).toEqual([false]);
+    expect(label('regular', 'Phase [°]')).toEqual([false, false]);
+    expect(label('full')).toEqual([undefined]);
+    // The frequency axis keeps its last label, or 20k would vanish.
+    expect((lineOption(series, tokens, 'dB', 'compact').xAxis as { axisLabel: { showMaxLabel?: boolean } }).axisLabel.showMaxLabel).toBeUndefined();
   });
 
   it('truncates legend entries from the middle so the run version survives', () => {

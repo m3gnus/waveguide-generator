@@ -569,6 +569,10 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .balloon-3d-reset:hover, .balloon-3d-reset:focus-visible { color: var(--fg1); opacity: 1; }
 .frequency-scrub { position: absolute; inset: auto 4px 4px; display: flex; align-items: center; gap: 6px; height: 17px; padding: 0 6px; border: 1px solid var(--glass-bd); border-radius: var(--r3); background: color-mix(in srgb, var(--chart-bg) 70%, transparent); color: var(--fg2); font: var(--text-micro) var(--mono); backdrop-filter: blur(7px); opacity: .4; transition: opacity .12s; }
 .result-card:hover .frequency-scrub, .frequency-scrub:focus-within, .result-detail .frequency-scrub { opacity: 1; }
+/* These two rails sit over the frequency labels, and at rest even a faint rail
+   ghosts over them. In a card they appear on hover or focus; the detail view
+   lifts its plot clear of them instead. */
+.result-card:not(:hover) .measurement-angles:not(:focus-within), .result-card:not(:hover) .chart-unit-toggle:not(:focus-within) { opacity: 0; }
 .frequency-scrub input { flex: 1; min-width: 0; height: 11px; }
 .frequency-scrub span { flex: none; white-space: nowrap; }
 /* The angle strip is the same glass rail as the frequency scrub, but its

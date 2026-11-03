@@ -170,15 +170,29 @@ const LINE_GRID: Record<ChartDensity, { left: number; right: number; top: number
   regular: { left: 40, right: 10, top: 20, bottom: 22 },
   full: { left: 54, right: 16, top: 30, bottom: 42 },
 };
+/** `right` holds the colour ramp and its end labels clear of the plot. */
 const MAP_GRID: Record<ChartDensity, { left: number; right: number; top: number; bottom: number }> = {
-  compact: { left: 27, right: 23, top: 16, bottom: 16 },
-  regular: { left: 34, right: 32, top: 20, bottom: 22 },
+  compact: { left: 27, right: 36, top: 16, bottom: 16 },
+  regular: { left: 34, right: 40, top: 20, bottom: 22 },
   full: { left: 46, right: 46, top: 14, bottom: 38 },
 };
 /** Colour ramp height, kept inside the shortest card it can appear in. */
 const MAP_RAMP: Record<ChartDensity, number> = { compact: 38, regular: 74, full: 150 };
 /** Legend clears copy/download/expand/close buttons in the same band. */
 const LEGEND_INSET = 88;
+/** Height of a control rail (angle strip, unit switch) under the plot, with its 4px inset. */
+const RAIL_CLEARANCE = 20;
+
+/**
+ * Lift the plot clear of a control rail in the detail view, where it would
+ * otherwise cover the tick labels and "Frequency [Hz]". A card instead keeps
+ * its rail hidden until hovered (app.css), because 20px is a sixth of a card.
+ */
+export function clearingRail(option: EChartsOption, density: ChartDensity): EChartsOption {
+  if (density !== 'full') return option;
+  const grid = option.grid as { bottom?: number } | undefined;
+  return { ...option, grid: { ...grid, bottom: (grid?.bottom ?? 0) + RAIL_CLEARANCE } };
+}
 
 type CartesianSeries = { data?: Array<number[] | { value?: number[] }> };
 
@@ -209,6 +223,14 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     axisLabel: { ...axis.axisLabel, customValues: ticks, formatter: directivityFrequencyTickLabel },
     axisTick: { ...axis.axisTick, customValues: ticks },
   } : {};
+  // The top value label sits in the band the card's title chip floats in, and
+  // printed over it ("25" under "SOUND PRESSURE LEVEL"). The detail view's
+  // header is outside the plot, so it keeps the label.
+  const valueAxis = { ...axis, axisLabel: { ...axis.axisLabel, ...(density === 'full' ? {} : { showMaxLabel: false }) } };
+  // On a compact card the legend shares one row with the title chip. A single
+  // name adds nothing the chip does not say, and more than about a third of the
+  // row overprints the chip.
+  const names = new Set((Array.isArray(series) ? series : [series]).map((entry) => (entry as { name?: string } | undefined)?.name));
   return {
     animationDuration: 180,
     backgroundColor: tokens.background,
@@ -219,7 +241,7 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     // a single row rather than wrapping down over the plot on a narrow card.
     // The tooltip and the detail view still name every series in full.
     legend: {
-      ...(density === 'compact' ? { type: 'scroll' as const, width: '46%', pageIconSize: 9, pageIconColor: tokens.muted, pageIconInactiveColor: tokens.grid, pageTextStyle: { color: tokens.muted, fontSize: 11 } } : {}),
+      ...(density === 'compact' ? { show: names.size > 1, type: 'scroll' as const, width: '30%', pageIconSize: 9, pageIconColor: tokens.muted, pageIconInactiveColor: tokens.grid, pageTextStyle: { color: tokens.muted, fontSize: 11 } } : {}),
       top: density === 'full' ? 2 : 1,
       right: density === 'full' ? 8 : LEGEND_INSET,
       textStyle: { color: tokens.muted, fontSize: 11 },
@@ -240,13 +262,13 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     // primary axis is the one whose gridlines carry meaning.
     yAxis: secondaryName
       ? [
-        { type: 'value' as const, ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'left' as const } } : {}), ...axes(tokens, density) },
+        { type: 'value' as const, ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'left' as const } } : {}), ...valueAxis },
         // Rotated along the right edge rather than sitting at the top of the
         // axis, which is where ECharts puts an axis name by default and where
         // this chart's legend already is -- the two overprinted each other.
-        { type: 'value' as const, ...(density === 'full' ? { name: secondaryName, nameLocation: 'middle' as const, nameRotate: -90, nameGap: 38, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), ...axes(tokens, density), splitLine: { show: false } },
+        { type: 'value' as const, ...(density === 'full' ? { name: secondaryName, nameLocation: 'middle' as const, nameRotate: -90, nameGap: 38, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), ...valueAxis, splitLine: { show: false } },
       ]
-      : { type: 'value', ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'left' as const } } : {}), ...axes(tokens, density) },
+      : { type: 'value', ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'left' as const } } : {}), ...valueAxis },
     dataZoom: [{ type: 'inside', xAxisIndex: 0, filterMode: 'none', zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: true }],
     series,
   };
@@ -1925,9 +1947,11 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
   // result snapshot has not changed.
   const plot = useMemo(() => {
     const mark = (option: EChartsOption) => withUnqualifiedBands(option, unqualified, tokens);
+    // The angle strip is drawn only when there is more than one angle to offer.
+    const railed = (option: EChartsOption) => (measurementSelection.available.length >= 2 ? clearingRail(option, density) : option);
     if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length
       ? <div className="frequency-canvas">
-        <EChart option={mark(splOption(angled, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull))} label="Interactive HornLab sound pressure frequency response" live={live}/>
+        <EChart option={railed(mark(splOption(angled, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull)))} label="Interactive HornLab sound pressure frequency response" live={live}/>
         <MeasurementAngleControls selection={measurementSelection} onChange={(next) => preferencesStore.update({
           ...(next.plane === undefined ? {} : { measurementPlane: next.plane }),
           ...(next.angles === undefined ? {} : { measurementAngles: next.angles }),
@@ -1959,7 +1983,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     if (chartType === 'beam_map') return <ForwardBeamRenderer result={result}/>;
     if (chartType === 'polar_response') return <PolarResponseCard items={overlays} tokens={tokens} density={density} live={live}/>;
     if (chartType === 'phase_response') {
-      const option = mark(phaseOption(angled, tokens, density));
+      const option = railed(mark(phaseOption(angled, tokens, density)));
       return Array.isArray(option.series) && option.series.length
         ? <div className="frequency-canvas">
           <EChart option={option} label="Interactive HornLab pressure phase by frequency" live={live}/>
@@ -1971,7 +1995,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="This run has no directivity phase. Solve again to get it."/>;
     }
     if (chartType === 'group_delay') {
-      const option = mark(groupDelayOption(overlays, tokens, density, preferences.groupDelayUnit));
+      const option = clearingRail(mark(groupDelayOption(overlays, tokens, density, preferences.groupDelayUnit)), density);
       // The unit rail only rides along with a curve: on the stub there is no
       // axis to rename, and offering the switch there would suggest the empty
       // card is the wrong projection rather than a result with no phase.
