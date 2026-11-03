@@ -39,7 +39,7 @@ import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
 import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, useDeveloperDetails, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
-import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
+import { directivityFrequencyLabelIndices, directivityFrequencyTickLabel, directivityFrequencyTickLabels, logFrequencyTicks } from '../results/directivityFrequencyAxis';
 import { directivityMapCanvas, solvedSampleSpan } from '../results/mapBitmap';
 import { runOfLabel, seriesColorsByLabel } from '../results/seriesColors';
 import { parseMeasuredTrace } from '../results/measuredTrace';
@@ -201,6 +201,14 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
   // A rotated axis title on the right needs room the single-axis insets never
   // reserved: label width plus the turned caption.
   const inset = secondaryName ? { ...base, right: base.left + (density === 'full' ? 16 : 0) } : base;
+  const axis = axes(tokens, density);
+  // Round frequencies, labelled the way the map labels them ("1k"). Left to
+  // itself the log axis labelled only the decades, as "1,000".
+  const ticks = bounds ? logFrequencyTicks(bounds[0], bounds[1], density) : [];
+  const frequencyTicks = ticks.length >= 2 ? {
+    axisLabel: { ...axis.axisLabel, customValues: ticks, formatter: directivityFrequencyTickLabel },
+    axisTick: { ...axis.axisTick, customValues: ticks },
+  } : {};
   return {
     animationDuration: 180,
     backgroundColor: tokens.background,
@@ -223,7 +231,7 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     grid: { ...inset, containLabel: false },
     // The tick labels already read as frequencies; the caption only earns its
     // 20px on a chart big enough to spare them.
-    xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 24, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), minorTick: { show: true }, ...axes(tokens, density) },
+    xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 24, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), minorTick: { show: true }, ...axis, ...frequencyTicks },
     // In-grid cards carry the unit in their title chip, which occupies exactly
     // the top-left corner an axis name would be drawn into.
     // A second axis is for a companion quantity in different units (phase
@@ -731,6 +739,9 @@ export function heatmapOption(
   const categoryAxis = { ...axes(tokens, density), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens, density).axisLabel, hideOverlap: true } };
   const frequencyTickLabels = directivityFrequencyTickLabels(grid.frequencies);
   const isFrequencyTick = (index: number) => frequencyTickLabels.has(index);
+  // Every tick keeps its guide; only round values carry a label, so ECharts'
+  // overlap test never gets to drop 1k or 10k.
+  const frequencyLabels = directivityFrequencyLabelIndices(grid.frequencies, density);
   const angleLabels = directivityAngleLabelIndices(grid.angles, density);
   const angleGuides = directivityAngleGuides(grid.angles, angleGuideInterval);
   const angleGuideSeries = angleGuides.length ? [{
@@ -896,7 +907,8 @@ export function heatmapOption(
       axisTick: { ...categoryAxis.axisTick, interval: isFrequencyTick },
       axisLabel: {
         ...categoryAxis.axisLabel,
-        interval: isFrequencyTick,
+        hideOverlap: false,
+        interval: (index: number) => frequencyLabels.has(index),
         formatter: (_value: string, index: number) => frequencyTickLabels.get(index) ?? '',
       },
       splitLine: { ...categoryAxis.splitLine, show: true, interval: isFrequencyTick },
