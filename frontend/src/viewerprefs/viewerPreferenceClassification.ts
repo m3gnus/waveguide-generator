@@ -19,6 +19,7 @@ export const VIEWER_PREFERENCE_EFFECTS: Record<keyof ViewerPreferences, Preferen
   dampingEnabled: 'render-refreshing',
   dampingFactor: 'render-refreshing',
   invertWheelZoom: 'render-refreshing',
+  scrollPans: 'render-refreshing',
   keyboardPanEnabled: 'render-refreshing',
   liveUpdate: 'render-refreshing',
   tintSolvedRegion: 'render-refreshing',

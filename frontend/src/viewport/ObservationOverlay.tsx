@@ -98,26 +98,46 @@ export function rigSpecFromSolveOptions(polar: {
   };
 }
 
+/** The rig the overlay draws: shared with the camera, whose depth range must
+ * reach the microphones as well as the model. */
+function useObservationRig(unitsPerMetre: number) {
+  const visible = useObservationStore((state) => state.visible);
+  const basis = useObservationStore((state) => state.basis);
+  // Imported models have their own solve options; this reads the workspace's.
+  const polar = useScopedSolveOptions((state) => state.polar);
+  const spec = useMemo(() => rigSpecFromSolveOptions(polar), [polar]);
+  const rig = useMemo(
+    () => (basis ? observationRig(basis, spec, unitsPerMetre) : null),
+    [basis, spec, unitsPerMetre],
+  );
+  return { visible, basis, spec, rig };
+}
+
+/**
+ * How far from `center` the shown rig reaches, selected markers included, or
+ * 0 while it is hidden. The microphones sit metres out, far beyond a horn, so a
+ * depth range fitted to the model alone clips every marker nearer the camera
+ * than the model.
+ */
+export function useObservationReach(unitsPerMetre: number, center: Vector3): number {
+  const { visible, spec, rig } = useObservationRig(unitsPerMetre);
+  if (!visible || !rig) return 0;
+  const radius = spec.distanceM * unitsPerMetre;
+  return center.distanceTo(new Vector3(...rig.origin)) + radius * (1 + MARKER_SCALE * 1.6);
+}
+
 export function ObservationOverlay({ unitsPerMetre, scheduler }: {
   unitsPerMetre: number;
   scheduler: DemandRenderScheduler;
 }) {
-  const visible = useObservationStore((state) => state.visible);
-  const basis = useObservationStore((state) => state.basis);
-  // Imported models have their own solve options; this reads the workspace's.
+  const { visible, basis, spec, rig } = useObservationRig(unitsPerMetre);
   const solveOptionsStore = useScopedSolveOptionsStore();
-  const polar = useScopedSolveOptions((state) => state.polar);
   const preferences = usePreferences();
   const gl = useThree((state) => state.gl);
   const camera = useThree((state) => state.camera);
   const markers = useRef<InstancedMesh>(null);
   const drag = useRef<Drag | null>(null);
 
-  const spec = useMemo(() => rigSpecFromSolveOptions(polar), [polar]);
-  const rig = useMemo(
-    () => (basis ? observationRig(basis, spec, unitsPerMetre) : null),
-    [basis, spec, unitsPerMetre],
-  );
   const radius = spec.distanceM * unitsPerMetre;
   const markerRadius = Math.max(radius * MARKER_SCALE, 1e-6);
 

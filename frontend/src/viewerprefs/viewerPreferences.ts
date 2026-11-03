@@ -11,6 +11,9 @@ export interface ViewerPreferences {
   dampingEnabled: boolean;
   dampingFactor: number;
   invertWheelZoom: boolean;
+  /** A plain two-finger scroll pans the view, as trackpad-first apps do; a
+   * pinch still zooms. Off, a scroll zooms like a mouse wheel. */
+  scrollPans: boolean;
   keyboardPanEnabled: boolean;
   liveUpdate: boolean;
   tintSolvedRegion: boolean;
@@ -47,6 +50,12 @@ export const VIEWER_PREFERENCE_RANGES = {
   fieldPlaneAnimationSpeed: [0.1, 4],
 } as const satisfies Partial<Record<keyof ViewerPreferences, readonly [number, number]>>;
 
+/** Macs are trackpad-first, so there a two-finger scroll pans unless the user
+ * turns it off; elsewhere a scroll is most likely a mouse wheel. */
+function trackpadFirstPlatform(): boolean {
+  return typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform ?? '');
+}
+
 export const DEFAULT_VIEWER_PREFERENCES: Readonly<ViewerPreferences> = Object.freeze({
   rotateSpeed: 1,
   zoomSpeed: 1,
@@ -54,6 +63,7 @@ export const DEFAULT_VIEWER_PREFERENCES: Readonly<ViewerPreferences> = Object.fr
   dampingEnabled: true,
   dampingFactor: 0.05,
   invertWheelZoom: false,
+  scrollPans: trackpadFirstPlatform(),
   keyboardPanEnabled: false,
   liveUpdate: true,
   tintSolvedRegion: true,
@@ -99,6 +109,7 @@ export function parseViewerPreferences(raw: string | null): ViewerPreferences {
       dampingEnabled: typeof stored.dampingEnabled === 'boolean' ? stored.dampingEnabled : DEFAULT_VIEWER_PREFERENCES.dampingEnabled,
       dampingFactor: finiteInRange(stored.dampingFactor, VIEWER_PREFERENCE_RANGES.dampingFactor) ? stored.dampingFactor : DEFAULT_VIEWER_PREFERENCES.dampingFactor,
       invertWheelZoom: typeof stored.invertWheelZoom === 'boolean' ? stored.invertWheelZoom : DEFAULT_VIEWER_PREFERENCES.invertWheelZoom,
+      scrollPans: typeof stored.scrollPans === 'boolean' ? stored.scrollPans : DEFAULT_VIEWER_PREFERENCES.scrollPans,
       keyboardPanEnabled: typeof stored.keyboardPanEnabled === 'boolean' ? stored.keyboardPanEnabled : DEFAULT_VIEWER_PREFERENCES.keyboardPanEnabled,
       liveUpdate: typeof stored.liveUpdate === 'boolean' ? stored.liveUpdate : DEFAULT_VIEWER_PREFERENCES.liveUpdate,
       tintSolvedRegion: typeof stored.tintSolvedRegion === 'boolean' ? stored.tintSolvedRegion : DEFAULT_VIEWER_PREFERENCES.tintSolvedRegion,

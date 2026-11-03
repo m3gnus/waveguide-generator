@@ -268,6 +268,9 @@ export function createMaterialLibrary(
   const cap = new MeshStandardMaterial({
     color: tokenColor('--vp-cap-material', theme === 'light' ? '#a5674a' : '#c07a4e'),
     metalness: 0.02, roughness: 0.72, side: FrontSide,
+    // Pushed back a hair: a field-plane cut lays the cap in the field plane's own
+    // plane, and the two would otherwise fight over every pixel.
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
     stencilWrite: true, stencilRef: 0, stencilFunc: NotEqualStencilFunc,
     stencilFail: ReplaceStencilOp, stencilZFail: ReplaceStencilOp, stencilZPass: ReplaceStencilOp,
   });

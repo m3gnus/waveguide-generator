@@ -393,8 +393,8 @@ describe('Viewport preview errors', () => {
       useFieldPlaneStore.setState({ enabled: true, jobId: job.id, plane: fieldPlane, status: 'ready' });
     });
     await vi.waitFor(() => expect(useMeshFreshnessStore.getState().jobs[job.id]).toBe('current'));
+    // Opening the field plane cuts the model at it without a click.
     const clip = host.querySelector<HTMLButtonElement>('[aria-label="Clip model to field plane"]')!;
-    act(() => clip.click());
     expect(clip.getAttribute('aria-pressed')).toBe('true');
     act(() => useMeshFreshnessStore.getState().check(job, true, 1));
     expect(useMeshFreshnessStore.getState().jobs[job.id]).toBe('pending');
@@ -867,8 +867,8 @@ describe('Viewport preview errors', () => {
         status: 'ready',
       });
     });
+    // Opening the field plane cuts the model at it without a click.
     const clip = host.querySelector<HTMLButtonElement>('[aria-label="Clip model to field plane"]')!;
-    act(() => clip.click());
     expect(clip.getAttribute('aria-pressed')).toBe('true');
 
     act(() => compareSelection.setPrimary('unavailable'));
@@ -1061,6 +1061,9 @@ describe('Viewport preview errors', () => {
     const buttons = () => [...host.querySelectorAll<HTMLButtonElement>('.mesh-source-tools button')];
     expect(buttons().map((button) => button.textContent)).toEqual(['Geometry', 'Mesh']);
     expect(buttons()[0].getAttribute('aria-pressed')).toBe('true');
+    const displayMode = () => host.querySelector<HTMLButtonElement>('.display-mode-tools button')!;
+    for (let press = 0; press < 3; press += 1) act(() => displayMode().click());
+    expect(displayMode().getAttribute('aria-label')).toContain('Display mode: X-ray');
 
     await act(async () => {
       buttons()[1].click();
@@ -1069,6 +1072,7 @@ describe('Viewport preview errors', () => {
     await vi.waitFor(() => expect(importedMeshStore.getSnapshot().cadSolver?.ingestId).toBe(ingestId));
     expect(meshFetches()).toBe(1);
     expect(buttons()[1].getAttribute('aria-pressed')).toBe('true');
+    expect(displayMode().getAttribute('aria-label')).toContain('Display mode: Solid + wireframe');
 
     // The artifact is immutable: reselecting it must re-serve the cached scene
     // rather than fetching the same mesh again.
@@ -1076,6 +1080,8 @@ describe('Viewport preview errors', () => {
       buttons()[0].click();
       await Promise.resolve();
     });
+    // Back on the geometry, its own display mode returns, not the mesh's.
+    expect(displayMode().getAttribute('aria-label')).toContain('Display mode: X-ray');
     await act(async () => {
       buttons()[1].click();
       await Promise.resolve();

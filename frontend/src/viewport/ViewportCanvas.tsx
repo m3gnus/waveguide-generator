@@ -1,13 +1,13 @@
 import { GizmoHelper, GizmoViewport, OrbitControls } from '@react-three/drei';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { Component, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ErrorInfo, type ReactNode, type RefObject } from 'react';
-import { Box3, CanvasTexture, MathUtils, OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
+import { Box3, CanvasTexture, MathUtils, MOUSE, OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
 import { readChartTokens } from '../results/EChart';
 import type { CameraProjection, ViewerPreferences } from '../viewerprefs/viewerPreferences';
 import { calculateCameraFit, clippingRange, framingRadius, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
 import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
 import { FieldPlane } from './FieldPlane';
-import { ObservationOverlay } from './ObservationOverlay';
+import { ObservationOverlay, useObservationReach } from './ObservationOverlay';
 import { deriveCapQuad, fieldPlaneToClipPlane, sectionClipPlane, type ModelClipMode, type SectionAxis } from './fieldPlaneClipping';
 import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
 import { useFieldPlaneStore } from './fieldPlaneStore';
@@ -216,11 +216,13 @@ export function installContextLossFallback(canvas: HTMLCanvasElement, onFailure:
   return () => canvas.removeEventListener('webglcontextlost', onLost);
 }
 
-export function installWheelZoomInversion(element: HTMLElement, enabled: boolean): () => void {
+export function installWheelZoomInversion(element: HTMLElement, enabled: boolean, scrollPans = false): () => void {
   if (!enabled) return () => undefined;
   const redispatched = new WeakSet<Event>();
   const invert = (event: WheelEvent) => {
     if (redispatched.has(event)) return;
+    // With scroll panning only a pinch (a ctrl wheel) zooms.
+    if (scrollPans && !event.ctrlKey) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     const replacement = new WheelEvent('wheel', {
@@ -244,6 +246,46 @@ export function installWheelZoomInversion(element: HTMLElement, enabled: boolean
   };
   element.addEventListener('wheel', invert, { capture: true, passive: false });
   return () => element.removeEventListener('wheel', invert, { capture: true });
+}
+
+/**
+ * Pan on a plain two-finger scroll, trackpad style, and leave a pinch -- which
+ * browsers deliver as a wheel event with ctrlKey set -- to the controls' zoom.
+ * The view moves with the fingers, the way a scrolled page does.
+ */
+export function installScrollPan(element: HTMLElement, enabled: boolean, pan: (deltaX: number, deltaY: number) => void): () => void {
+  if (!enabled) return () => undefined;
+  const onWheel = (event: WheelEvent) => {
+    if (event.ctrlKey) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    // Line and page deltas come from wheels that report in steps; scale them to
+    // roughly the pixels a trackpad would have reported.
+    const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1;
+    pan(event.deltaX * scale, event.deltaY * scale);
+  };
+  element.addEventListener('wheel', onWheel, { capture: true, passive: false });
+  return () => element.removeEventListener('wheel', onWheel, { capture: true });
+}
+
+/** Move camera and target together by a screen-space offset in CSS pixels. */
+export function panCamera(
+  camera: PerspectiveCamera | OrthographicCamera,
+  target: Vector3,
+  deltaX: number,
+  deltaY: number,
+  viewportHeight: number,
+): void {
+  const height = Math.max(viewportHeight, 1);
+  const unitsPerPixel = camera instanceof PerspectiveCamera
+    ? 2 * camera.position.distanceTo(target) * Math.tan((camera.fov * Math.PI) / 360) / height
+    : (camera.top - camera.bottom) / camera.zoom / height;
+  camera.updateMatrix();
+  const right = new Vector3().setFromMatrixColumn(camera.matrix, 0);
+  const up = new Vector3().setFromMatrixColumn(camera.matrix, 1);
+  const offset = right.multiplyScalar(deltaX * unitsPerPixel).addScaledVector(up, -deltaY * unitsPerPixel);
+  camera.position.add(offset);
+  target.add(offset);
 }
 
 type OrbitControlsInstance = ComponentRef<typeof OrbitControls>;
@@ -323,8 +365,9 @@ function cameraUp(direction: Vector3): Vector3 {
   return new Vector3(0, 0, direction.y > 0 ? -1 : 1);
 }
 
-function CameraRig({ bounds, request, zoomRequest, projection, preferences, scheduler, controls }: {
+function CameraRig({ bounds, unitsPerMetre, request, zoomRequest, projection, preferences, scheduler, controls }: {
   bounds: FrameScene['bounds'];
+  unitsPerMetre: number;
   request: CameraRequest;
   zoomRequest: ZoomRequest;
   projection: CameraProjection;
@@ -359,6 +402,10 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     () => framingRadius(new Box3(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ))),
     [maxX, maxY, maxZ, minX, minY, minZ],
   );
+  // Framing follows the model; the depth range also has to reach whatever is
+  // drawn around it, or the near plane cuts it off.
+  const observationReach = useObservationReach(unitsPerMetre, center);
+  const depthRadius = Math.max(boundsRadius, observationReach);
   const requestedPreset = request.preset;
   const requestedDirection = request.direction;
   const directionX = requestedDirection?.[0] ?? 0;
@@ -407,7 +454,7 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     );
     if (disposition === 'settled') return;
     if (disposition === 'record') {
-      if (rebracketCamera(camera, controls.current?.target ?? center, boundsRadius)) scheduler.schedule();
+      if (rebracketCamera(camera, controls.current?.target ?? center, depthRadius)) scheduler.schedule();
       appliedRequest.current = fitRequestKey;
       return;
     }
@@ -428,12 +475,18 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     camera.near = fit.near;
     camera.far = fit.far;
     camera.updateProjectionMatrix();
+    if (depthRadius > boundsRadius) rebracketCamera(camera, fit.center, depthRadius);
     viewTarget.current?.copy(fit.center);
     controls.current?.target.copy(fit.center);
     controls.current?.update();
     appliedRequest.current = fitRequestKey;
     scheduler.schedule();
-  }, [aspect, bounds, boundsRadius, camera, center, direction, fit, fitRequestKey, scheduler, viewKey]);
+  }, [aspect, bounds, boundsRadius, camera, center, depthRadius, direction, fit, fitRequestKey, scheduler, viewKey]);
+
+  // Showing the rig, or moving its distance, widens the range without a refit.
+  useEffect(() => {
+    if (rebracketCamera(camera, controls.current?.target ?? center, depthRadius)) scheduler.schedule();
+  }, [camera, center, controls, depthRadius, scheduler]);
 
   // The first fit may run before the sibling OrbitControls ref is attached.
   // Apply only the target from the most recent explicit view request; geometry
@@ -478,13 +531,22 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     return undefined;
   }, [gl.domElement, preferences.keyboardPanEnabled]);
 
-  useEffect(() => installWheelZoomInversion(gl.domElement, preferences.invertWheelZoom), [gl.domElement, preferences.invertWheelZoom]);
+  useEffect(
+    () => installWheelZoomInversion(gl.domElement, preferences.invertWheelZoom, preferences.scrollPans),
+    [gl.domElement, preferences.invertWheelZoom, preferences.scrollPans],
+  );
+  useEffect(() => installScrollPan(gl.domElement, preferences.scrollPans, (deltaX, deltaY) => {
+    const instance = controls.current;
+    if (!instance) return;
+    panCamera(camera, instance.target, deltaX * preferences.panSpeed, deltaY * preferences.panSpeed, gl.domElement.clientHeight);
+    instance.update();
+  }), [camera, controls, gl.domElement, preferences.panSpeed, preferences.scrollPans]);
 
   // Fit-time planes go stale the moment the user dollies, and a fixed pair wide
   // enough for every distance wastes the whole depth buffer. Re-bracket the
   // model against the camera's actual distance whenever the controls move.
   const rebracket = () => {
-    rebracketCamera(camera, controls.current?.target ?? center, boundsRadius);
+    rebracketCamera(camera, controls.current?.target ?? center, depthRadius);
   };
 
   return <OrbitControls
@@ -497,6 +559,8 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     enableDamping={preferences.dampingEnabled}
     dampingFactor={preferences.dampingFactor}
     zoomToCursor
+    // Middle-drag pans, as in most CAD tools; the wheel still zooms.
+    mouseButtons={{ LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.PAN, RIGHT: MOUSE.PAN }}
     onChange={() => {
       if (controls.current && viewTarget.current) viewTarget.current.copy(controls.current.target);
       rebracket();
@@ -712,13 +776,27 @@ function Scene({ children, scene, sceneMarker, spatialResultId, mode, showEnclos
   const fieldGeometrySha256 = useFieldPlaneStore((state) => state.geometrySha256);
   const maskState = useFieldPlaneMaskStore((state) => state);
   const stableClipPlane = useMemo(() => new Plane(new Vector3(1, 0, 0), 0), []);
+  const camera = useThree((state) => state.camera);
+  // Which half the field-plane cut keeps is chosen once, when the cut starts:
+  // the half beyond the plane as the camera then sees it, so the plane's face
+  // and the cut model show together. Moving the plane keeps that side; orbiting
+  // round does not flip it under the user.
+  const fieldClipFlipped = useRef<boolean | null>(null);
   const clipDefinition = useMemo(() => {
     if (clipMode === 'section') return sectionClipPlane(sectionAxis, scene.bounds);
     if (clipMode === 'field-plane' && fieldCurrent && fieldPlane) {
-      return fieldPlaneToClipPlane(fieldPlane, scene.unitsPerMetre, invertFieldClip);
+      const plane = fieldPlaneToClipPlane(fieldPlane, scene.unitsPerMetre);
+      fieldClipFlipped.current ??= plane.distanceToPoint(camera.position) > 0;
+      return fieldClipFlipped.current !== invertFieldClip ? plane.negate() : plane;
     }
+    fieldClipFlipped.current = null;
     return null;
-  }, [clipMode, fieldCurrent, fieldPlane, invertFieldClip, scene.bounds, scene.unitsPerMetre, sectionAxis]);
+  }, [camera, clipMode, fieldCurrent, fieldPlane, invertFieldClip, scene.bounds, scene.unitsPerMetre, sectionAxis]);
+  // A section cut lying in the field plane's own plane would clip each of its
+  // pixels on rounding alone, and one parallel to it would hide it whole; the
+  // cut only trims a field plane it crosses.
+  const sectionClipsField = clipMode === 'section' && clipDefinition !== null && fieldPlane !== null
+    && Math.abs(fieldPlaneToClipPlane(fieldPlane, 1).normal.dot(clipDefinition.normal)) < 0.999;
   const clipActive = clipDefinition !== null;
   const materials = useMemo(
     () => createMaterialLibrary(
@@ -777,7 +855,7 @@ function Scene({ children, scene, sceneMarker, spatialResultId, mode, showEnclos
     <FieldPlane
       active={fieldCurrent}
       unitsPerMetre={scene.unitsPerMetre}
-      clipPlane={clipMode === 'section' ? stableClipPlane : null}
+      clipPlane={sectionClipsField ? stableClipPlane : null}
       colormap={fieldColormap}
       scheduler={scheduler}
     />
@@ -806,7 +884,7 @@ function Scene({ children, scene, sceneMarker, spatialResultId, mode, showEnclos
     >
       <planeGeometry args={[1, 1]} />
     </mesh>}
-    <CameraRig bounds={scene.bounds} request={cameraRequest} zoomRequest={zoomRequest} projection={cameraProjection} preferences={preferences} scheduler={scheduler} controls={controls} />
+    <CameraRig bounds={scene.bounds} unitsPerMetre={scene.unitsPerMetre} request={cameraRequest} zoomRequest={zoomRequest} projection={cameraProjection} preferences={preferences} scheduler={scheduler} controls={controls} />
     <CameraGizmo controls={controls} center={center} scheduler={scheduler} theme={theme} onDirection={onCameraDirection} />
     <GizmoAxisPicker onDirection={onCameraDirection} />
     <PaintObserver marker={sceneMarker} startedAt={frameStartedAt} onClientFrame={onClientFrame} />

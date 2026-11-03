@@ -43,6 +43,7 @@ export function ViewerPreferencesPanel({ preferences, showEnclosure, showStats, 
       {preferences.dampingEnabled && <RangePreference label="Damping factor" field="dampingFactor" value={preferences.dampingFactor} min={0.01} max={0.5} step={0.01} />}
 
       <h3>Input</h3>
+      <TogglePreference label="Two-finger scroll pans" checked={preferences.scrollPans} onChange={(scrollPans) => viewerPreferences.update({ scrollPans })} />
       <TogglePreference label="Invert scroll zoom" checked={preferences.invertWheelZoom} onChange={(invertWheelZoom) => viewerPreferences.update({ invertWheelZoom })} />
       <TogglePreference label="Keyboard pan" checked={preferences.keyboardPanEnabled} onChange={(keyboardPanEnabled) => viewerPreferences.update({ keyboardPanEnabled })} />
       <TogglePreference label="Live updates" checked={preferences.liveUpdate} onChange={(liveUpdate) => viewerPreferences.update({ liveUpdate })} />

@@ -881,12 +881,25 @@ export function Viewport() {
     setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
   }, [importedMesh]);
 
+  // Geometry and Mesh each keep their own display mode. The mesh view opens in
+  // solid + wireframe; leaving it restores whatever the geometry view showed,
+  // so the tessellation lines do not follow the user back to the geometry.
+  // Starts false so a viewport mounted on the mesh view still opens it in
+  // solid + wireframe.
+  const meshViewSelected = solverViewSelected || cadSolverViewSelected;
+  const meshViewWas = useRef(false);
+  const viewModes = useRef<Record<'geometry' | 'mesh', DisplayMode>>({ geometry: 'clay', mesh: 'solid-wire' });
+  useEffect(() => {
+    if (meshViewWas.current === meshViewSelected) return;
+    meshViewWas.current = meshViewSelected;
+    viewModes.current[meshViewSelected ? 'geometry' : 'mesh'] = mode;
+    setMode(viewModes.current[meshViewSelected ? 'mesh' : 'geometry']);
+  }, [meshViewSelected, mode]);
+
   // Simulation-mesh view lifecycle: activation is user intent, so it builds
-  // (or re-serves from the shared artifact cache) immediately and defaults the
-  // display mode to solid + wireframe; the mode picker stays live after that.
+  // (or re-serves from the shared artifact cache) immediately.
   useEffect(() => {
     if (!solverViewSelected) return undefined;
-    setMode('solid-wire');
     solverRefresh.activate(currentSolverMeshKey());
     return () => solverRefresh.deactivate();
   }, [solverRefresh, solverViewSelected]);
@@ -932,7 +945,6 @@ export function Viewport() {
   // time would leave it permanently loading.
   useEffect(() => {
     if (!cadSolverViewSelected || cadIngestId === null) return undefined;
-    setMode('solid-wire');
     if (cadSolverMesh !== null) return undefined;
     const record = useCadReturnStore.getState().ingestRecord;
     if (record === null || record.ingest_id !== cadIngestId) return undefined;
@@ -982,12 +994,22 @@ export function Viewport() {
     }
   }, [solveRunningOrQueued]);
 
+  // Opening the field plane cuts the model at it, so the plane is not hidden
+  // inside the horn; the clip button still turns the cut off.
+  const fieldPlaneShown = Boolean(availablePlaneJob && fieldEnabled && fieldPlane);
+  const fieldPlaneWasShown = useRef(fieldPlaneShown);
+  useEffect(() => {
+    if (fieldPlaneWasShown.current === fieldPlaneShown) return;
+    fieldPlaneWasShown.current = fieldPlaneShown;
+    if (fieldPlaneShown) setClipMode('field-plane');
+  }, [fieldPlaneShown]);
+
   useEffect(() => {
     if (meshFreshness === 'pending') return;
-    if (availablePlaneJob && fieldEnabled && fieldPlane) return;
+    if (fieldPlaneShown) return;
     if (clipMode === 'field-plane') setClipMode('off');
     if (!availablePlaneJob && invertFieldClip) setInvertFieldClip(false);
-  }, [availablePlaneJob, clipMode, fieldEnabled, fieldPlane, invertFieldClip, meshFreshness]);
+  }, [availablePlaneJob, clipMode, fieldPlaneShown, invertFieldClip, meshFreshness]);
 
   useEffect(() => {
     useFieldPlaneStore.getState().applyRenderingPreferences({
