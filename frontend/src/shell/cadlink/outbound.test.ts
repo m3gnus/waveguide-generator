@@ -356,6 +356,8 @@ it('Stop on Send ends with Stopped and records no CAD error or identity', async 
       signal = init!.signal!;
       return new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }));
     }
+    // The server accepts a Stop that arrives before the bundle's point of no return.
+    if (String(url).includes('/api/operation-progress/') && init?.method === 'DELETE') return Promise.resolve(new Response(null, { status: 204 }));
     return Promise.resolve(json({ selected: true }));
   });
   const { controller } = setup(undefined, fetcher);
