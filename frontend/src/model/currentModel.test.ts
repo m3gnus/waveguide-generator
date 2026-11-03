@@ -332,8 +332,15 @@ describe('a design assembly run on its parametric design', () => {
     expect(currentModel().viewportShowing).toBe(false);
     importedMeshStore.showParametric();
     expect(currentModelScene(currentModel())).toBeNull();
+    useDesignStore.getState().undo();
+    expect(currentModelScene(currentModel())).toBe(built);
+    expect(currentModel().viewportShowing).toBe(true);
     useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
     expect(useAssemblyBuildStore.getState().published).toBeNull();
+    expect(currentModelScene(currentModel())).toBeNull();
+    resetDesignStore();
+    expect(useAssemblyBuildStore.getState().published).toBeNull();
+    expect(currentModelScene(currentModel())).toBeNull();
   });
 
   it('stays another model when the run stored no design', () => {
