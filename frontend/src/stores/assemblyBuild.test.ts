@@ -10,6 +10,9 @@ import { useDesignModelStore } from './importedModel';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { mesh } from '../shell/cadlink/selection.fixtures';
 import { currentModel, currentModelScene } from '../model/currentModel';
+import preparationEdits from '../../../server/tests/fixtures/assembly_preparation_edits.json';
+import { assemblyGeometryKey } from './assemblyBuild';
+import { designContentKey } from './designContentKey';
 
 let counter = 0;
 const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '0')}`;
@@ -37,6 +40,18 @@ describe('assembly background build', () => {
     useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), enclosure: { ...designForFamily('R-OSSE').enclosure, depth: 200 } });
     resetAssemblyBuild();
     commitAssembly(addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids).assembly);
+  });
+
+  it.each(preparationEdits)('classifies $path against the backend compile contract', edit => {
+    const base = useDesignStore.getState().design;
+    const changed = structuredClone(base);
+    const parts = edit.path.split('.');
+    let target = changed as unknown as Record<string, unknown>;
+    for (const part of parts.slice(0, -1)) target = target[part] as Record<string, unknown>;
+    target[parts.at(-1)!] = edit.value;
+    expect(assemblyGeometryKey(changed) === assemblyGeometryKey(base)).toBe(edit.reuses);
+    const fileKey = (design: typeof base) => designContentKey(design, '', { polar: { config: null }, solve: null });
+    expect(fileKey(changed)).not.toBe(fileKey(base));
   });
 
   it.each([200, 422])('registers one shared build through success or failure (%s)', async status => {

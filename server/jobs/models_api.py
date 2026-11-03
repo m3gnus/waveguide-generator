@@ -901,6 +901,7 @@ def mount_models_api(application: FastAPI) -> None:
                     store, data_dir, body.design, design_uid=body.design_uid,
                     design_name=body.design_name, design_revision=body.design_revision,
                     build_session=body.build_session, cancel_cb=operation.check, progress_cb=operation.progress,
+                    commit_cb=operation.begin_commit,
                 )
                 operation.attach(http_response)
         except HTTPException:

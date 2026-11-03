@@ -1073,6 +1073,13 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
     reports those samples and the resolved centres for the front view.
     """
 
+    config, placement, _geometry = _assembly_preparation(design)
+    return config, placement
+
+
+def _assembly_preparation(design: DesignConfig) -> tuple[dict[str, Any], dict[str, Any], Any]:
+    """Retain the placement owner's geometry for solver-free front context."""
+
     from hornlab_mesher.config_builder import resolve_geometry
     from hornlab_mesher.errors import UserRefusal, ConfigError
     from hornlab_mesher.enclosure_woofers import mouth_y_edges, resolve_woofer_placements
@@ -1127,7 +1134,7 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
         "mouth_top_mm": top,
         "woofers": [{key: row[key] for key in ("radiator_id", "x_mm", "y_mm", "radius_mm")} for row in resolved],
     }
-    return config, placement
+    return config, placement, geometry
 
 
 def _assembly_front_context_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
@@ -1137,21 +1144,32 @@ def _assembly_front_context_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
     build uses; the build itself certifies the 0.1 mm clearances exactly.
     """
 
-    from hornlab_mesher.config_builder import resolve_enclosure_bounds, resolve_geometry
+    from hornlab_mesher.config_builder import resolve_geometry
+    from hornlab_mesher.builders.enclosure import enclosure_box_bounds
 
     design = DesignConfig.model_validate(design_dump)
     try:
-        config, placement = assembly_mesher_config(design)
+        config, placement, geometry = _assembly_preparation(design)
     except AssemblyRefusal as exc:
         return {"refusal": str(exc)}
     probe = deepcopy(config)
     if isinstance(probe.get("enclosure"), dict):
         probe["enclosure"].pop("woofers", None)
-    geometry = resolve_geometry(probe).geometry
+    # ATH can change the enclosure envelope after placement. Ordinary inputs
+    # are unchanged: reuse their original resolved geometry and sampling grid.
+    if (probe.get("enclosure") or {}).get("ath_lf_envelope"):
+        geometry = resolve_geometry(probe).geometry
     ring = np.asarray(geometry.inner_points)[:, -1, :2]
     step = max(1, len(ring) // 256)
     outline = [[float(x), float(y)] for x, y in ring[::step]]
-    bounds = resolve_enclosure_bounds(probe, warn_prefix=None) if probe.get("mode") == "enclosure" else None
+    bounds = None
+    if probe.get("mode") == "enclosure" and geometry.enclosure is not None:
+        bounds = enclosure_box_bounds(
+            geometry.inner_points, geometry.enclosure, closed=geometry.closed,
+            symmetry_planes=tuple(geometry.symmetry_planes), warn_prefix=None,
+            surface_fit=geometry.surface_fit, preserve_grid=geometry.preserve_grid,
+            boundary_recipe=getattr(geometry, "freeform_wall", None),
+        )
     baffle = None if bounds is None else {
         "x0_mm": bounds["bx0"], "x1_mm": bounds["bx1"], "y0_mm": bounds["by0"], "y1_mm": bounds["by1"],
         "edge_mm": bounds.get("clamped_edge", 0.0),
@@ -1603,12 +1621,16 @@ async def build_solver_mesh(
         # In a killable child: a mesher abort or hang on this geometry must not
         # take the server down (server/mesh/child.py). The child cannot see
         # ``cancel_cb``; the parent polls it and kills the child instead.
-        result = await run_mesh_build(
-            _build_sync,
-            validated.model_dump(mode="json"),
-            cancel_cb=cancel_cb,
-        )
-        _solver_mesh_cache.put(cache_key, result)
+        async with _solver_mesh_cache.build_slot(cache_key, lambda: _check_cancel(cancel_cb)):
+            result = None if force_rebuild else _solver_mesh_cache.get(cache_key)
+            cache_hit = result is not None
+            if result is None:
+                result = await run_mesh_build(
+                    _build_sync,
+                    validated.model_dump(mode="json"),
+                    cancel_cb=cancel_cb,
+                )
+                _solver_mesh_cache.put(cache_key, result)
     try:
         _enforce_artifact_triangle_ceiling(
             int(result["stats"]["triangle_count"]),
@@ -1640,9 +1662,13 @@ async def build_solver_mesh(
     # crossing names a cause the user can act on where "failed topology
     # integrity validation" does not.
     if validation_mode == "strict" and crossings:
+        from server.preview.errors import PublicMessage
+
         raise RuntimeError(
-            f"Solver mesh failed strict validation: {crossings:,} self-intersecting "
-            f"triangle pairs. {SELF_INTERSECTION_REMEDY}"
+            PublicMessage(
+                f"Solver mesh failed strict validation: {crossings:,} self-intersecting "
+                f"triangle pairs. {SELF_INTERSECTION_REMEDY}"
+            )
         )
     if validation_mode == "strict" and not result["integrity"]["valid"]:
         raise RuntimeError("Solver mesh failed strict topology integrity validation")

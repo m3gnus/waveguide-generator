@@ -42,6 +42,40 @@ class AutoExportOwner:
         self.clock = clock
         self.lock = asyncio.Lock()
         self.owner: Reservation | None = None
+        self._expiry_task: asyncio.Task[None] | None = None
+
+    def _cancel_expiry(self) -> None:
+        task, self._expiry_task = self._expiry_task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    def _schedule_expiry(self) -> None:
+        self._cancel_expiry()
+        self._expiry_task = asyncio.create_task(self._wait_for_expiry())
+
+    async def _wait_for_expiry(self) -> None:
+        try:
+            while (owner := self.owner) is not None:
+                await asyncio.sleep(max(0, owner.deadline - self.clock()))
+                async with self.lock:
+                    self._expire()
+                    # An active operation releases its own guard on leave.
+                    # Otherwise retry an early timer wake against the clock.
+                    if self.owner is None or (owner.active and owner.deadline <= self.clock()):
+                        return
+        finally:
+            if self._expiry_task is asyncio.current_task():
+                self._expiry_task = None
+
+    async def shutdown(self) -> None:
+        task = self._expiry_task
+        self._cancel_expiry()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        async with self.lock:
+            if self.owner is not None:
+                self.owner.released = True
+                self._expire()
 
     def _expire(self) -> None:
         owner = self.owner
@@ -49,6 +83,7 @@ class AutoExportOwner:
             if owner.archive_guard is not None:
                 owner.archive_guard.__exit__(None, None, None)
             self.owner = None
+            self._cancel_expiry()
 
     def _require(self, token: str) -> Reservation:
         self._expire()
@@ -116,6 +151,7 @@ class AutoExportOwner:
                     },
                 )
                 self.owner = Reservation(token, job_id, pending, formats, self.clock() + LEASE_SECONDS, archive_guard=guard)
+                self._schedule_expiry()
             except BaseException:
                 if guard is not None:
                     guard.__exit__(None, None, None)
@@ -125,6 +161,7 @@ class AutoExportOwner:
     async def heartbeat(self, token: str) -> None:
         async with self.lock:
             self._require(token).deadline = self.clock() + LEASE_SECONDS
+            self._schedule_expiry()
 
     async def finish(self, token: str, body: dict[str, Any]) -> None:
         async with self.lock:
@@ -164,6 +201,7 @@ class AutoExportOwner:
             if owner.archive_guard is not None:
                 owner.archive_guard.__exit__(None, None, None)
             self.owner = None
+            self._cancel_expiry()
 
     async def release(self, token: str) -> None:
         """Give up a reservation; idempotent.

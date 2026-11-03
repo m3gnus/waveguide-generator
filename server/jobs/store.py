@@ -1677,11 +1677,13 @@ class JobStore:
         fields: Mapping[str, Any],
         event_type: str,
         payload: Mapping[str, Any],
+        *,
+        allowed_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         """Persist a visible state transition and its cursor atomically."""
 
         with self._lock, self._transaction() as conn:
-            changed = self._update_job(conn, job_id, fields)
+            changed = self._update_job(conn, job_id, fields, allowed_statuses=allowed_statuses)
             event = self._append_event(conn, job_id, event_type, payload) if changed else None
             return changed, event
 
@@ -3611,7 +3613,8 @@ class JobStore:
             return [self._row_to_event(row) for row in rows]
 
     def _update_job(
-        self, conn: sqlite3.Connection, job_id: str, fields: Mapping[str, Any]
+        self, conn: sqlite3.Connection, job_id: str, fields: Mapping[str, Any],
+        *, allowed_statuses: frozenset[str] | None = None,
     ) -> bool:
         values = dict(fields)
         unsupported = sorted(set(values) - ALLOWED_JOB_UPDATE_FIELDS)
@@ -3639,9 +3642,13 @@ class JobStore:
                     f" THEN json_remove(task_metadata_json, {path})"
                     " ELSE task_metadata_json END"
                 )
+        predicate = ""
+        sources = sorted(allowed_statuses) if allowed_statuses is not None else []
+        if allowed_statuses is not None:
+            predicate = f" AND status IN ({', '.join('?' for _ in sources)})"
         cur = conn.execute(
-            f"UPDATE simulation_jobs SET {', '.join(assignments)} WHERE id = ?",
-            [*params, job_id],
+            f"UPDATE simulation_jobs SET {', '.join(assignments)} WHERE id = ?{predicate}",
+            [*params, job_id, *sources],
         )
         return cur.rowcount > 0
 

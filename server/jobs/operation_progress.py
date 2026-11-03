@@ -129,7 +129,7 @@ def mount_operation_progress(application: FastAPI) -> None:
             if entry is None or _expired(entry, time.monotonic()):
                 raise HTTPException(404, "Operation progress is no longer available.")
             operation = entry[2]
-            if operation.committed:
-                raise HTTPException(409, "The operation is already being sent. Wait for its result.")
+            if operation.committed or operation.finished is not None:
+                raise HTTPException(409, "The operation is already being published or has finished. Wait for its result.")
             operation.cancellation.disconnected.set()
         return Response(status_code=204)

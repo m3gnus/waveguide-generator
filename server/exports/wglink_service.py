@@ -399,7 +399,7 @@ def export_wglink_sync(
         bind_design_lineage(store, identity.lineage_id, request.design_uid, design_name)
         return identity, _instance_slug(store, identity.lineage_id, design_name)
 
-    with store.cancellable_export_design(request.identity, request.design_uid, prepare_design) as (identity, instance_slug):
+    with store.cancellable_export_design(request.identity, request.design_uid, prepare_design, cancel_cb=cancel_cb) as (identity, instance_slug):
         try:
             wglink_root.mkdir(exist_ok=True)
         except OSError as exc:

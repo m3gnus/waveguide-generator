@@ -6,7 +6,7 @@
  */
 import { assemblyContextRefused, fetchAssemblyContext } from '../api/assembly';
 import { placementProblems } from '../sketch/adapters/frontView';
-import { designModelCurrent, requestAssemblyBuild } from '../stores/assemblyBuild';
+import { designModelCurrent, designModelGeometryCurrent, prepareDesignModel } from '../stores/assemblyBuild';
 import { designPreparedRecord, useDesignModelStore } from '../stores/importedModel';
 import { assemblyImportedSetup, assemblyRadiatorLabel } from '../stores/assemblySimulation';
 import { currentDocumentLoad, serializeDesign, useDesignStore } from '../stores/design';
@@ -50,7 +50,7 @@ export async function prepareDesignAssembly(fetcher: typeof fetch = fetch): Prom
   const options = useSolveOptionsStore.getState().options() as ImportedSolveSubmission['options'];
   const driverProblem = assemblyDriverBlocker(assemblyImportedSetup(), options, id => assemblyRadiatorLabel(design, id));
   if (driverProblem) throw new Error(driverProblem);
-  if (!designModelCurrent(design)) {
+  if (!designModelGeometryCurrent(design)) {
     const context = await fetchAssemblyContext(serializeDesign(design), fetcher).catch((reason: unknown) => {
       if (assemblyContextRefused(reason)) throw reason;
       return null;
@@ -58,9 +58,9 @@ export async function prepareDesignAssembly(fetcher: typeof fetch = fetch): Prom
     assertCurrent();
     const [problem] = context ? [...placementProblems(design.assembly, { context, assembly: design.assembly }).values()].flat() : [];
     if (problem) throw new Error(`${problem} Open Sources and baffle to fix it.`);
-    const built = await requestAssemblyBuild(fetcher);
-    assertCurrent();
-    if (built?.status !== 'published') throw new Error('A newer revision of this design is being built. Solve again when it is ready.');
   }
+  const built = await prepareDesignModel(fetcher);
+  assertCurrent();
+  if (built?.status !== 'published') throw new Error('A newer revision of this design is being built. Solve again when it is ready.');
   return designAssemblySnapshot();
 }

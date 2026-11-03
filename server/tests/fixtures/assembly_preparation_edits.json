@@ -1,0 +1,21 @@
+[
+  {"path": "assembly.drivers", "value": {"00000000-0000-4000-8000-0000000000aa": {"exterior_transducer": {"version": 1, "re_ohm": 6}}}, "reuses": true},
+  {"path": "assembly.drive_voltage_v", "value": 4, "reuses": true},
+  {"path": "assembly.crossover", "value": {"enabled": false}, "reuses": true},
+  {"path": "assembly.signal_groups.0.label", "value": "Renamed", "reuses": true},
+  {"path": "assembly.signal_groups.0.members.0.delay_ms", "value": 1.5, "reuses": true},
+  {"path": "assembly.signal_groups.0.members.0.weight", "value": 0.5, "reuses": true},
+  {"path": "assembly.signal_groups.0.members.0.invert", "value": true, "reuses": true},
+  {"path": "assembly.woofers.0.label", "value": "New label", "reuses": true},
+  {"path": "simulation.f1", "value": 100, "reuses": true},
+  {"path": "simulation.f2", "value": 2400, "reuses": true},
+  {"path": "simulation.num_frequencies", "value": 5, "reuses": true},
+  {"path": "assembly.woofers.0.radius_mm", "value": 90, "reuses": false},
+  {"path": "assembly.woofers.0.placement.gap_mm", "value": 20, "reuses": false},
+  {"path": "assembly.woofers.0.shape.kind", "value": "piston", "reuses": false},
+  {"path": "assembly.woofers.0.enabled", "value": false, "reuses": false},
+  {"path": "assembly.woofers.0.drive", "value": "rigid", "reuses": false},
+  {"path": "assembly.signal_groups.0.id", "value": "00000000-0000-4000-8000-000000000099", "reuses": false},
+  {"path": "enclosure.depth", "value": 300, "reuses": false},
+  {"path": "source.velocity_convention", "value": "axial", "reuses": false}
+]
