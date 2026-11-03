@@ -91,7 +91,7 @@ describe('woofer drivers on a live design', () => {
     enter('Resistance', '6');
     expect(host.querySelector('.field-error')?.textContent).toBe('Enter inductance in the stated units.');
     act(() => useSolveOptionsStore.getState().setEngine('metal'));
-    expect(host.textContent).toContain('choose Auto, BEAT CPU or BEAT Metal as the engine');
+    expect(host.textContent).toContain('set Advanced backend under Solver to Automatic, BEAT CPU or BEAT Metal');
   });
 
   it('keeps a rigid woofer\'s driver for later and clears it at fixed velocity', () => {
