@@ -4,6 +4,7 @@ import { resolveAssemblySetup } from '../jobs/importedSubmission';
 import { addWoofer, commitAssembly, emptyAssembly, setMemberProcessing, setWooferEnabled } from './assembly';
 import { resetAssemblyBuild } from './assemblyBuild';
 import { adoptDesignBuild } from './importedModel';
+import { combineBaseSpec, combineEnabledEffective, combineWire } from './cadReturn';
 import { applyAssemblySimulation, assemblyImportedSetup, assemblySimulationData } from './assemblySimulation';
 import { currentDocumentLoad, designForFamily, resetDesignStore, useDesignStore } from './design';
 
@@ -57,6 +58,62 @@ describe('assembly as the shared Simulation input', () => {
     expect(assemblyImportedSetup().driveChannels[1].exterior_transducer?.motion_axis).toEqual([0, 0, 1]);
     useDesignStore.getState().undo();
     expect(useDesignStore.getState().design.assembly).toEqual(before);
+  });
+
+  it('uses the CAD default combination without rewriting a saved design', () => {
+    const { first, second } = setup();
+    const before = structuredClone(useDesignStore.getState().design);
+    const state = assemblyImportedSetup();
+    expect(state.combineEnabled).toBeNull();
+    const cad = { ...state, input: 'cad' };
+    expect(combineEnabledEffective(state)).toBe(true);
+    expect(combineWire(state)).toEqual(combineWire(cad));
+    const design = useDesignStore.getState().design;
+    const geometry = resolveAssemblySetup(state, design.assembly!, { engine: 'metal' } as never, design.simulation).setup.geometry;
+    expect(geometry.combine).toEqual(combineWire(cad));
+    expect(geometry.combine?.members).toEqual([state.driverGroups[1].id, state.driverGroups[2].id, state.driverGroups[0].id]);
+    expect(geometry.drive_channels.map(channel => channel.id)).toEqual(['horn-throat', first, second]);
+    expect(useDesignStore.getState().design).toEqual(before);
+    // Driver and grouping edits must not turn the implicit default off.
+    assemblyImportedSetup().setExteriorTransducer(first, { ...DRIVER, motion_axis: [0, 0, 1] });
+    expect(useDesignStore.getState().design.assembly).not.toHaveProperty('crossover');
+    expect(combineEnabledEffective(assemblyImportedSetup())).toBe(true);
+  });
+
+  it('keeps an explicit off choice across edits, save/reopen and undo', () => {
+    const { first, second } = setup();
+    assemblyImportedSetup().setCombineEnabled(false);
+    expect(useDesignStore.getState().design.assembly?.crossover).toEqual({ enabled: false });
+    expect(combineWire(assemblyImportedSetup())).toBeUndefined();
+    const saved = JSON.parse(JSON.stringify(useDesignStore.getState().design));
+    const reopened = assemblySimulationData(saved, compiledFor([first, second]));
+    expect(combineEnabledEffective(reopened)).toBe(false);
+    assemblyImportedSetup().setExteriorTransducer(first, { ...DRIVER, motion_axis: [0, 0, 1] });
+    expect(combineWire(assemblyImportedSetup())).toBeUndefined();
+    useDesignStore.getState().undo();
+    useDesignStore.getState().undo();
+    expect(combineEnabledEffective(assemblyImportedSetup())).toBe(true);
+    assemblyImportedSetup().setCombineEnabled(true);
+    expect(useDesignStore.getState().design.assembly?.crossover?.enabled).toBe(true);
+  });
+
+  it('keeps a custom spec enabled when editing the implicit CAD default', () => {
+    setup();
+    const spec = combineBaseSpec(assemblyImportedSetup())!;
+    spec.channels[spec.members[0]].invert = true;
+    assemblyImportedSetup().setCombineSpec(spec);
+    const saved = JSON.parse(JSON.stringify(useDesignStore.getState().design));
+    expect(saved.assembly.crossover.enabled).toBe(true);
+    const reopened = assemblySimulationData(saved, compiledFor(saved.assembly.woofers.map((woofer: { id: string }) => woofer.id)));
+    expect(combineWire({ ...reopened, sources: assemblyImportedSetup().sources })).toEqual(combineWire(assemblyImportedSetup()));
+  });
+
+  it('has no combination with just the horn or one shared signal group', () => {
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly: emptyAssembly(ids) });
+    expect(combineWire(assemblyImportedSetup())).toBeUndefined();
+    setup();
+    const state = assemblyImportedSetup();
+    expect(combineWire({ ...state, driverGroups: [{ id: 'one', channelIds: state.driveChannels.map(channel => channel.id) }] })).toBeUndefined();
   });
 
   it('saves accepted Mmd provenance and undoes both the value and derivation in one step', () => {

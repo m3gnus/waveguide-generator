@@ -13,6 +13,7 @@ import { resultViewStore } from '../stores/resultView';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { ResultsPanel } from './ResultsPanel';
 import { importedMeshStore } from '../viewport/importedMeshStore';
+import { resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
 
 /** Every option an EChart was handed, so a card can be read by its series
  * rather than through a canvas jsdom does not implement. */
@@ -198,8 +199,10 @@ describe('results dock view switch', () => {
     resetDesignStore();
     resetCadReturnStore();
     resetDocumentStore();
+    resetImportedModelStore();
     resultViewStore.resetForTests();
     workspaceModeStore.setMode('cad');
+    workspaceModeStore.setImportedInput('cad');
     importedMeshStore.clear();
     useCadReturnStore.setState({
       ingestRecord: { ingest_id: 'wgi_return' } as never,
@@ -263,6 +266,30 @@ describe('results dock view switch', () => {
     await render();
 
     expect(host.querySelector('[role="radiogroup"]')).toBeNull();
+  });
+
+  it('opens a retained assembly on Combined with the shared HF/LF view controls', async () => {
+    workspaceModeStore.setImportedInput('assembly');
+    useImportedModelStore.setState({ input: 'assembly', phase: 'ready',
+      prepared: { ingest_id: 'wgi_return', manifest_sha256: 'm', artifact_sha256: 'a' } });
+    importedMeshStore.setFile({ ingestId: 'wgi_return' } as never);
+    const saved = job('primary', 1);
+    saved.config_summary.import_origin = 'design-assembly';
+    const result = payloads.primary;
+    result.channels!['drive-mf'].metadata!.role = 'LF';
+    publishJobs([saved]);
+    compareSelection.setPrimary('primary');
+    await render();
+    expect(viewButtons().map(button => button.textContent)).toEqual(['Combined', 'HF', 'LF']);
+    expect(viewButtons()[0].getAttribute('aria-checked')).toBe('true');
+    expect(seriesNames(POLAR_CHART)).toEqual(['#1 · primary · Combined']);
+    await chooseView('LF');
+    expect(seriesNames(POLAR_CHART)).toEqual(['#1 · primary · LF']);
+    await chooseView('HF');
+    expect(seriesNames(POLAR_CHART)).toEqual(['#1 · primary · HF']);
+    await chooseView('Combined');
+    expect(seriesNames(POLAR_CHART)).toEqual(['#1 · primary · Combined']);
+    expect(latestCombine.getSnapshot()?.canApply).toBe(true);
   });
 
   it('opens on the combined sum and draws its members beneath it', async () => {

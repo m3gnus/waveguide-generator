@@ -13,7 +13,7 @@ import { parseWire, toWire } from '../results/crossoverSpec';
 import { HF_RADIATOR_ID, newRadiatorId, type AssemblyDriver, type AssemblySignalGroup, type DesignAssembly } from './assembly';
 import { designPreparedRecord, useDesignPreparedRecord } from './importedModel';
 import { currentModel } from '../model/currentModel';
-import { PASSIVE_CARDIOID_DEFAULTS, type CadDriveChannel, type RoleSource, type SimulationData } from './cadReturn';
+import { combineEnabledEffective, PASSIVE_CARDIOID_DEFAULTS, type CadDriveChannel, type RoleSource, type SimulationData } from './cadReturn';
 import { useDesignStore, type DesignDocument } from './design';
 import { parseExteriorTransducer, type ExteriorTransducerForm } from './exteriorTransducer';
 import { createImportedSimulationSetup, registerLiveAssemblySimulation, type ImportedSimulationSetup } from './importedSimulationSetup';
@@ -76,7 +76,8 @@ export function assemblySimulationData(design: DesignDocument, record: CompiledA
     passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
     driveVoltageV: assembly.drive_voltage_v ?? DEFAULT_DRIVE_VOLTAGE_V,
     maxDriveVoltageV: null,
-    combineEnabled: !!assembly.crossover?.enabled,
+    // An absent choice uses the same multi-group default as a CAD import.
+    combineEnabled: assembly.crossover ? !!assembly.crossover.enabled : null,
     combineSpec: spec ? parseWire(spec) : null,
     frequencyStartHz: design.simulation.f1, frequencyEndHz: design.simulation.f2, frequencyCount: design.simulation.num_frequencies,
   };
@@ -133,8 +134,8 @@ export function applyAssemblySimulation(assembly: DesignAssembly, next: Simulati
     spec.reference = renamed.get(spec.reference) ?? spec.reference;
     spec.channels = Object.fromEntries(Object.entries(spec.channels).map(([id, value]) => [renamed.get(id) ?? id, value]));
   }
-  if (next.combineEnabled || spec) {
-    result.crossover = { enabled: !!next.combineEnabled, ...(spec ? { spec: spec as unknown as Record<string, unknown> } : {}) };
+  if (next.combineEnabled !== null || spec) {
+    result.crossover = { enabled: combineEnabledEffective(next), ...(spec ? { spec: spec as unknown as Record<string, unknown> } : {}) };
   } else delete result.crossover;
   if (next.driveVoltageV === DEFAULT_DRIVE_VOLTAGE_V) delete result.drive_voltage_v;
   else result.drive_voltage_v = next.driveVoltageV;

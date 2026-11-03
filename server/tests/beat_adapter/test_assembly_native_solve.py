@@ -185,6 +185,27 @@ def test_mixed_results_keep_each_basis_and_build_the_crossover_once(solid, recor
     np.testing.assert_allclose(again["channels"]["combined"]["spl_on_axis"]["spl"], combined["spl_on_axis"]["spl"])
 
 
+def test_assembly_without_a_combination_can_recombine_its_stored_bases(solid, record, monkeypatch):
+    """Old assembly runs retain the bases and processing even with combine off."""
+    from copy import deepcopy
+
+    processing = {W1: {"weight": 0.7}, W2: {"weight": 0.8, "delay_ms": 0.25, "invert": True}}
+    old_request = request(combine=False, processing=processing)
+    result, _compiled, _partial = _solve(solid, record, monkeypatch, old_request)
+    assert "combined" not in result["channels"]
+    stored = {key: value for key, value in result.items() if not key.startswith("_")}
+    before = deepcopy(stored)
+    spec = request(processing=processing).geometry.combine
+    updated = recombine_stored_results(stored, result["_channel_bases_npz"], spec, old_request)
+    assert updated["channel_order"] == ["horn-throat", W1, W2, "combined"]
+    combined = updated["channels"]["combined"]
+    assert combined["metadata"]["recombined"] is True
+    assert combined["metadata"]["combine"]["member_processing"][W2] == processing[W2]
+    assert np.isfinite(combined["spl_on_axis"]["spl"]).all()
+    assert stored == before
+    assert old_request.geometry.combine is None
+
+
 def test_removing_drivers_preserves_the_prescribed_hf_velocity_basis(make_mesh, record, monkeypatch):
     from server.solver import beat_imported, official_beat
     from server.solver.beat_adapter.results import SweepResult, acceleration_scale
