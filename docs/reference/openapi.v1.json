@@ -20100,6 +20100,36 @@
       }
     },
     "/api/operation-progress/{operation_id}": {
+      "delete": {
+        "operationId": "cancel_operation_api_operation_progress__operation_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Operation"
+      },
       "get": {
         "operationId": "operation_progress_api_operation_progress__operation_id__get",
         "parameters": [

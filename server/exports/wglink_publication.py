@@ -196,6 +196,7 @@ def publish_bundle(
     handoff: Mapping[str, object] | None = None,
     cancel_cb: Callable[[], None] | None = None,
     progress_cb: Callable[[str], None] | None = None,
+    commit_cb: Callable[[], None] | None = None,
 ) -> Mapping[str, str]:
     """Persist intent, stage/validate/fsync, then rename to a unique export name."""
     if cancel_cb is not None:
@@ -220,7 +221,12 @@ def publish_bundle(
                 },
             )
     if destination.exists() or destination.is_symlink():
-        return bundle_products(destination, facts)
+        products = bundle_products(destination, facts)
+        if commit_cb is not None:
+            commit_cb()
+        elif cancel_cb is not None:
+            cancel_cb()
+        return products
     from server.platform.staging import publish_staging_directory
     import shutil
 
@@ -239,10 +245,20 @@ def publish_bundle(
             _sync_directory(directory)
         _sync_directory(staged)
         with _LOCK:
-            if cancel_cb is not None:
-                cancel_cb()
             if destination.exists() or destination.is_symlink():
-                return bundle_products(destination, facts)
+                products = bundle_products(destination, facts)
+                if commit_cb is not None:
+                    commit_cb()
+                elif cancel_cb is not None:
+                    cancel_cb()
+                return products
+            # Point of no return: the durable staged bundle becomes visible by
+            # immutable rename. Stop must be acknowledged before this boundary;
+            # fsync/validation, registry and handoff must finish after it.
+            if commit_cb is not None:
+                commit_cb()
+            elif cancel_cb is not None:
+                cancel_cb()
             os.rename(staged, destination)
             _sync_directory(root)
         return bundle_products(destination, facts)

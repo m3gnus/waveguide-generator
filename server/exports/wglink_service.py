@@ -328,6 +328,7 @@ def export_wglink_sync(
     handoff: Mapping[str, object] | None = None,
     cancel_cb: Callable[[], None] | None = None,
     progress_cb: Callable[[str], None] | None = None,
+    commit_cb: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Build one identity-bearing bundle under ``workspace_root/wglink``.
 
@@ -378,6 +379,10 @@ def export_wglink_sync(
         if progress_cb is not None:
             for stage in ("resolve", "mesh", "check"):
                 progress_cb(stage)
+        if commit_cb is not None:
+            commit_cb()
+        elif cancel_cb is not None:
+            cancel_cb()
         result = _wglink_response(retry, _identity_for_export(store, retry))
         result.update(_finish_publication(store, retry))
         if progress_cb is not None:
@@ -423,7 +428,7 @@ def export_wglink_sync(
                     progress_cb("mesh")
 
             return publish_bundle(store, wglink_root, facts, write, handoff=handoff,
-                                  cancel_cb=cancel_cb, progress_cb=progress_cb)
+                                  cancel_cb=cancel_cb, progress_cb=progress_cb, commit_cb=commit_cb)
 
         try:
             row = store.allocate_export(

@@ -467,3 +467,62 @@ def test_a_crash_between_accept_and_file_is_reissued_only_by_a_live_retry(monkey
     again = service.export_wglink_sync(_request(saved), recovered, workspace, "A")
     assert again["cadHandoffRequestId"] == new_id
     assert len(writes) == 1
+
+
+@pytest.mark.parametrize("stop_at", ["staged_sync", "published_sync", "published_validation"])
+def test_send_stop_at_durability_boundary(monkeypatch, tmp_path, stop_at):
+    from server.jobs.request_cancellation import ClientDisconnected
+
+    store, saved, workspace, _ = setup(monkeypatch, tmp_path)
+    stopped = False
+    committed = False
+    real_sync = publication._sync_directory
+    real_products = publication.bundle_products
+
+    def check():
+        if stopped and not committed:
+            raise ClientDisconnected()
+
+    def commit():
+        nonlocal committed
+        check()
+        committed = True
+
+    def sync(path):
+        nonlocal stopped
+        real_sync(path)
+        if (stop_at == "staged_sync" and path.name == "bundle.wglink"
+                or stop_at == "published_sync" and path == workspace / "wglink"):
+            stopped = True
+
+    def products(path, facts):
+        nonlocal stopped
+        result = real_products(path, facts)
+        if stop_at == "published_validation" and path.parent == workspace / "wglink":
+            stopped = True
+        return result
+
+    monkeypatch.setattr(publication, "_sync_directory", sync)
+    monkeypatch.setattr(publication, "bundle_products", products)
+    try:
+        def send():
+            return service.export_wglink_sync(_request(saved), store, workspace, "boundary",
+                handoff={"dataDir": str(tmp_path / "data")}, cancel_cb=check, commit_cb=commit)
+
+        if stop_at == "staged_sync":
+            with pytest.raises(ClientDisconnected):
+                send()
+            assert not committed
+            assert store.publication_exports() == []
+            assert store.publication_reservation_for_key("boundary") is None
+            assert not list(workspace.rglob("*.wglink"))
+            assert not list(publication._journal_folder(store).glob("*.json"))
+            assert not list((tmp_path / "data").rglob(".fusion-handoffs/*.json"))
+        else:
+            result = send()
+            assert stopped and committed
+            assert result["cadHandoff"] == "published"
+            assert Path(result["bundlePath"]).is_dir()
+            assert store.get_export(result["exportId"])
+    finally:
+        store.close()

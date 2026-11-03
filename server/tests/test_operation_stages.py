@@ -201,6 +201,7 @@ def test_stop_after_validation_cannot_publish(kind, tmp_path, monkeypatch, stage
     assert stage_store._read_one("SELECT count(*) AS n FROM imported_models", ())["n"] == 0
     assert not list(workspace.rglob("*.wglink"))
     assert not list((tmp_path / "imports").rglob("solve.msh"))
+    assert stage_store._read_one("SELECT count(*) AS n FROM archive_folders", ())["n"] == 0
     assert not list(stage_store.db_path.with_suffix(".publications").glob("*.json"))
 
 
@@ -420,3 +421,113 @@ def test_real_socket_stop_reaches_create_app_and_kills_the_mesher(tmp_path, monk
     finally:
         listener.close()
         child.close_mesher_child()
+
+
+def test_send_stop_acknowledgement_is_atomic_with_publication_commit():
+    from server.jobs.operation_progress import RequestOperation
+    from starlette.requests import Request
+
+    async def scenario():
+        app = FastAPI()
+        mount_operation_progress(app)
+        for committed in (False, True):
+            key = str(uuid4())
+            request = Request({"type": "http", "headers": [(b"x-wg-operation-id", key.encode())]})
+            operation = RequestOperation(request, ("resolve", "mesh", "check", "publish"))
+            try:
+                if committed:
+                    operation.begin_commit()
+                status, _, _ = await _http(app, "DELETE", f"/api/operation-progress/{key}")
+                assert status == (409 if committed else 204)
+                if not committed:
+                    with pytest.raises(ClientDisconnected):
+                        operation.begin_commit()
+                else:
+                    # Disconnects after commit must not undo recovery intent.
+                    operation.cancellation.disconnected.set()
+                    operation.check()
+            finally:
+                operation.cancellation.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_build_stop_at_registry_guard_preserves_folder_allocation(existing, tmp_path, monkeypatch, stage_store):
+    from server.cadlink.intake import design_assembly
+    from server.workspace.archive_identity import claim_project_folder, registered_folder
+
+    monkeypatch.setenv(child.IN_PROCESS_ENV, "1")
+    model_id = f"design-assembly:{UID}"
+    key = f"model:{model_id}"
+    before = claim_project_folder(stage_store, key, "Stages") if existing else None
+    stopped = False
+    real_publish = design_assembly._publish
+
+    def publish(*args):
+        nonlocal stopped
+        real_publish(*args)
+        stopped = True
+
+    def check():
+        if stopped:
+            raise ClientDisconnected()
+
+    monkeypatch.setattr(design_assembly, "_publish", publish)
+    _, payload = _body("build")
+    with pytest.raises(ClientDisconnected):
+        asyncio.run(design_assembly.compile_design_assembly(stage_store, tmp_path, payload["design"],
+            design_uid=UID, design_name="Stages", design_revision=1,
+            build_session=str(uuid4()), cancel_cb=check))
+    assert registered_folder(stage_store, key) == before
+    assert not list((tmp_path / "imports").rglob("solve.msh"))
+    assert claim_project_folder(stage_store, "model:next", "Stages") == ("Stages-2" if existing else "Stages")
+
+
+@pytest.mark.parametrize("after_commit", [False, True])
+def test_send_api_stop_during_fsync_obeys_commit_boundary(after_commit, tmp_path, monkeypatch, stage_store):
+    from server.exports import wglink_publication as publication
+
+    monkeypatch.setenv(child.IN_PROCESS_ENV, "1")
+    _install_fake_write(monkeypatch)
+    monkeypatch.setattr(api, "focus_cad", lambda: False)
+    monkeypatch.setattr(api, "_handoff_waiting_notice", lambda _: None)
+    reached = threading.Event()
+    release = threading.Event()
+    real_sync = publication._sync_directory
+
+    def sync(path):
+        real_sync(path)
+        boundary = path.name == "wglink" if after_commit else path.name == "bundle.wglink"
+        if boundary:
+            reached.set()
+            assert release.wait(5), "Stop request did not complete"
+
+    monkeypatch.setattr(publication, "_sync_directory", sync)
+
+    async def scenario():
+        app, runtime, workspace = _mount(tmp_path, stage_store)
+        key = str(uuid4())
+        path, body = _body("send")
+        sending = asyncio.create_task(_http(app, "POST", path, body, operation_id=key))
+        try:
+            assert await asyncio.to_thread(reached.wait, 5)
+            status, _, _ = await _http(app, "DELETE", f"/api/operation-progress/{key}")
+            assert status == (409 if after_commit else 204)
+            release.set()
+            status, _, result = await sending
+            assert status == (200 if after_commit else 499)
+            if after_commit:
+                assert json.loads(result)["cadHandoff"] == "published"
+                assert len(stage_store.publication_exports()) == 1
+            else:
+                assert stage_store.publication_exports() == []
+                assert stage_store.publication_reservation_for_key("stage-send") is None
+                assert not list(workspace.rglob("*.wglink"))
+                assert not list(publication._journal_folder(stage_store).glob("*.json"))
+        finally:
+            release.set()
+            await sending
+            await runtime.shutdown()
+
+    asyncio.run(scenario())

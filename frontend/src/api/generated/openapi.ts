@@ -1819,7 +1819,8 @@ export interface paths {
         get: operations["operation_progress_api_operation_progress__operation_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Cancel Operation */
+        delete: operations["cancel_operation_api_operation_progress__operation_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -11045,6 +11046,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["OperationProgress"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_operation_api_operation_progress__operation_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

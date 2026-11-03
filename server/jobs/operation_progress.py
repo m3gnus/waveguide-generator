@@ -19,7 +19,7 @@ from server.jobs.request_cancellation import ClientDisconnected, RequestCancella
 
 HEADER = "X-WG-Operation-Id"
 _LOCK = threading.Lock()
-_COUNTS: OrderedDict[str, tuple[float, list[str], tuple[str, ...]]] = OrderedDict()
+_COUNTS: OrderedDict[str, tuple[float, list[str], "RequestOperation"]] = OrderedDict()
 _TTL = 300
 _LIMIT = 128
 
@@ -51,6 +51,7 @@ class RequestOperation:
     def __init__(self, request: Request | None, stages: tuple[str, ...]) -> None:
         self.key = _key(request.headers[HEADER]) if request and HEADER in request.headers else None
         self.stages = stages
+        self.committed = False
         self.cancellation = RequestCancellation(request.is_disconnected if request else None)
         if self.key:
             with _LOCK:
@@ -61,7 +62,7 @@ class RequestOperation:
                 if self.key in _COUNTS:
                     self.cancellation.close()
                     raise HTTPException(409, "Operation id is already in use.")
-                _COUNTS[self.key] = (now, [], stages)
+                _COUNTS[self.key] = (now, [], self)
                 while len(_COUNTS) > _LIMIT:
                     _COUNTS.popitem(last=False)
 
@@ -71,11 +72,22 @@ class RequestOperation:
                 entry = _COUNTS.get(self.key)
                 if entry is not None:
                     response.headers["X-WG-Operation-Stages"] = json.dumps(
-                        {"stages": entry[1], "total": len(entry[2])}, separators=(",", ":")
+                        {"stages": entry[1], "total": len(entry[2].stages)}, separators=(",", ":")
                     )
 
     def check(self) -> None:
-        self.cancellation.check()
+        if not self.committed:
+            self.cancellation.check()
+
+    def begin_commit(self) -> None:
+        """Serialize the final cancellation check with acknowledgement of Stop.
+
+        After this succeeds the caller must finish publication. A late Stop
+        gets 409 and keeps the original request alive to receive its outcome.
+        """
+        with _LOCK:
+            self.check()
+            self.committed = True
 
     def progress(self, stage: str) -> None:
         if self.key:
@@ -94,4 +106,16 @@ def mount_operation_progress(application: FastAPI) -> None:
             entry = _COUNTS.get(_key(operation_id))
             if entry is None or time.monotonic() - entry[0] > _TTL:
                 raise HTTPException(404, "Operation progress is no longer available.")
-            return OperationProgress(stages=list(entry[1]), total=len(entry[2]))
+            return OperationProgress(stages=list(entry[1]), total=len(entry[2].stages))
+
+    @application.delete("/api/operation-progress/{operation_id}", status_code=204)
+    async def cancel_operation(operation_id: str) -> Response:
+        with _LOCK:
+            entry = _COUNTS.get(_key(operation_id))
+            if entry is None or time.monotonic() - entry[0] > _TTL:
+                raise HTTPException(404, "Operation progress is no longer available.")
+            operation = entry[2]
+            if operation.committed:
+                raise HTTPException(409, "The operation is already being sent. Wait for its result.")
+            operation.cancellation.disconnected.set()
+        return Response(status_code=204)

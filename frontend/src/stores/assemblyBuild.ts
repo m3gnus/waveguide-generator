@@ -1,3 +1,4 @@
+import { isAbortError } from '../api/httpError';
 import { stagedActivity } from '../shell/stagedActivity';
 /**
  * The design assembly's background build: one captured revision at a time.
@@ -108,7 +109,7 @@ async function compileRequested(design: DesignDocument, requested: NonNullable<A
         build_session: `${PAGE_SESSION}:${load}`,
       }, fetcher, signal);
     }).catch(error => {
-      if (error?.name !== 'AbortError') throw error;
+      if (!isAbortError(error)) throw error;
       if (owns()) useAssemblyBuildStore.setState(before);
       return { status: 'superseded' as const };
     });

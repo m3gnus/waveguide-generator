@@ -1,6 +1,6 @@
 import { activityOperation } from '../shell/activityOperation';
 import type { CadSourceInventoryEntry } from './cadOperations';
-import { refusalText } from './httpError';
+import { isAbortError, refusalText } from './httpError';
 import type { ImportedSetup } from '../jobs/importedSetup';
 
 /** A refused read, with the status and code the server gave so a caller can tell a gone model from a failed one. */
@@ -78,7 +78,7 @@ export async function requestImportedModel<T>(path: string, fetcher: typeof fetc
   const response = await fetcher(path, init);
   if (!response.ok) {
     const body = await response.json().catch((error: unknown) => {
-      if (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError') throw error;
+      if (isAbortError(error)) throw error;
       return null;
     }) as { error?: { message?: unknown; code?: unknown }; detail?: unknown } | null;
     const message = refusalText(typeof body?.error?.message === 'string' ? body.error.message : body?.detail, what, `${what} could not be read. Try again.`);

@@ -220,7 +220,7 @@ async def export_wglink(
                      "documentId": payload.expected_fusion_document_id,
                      "instanceId": payload.expected_fusion_instance_id,
                      "returnStateHash": payload.expected_fusion_return_state_hash},
-            cancel_cb=operation.check, progress_cb=operation.progress,
+            cancel_cb=operation.check, progress_cb=operation.progress, commit_cb=operation.begin_commit,
         )
         if response is not None:
             operation.attach(response)

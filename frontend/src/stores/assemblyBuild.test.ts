@@ -1,3 +1,4 @@
+import * as httpError from '../api/httpError';
 import { activityStore } from '../shell/activity';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { addWoofer, commitAssembly, emptyAssembly, setPlacement } from './assembly';
@@ -56,11 +57,14 @@ describe('assembly background build', () => {
       signal = init?.signal;
       signal?.addEventListener('abort', () => reject(signal?.reason), { once: true });
     });
+    const classify = vi.spyOn(httpError, 'isAbortError');
     const build = requestAssemblyBuild(fetcher);
     expect(useAssemblyBuildStore.getState().status).toBe('building');
     activityStore.getSnapshot()[0].cancel!();
     await expect(build).resolves.toEqual({ status: 'superseded' });
     expect(signal?.aborted).toBe(true);
+    expect(classify).toHaveBeenCalledWith(expect.objectContaining({ name: 'AbortError' }));
+    classify.mockRestore();
     expect(useAssemblyBuildStore.getState()).toEqual(before);
     expect(useDesignModelStore.getState()).toBe(model);
     expect(activityStore.getSnapshot()).toEqual([]);

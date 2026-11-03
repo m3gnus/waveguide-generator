@@ -1451,3 +1451,13 @@ it('counts the two files of a standalone Fusion CSV export', async () => {
   await pending;
   expect(activityStore.getSnapshot()).toHaveLength(0);
 });
+
+it('a cross-realm abort stops a bundle before the next format', async () => {
+  activityStore.reset();
+  const reason = { name: 'AbortError' };
+  const saveText = vi.fn();
+  await expect(runExportBundle({ jobStem: 'horn', preferences: preferencesStore.getSnapshot(),
+    design: designForFamily('OSSE'), fetcher: async () => { throw reason; }, saveText,
+  }, ['stl', 'mwg_config'])).rejects.toBe(reason);
+  expect(saveText).not.toHaveBeenCalled();
+});

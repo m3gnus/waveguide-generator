@@ -611,6 +611,7 @@ describe('Send to CAD requests', () => {
     let signal: AbortSignal | null | undefined;
     const fetcher: typeof fetch = async (url, init) => {
       if (url === '/api/cad-workspace/path') return new Response(JSON.stringify({ selected: true }));
+      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
       signal = init?.signal;
       return new Promise((_resolve, reject) => {
         signal?.addEventListener('abort', () => reject(signal?.reason), { once: true });
@@ -834,6 +835,7 @@ it.each(['stl', 'step', 'send'] as const)('Stop while reading a refused %s body 
   let reading = false;
   const fetcher: typeof fetch = async (url, init) => {
     if (url === '/api/cad-workspace/path') return Response.json({ selected: true });
+    if (init?.method === 'DELETE') return new Response(null, { status: 204 });
     const response = new Response(null, { status: 422 });
     response.json = () => new Promise((_resolve, reject) => {
       reading = true;

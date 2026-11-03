@@ -1,4 +1,5 @@
-import { expect, it } from 'vitest';
+import * as httpError from './httpError';
+import { expect, it, vi } from 'vitest';
 import { ImportedModelApiError, requestImportedModel } from './importedModels';
 
 it.each([200, 422])('preserves the exact body abort (%s)', async status => {
@@ -21,4 +22,15 @@ it('keeps the HTTP refusal and code for other model readers', async () => {
 it('retains the fallback refusal for malformed error bodies', async () => {
   const fetcher: typeof fetch = async () => new Response('not JSON', { status: 503 });
   await expect(requestImportedModel('/api/models/test', fetcher, 'This model')).rejects.toBeInstanceOf(ImportedModelApiError);
+});
+
+it('uses the shared abort classifier for a refused body', async () => {
+  const classify = vi.spyOn(httpError, 'isAbortError');
+  const reason = { name: 'AbortError' };
+  try {
+    const response = new Response(null, { status: 422 });
+    response.json = async () => { throw reason; };
+    await expect(requestImportedModel('/model', async () => response, 'Model')).rejects.toBe(reason);
+    expect(classify).toHaveBeenCalledWith(reason);
+  } finally { classify.mockRestore(); }
 });

@@ -32,7 +32,7 @@ import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type Resul
 import { buildRunReportHtml } from './runReport';
 import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './vituixcad';
 import { reportCaughtError } from '../shell/clientErrors';
-import { failureWords, ProgramFault } from '../api/httpError';
+import { failureWords, isAbortError, ProgramFault } from '../api/httpError';
 
 export interface ExportContext {
   /** Shared by this bundle’s counted format builds and final publication. */
@@ -937,7 +937,7 @@ async function runAttributedExportBundle(inputContext: ExportContext, formats: r
         formatFiles.set(format, own);
       }
       catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') throw error;
+        if (isAbortError(error)) throw error;
         reportCaughtError('export-build', error, { job_id: context.jobId ?? null, format });
         failures.push({ format, reason: failureWords(error, 'WG could not write this file. Try again.') });
       }

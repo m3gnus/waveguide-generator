@@ -399,26 +399,30 @@ def _publish_record(
     ingest_id = mint_id("wgi_")
     created_at = utc_now()
     destination = parent / ingest_id
-    model = store.get_model(model_id) or {}
-    archive_stem = model.get("archive_stem") or claim_project_folder(
-        store, f"model:{model_id}", design_name or "Design assembly"
-    )
-    record, solver_text = compose_record(
-        design, built, ingest_id=ingest_id, created_at=created_at, design_uid=design_uid,
-        design_name=design_name, design_revision=design_revision, spec_digest=spec_digest,
-        archive_stem=archive_stem, destination=destination,
-    )
-    record_json = seal_prepared_record(record, producer=PRODUCER)
-    if progress_cb is not None:
-        progress_cb("check")
     try:
-        _publish(parent, destination, solver_text, cancel_cb)
-        row, created = store.insert_file_ingest(
-            ingest_id=ingest_id, created_at=created_at, manifest_sha256=spec_digest,
-            artifact_sha256=record["artifact_sha256"], record_json=record_json,
-            known_ingest_ids=known, model_id=model_id,
-            commit_guard=lambda _conn: _current(fence, token, cancel_cb),
-        )
+        # Claim and ingest commit together. The geometry is already built; a
+        # late Stop or superseded revision rolls back the first folder claim
+        # along with the record, while the exception handler removes its file.
+        with store._lock, store._transaction():
+            model = store.get_model(model_id) or {}
+            archive_stem = model.get("archive_stem") or claim_project_folder(
+                store, f"model:{model_id}", design_name or "Design assembly"
+            )
+            record, solver_text = compose_record(
+                design, built, ingest_id=ingest_id, created_at=created_at, design_uid=design_uid,
+                design_name=design_name, design_revision=design_revision, spec_digest=spec_digest,
+                archive_stem=archive_stem, destination=destination,
+            )
+            record_json = seal_prepared_record(record, producer=PRODUCER)
+            if progress_cb is not None:
+                progress_cb("check")
+            _publish(parent, destination, solver_text, cancel_cb)
+            row, created = store.insert_file_ingest(
+                ingest_id=ingest_id, created_at=created_at, manifest_sha256=spec_digest,
+                artifact_sha256=record["artifact_sha256"], record_json=record_json,
+                known_ingest_ids=known, model_id=model_id,
+                commit_guard=lambda _conn: _current(fence, token, cancel_cb),
+            )
     except StaleAttempt:
         shutil.rmtree(destination, ignore_errors=True)
         return None
