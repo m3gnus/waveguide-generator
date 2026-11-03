@@ -72,6 +72,15 @@ it('fills the bar and gives the percentage and time left when the work is counte
   expect(host.textContent).toContain('0:10 left');
 });
 
+it('takes time left from the usual duration when stages are uneven, and never claims 0:00 while working', () => {
+  // Resolving took 0.2 s; meshing will take the rest of a usual 10 s.
+  const staged = activity({ progress: { done: 1, total: 4 }, progressAt: 200 });
+  expect(activityMeta(staged, 2_000, 10_000)).toBe('25% · 0:08 left · 0:02');
+  // Without a usual duration, the stage rate has run out: no time is claimed.
+  expect(activityMeta(staged, 2_000, null)).toBe('25% · 0:02');
+  expect(activityMeta(staged, 12_000, 10_000)).toBe('25% · 0:12');
+});
+
 it('keeps failed or cancelled runs out of the usual duration', async () => {
   await expect(activityStore.track({ kind: 'export', label: 'Exporting STL' }, async () => {
     vi.advanceTimersByTime(500);

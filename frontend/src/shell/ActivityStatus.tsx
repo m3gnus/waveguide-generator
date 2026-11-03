@@ -2,13 +2,21 @@ import { useSyncExternalStore } from 'react';
 import { activityStore, activityVisible, type Activity } from './activity';
 import { etaSeconds, formatClock, useSolveClock } from './solveProgress';
 
-/** Time left from the rate the counted work has kept so far, less the time
- * since it last gained, so the readout keeps counting down between steps. */
-export function activityTimeLeft(activity: Activity, now: number): number | null {
+/** Time left. Stages of one operation can differ a hundredfold (resolving
+ * takes a moment, meshing takes the rest), so their rate says little; this
+ * machine's usual duration says more whenever it is known. The stage rate is
+ * the fallback, less the time since the last stage, so it keeps counting down.
+ * Nothing is claimed once the estimate has run out but the work has not. */
+export function activityTimeLeft(activity: Activity, now: number, typicalMs: number | null = null): number | null {
   const { progress, progressAt } = activity;
-  if (!progress || progressAt === null) return null;
-  const eta = etaSeconds((progressAt - activity.startedAt) / 1000, progress);
-  return eta === null ? null : Math.max(0, eta - (now - progressAt) / 1000);
+  if (!progress || progress.done >= progress.total) return null;
+  let left: number | null = null;
+  if (typicalMs !== null) left = (typicalMs - (now - activity.startedAt)) / 1000;
+  else if (progressAt !== null) {
+    const eta = etaSeconds((progressAt - activity.startedAt) / 1000, progress);
+    if (eta !== null) left = eta - (now - progressAt) / 1000;
+  }
+  return left !== null && left >= 1 ? left : null;
 }
 
 /** What one activity says beside its bar: how far and how long left when it
@@ -18,7 +26,7 @@ export function activityMeta(activity: Activity, now: number, typicalMs: number 
   const { progress } = activity;
   if (progress && progress.total > 0) {
     const percent = Math.round(Math.min(1, progress.done / progress.total) * 100);
-    const left = activityTimeLeft(activity, now);
+    const left = activityTimeLeft(activity, now, typicalMs);
     return [`${percent}%`, left !== null ? `${formatClock(left)} left` : null, elapsed].filter(Boolean).join(' · ');
   }
   return typicalMs !== null ? `${elapsed} · usually ${formatClock(typicalMs / 1000)}` : elapsed;
