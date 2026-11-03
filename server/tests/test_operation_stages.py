@@ -452,6 +452,39 @@ def test_send_stop_acknowledgement_is_atomic_with_publication_commit():
     asyncio.run(scenario())
 
 
+def test_a_running_operation_stays_stoppable_past_the_history_ttl(monkeypatch):
+    from server.jobs import operation_progress
+    from server.jobs.operation_progress import RequestOperation, request_operation
+    from starlette.requests import Request
+
+    clock = [1000.0]
+    monkeypatch.setattr(operation_progress.time, "monotonic", lambda: clock[0])
+
+    async def scenario():
+        app = FastAPI()
+        mount_operation_progress(app)
+        key = str(uuid4())
+        request = Request({"type": "http", "headers": [(b"x-wg-operation-id", key.encode())]})
+        with request_operation(request, ("resolve", "mesh", "check", "publish")) as operation:
+            # A long mesh build: well past the five-minute history TTL, and a
+            # flood of other finished operations past the size limit.
+            clock[0] += operation_progress._TTL * 3
+            for _ in range(operation_progress._LIMIT + 5):
+                other = Request({"type": "http", "headers": [(b"x-wg-operation-id", str(uuid4()).encode())]})
+                with request_operation(other, ("resolve",)):
+                    pass
+            assert (await _http(app, "GET", f"/api/operation-progress/{key}"))[0] == 200
+            assert (await _http(app, "DELETE", f"/api/operation-progress/{key}"))[0] == 204
+            with pytest.raises(ClientDisconnected):
+                operation.check()
+        # Once finished, its history expires as before.
+        clock[0] += operation_progress._TTL + 1
+        assert (await _http(app, "GET", f"/api/operation-progress/{key}"))[0] == 404
+        assert isinstance(operation, RequestOperation)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("existing", [False, True])
 def test_build_stop_at_registry_guard_preserves_folder_allocation(existing, tmp_path, monkeypatch, stage_store):
     from server.cadlink.intake import design_assembly

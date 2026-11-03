@@ -45,6 +45,15 @@ def request_operation(request: Request | None, stages: tuple[str, ...]) -> Itera
         raise HTTPException(499, "Operation was cancelled.") from exc
     finally:
         operation.cancellation.close()
+        with _LOCK:
+            operation.finished = time.monotonic()
+
+
+def _expired(entry: tuple[float, list[str], "RequestOperation"], now: float) -> bool:
+    # Only a finished operation's history expires. A running one must stay
+    # reachable for Stop however long its mesh build takes.
+    finished = entry[2].finished
+    return finished is not None and now - finished > _TTL
 
 
 class RequestOperation:
@@ -52,19 +61,24 @@ class RequestOperation:
         self.key = _key(request.headers[HEADER]) if request and HEADER in request.headers else None
         self.stages = stages
         self.committed = False
+        self.finished: float | None = None
         self.cancellation = RequestCancellation(request.is_disconnected if request else None)
         if self.key:
             with _LOCK:
                 now = time.monotonic()
-                for key, (created, _, _) in list(_COUNTS.items()):
-                    if now - created > _TTL:
+                for key, entry in list(_COUNTS.items()):
+                    if _expired(entry, now):
                         del _COUNTS[key]
                 if self.key in _COUNTS:
                     self.cancellation.close()
                     raise HTTPException(409, "Operation id is already in use.")
                 _COUNTS[self.key] = (now, [], self)
-                while len(_COUNTS) > _LIMIT:
-                    _COUNTS.popitem(last=False)
+                # Over the limit, drop the oldest finished histories; running
+                # operations are bounded by the requests actually in flight.
+                for key in [key for key, entry in _COUNTS.items() if entry[2].finished is not None]:
+                    if len(_COUNTS) <= _LIMIT:
+                        break
+                    del _COUNTS[key]
 
     def attach(self, response: Response) -> None:
         if self.key:
@@ -104,7 +118,7 @@ def mount_operation_progress(application: FastAPI) -> None:
     async def operation_progress(operation_id: str) -> OperationProgress:
         with _LOCK:
             entry = _COUNTS.get(_key(operation_id))
-            if entry is None or time.monotonic() - entry[0] > _TTL:
+            if entry is None or _expired(entry, time.monotonic()):
                 raise HTTPException(404, "Operation progress is no longer available.")
             return OperationProgress(stages=list(entry[1]), total=len(entry[2].stages))
 
@@ -112,7 +126,7 @@ def mount_operation_progress(application: FastAPI) -> None:
     async def cancel_operation(operation_id: str) -> Response:
         with _LOCK:
             entry = _COUNTS.get(_key(operation_id))
-            if entry is None or time.monotonic() - entry[0] > _TTL:
+            if entry is None or _expired(entry, time.monotonic()):
                 raise HTTPException(404, "Operation progress is no longer available.")
             operation = entry[2]
             if operation.committed:
