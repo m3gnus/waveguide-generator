@@ -38,7 +38,7 @@ describe('assembly Solve press', () => {
     useSolveOptionsStore.getState().setEngine('beat-cpu');
     const fetcher = vi.fn() as unknown as typeof fetch;
     await expect(prepareAssemblySolve(fetcher, () => 'p1')).rejects.toThrow(
-      'Woofer 1 needs its driver: Enter resistance in the stated units. Pick one from the library or enter its values under Woofer drivers, or set the woofer to Fixed velocity.');
+      'Woofer 1 needs its driver: Enter resistance in the stated units. Pick one from the library or enter its values under Drivers in Simulation, or set the woofer to Fixed velocity.');
     expect(fetcher).not.toHaveBeenCalled();
     useSolveOptionsStore.getState().setAdaptiveFrequencySampling(true);
     useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly: setDriver(assembly, id, { exterior_transducer: {

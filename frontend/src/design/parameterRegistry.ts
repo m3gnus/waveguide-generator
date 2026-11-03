@@ -8,7 +8,7 @@ import { SOLVE_CONTROLS, nameFieldsWith } from '../api/httpError';
 
 export type ParameterSection =
   | 'Model Type' | 'Profile' | 'Throat' | 'Mouth' | 'Cross-section' | 'Mounting'
-  | 'Frequency sweep' | 'Source excitation' | 'Woofer drivers' | 'Mesh' | 'Export' | 'Imported ATH values'
+  | 'Frequency sweep' | 'Source excitation' | 'Drivers' | 'Mesh' | 'Export' | 'Imported ATH values'
   | 'Directivity map' | 'Solver' | 'Experimental'
   | 'Profile Dimensions'
   | 'Throat Extension'
@@ -621,7 +621,7 @@ export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[
   { title: 'Frequency sweep', tab: 'simulation', description: 'Frequency range, output points, spacing and adaptive sampling.', visibleWhen: parametricWorkspaceOnly },
   { title: 'Directivity map', tab: 'simulation', description: 'Polar planes and angular sampling used for directivity exports and plots.', visibleWhen: parametricWorkspaceOnly },
   { title: 'Source excitation', fieldOrder: ['source.velocity_convention', 'source.velocity'], tab: 'simulation', description: 'Source velocity convention and legacy amplitude.', visibleWhen: parametricWorkspaceOnly },
-  { title: 'Woofer drivers', tab: 'simulation', description: 'How each Sources and baffle woofer is driven: at fixed velocity, by a T/S driver at the drive voltage, or not at all.', visibleWhen: ({ mode, design }) => mode === 'parametric' && (design.assembly?.woofers?.length ?? 0) > 0 },
+  { title: 'Drivers', tab: 'simulation', description: 'Drive channels of the Sources and baffle assembly: each woofer moves at 1 m/s RMS, or a T/S driver solved in BEAT drives it at the drive voltage.', visibleWhen: ({ mode, design }) => mode === 'parametric' && (design.assembly?.woofers?.length ?? 0) > 0 },
   { title: 'Solver', tab: 'simulation', description: 'Solve accuracy, backend engine, ground plane and diagnostic logging.', visibleWhen: parametricWorkspaceOnly },
   { title: 'Mesh', groups: MESH_GROUPS, fieldOrder: ['control.solveDomain', ...MESH_GROUPS.flatMap((group) => group.fieldOrder ?? [])], tab: 'simulation', description: CAD_PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Surface sampling')!.description, visibleWhen: parametricWorkspaceOnly },
   { title: 'Export', fieldOrder: ['mesh.vertical_offset', 'native.mesh.offset', 'mesh.quadrants', 'mesh.throat_segments', 'mesh.throat_slice_density', 'output.stl', 'output.msh', 'passthrough.abec', 'passthrough.report', 'passthrough.extra', 'passthrough.keys'], tab: 'simulation', description: 'Export placement and imported-file round-trip values; none change the preview or the solve.', visibleWhen: parametricWorkspaceOnly },

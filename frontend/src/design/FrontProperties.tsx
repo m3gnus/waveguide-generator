@@ -89,8 +89,8 @@ function WooferProperties({ assembly, id, session, resolved, select }: { assembl
     <WooferDriveSelect id="front-woofer-drive" woofer={woofer} mode={drive}
       onChange={mode => run(session, 'Woofer drive', current => setWooferDrive(current, id, mode))}/>
     {drive === 'driver' && <p className="section-note">{driverProblem
-      ? `Pick its driver, or enter its values, under Woofer drivers in Simulation. ${driverProblem}`
-      : 'Its driver is set up under Woofer drivers in Simulation.'}</p>}
+      ? `Pick its driver, or enter its values, under Drivers in Simulation. ${driverProblem}`
+      : 'Its driver is set up under Drivers in Simulation.'}</p>}
 
     <h4>Position</h4>
     <SelectRow>

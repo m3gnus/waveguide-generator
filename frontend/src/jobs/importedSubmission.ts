@@ -416,7 +416,7 @@ export function assemblyDriverBlocker(state: Pick<SimulationData, 'driveChannels
   if (!driven.length || !assemblyEngineCouplesDrivers(options)) return null;
   for (const channel of driven) {
     const error = exteriorTransducerError(channel.exterior_transducer!);
-    if (error) return `${label(channel.id)} needs its driver: ${error} Pick one from the library or enter its values under Woofer drivers, or set the woofer to Fixed velocity.`;
+    if (error) return `${label(channel.id)} needs its driver: ${error} Pick one from the library or enter its values under Drivers in Simulation, or set the woofer to Fixed velocity.`;
   }
   if (options.adaptive_frequency_sampling || options.ground_plane?.enabled) {
     return 'Woofer drivers solve without adaptive sampling and the ground plane. Turn both off, or set the woofers to Fixed velocity.';

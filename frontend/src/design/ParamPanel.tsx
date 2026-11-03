@@ -10,7 +10,8 @@ import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeSymmetryLimitation } from './nativeFamilies';
 import { EnclosureResolutionField } from './EnclosureResolutionField';
 import { FrontWorkspaceLauncher } from './FrontWorkspace';
-import { WooferDrivers } from './WooferDrivers';
+import { AssemblyDriverStatus } from './WooferDrivers';
+import { HF_RADIATOR_ID } from '../stores/assembly';
 import { outerBodyUpdates } from './outerBodyUpdates';
 import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOptions';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
@@ -925,6 +926,12 @@ function CadFrequencySweep() {
  */
 function CadDriveChannels() {
   const state = useImportedSimulationSetup();
+  // A design's Sources and baffle assembly is built in WG: its build fixes each
+  // radiator's motion (the horn's classic source, woofers axial along +Z), and
+  // only woofers can carry a driver. Everything else is the imported setup.
+  const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const designAssembly = state.input === 'assembly' && workspaceMode === 'parametric';
+  const label = (id: string) => state.input === 'cad' ? id : importedDriverLabel(state, id);
   const sources = state.sources;
   const activeSources = sources.filter((source) => !state.skippedSourceIds.includes(source.id));
   // The coupled campaign writes its derived output to a reserved channel id.
@@ -956,18 +963,20 @@ function CadDriveChannels() {
         const channel = state.driveChannels.find(channel => channel.id === group.channelIds[0])!;
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
-        const channelName = state.input === 'file' ? importedDriverLabel(state, channel.id) : channel.id;
+        const channelName = label(channel.id);
+        const hornSource = designAssembly && channel.id === HF_RADIATOR_ID;
         return <div className="cad-channel" data-channel-id={channel.id} data-driver-group-id={group.id} key={group.id}>
-          <div className="cad-channel-summary"><span>{state.input === 'file' ? importedDriverLabel(state, channel.id)
+          <div className="cad-channel-summary"><span>{state.input !== 'cad' ? channelName
             : group.channelIds.length > 1 ? sourceRoleLabel(activeSources.find(source => source.id === channel.source_ids[0])?.role ?? '', { driver: true }) : cadChannelLabel(state, channel.id)}</span></div>
           {group.channelIds.length > 1 && <p className="cad-driver-hint">{group.channelIds.length} surfaces · identical drivers. Each surface gets its own driver, wired to one amplifier channel.</p>}
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
             .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} disabled={!!channel.exterior_transducer} value={channel.id} onChange={(event) => state.setSourceChannel?.(sourceId, event.target.value)}><option value={channel.id} disabled>{channel.id} (unavailable)</option>{channelIds.map((id) => <option value={id} key={id} disabled={state.driveChannels.some(target => target.id === id && !!target.exterior_transducer)}>{id}</option>)}</select></div>)}
           {showsAssignment(channel) && state.driveChannels.some(item => item.exterior_transducer) && <p className="cad-channel-hint" role="status">Before reassigning, turn off Solve driver in BEAT in More for the source and destination channels.</p>}
-          <details className="cad-channel-more" open={channel.exterior_transducer ? true : undefined}><summary>More</summary>
-          <div data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channelName}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
-          <div className="cad-channel-hint">Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.</div>
+          {hornSource && <p className="cad-driver-hint">The horn's source moves at 1 m/s RMS. Drivers go on woofers.</p>}
+          {!hornSource && <details className="cad-channel-more" open={channel.exterior_transducer ? true : undefined}><summary>More</summary>
+          {!designAssembly && <><div data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channelName}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
+          <div className="cad-channel-hint">Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.</div></>}
           <label className="cad-driver-hint"><input type="checkbox" aria-label={`Solve driver in BEAT for ${channelName}`} checked={!!channel.exterior_transducer} disabled={group.channelIds.length > 1}
             onChange={(event) => state.setExteriorTransducer(channel.id, event.target.checked ? { version: 1, motion_axis: [0, 0, 1] } : undefined)}/>
             Solve driver in BEAT</label>
@@ -980,13 +989,13 @@ function CadDriveChannels() {
               onChange={form => state.setExteriorTransducer(channel.id, form)}/>
             <ExteriorDriverOptions channelId={channelName} form={channel.exterior_transducer}
               onChange={form => state.setExteriorTransducer(channel.id, form)}/>
-            <p className="cad-driver-hint">Motion axis in the returned mesh frame:</p>
+            {!designAssembly && <><p className="cad-driver-hint">Motion axis in the returned mesh frame:</p>
             <div className="cad-driver-grid">{['x', 'y', 'z'].map((axis, index) => <label key={axis}><span>{axis}</span>
               <input type="number" aria-label={`Motion axis ${axis} for ${channelName}`} value={channel.exterior_transducer!.motion_axis[index]}
                 onChange={event => { const motion_axis = [...channel.exterior_transducer!.motion_axis] as [number, number, number]; motion_axis[index] = Number(event.target.value); state.setExteriorTransducer(channel.id, { ...channel.exterior_transducer!, motion_axis }); }}/>
-            </label>)}</div>
+            </label>)}</div></>}
           </>}
-          </details>
+          </details>}
           {driverEligible && <ChannelDriverPicker
             channel={channel}
             displayName={channelName}
@@ -1001,8 +1010,9 @@ function CadDriveChannels() {
         <NumberField label={CAD_CONTROLS.driveVoltage.label} revealId={CAD_CONTROLS.driveVoltage.reveal.id} unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>
         {/* A ceiling, not a drive: it changes nothing about the response and
             only ever caps the maximum output the crossover section reports.
-            Left empty, the drivers themselves are the only limit. */}
-        <NumberField
+            Left empty, the drivers themselves are the only limit. Coupled
+            assembly drivers take no ceiling. */}
+        {!designAssembly && <NumberField
           label={CAD_CONTROLS.maxDriveVoltage.label}
           revealId={CAD_CONTROLS.maxDriveVoltage.reveal.id}
           unit="V"
@@ -1014,14 +1024,15 @@ function CadDriveChannels() {
           onClear={() => state.setMaxDriveVoltage(null)}
           description="Most RMS volts the amplifier can swing. Caps the maximum output the Crossover section reports; leave empty when the drivers are the only limit."
           onCommit={state.setMaxDriveVoltage}
-        />
+        />}
       </>}
     {/* Said here, beside the drivers, and before the solve rather than after
         it: a channel with no driver is a good solve with consequences that are
         otherwise invisible until a chart has nothing to draw. */}
-    {importedSubmissionNotices(state, state.input === 'file' ? id => importedDriverLabel(state, id) : undefined).map((notice) => (
+    {importedSubmissionNotices(state, state.input === 'cad' ? undefined : label).map((notice) => (
       <p className="cad-driver-hint" role="status" key={notice}>{notice}</p>
     ))}
+    {designAssembly && <AssemblyDriverStatus/>}
   </>;
 }
 
@@ -1294,7 +1305,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
     const custom = showCustom ? definition.title === 'Directivity map' ? <DirectivityMapControls />
       : definition.title === 'Solver' ? <SolveOptionsControls includeSampling={false} showOpenclGuidance />
       : definition.title === 'Frequency sweep' ? <><FrequencySweepControls idPrefix="design-solve" context="design" /><AdaptiveFrequencyControls /></>
-      : definition.title === 'Woofer drivers' ? <WooferDrivers />
+      : definition.title === 'Drivers' ? <CadDriveChannels />
       : null : null;
     const slots = definition.fieldOrder ?? fields.map((field) => field.id);
     if (fields.length === 0 && !hasCustomMode && !custom && !(definition.title === 'Imported ATH values' && usesCurrentAthImport(design.text_import_version))) return null;
