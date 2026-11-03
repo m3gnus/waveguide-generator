@@ -1,5 +1,5 @@
 import { httpErrorMessage } from './httpError';
-import { deadlineFetch } from './deadlineFetch';
+import { deadlineFetch, deadlineSignal } from './deadlineFetch';
 import { selectFolderRoot } from './folders';
 import {
   collisionFrom,
@@ -119,7 +119,20 @@ export async function writeToOutputFolder(
   };
   // `confirm` is the only policy that can come back asking a question, so it is
   // the only one routed through the retry.
-  return existing === 'confirm'
-    ? writeConfirmingReplacements(post, confirmReplacements)
-    : post(existing);
+  try {
+    return await (existing === 'confirm'
+      ? writeConfirmingReplacements(post, confirmReplacements)
+      : post(existing));
+  } catch (error) {
+    // Successful writes release their bytes in the workspace writer. A
+    // declined replacement or failed write has no further use for them.
+    await Promise.allSettled(members.map(async member => {
+      if ('artifactId' in member) {
+        await fetcher(`/api/export/artifacts/${encodeURIComponent(member.artifactId)}`, {
+          method: 'DELETE', signal: deadlineSignal(),
+        });
+      }
+    }));
+    throw error;
+  }
 }

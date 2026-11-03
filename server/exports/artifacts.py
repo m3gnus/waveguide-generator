@@ -17,10 +17,12 @@ class StagedArtifactStore:
         self._max_bytes = max_bytes
         self._clock = clock
         self._entries: OrderedDict[str, tuple[float, bytes]] = OrderedDict()
+        self._retained_until: dict[str, float] = {}
         self._bytes = 0
         self._lock = threading.Lock()
 
     def _remove(self, key: str) -> None:
+        self._retained_until.pop(key, None)
         entry = self._entries.pop(key, None)
         if entry is not None:
             self._bytes -= len(entry[1])
@@ -28,6 +30,10 @@ class StagedArtifactStore:
     def _prune(self) -> None:
         now = self._clock()
         for key, (created, _) in list(self._entries.items()):
+            if key in self._retained_until:
+                if now <= self._retained_until[key]:
+                    continue
+                del self._retained_until[key]
             if now - created >= self._ttl:
                 self._remove(key)
 
@@ -39,18 +45,27 @@ class StagedArtifactStore:
             while self._entries and (
                 len(self._entries) >= self._max_entries or self._bytes + len(payload) > self._max_bytes
             ):
-                self._remove(next(iter(self._entries)))
+                evictable = next((key for key in self._entries if key not in self._retained_until), None)
+                if evictable is None:
+                    raise ValueError(
+                        "WG is retaining exports awaiting replacement. Finish or cancel another export, then export again."
+                    )
+                self._remove(evictable)
             key = secrets.token_urlsafe(32)
             self._entries[key] = (self._clock(), bytes(payload))
             self._bytes += len(payload)
             return key
 
-    def read(self, key: str) -> bytes:
+    def read(self, key: str, *, retain_until: float | None = None) -> bytes:
         with self._lock:
             self._prune()
             entry = self._entries.get(key)
             if entry is None:
                 raise ValueError("The generated export is no longer available. Export again to rebuild it.")
+            if retain_until is not None:
+                # Acquire retention with the read, before another export can
+                # evict bytes that a replacement question is about to own.
+                self._retained_until[key] = max(retain_until, self._retained_until.get(key, retain_until))
             return entry[1]
 
     def discard(self, key: str) -> None:

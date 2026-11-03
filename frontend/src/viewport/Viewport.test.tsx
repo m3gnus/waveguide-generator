@@ -194,6 +194,53 @@ describe('Viewport preview errors', () => {
     wording.forEach(element => expectNoJargon(element));
   });
 
+  it.each([4, 5])('retries failed auto symmetry after reconnecting to epoch %s', async (epoch) => {
+    act(() => root.unmount());
+    root = createRoot(host);
+    vi.useFakeTimers();
+    const posts = vi.fn()
+      .mockRejectedValueOnce(new TypeError('backend disconnected'))
+      .mockResolvedValue(json({ quadrants: 1 }));
+    vi.stubGlobal('fetch', (url: RequestInfo | URL, init?: RequestInit) => (
+      String(url) === '/api/design/symmetry' ? posts(url, init) : Promise.resolve(json({}))
+    ));
+    try {
+      act(() => {
+        useSolveOptionsStore.setState({ symmetry: 'auto' });
+        useDesignStore.getState().updateField('mesh.quadrants', 1234);
+        root.render(<Viewport />);
+      });
+      await act(async () => { vi.advanceTimersByTime(400); });
+      expect(posts).toHaveBeenCalledTimes(1);
+      expect(host.querySelector('[aria-label="Solved domain"]')?.textContent).toContain('Full model');
+      act(() => {
+        previewSnapshot.connection = 'reconnecting';
+        previewSnapshot.epoch = null;
+        root.render(<Viewport />);
+      });
+      await act(async () => { vi.advanceTimersByTime(400); });
+      expect(posts).toHaveBeenCalledTimes(1);
+      act(() => {
+        previewSnapshot.connection = 'connected';
+        previewSnapshot.epoch = epoch;
+        root.render(<Viewport />);
+      });
+      await act(async () => { vi.advanceTimersByTime(400); });
+      expect(posts).toHaveBeenCalledTimes(2);
+      expect(posts.mock.calls[1][1].body).toBe(posts.mock.calls[0][1].body);
+      expect(host.querySelector('[aria-label="Solved domain"]')?.textContent).toContain('Quarter model');
+      act(() => {
+        previewSnapshot.frame = { ...frame, header: { ...frame.header, seq: 10, lod: 'fine' } };
+        root.render(<Viewport />);
+      });
+      await act(async () => { vi.advanceTimersByTime(400); });
+      expect(posts).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it('resolves unchanged auto symmetry once across coarse and fine arrivals', async () => {
     act(() => root.unmount());
     root = createRoot(host);

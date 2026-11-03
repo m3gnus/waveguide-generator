@@ -222,11 +222,13 @@ def _workspace_unavailable_response(exc: WorkspaceUnavailableError) -> JSONRespo
 
 
 
-def _member_bytes(member: ExportMember, remaining: int = MAX_EXPORT_BYTES) -> bytes:
+def _member_bytes(
+    member: ExportMember, remaining: int = MAX_EXPORT_BYTES, *, retain_until: float | None = None,
+) -> bytes:
     if member.artifact_id is not None:
         from server.exports.artifacts import STAGED_EXPORTS
 
-        content = STAGED_EXPORTS.read(member.artifact_id)
+        content = STAGED_EXPORTS.read(member.artifact_id, retain_until=retain_until)
         if len(content) > remaining:
             raise ValueError(f"Export set exceeds the {MAX_EXPORT_BYTES}-byte binary size limit")
         return content
@@ -248,7 +250,7 @@ def _member_bytes(member: ExportMember, remaining: int = MAX_EXPORT_BYTES) -> by
 
 
 def _decode_json_export_request(
-    payload: bytes | WriteExportRequest,
+    payload: bytes | WriteExportRequest, *, retain_until: float | None = None,
 ) -> tuple[str, str, list[tuple[str, bytes]], str | None, str | None]:
     request = (
         payload
@@ -258,7 +260,7 @@ def _decode_json_export_request(
     members = []
     remaining = MAX_EXPORT_BYTES
     for member in request.members:
-        content = _member_bytes(member, remaining)
+        content = _member_bytes(member, remaining, retain_until=retain_until)
         remaining -= len(content)
         members.append((member.relative_path, content))
     return (
@@ -715,6 +717,12 @@ class ExportDestinationStore:
         if not path.is_dir():
             raise ValueError(f"The chosen export folder is unavailable: {path}")
         return path
+
+    def expires_at(self, token: str) -> float:
+        """Share the validated handle's deadline with pending export bytes."""
+
+        self.resolve(token)
+        return self._handles[token][1] + EXPORT_DESTINATION_TTL_SECONDS
 
 
 class CadWorkspaceState(WorkspaceState):
@@ -1401,13 +1409,11 @@ def create_workspace_router(
     async def workspace_write_export_guarded(request: Request) -> Any:
         artifact_ids: list[str] = []
         try:
+            payload = None
             if isinstance(request, WriteExportRequest):
                 # Direct endpoint calls in unit tests retain the legacy model
                 # shape; actual ASGI requests always take one branch below.
-                artifact_ids = [m.artifact_id for m in request.members if m.artifact_id is not None]
-                subdirectory, existing, members, destination, job_id = await asyncio.to_thread(
-                    _decode_json_export_request, request
-                )
+                payload = request
             elif request.headers.get("content-type", "").lower().startswith(
                 "multipart/form-data"
             ):
@@ -1417,9 +1423,18 @@ def create_workspace_router(
             else:
                 raw = await request.body()
                 payload = await asyncio.to_thread(WriteExportRequest.model_validate_json, raw)
+            if payload is not None:
                 artifact_ids = [m.artifact_id for m in payload.members if m.artifact_id is not None]
+                retain_until = None
+                if artifact_ids and payload.existing == "confirm" and payload.destination is not None:
+                    try:
+                        retain_until = export_destinations.expires_at(payload.destination)
+                    except KeyError as exc:
+                        raise HTTPException(status_code=409, detail=exc.args[0]) from exc
+                    except (OSError, ValueError) as exc:
+                        raise HTTPException(status_code=409, detail=str(exc)) from exc
                 subdirectory, existing, members, destination, job_id = await asyncio.to_thread(
-                    _decode_json_export_request, payload
+                    _decode_json_export_request, payload, retain_until=retain_until,
                 )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
