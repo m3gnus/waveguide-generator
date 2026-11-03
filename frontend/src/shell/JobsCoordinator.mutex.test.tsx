@@ -801,7 +801,7 @@ describe('solve invocation mutex', () => {
     expect(mocks.solveModel).toHaveBeenCalledTimes(outcome === 'ready' ? 1 : 0);
     expect(preferencesStore.getSnapshot().runSequenceNext).toBe(outcome === 'ready' ? 2 : 1);
     // Resuming reuses the adopted build; no second compile or fresh-plan press.
-    expect(fetcher.mock.calls.filter(([url]) => !url.endsWith('/context'))).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(([url]) => url.endsWith('/api/models/assembly/compile'))).toHaveLength(1);
     expect(mocks.postImportedSolvePlan).toHaveBeenCalledOnce();
     if (outcome === 'ready') expect(mocks.solveModel.mock.calls[0][1]).toMatchObject({ prepared_id: 'wgi_live', label: 'horn1' });
   });

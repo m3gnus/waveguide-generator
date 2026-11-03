@@ -8,7 +8,7 @@ import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
-import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
+import { resetSolveOptionsStore, seedImportedSolveOptionsForFile, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { editMeshImport, fileSubmissionSnapshot, fileMeshSubmission, loadMeshFile, prepareMeshFile, loadMeshReplay, registeredMesh,
   fileMeshSetup, fileSetupForSave, useMeshImportStore } from './meshImport';
 import { openImported, reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore, editFileDraft } from './importedModel';
@@ -119,6 +119,7 @@ describe('standalone imported mesh', () => {
   });
 
   it('keeps the exact file press and plan body', () => {
+    seedImportedSolveOptionsForFile();
     showPrepared();
     const snapshot = fileSubmissionSnapshot();
     const press = modelSolvePress(snapshot, 'speaker1', 'p1');
