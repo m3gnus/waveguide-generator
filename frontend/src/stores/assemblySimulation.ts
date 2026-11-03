@@ -76,8 +76,8 @@ export function assemblySimulationData(design: DesignDocument, record: CompiledA
     passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
     driveVoltageV: assembly.drive_voltage_v ?? DEFAULT_DRIVE_VOLTAGE_V,
     maxDriveVoltageV: null,
-    // An absent choice uses the same multi-group default as a CAD import.
-    combineEnabled: assembly.crossover ? !!assembly.crossover.enabled : null,
+    // Omitted crossovers in saved designs retain their original off behavior.
+    combineEnabled: !!assembly.crossover?.enabled,
     combineSpec: spec ? parseWire(spec) : null,
     frequencyStartHz: design.simulation.f1, frequencyEndHz: design.simulation.f2, frequencyCount: design.simulation.num_frequencies,
   };

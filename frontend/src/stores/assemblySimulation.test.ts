@@ -1,16 +1,29 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CompiledAssembly } from '../api/assembly';
+import { hydrateDesignDocument } from '../api/designIo';
 import { resolveAssemblySetup } from '../jobs/importedSubmission';
-import { addWoofer, commitAssembly, emptyAssembly, setMemberProcessing, setWooferEnabled } from './assembly';
+import { addWoofer, commitAssembly, emptyAssembly, setMemberProcessing, setWooferEnabled, type DesignAssembly } from './assembly';
 import { resetAssemblyBuild } from './assemblyBuild';
 import { adoptDesignBuild } from './importedModel';
 import { combineBaseSpec, combineEnabledEffective, combineWire } from './cadReturn';
 import { applyAssemblySimulation, assemblyImportedSetup, assemblySimulationData } from './assemblySimulation';
-import { currentDocumentLoad, designForFamily, resetDesignStore, useDesignStore } from './design';
+import { currentDocumentLoad, designForFamily, resetDesignStore, serializeDesign, useDesignStore } from './design';
 
 let counter = 0;
 const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '0')}`;
 const DRIVER = { version: 1, re_ohm: 6, le_h: 0.0005, bl_n_per_a: 7, mmd_kg: 0.02, cms_m_per_n: 0.001, rms_n_s_per_m: 1.5 };
+
+// Saved two-group assembly from before crossovers were persisted. Keep this
+// independent of addWoofer, whose creation defaults must not migrate old files.
+const savedAssembly: DesignAssembly = {
+  hf_source: { radiator_id: 'horn-throat', kind: 'classic' },
+  woofers: [{ id: '00000000-0000-4000-8000-000000000002', label: 'Woofer 1', enabled: true,
+    radius_mm: 80, shape: { kind: 'piston' }, placement: { anchor: 'below', gap_mm: 10 }, drive: 'prescribed' }],
+  signal_groups: [
+    { id: '00000000-0000-4000-8000-000000000001', label: 'HF', members: [{ radiator_id: 'horn-throat' }] },
+    { id: '00000000-0000-4000-8000-000000000003', label: 'LF', members: [{ radiator_id: '00000000-0000-4000-8000-000000000002' }] },
+  ],
+};
 
 function compiledFor(woofers: string[]): CompiledAssembly {
   return {
@@ -60,24 +73,39 @@ describe('assembly as the shared Simulation input', () => {
     expect(useDesignStore.getState().design.assembly).toEqual(before);
   });
 
-  it('uses the CAD default combination without rewriting a saved design', () => {
-    const { first, second } = setup();
+  it.each(['omitted', 'off'] as const)('keeps a saved %s crossover off in serialized solves before and after save/reopen', choice => {
+    const assembly = structuredClone(savedAssembly);
+    if (choice === 'off') assembly.crossover = { enabled: false };
+    const design = { ...designForFamily('R-OSSE'), assembly };
+    useDesignStore.getState().replaceDocument(design);
+    const reopened = hydrateDesignDocument(JSON.parse(JSON.stringify(serializeDesign(design))));
+    for (const document of [design, reopened]) {
+      const state = assemblySimulationData(document, compiledFor([assembly.woofers![0].id]));
+      expect(state.combineEnabled).toBe(false);
+      const request = resolveAssemblySetup({ ...state, sources: compiledFor([assembly.woofers![0].id]).sources },
+        document.assembly!, { engine: 'metal' } as never, document.simulation);
+      expect(JSON.parse(JSON.stringify(request.setup)).geometry).not.toHaveProperty('combine');
+      expect(document.assembly?.crossover).toEqual(assembly.crossover);
+    }
+    assemblyImportedSetup().setExteriorTransducer(assembly.woofers![0].id, { ...DRIVER, motion_axis: [0, 0, 1] });
+    expect(combineWire(assemblyImportedSetup())).toBeUndefined();
+  });
+
+  it('opts the first woofer into the shared CAD default as one undoable creation', () => {
     const before = structuredClone(useDesignStore.getState().design);
-    const state = assemblyImportedSetup();
-    expect(state.combineEnabled).toBeNull();
-    const cad = { ...state, input: 'cad' };
-    expect(combineEnabledEffective(state)).toBe(true);
-    expect(combineWire(state)).toEqual(combineWire(cad));
+    const added = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+    expect(added.assembly.crossover).toEqual({ enabled: true });
+    commitAssembly(added.assembly);
     const design = useDesignStore.getState().design;
-    const geometry = resolveAssemblySetup(state, design.assembly!, { engine: 'metal' } as never, design.simulation).setup.geometry;
-    expect(geometry.combine).toEqual(combineWire(cad));
-    expect(geometry.combine?.members).toEqual([state.driverGroups[1].id, state.driverGroups[2].id, state.driverGroups[0].id]);
-    expect(geometry.drive_channels.map(channel => channel.id)).toEqual(['horn-throat', first, second]);
+    const state = { ...assemblySimulationData(design, compiledFor([added.id])), sources: compiledFor([added.id]).sources };
+    const cad = { ...state, input: 'cad', combineEnabled: null };
+    const request = resolveAssemblySetup(state, design.assembly!, { engine: 'metal' } as never, design.simulation);
+    expect(request.setup.geometry.combine).toEqual(combineWire(cad));
+    expect(request.setup.geometry.combine?.members).toEqual([added.assembly.signal_groups![1].id, added.assembly.signal_groups![0].id]);
+    expect(JSON.parse(JSON.stringify(serializeDesign(design))).assembly.crossover).toEqual({ enabled: true });
+    useDesignStore.getState().undo();
     expect(useDesignStore.getState().design).toEqual(before);
-    // Driver and grouping edits must not turn the implicit default off.
-    assemblyImportedSetup().setExteriorTransducer(first, { ...DRIVER, motion_axis: [0, 0, 1] });
-    expect(useDesignStore.getState().design.assembly).not.toHaveProperty('crossover');
-    expect(combineEnabledEffective(assemblyImportedSetup())).toBe(true);
+    expect(useDesignStore.getState().design.assembly?.crossover).toBeUndefined();
   });
 
   it('keeps an explicit off choice across edits, save/reopen and undo', () => {
@@ -97,15 +125,23 @@ describe('assembly as the shared Simulation input', () => {
     expect(useDesignStore.getState().design.assembly?.crossover?.enabled).toBe(true);
   });
 
-  it('keeps a custom spec enabled when editing the implicit CAD default', () => {
+  it('keeps an explicit on choice and custom values in serialized solves after save/reopen', () => {
     setup();
     const spec = combineBaseSpec(assemblyImportedSetup())!;
     spec.channels[spec.members[0]].invert = true;
+    spec.channels[spec.members[0]].gain = { mode: 'manual', db: -3 };
+    spec.channels[spec.members[0]].delay = { mode: 'manual', ms: 0.75 };
+    spec.channels[spec.members[0]].lp = { family: 'butterworth', order: 3, fcHz: 725 };
     assemblyImportedSetup().setCombineSpec(spec);
-    const saved = JSON.parse(JSON.stringify(useDesignStore.getState().design));
-    expect(saved.assembly.crossover.enabled).toBe(true);
-    const reopened = assemblySimulationData(saved, compiledFor(saved.assembly.woofers.map((woofer: { id: string }) => woofer.id)));
-    expect(combineWire({ ...reopened, sources: assemblyImportedSetup().sources })).toEqual(combineWire(assemblyImportedSetup()));
+    const saved = hydrateDesignDocument(JSON.parse(JSON.stringify(serializeDesign(useDesignStore.getState().design))));
+    expect(saved.assembly?.crossover?.enabled).toBe(true);
+    const reopened = assemblySimulationData(saved, compiledFor(saved.assembly!.woofers!.map(woofer => woofer.id)));
+    const request = resolveAssemblySetup({ ...reopened, sources: assemblyImportedSetup().sources }, saved.assembly!, { engine: 'metal' } as never, saved.simulation);
+    expect(JSON.parse(JSON.stringify(request.setup)).geometry.combine).toEqual(combineWire(assemblyImportedSetup()));
+    expect(request.setup.geometry.combine?.channels?.[spec.members[0]]).toMatchObject({
+      invert: true, gain: { mode: 'manual', db: -3 }, delay: { mode: 'manual', ms: 0.75 },
+      lp: { family: 'butterworth', order: 3, fc_hz: 725 },
+    });
   });
 
   it('has no combination with just the horn or one shared signal group', () => {
@@ -113,7 +149,11 @@ describe('assembly as the shared Simulation input', () => {
     expect(combineWire(assemblyImportedSetup())).toBeUndefined();
     setup();
     const state = assemblyImportedSetup();
-    expect(combineWire({ ...state, driverGroups: [{ id: 'one', channelIds: state.driveChannels.map(channel => channel.id) }] })).toBeUndefined();
+    const single = { ...state, driverGroups: [{ id: 'one', channelIds: state.driveChannels.map(channel => channel.id) }] };
+    expect(combineWire(single)).toBeUndefined();
+    const design = useDesignStore.getState().design;
+    expect(JSON.parse(JSON.stringify(resolveAssemblySetup(single, design.assembly!, { engine: 'metal' } as never, design.simulation).setup)).geometry)
+      .not.toHaveProperty('combine');
   });
 
   it('saves accepted Mmd provenance and undoes both the value and derivation in one step', () => {

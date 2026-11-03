@@ -85,7 +85,7 @@ afterEach(() => {
   host.remove(); client.clear(); latestCombine.reset(); vi.restoreAllMocks();
 });
 
-it('mounts the shared editor in live Simulation and shows the implicit state without editing the document', () => {
+it('mounts the shared editor with the explicit new-assembly default without editing the document', () => {
   const before = structuredClone(useDesignStore.getState().design);
   const retained = useImportedModelStore.getState();
   const cad = useCadReturnStore.getState();
@@ -100,6 +100,20 @@ it('mounts the shared editor in live Simulation and shows the implicit state wit
   expect(useCadReturnStore.getState()).toBe(cad);
 });
 
+it('shows an omitted saved crossover as off before and after save/reopen', () => {
+  const design = structuredClone(useDesignStore.getState().design);
+  delete design.assembly!.crossover;
+  useDesignStore.getState().replaceDocument(design);
+  adoptBuild();
+  render();
+  for (const check of [() => {}, reopen]) {
+    check();
+    expect(host.querySelector<HTMLInputElement>('#cad-combine')!.checked).toBe(false);
+    expect(JSON.stringify(modelSolvePress(designAssemblySnapshot(), 'Assembly', 'omitted').setup)).not.toContain('"combine":');
+    expect(useDesignStore.getState().design.assembly).not.toHaveProperty('crossover');
+  }
+});
+
 it('turns the combination off and on with one undo step per edit, including after save/reopen', () => {
   render();
   toggle();
@@ -108,7 +122,7 @@ it('turns the combination off and on with one undo step per edit, including afte
   expect(combineWire(assemblyImportedSetup())).toBeUndefined();
   act(() => useDesignStore.getState().undo());
   expect(host.querySelector<HTMLInputElement>('#cad-combine')!.checked).toBe(true);
-  expect(useDesignStore.getState().design.assembly).not.toHaveProperty('crossover');
+  expect(useDesignStore.getState().design.assembly!.crossover).toEqual({ enabled: true });
   act(() => useDesignStore.getState().redo());
   reopen();
   expect(host.querySelector<HTMLInputElement>('#cad-combine')!.checked).toBe(false);

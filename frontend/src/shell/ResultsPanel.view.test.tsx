@@ -7,7 +7,11 @@ import { compareSelection, provisionalResults, resultsCache, type JobResults, ty
 import { preferencesStore } from '../prefs/preferences';
 import { latestCombine } from '../results/latestCombine';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetDesignStore } from '../stores/design';
+import { addWoofer, commitAssembly, emptyAssembly } from '../stores/assembly';
+import { assemblySimulationData } from '../stores/assemblySimulation';
+import { resetDesignStore, useDesignStore } from '../stores/design';
+import { compiledDesignAssembly } from '../jobs/assemblySolve.fixtures';
+import { resolveAssemblySetup } from '../jobs/importedSubmission';
 import { resetDocumentStore } from '../stores/document';
 import { resultViewStore } from '../stores/resultView';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -290,6 +294,39 @@ describe('results dock view switch', () => {
     await chooseView('Combined');
     expect(seriesNames(POLAR_CHART)).toEqual(['#1 · primary · Combined']);
     expect(latestCombine.getSnapshot()?.canApply).toBe(true);
+  });
+
+  it('shows the combined response requested by a newly added first woofer', async () => {
+    const added = addWoofer(emptyAssembly(), { anchor: 'below' });
+    commitAssembly(added.assembly);
+    expect(useDesignStore.getState().design.assembly?.crossover).toEqual({ enabled: true });
+    const record = compiledDesignAssembly().prepared;
+    const source = { id: `${added.id}/cap`, role: 'LF', radiator_id: added.id, segment_id: 'cap' };
+    const built = { ...record, sources: [...record.sources, source], excitations: [...record.excitations,
+      { id: added.id, source_ids: [source.id], motion: 'axial' as const, patch_weights: {} }] };
+    const design = useDesignStore.getState().design;
+    const simulation = { ...assemblySimulationData(design, built), sources: built.sources };
+    const request = resolveAssemblySetup(simulation, added.assembly, { engine: 'metal' } as never, design.simulation);
+    const combine = request.setup.geometry.combine!;
+    expect(combine?.members).toHaveLength(2);
+    const [low, high] = combine.members;
+    // The build and solver response are fixtures; request setup and result rendering are real.
+    payloads.primary = { ...finalIdentity('multi_channel'), frequencies: [1_000],
+      channel_order: [high, low, 'combined'], metadata: { geometry_type: 'imported' },
+      channels: { [low]: channel(90, 'LF'), [high]: channel(92, 'HF'),
+        combined: channel(94, undefined, { ...combine, crossovers_hz: [combine.channels![low].lp!.fc_hz],
+          member_roles: ['LF', 'HF'] }) } };
+    workspaceModeStore.setImportedInput('assembly');
+    useImportedModelStore.setState({ input: 'assembly', phase: 'ready',
+      prepared: { ingest_id: 'wgi_return', manifest_sha256: 'm', artifact_sha256: 'a' } });
+    importedMeshStore.setFile({ ingestId: 'wgi_return' } as never);
+    const run = job('primary', 1);
+    run.config_summary.import_origin = 'design-assembly';
+    publishJobs([run]);
+    compareSelection.setPrimary('primary');
+    await render();
+    expect(viewButtons().map(button => button.textContent)).toEqual(['Combined', 'HF', 'LF']);
+    expect(seriesNames(POLAR_CHART)).toEqual(['#1 · primary · Combined']);
   });
 
   it('opens on the combined sum and draws its members beneath it', async () => {

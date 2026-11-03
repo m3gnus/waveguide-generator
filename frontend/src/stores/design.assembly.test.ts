@@ -32,6 +32,16 @@ describe('assembly identity', () => {
     expect(assembly.woofers?.[0].shape).toEqual({ kind: 'ath_cone' });
   });
 
+  it('preserves omitted and explicit crossover choices when adding to an existing assembly', () => {
+    const first = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+    delete first.assembly.crossover;
+    expect(addWoofer(first.assembly, { anchor: 'above' }, ids).assembly).not.toHaveProperty('crossover');
+    const off = { ...emptyAssembly(ids), crossover: { enabled: false } };
+    expect(addWoofer(off, { anchor: 'below' }, ids).assembly.crossover).toEqual({ enabled: false });
+    const custom = { ...first.assembly, crossover: { enabled: true, spec: { members: ['custom'] } } };
+    expect(addWoofer(custom, { anchor: 'above' }, ids).assembly.crossover).toEqual(custom.crossover);
+  });
+
   it.each([0, 3])('preserves a saved piston with %s mm recess when adding a new woofer', recess_mm => {
     const saved = addWoofer(emptyAssembly(ids), { anchor: 'below', shape: { kind: 'piston', recess_mm } }, ids);
     const assembly = setDriver(saved.assembly, saved.id, driver);

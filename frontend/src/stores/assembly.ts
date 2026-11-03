@@ -81,6 +81,9 @@ export function addWoofer(assembly: DesignAssembly, options: NewWooferOptions,
     shape: structuredClone(options.shape ?? { kind: 'ath_cone' }), placement, drive: 'prescribed',
   }];
   next.signal_groups = [...groups(next), { id: newId(), label, members: [{ radiator_id: id }] }];
+  // Opt new assemblies in explicitly. Leaving the spec absent uses the shared
+  // CAD chain defaults; saved assemblies without a crossover remain off.
+  if (!woofers(assembly).length && !assembly.crossover) next.crossover = { enabled: true };
   return { assembly: next, id };
 }
 
