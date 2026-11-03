@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "5780a9a3a0a7eecdb808741766f28d274e33878e",
+  "commit": "2416448b19c6c715f5c93f1266d8ca282ac1a85f",
   "path": "fusion-addins/WGLink/wglink_protocol.py",
   "sha256": "afce1630cb2464244cb8a22d52182c42050242a28eb4807dbb3c1a286716a857",
-  "note": "Vendored byte for byte from source commit 5780a9a."
+  "note": "Vendored byte for byte from source commit 2416448."
 }

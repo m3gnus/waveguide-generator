@@ -89,3 +89,7 @@ remains separate from source/package qualification.
 
 The pinned source shows a WG-inserted horn’s linked throat in the default HF row
 of Sources & Mesh, while preserving user-picked sources and linked read-only faces.
+
+WGLink 0.3.4 names affected bodies and their corrective actions in scope
+refusals before Send or Solve. Its shared protocol bytes remain identical
+at this package pin.

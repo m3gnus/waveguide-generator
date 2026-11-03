@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "5780a9a3a0a7eecdb808741766f28d274e33878e",
+  "commit": "2416448b19c6c715f5c93f1266d8ca282ac1a85f",
   "license": "AGPL-3.0-or-later",
-  "addinVersion": "0.3.3",
-  "note": "Reviewed linked throat in the default Sources & Mesh HF row; user-picked sources retain precedence. Previous add-in history is not migrated into pending edits."
+  "addinVersion": "0.3.4",
+  "note": "Scope refusals name each affected body and its corrective action before Send or Solve. Linked throat defaults and existing authoring checks are retained."
 }
