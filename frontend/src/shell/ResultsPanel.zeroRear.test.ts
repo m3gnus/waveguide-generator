@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChartTokens } from '../results/EChart';
 import { hasZeroRadiationRear, OUTSIDE_HALF_SPACE_LABEL, type NamedResult } from '../results/mappers';
+import { directivityMapPixels } from '../results/mapBitmap';
 import type { ResultPayload } from '../results/types';
 import { heatmapOption, maskRearHemisphere, interpolateDirectivityGrid, polarOption } from './ResultsPanel';
 
@@ -23,7 +24,8 @@ type Cell = [number, number, number, number, number, number];
 const heatmapCells = (result: ResultPayload) => {
   const option = heatmapOption(result, tokens, 'horizontal', -6, 'full', false, 10);
   const series = option.series as Array<{ type: string; name?: string; data: unknown[] }>;
-  return { series, cells: series[0].data as Cell[] };
+  // Series 1 is the hover targets: one per solved sample that is drawn.
+  return { series, cells: series[1].data as Cell[] };
 };
 
 describe('zero-radiation rear hemisphere', () => {
@@ -52,6 +54,24 @@ describe('zero-radiation rear hemisphere', () => {
     const { series, cells } = heatmapCells(payload('zero_radiation', [0, 30, 60, 90], [0, -2, -6, -12]));
     expect(Math.max(...cells.map((cell) => cell[5]))).toBe(90);
     expect(series.some(({ name }) => name === OUTSIDE_HALF_SPACE_LABEL)).toBe(false);
+  });
+
+  it('leaves the bitmap transparent across the masked rear rows', () => {
+    const result = payload('zero_radiation');
+    const solved = maskRearHemisphere(interpolateDirectivityGrid(result, 'horizontal', 1), result);
+    // Seven solved rows, 0 to 180 degrees, over 70 pixel rows: ten per solved
+    // step. Pixel row b from the bottom samples angle ((b + .5) / 10 - .5) * 30.
+    const height = 70;
+    const pixels = directivityMapPixels(solved.values, -30, tokens.colormap, 2, height, 1);
+    const alpha = (fromBottom: number) => pixels[((height - 1 - fromBottom) * 2) * 4 + 3];
+    // Up to the last solved row, 90 degrees, every row is drawn.
+    for (let row = 0; row <= 34; row += 1) expect(alpha(row)).toBe(255);
+    // From the first masked row on (120 degrees), nothing is.
+    for (let row = 45; row < height; row += 1) expect(alpha(row)).toBe(0);
+
+    const sampled = payload('sampled');
+    const full = directivityMapPixels(interpolateDirectivityGrid(sampled, 'horizontal', 1).values, -30, tokens.colormap, 2, height, 1);
+    for (let row = 0; row < height; row += 1) expect(full[((height - 1 - row) * 2) * 4 + 3]).toBe(255);
   });
 
   it('masks the rear rows of the contour grid so no false edge is contoured at 90 degrees', () => {

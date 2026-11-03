@@ -1,7 +1,8 @@
 import * as echarts from 'echarts';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { chartDensity, contourPointToPixels, contourPolylines, contourSegments, frequencyBounds, heatmapFrequencyLabel, heatmapOption, interpolateDirectivityGrid, lineOption, smoothContourShape } from './ResultsPanel';
 import { readChartTokens, type ChartTokens } from '../results/EChart';
+import { directivityMapPixels } from '../results/mapBitmap';
 import type { ResultPayload } from '../results/types';
 
 const tokens: ChartTokens = {
@@ -21,74 +22,122 @@ function payload(frequencyCount = 40, angleCount = 37): ResultPayload {
   } as unknown as ResultPayload;
 }
 
-/**
- * ECharts refuses to draw cartesian heatmap cells unless both axes are category
- * axes. It only says so in development: the guard is compiled out of production
- * builds, where every cell is instead emitted as an empty path and the chart
- * goes blank with nothing logged. Render the real option and count the cells
- * rather than trusting the option shape.
- */
-function renderedCells(option: ReturnType<typeof heatmapOption>) {
-  const chart = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 289, height: 185 });
-  chart.setOption(option);
-  const svg = chart.renderToSVGString();
-  chart.dispose();
-  const paths = svg.match(/<path[^>]*>/g) ?? [];
-  return {
-    drawn: paths.filter((path) => /\sd="M/.test(path) && /ecmeta_series_index/.test(path)).length,
-    empty: paths.filter((path) => /\sd=""/.test(path) && /ecmeta_series_index/.test(path)).length,
+type MapSeries = {
+  type: string;
+  name?: string;
+  data: unknown[];
+  renderItem: (params: unknown, api: Record<string, unknown>) => Record<string, unknown> | null;
+};
+type MapOption = {
+  animationDuration: number;
+  xAxis: { type: string; data: string[] };
+  yAxis: { type: string; data: string[] };
+  visualMap: { seriesIndex: number; dimension: number };
+  series: MapSeries[];
+};
+
+/** A 2D context with just enough of ImageData for the bitmap to be drawn into. */
+function stubCanvas() {
+  const drawn: ImageData[] = [];
+  const context = {
+    createImageData: (width: number, height: number) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) }),
+    putImageData: (image: ImageData) => drawn.push(image),
   };
+  const spy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
+  return { drawn, restore: () => spy.mockRestore() };
 }
 
 describe('directivity heatmap', () => {
-  it('draws a four-times denser interpolated field instead of empty paths', () => {
-    const dense = interpolateDirectivityGrid(payload(12, 13), 'horizontal');
-    const { drawn, empty } = renderedCells(heatmapOption(payload(12, 13), tokens, 'horizontal', -6));
-    expect(empty).toBe(0);
-    expect(dense.factor).toBe(4);
-    expect(dense.frequencies).toHaveLength(45);
-    expect(dense.angles).toHaveLength(49);
-    expect(drawn).toBeGreaterThanOrEqual(dense.frequencies.length * dense.angles.length);
+  it('draws the map as one bitmap at device resolution, over hover targets at the solved samples', () => {
+    const option = heatmapOption(payload(12, 13), tokens, 'horizontal', -6) as unknown as MapOption;
+    const [image, samples] = option.series;
+    expect(image).toMatchObject({ type: 'custom', silent: true });
+    expect(samples.type).toBe('custom');
+    // One hover target per solved sample, not per interpolated cell.
+    expect(samples.data).toHaveLength(12 * 13);
+    // The colour ramp is attached to the solved samples' clamped level.
+    expect(option.visualMap).toMatchObject({ seriesIndex: 1, dimension: 2 });
+
+    const canvas = stubCanvas();
+    try {
+      const rect = { x: 10, y: 20, width: 200, height: 100 };
+      const drawn = image.renderItem({ coordSys: rect }, { getDevicePixelRatio: () => 2 }) as { type: string; style: Record<string, unknown> };
+      expect(drawn.type).toBe('image');
+      expect(drawn.style).toMatchObject(rect);
+      expect(canvas.drawn).toHaveLength(1);
+      expect(canvas.drawn[0]).toMatchObject({ width: 400, height: 200 });
+      // The same plot size reuses the bitmap; a resize draws a new one.
+      image.renderItem({ coordSys: rect }, { getDevicePixelRatio: () => 2 });
+      expect(canvas.drawn).toHaveLength(1);
+      image.renderItem({ coordSys: { ...rect, width: 300 } }, { getDevicePixelRatio: () => 2 });
+      expect(canvas.drawn).toHaveLength(2);
+    } finally {
+      canvas.restore();
+    }
   });
 
-  it('uses category axes on both dimensions, which is what echarts requires', () => {
-    const option = heatmapOption(payload(), tokens, 'horizontal', -6) as {
-      xAxis: { type: string; data: string[] }; yAxis: { type: string; data: string[] };
-    };
+  it('places each hover target on its solved sample, half a solved step either side', () => {
+    const option = heatmapOption(payload(12, 13), tokens, 'horizontal', -6) as unknown as MapOption;
+    const samples = option.series[1];
+    const display = interpolateDirectivityGrid(payload(12, 13), 'horizontal', 12, 180_000);
+    const rect = { x: 0, y: 0, width: display.frequencies.length, height: display.angles.length };
+    const target = (column: number, row: number) => samples.renderItem({ coordSys: rect }, { value: (index: number) => [column, row][index] }) as { shape: { x: number; y: number; width: number; height: number } };
+    // One display cell is one pixel here, so a sample's centre is its display index + .5.
+    const centre = target(5, 6).shape;
+    expect(centre.x + centre.width / 2).toBeCloseTo(5 * display.factor + .5);
+    expect(rect.height - (centre.y + centre.height / 2)).toBeCloseTo(6 * display.factor + .5);
+    expect(centre.width).toBeCloseTo(display.factor);
+    // The first sample's target is clipped to the plot rather than hanging out of it.
+    expect(target(0, 0).shape.x).toBe(0);
+  });
+
+  it('uses category axes over the dense contour grid, so contours, ticks and bitmap share one index space', () => {
+    const option = heatmapOption(payload(), tokens, 'horizontal', -6) as unknown as MapOption;
+    const display = interpolateDirectivityGrid(payload(), 'horizontal', 12, 180_000);
     expect(option.xAxis.type).toBe('category');
     expect(option.yAxis.type).toBe('category');
-    expect(option.xAxis.data).toHaveLength(157);
-    expect(option.yAxis.data).toHaveLength(145);
+    expect(option.xAxis.data).toHaveLength(display.frequencies.length);
+    expect(option.yAxis.data).toHaveLength(display.angles.length);
   });
 
   it('uses a bounded live grid, then restores the full-quality completed map', () => {
     const result = payload(60, 37);
-    const live = heatmapOption(result, tokens, 'horizontal', -6, 'regular', true) as {
-      animationDuration: number;
-      xAxis: { data: string[] };
-      yAxis: { data: string[] };
-      series: Array<{ type: string; data: unknown[] }>;
-    };
-    const complete = heatmapOption(result, tokens, 'horizontal', -6) as {
-      animationDuration: number;
-      xAxis: { data: string[] };
-      yAxis: { data: string[] };
-      series: Array<{ type: string; data: unknown[] }>;
-    };
-    const liveCells = live.series.find(({ type }) => type === 'heatmap')!.data.length;
-    const completeCells = complete.series.find(({ type }) => type === 'heatmap')!.data.length;
+    const live = heatmapOption(result, tokens, 'horizontal', -6, 'regular', true) as unknown as MapOption;
+    const complete = heatmapOption(result, tokens, 'horizontal', -6) as unknown as MapOption;
 
     expect(live.animationDuration).toBe(0);
     expect(live.xAxis.data).toHaveLength(119);
     expect(live.yAxis.data).toHaveLength(73);
-    expect(liveCells).toBe(8_687);
     expect(complete.animationDuration).toBe(180);
-    expect(completeCells).toBeGreaterThan(liveCells * 3);
+    expect(complete.xAxis.data).toHaveLength(532);
+    expect(complete.yAxis.data).toHaveLength(325);
+    // Either way the hover targets are the solved samples.
+    expect(live.series[1].data).toHaveLength(60 * 37);
+    expect(complete.series[1].data).toHaveLength(60 * 37);
   });
 
-  it('renders nothing but still builds a valid option for a plane with no data', () => {
-    const { drawn, empty } = renderedCells(heatmapOption(payload(), tokens, 'vertical', -6));
-    expect(drawn + empty).toBe(0);
+  it('builds a valid option with nothing to draw for a plane with no data', () => {
+    const option = heatmapOption(payload(), tokens, 'vertical', -6) as unknown as MapOption;
+    expect(option.series[0].data).toHaveLength(0);
+    expect(option.series[1].data).toHaveLength(0);
+    const chart = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 289, height: 185 });
+    expect(() => chart.setOption(option as never)).not.toThrow();
+    chart.dispose();
+  });
+
+  it('interpolates the bitmap linearly between solved samples and holds the edge values', () => {
+    const colormap = ['#000000', '#ffffff'];
+    // Two frequencies, one angle: 0 dB then -30 dB, on a -30 dB floor.
+    const pixels = directivityMapPixels([[0, -30]], -30, colormap, 4, 1, 1);
+    const red = [0, 1, 2, 3].map((pixel) => pixels[pixel * 4]);
+    // Pixel centres at 1/8, 3/8, 5/8, 7/8 of a two-category axis: the outer
+    // two hold the edge samples, the inner two sit a quarter step in.
+    expect(red[0]).toBe(255);
+    expect(red[3]).toBe(0);
+    expect(red[1]).toBeGreaterThan(160);
+    expect(red[1]).toBeLessThan(220);
+    expect(red[1] + red[2]).toBeCloseTo(255, -1);
+    expect([0, 1, 2, 3].every((pixel) => pixels[pixel * 4 + 3] === 255)).toBe(true);
   });
 
   it('labels frequencies compactly on the category axis', () => {

@@ -40,6 +40,7 @@ import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
 import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, useDeveloperDetails, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
+import { directivityMapCanvas, solvedSampleSpan } from '../results/mapBitmap';
 import { runOfLabel, seriesColorsByLabel } from '../results/seriesColors';
 import { parseMeasuredTrace } from '../results/measuredTrace';
 import { electricalDrive, excursionSeries, hasElectricalImpedance } from '../results/drivePower';
@@ -351,14 +352,13 @@ export interface InterpolatedDirectivityGrid {
   factor: number;
 }
 
-const MAX_INTERPOLATED_CELLS = 50_000;
 /** A settled chart can afford a contour grid close to the PNG export. */
 const MAX_CONTOUR_CELLS = 180_000;
 /** A live snapshot must finish painting before the next 250 ms publication. */
 const MAX_LIVE_INTERPOLATED_CELLS = 16_000;
 
-/** Bilinear interpolation in log-frequency/index space for a smooth live map. */
-export function interpolateDirectivityGrid(result: ResultPayload, plane: string, requestedFactor = 4, maxCells = MAX_INTERPOLATED_CELLS): InterpolatedDirectivityGrid {
+/** Bilinear interpolation in log-frequency/index space, for contours and axes. */
+export function interpolateDirectivityGrid(result: ResultPayload, plane: string, requestedFactor = 4, maxCells = MAX_CONTOUR_CELLS): InterpolatedDirectivityGrid {
   const source = directivityGrid(result, plane);
   if (!source.frequencies.length || !source.angles.length) return { frequencies: [], angles: [], values: [], factor: 1 };
   const sourceValues = Array.from({ length: source.angles.length }, () => Array<number | null>(source.frequencies.length).fill(null));
@@ -651,11 +651,10 @@ export function directivityAngleGuides(angles: number[], interval: number): numb
 }
 
 /**
- * ECharts only draws cartesian heatmap cells on two *category* axes. On a log
- * or value axis every cell is emitted with an empty path — nothing renders, and
- * the guard that says so is compiled out of production builds, so the chart
- * fails silently. Index the cells against category axes instead. The frequency
- * axis still reads logarithmically because the sweep itself is log-spaced.
+ * The map's axes are *category* axes over the display grid: the contours, the
+ * frequency ticks and the bitmap are all placed by grid index, so one index
+ * space serves all three. The frequency axis still reads logarithmically
+ * because the sweep itself is log-spaced.
  */
 export interface DirectivityContourReference {
   label: string;
@@ -679,20 +678,18 @@ export function heatmapOption(
   angleGuideInterval = 10,
   comparison?: DirectivityComparisonOverlay,
 ): EChartsOption {
-  // Boundary Lab renders a lighter surface while a solve is changing and one
-  // canonical surface when it settles. Do the same here: the live grid has at
-  // most a quarter of the usual heatmap cells and also supplies its contours,
-  // avoiding a second 180k-cell interpolation on every partial result.
+  // The solved samples: the bitmap is interpolated from these per pixel, and
+  // the tooltip reports them rather than an interpolated value.
+  const solved = maskRearHemisphere(interpolateDirectivityGrid(result, plane, 1), result);
+  // The display grid carries the category axes and the contours. The exported
+  // renderer contours a canonical 500 x 361 interpolation, and a settled chart
+  // contours a comparably dense grid: a typical 60 x 37 result resolves to
+  // 532 x 325. Boundary Lab draws a lighter surface while a solve is changing,
+  // so a live snapshot contours a grid capped to finish well inside the 250 ms
+  // publication interval.
   const grid = maskRearHemisphere(live
     ? interpolateDirectivityGrid(result, plane, 2, MAX_LIVE_INTERPOLATED_CELLS)
-    : interpolateDirectivityGrid(result, plane), result);
-  // The exported renderer contours a canonical 500 x 361 interpolation. Keep
-  // the interactive cells capped for responsiveness, but derive the visible
-  // engineering reference lines from a comparably dense grid. With a typical
-  // 60 x 37 result this resolves to 532 x 325 instead of 237 x 145.
-  const contourGrid = live
-    ? grid
-    : maskRearHemisphere(interpolateDirectivityGrid(result, plane, 12, MAX_CONTOUR_CELLS), result);
+    : interpolateDirectivityGrid(result, plane, 12, MAX_CONTOUR_CELLS), result);
   const floor = mapReference * 5;
   const comparing = Boolean(comparison?.references.length);
   // The overlaid contours are the same runs the line charts draw, so they take
@@ -708,7 +705,9 @@ export function heatmapOption(
   const inset = comparing && comparison?.showLegend !== false
     ? { ...baseInset, top: Math.max(baseInset.top, density === 'compact' ? 27 : 31) }
     : baseInset;
-  const cells = grid.values.flatMap((rowValues, row) => rowValues.flatMap((level, column) => level === null ? [] : [[column, row, Math.max(floor, Math.min(0, level)), level, grid.frequencies[column], grid.angles[row]]]));
+  // [column, row] index the solved grid; the clamped level is what the colour
+  // ramp reads, the rest is the tooltip.
+  const cells = solved.values.flatMap((rowValues, row) => rowValues.flatMap((level, column) => level === null ? [] : [[column, row, Math.max(floor, Math.min(0, level)), level, solved.frequencies[column], solved.angles[row]]]));
   const categoryAxis = { ...axes(tokens, density), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens, density).axisLabel, hideOverlap: true } };
   const frequencyTickLabels = directivityFrequencyTickLabels(grid.frequencies);
   const isFrequencyTick = (index: number) => frequencyTickLabels.has(index);
@@ -758,7 +757,7 @@ export function heatmapOption(
     : [];
   const contourLevels = [...new Set([-3, -6, -12, mapReference])].filter((level) => level >= floor).sort((a, b) => b - a);
   const contourSeries = contourLevels.flatMap((level, contourIndex) => {
-    const polylines = contourPolylines(contourSegments(contourGrid.values, level)).filter((points) => points.length > 1);
+    const polylines = contourPolylines(contourSegments(grid.values, level)).filter((points) => points.length > 1);
     if (!polylines.length) return [];
     const labelIndex = polylines.reduce((best, points, index) => points.length > polylines[best].length ? index : best, 0);
     const isComparisonContour = comparing && level === mapReference;
@@ -771,7 +770,7 @@ export function heatmapOption(
       data: polylines.map((_points, index) => [index, index === labelIndex ? 1 : 0]),
       renderItem: (params: { coordSys?: PlotRect }, api: { value: (index: number) => unknown }) => {
         if (!params.coordSys) return null;
-        const points = polylines[Number(api.value(0))].map((point) => contourPointToPixels(point, contourGrid, params.coordSys!));
+        const points = polylines[Number(api.value(0))].map((point) => contourPointToPixels(point, grid, params.coordSys!));
         const middle = points[Math.floor(points.length / 2)];
         const children: Array<Record<string, unknown>> = [{ type: 'polyline', shape: smoothContourShape(points), style: { fill: null, stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .92, lineCap: 'round', lineJoin: 'round', lineDash: level <= -12 ? [4, 3] : undefined } }];
         if (Number(api.value(1)) && (density !== 'compact' || level === -6 || isComparisonContour)) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: isComparisonContour && comparison?.showContourNames ? middleEllipsis(comparison.primaryLabel, 14) : `${level} dB`, fill: color, font: '11px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
@@ -798,7 +797,7 @@ export function heatmapOption(
       data: polylines.map((_points, index) => [index, index === labelIndex ? 1 : 0]),
       renderItem: (params: { coordSys?: PlotRect }, api: { value: (index: number) => unknown }) => {
         if (!params.coordSys) return null;
-        const points = polylines[Number(api.value(0))].map((point) => comparisonContourPointToPixels(point, referenceGrid, contourGrid, params.coordSys!));
+        const points = polylines[Number(api.value(0))].map((point) => comparisonContourPointToPixels(point, referenceGrid, grid, params.coordSys!));
         const middle = points[Math.floor(points.length / 2)];
         const children: Array<Record<string, unknown>> = [{
           type: 'polyline',
@@ -813,6 +812,42 @@ export function heatmapOption(
       },
     }];
   }) ?? [];
+  // One bitmap per plot size, drawn when ECharts first lays the plot out and
+  // again only when a resize changes its device-pixel size.
+  let bitmap: { key: string; canvas: HTMLCanvasElement | null } | undefined;
+  const mapSeries = [{
+    name: 'Directivity map', type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 1, clip: true,
+    data: cells.length ? [0] : [],
+    renderItem: (params: { coordSys?: PlotRect }, api: { getDevicePixelRatio?: () => number }) => {
+      if (!params.coordSys) return null;
+      const rect = params.coordSys;
+      const ratio = api.getDevicePixelRatio?.() ?? 1;
+      const width = Math.max(1, Math.round(rect.width * ratio));
+      const height = Math.max(1, Math.round(rect.height * ratio));
+      const key = `${width}x${height}`;
+      if (bitmap?.key !== key) bitmap = { key, canvas: directivityMapCanvas(solved.values, floor, tokens.colormap, width, height, grid.factor) };
+      return bitmap.canvas ? { type: 'image', style: { image: bitmap.canvas, x: rect.x, y: rect.y, width: rect.width, height: rect.height } } : null;
+    },
+  }, {
+    // Transparent hover targets, one per solved sample, so the tooltip states
+    // a solved value. The colour ramp is attached here: its dimension 2 is the
+    // same clamped level the bitmap is coloured by.
+    name: 'Solved samples', type: 'custom', coordinateSystem: 'cartesian2d', z: 2, clip: true,
+    data: cells,
+    renderItem: (params: { coordSys?: PlotRect }, api: { value: (index: number) => unknown }) => {
+      if (!params.coordSys) return null;
+      const rect = params.coordSys;
+      const [left, right] = solvedSampleSpan(Number(api.value(0)), grid.factor, grid.frequencies.length, rect.x, rect.width);
+      // Rows count up from the bottom of the plot.
+      const [lower, upper] = solvedSampleSpan(Number(api.value(1)), grid.factor, grid.angles.length, 0, rect.height);
+      return {
+        type: 'rect',
+        shape: { x: left, y: rect.y + rect.height - upper, width: right - left, height: upper - lower },
+        style: { fill: 'rgba(0, 0, 0, 0)' },
+        emphasis: { style: { stroke: tokens.accent, lineWidth: 1.2 } },
+      };
+    },
+  }];
   const comparisonLabels = comparison ? [comparison.primaryLabel, ...comparison.references.map(({ label }) => label)] : [];
   return {
     animationDuration: live ? 0 : 180,
@@ -850,10 +885,8 @@ export function heatmapOption(
     // fit this card size, and letting ECharts thin it again is what broke the
     // axis's symmetry and dropped 0 deg.
     yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameLocation: 'start' as const, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'right' as const, verticalAlign: 'top' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, hideOverlap: false, interval: (index: number) => angleLabels.has(index) } },
-    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: 11 }, inRange: { color: tokens.colormap } },
-    // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
-    // stop after the first angle band and leave the rest of the map blank.
-    series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...angleGuideSeries, ...rearBand, ...contourSeries, ...comparisonSeries] as EChartsOption['series'],
+    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 1, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: 11 }, inRange: { color: tokens.colormap } },
+    series: [...mapSeries, ...angleGuideSeries, ...rearBand, ...contourSeries, ...comparisonSeries] as EChartsOption['series'],
   };
 }
 

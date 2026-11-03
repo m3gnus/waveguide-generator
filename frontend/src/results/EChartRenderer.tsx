@@ -1,4 +1,4 @@
-import { CustomChart, HeatmapChart, LineChart } from 'echarts/charts';
+import { CustomChart, LineChart } from 'echarts/charts';
 import {
   DataZoomComponent,
   GridComponent,
@@ -16,7 +16,6 @@ import { chartGutter, inAxisGutter, rulerLabel } from './chartRuler';
 
 echarts.use([
   LineChart,
-  HeatmapChart,
   CustomChart,
   GridComponent,
   TooltipComponent,
