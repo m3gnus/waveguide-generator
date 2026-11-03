@@ -738,11 +738,15 @@ export function Viewport() {
       ? cadSolverLoading ? 'loading…' : cadSolverMesh ? 'prepared' : 'unavailable'
       : null;
   // A build pressed in Sources and baffle reports here, once its dialog has closed.
-  const assemblyNote = workspaceMode !== 'parametric' || !design.assembly ? null
+  const assemblyShown = workspaceMode === 'parametric' && !!design.assembly;
+  const assemblyNote = !assemblyShown ? null
     : importedMesh && assemblyPreviewLabel(assemblyBuild, design)
-      || (assemblyBuild.status === 'building' ? 'Building the assembly…'
-        : assemblyBuild.status === 'refused' && !showSolverMeshNotice && assemblyBuild.requested?.revision === designRevision
-          ? `Could not build the assembly. ${assemblyBuild.refusal ?? ''}`.trim() : null);
+      || (assemblyBuild.status === 'building' ? 'Building the assembly…' : null);
+  // A refusal of this revision always shows, whoever pressed Build, unless the
+  // mesh banner already carries the same words.
+  const assemblyRefusal = assemblyShown && assemblyBuild.status === 'refused' && assemblyBuild.requested?.revision === designRevision
+    && !(showSolverMeshNotice && solverMeshState.error === assemblyBuild.refusal)
+    ? `Could not build the assembly. ${assemblyBuild.refusal ?? ''}`.trim() : null;
   const refresh = () => {
     setDismissedPreviewError(null);
     setRefreshRequestedAt(performance.now());
@@ -1161,6 +1165,7 @@ export function Viewport() {
       {solverViewSelected && solverMeshRefusal && <div className="viewport-note solver-plan-adjustment-note" role="note">
         Cannot solve this yet: {solverMeshRefusal}
       </div>}
+      {assemblyRefusal && <div className="viewport-note" role="alert" aria-label="Assembly build failed">{assemblyRefusal}</div>}
       {assemblyNote && <div className="viewport-note" role="status" aria-label="Assembly build">{assemblyNote}</div>}
       {activeScene && previewNote && <div className="viewport-note" role="note" aria-label="Preview surface">{previewNote}</div>}
       {recoveryNotice && <div className="viewport-note" role="note">{recoveryNotice}</div>}

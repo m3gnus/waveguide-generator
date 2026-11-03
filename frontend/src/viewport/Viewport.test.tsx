@@ -141,7 +141,7 @@ import { femFieldJob, fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refits
 import { FACT_DROP } from './ViewportFact';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
-import { resetAssemblyBuild } from '../stores/assemblyBuild';
+import { resetAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
 
 describe('CAD viewport empty-state copy', () => {
   it('names the model and points to Results, never repeating its status line', () => {
@@ -1480,6 +1480,15 @@ describe('solver-mesh refresh inputs and document loads', () => {
     await act(async () => { await vi.waitFor(() => expect(host.textContent).toContain('display triangles')); });
     expect(host.querySelector('.solver-mesh-banner')).toBeNull();
     expect(host.querySelector('[aria-label="Assembly build"]')).toBeNull();
+    // A Build pressed in the closed dialog for the next revision is refused: its words
+    // show beside the retained mesh's label, in Mesh and in Geometry.
+    act(() => useDesignStore.getState().updateValue('enclosure.depth', 321));
+    act(() => useAssemblyBuildStore.setState({ status: 'refused', refusal: 'Set an enclosure depth.', failureDetail: null,
+      requested: { revision: useDesignStore.getState().designRevision, contentKey: null, load: 0 } }));
+    expect(host.querySelector('[aria-label="Assembly build failed"]')?.textContent).toBe('Could not build the assembly. Set an enclosure depth.');
+    expect(host.querySelector('[aria-label="Assembly build"]')?.textContent).toMatch(/earlier revision/);
+    act(() => importedMeshStore.showParametric());
+    expect(host.querySelector('[aria-label="Assembly build failed"]')?.textContent).toContain('Set an enclosure depth.');
     resetAssemblyBuild();
   });
 
