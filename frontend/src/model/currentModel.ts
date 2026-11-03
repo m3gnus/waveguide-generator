@@ -26,6 +26,8 @@ export interface CurrentModel {
   modelId?: string | null;
   ingestId?: string | null;
   design?: DesignDocument;
+  /** The parametric document's uid, which a design assembly's runs name. */
+  designUid?: string | null;
   manifestSha256?: string | null;
   /** An arrived Fusion request selected before it has a prepared mesh. */
   requestId?: string | null;
@@ -124,7 +126,7 @@ export function currentModel(): CurrentModel {
     : preview.connection === 'idle');
   if (workspace.mode === 'parametric') return {
     kind: 'parametric', key: parametricKey, lineage: document.identity?.designId ?? null,
-    label: document.designName || 'Parametric model', design,
+    label: document.designName || 'Parametric model', design, designUid: document.designUid ?? null,
     viewportShowing: viewport.showing === 'solver' && viewport.solver
       ? viewport.solver.modelKey === parametricKey : previewShowing, unloadedRunId,
   };
@@ -158,10 +160,26 @@ export function useCurrentModel(): CurrentModel {
   return currentModel();
 }
 
+/**
+ * A design assembly's run on the parametric design it was pressed from: the
+ * run stores that design, so it is compared the way a parametric run is.
+ * Null for every other pairing, and for older assembly runs with no design.
+ */
+function designAssemblyRun(job: JobItem, model: CurrentModel): RunVerdict | null {
+  if (model.kind !== 'parametric' || !model.design?.assembly || job.config_summary?.import_origin !== 'design-assembly') return null;
+  const key = jobDesignFingerprint(job);
+  if (key === null) return null;
+  if (key === model.key) return model.viewportShowing ? 'current' : 'model-not-shown';
+  const solved = (job.config_summary.design_assembly as { design?: { design_uid?: unknown } } | undefined)?.design?.design_uid;
+  return model.designUid && solved === model.designUid ? 'earlier-version' : 'other-model';
+}
+
 /** The sole run-versus-viewport verdict. Legacy missing hashes use ingestion identity. */
 export function runVerdict(job: JobItem, model: CurrentModel): RunVerdict {
   const run = modelForRun(job);
   if (model.unloadedRunId === job.id) return 'model-not-shown';
+  const assembly = designAssemblyRun(job, model);
+  if (assembly) return assembly;
   if (run.kind !== model.kind) return 'other-model';
   const same = !!model.key && (run.key === model.key
     || ((!job.cad_source?.solve_model_sha256 || model.key === model.ingestId) && !!model.ingestId && run.ingestId === model.ingestId));
@@ -213,12 +231,15 @@ export function shownResult(model: CurrentModel, selection: ResultSelection, job
 }
 
 /** Spatial artifacts require the shown run's model to actually be in the viewport.
- * The unreadable-archive exception permits standalone charts only. */
+ * The unreadable-archive exception permits standalone charts only, and so
+ * does a design assembly's run on its parametric preview: its fields belong
+ * to the compiled mesh, which only the assembly model shows. */
 export function spatialResult(model: CurrentModel, selection: ResultSelection, jobs: readonly JobItem[],
   provisional: Readonly<Record<string, unknown>> = {}): JobItem | null {
   const { job } = shownResult(model, selection, jobs, provisional);
   const meshFreshness = job && hasMeshProvenance(job) && useMeshFreshnessStore.getState().jobs[job.id];
-  return job && runVerdict(job, model) === 'current' && meshFreshness !== 'stale' && meshFreshness !== 'pending' ? job : null;
+  return job && modelKindForRun(job) === model.kind && runVerdict(job, model) === 'current'
+    && meshFreshness !== 'stale' && meshFreshness !== 'pending' ? job : null;
 }
 
 /** Existing job data only; slice 4 can supply readiness at this single seam. */

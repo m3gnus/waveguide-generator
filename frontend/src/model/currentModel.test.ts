@@ -28,6 +28,9 @@ import refused from '../jobs/cadRefusedJob.fixture.json';
 import { resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
 import { json, mesh, record, workspaceFor } from '../shell/cadlink/selection.fixtures';
 import { fieldPlaneJob, femFieldJob } from '../viewport/Viewport';
+import { addWoofer, emptyAssembly } from '../stores/assembly';
+import { designForFamily, serializeDesign } from '../stores/design';
+import type { CurrentModel } from './currentModel';
 
 export const oldRuns = [parametric, fileSha, fileNoSha, cad, cadNoSha, unreadable] as unknown as JobItem[];
 
@@ -258,4 +261,52 @@ it('says a selected run is arriving while the viewport has yet to draw its model
   expect(shown(true)).toMatchObject({ arriving: false, job: { id: 'next' }, canRender: true });
   expect(shown(false, { has_results: false, status: 'error' }).arriving).toBe(false);
   expect(shownResult({ ...model, key: 'another model', viewportShowing: true }, { primary: 'next' }, [job]).arriving).toBe(false);
+});
+
+describe('a design assembly run on its parametric design', () => {
+  let counter = 0;
+  const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '0')}`;
+  const onScreen = () => {
+    const { assembly } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });
+    return { ...currentModel(), viewportShowing: true };
+  };
+  const assemblyRun = (model: CurrentModel, overrides: Partial<JobItem> = {}) => ({
+    ...oldRuns[0], id: 'assembly-run', status: 'complete', has_results: true, field_plane_available: true,
+    script_snapshot: { version: 1, design: serializeDesign(model.design!) },
+    config_summary: { geometry_type: 'imported', formula_type: 'design-assembly', import_origin: 'design-assembly',
+      ingest_id: 'wgi_1', design_assembly: { design: { design_uid: model.designUid } } },
+    ...overrides,
+  }) as unknown as JobItem;
+
+  it('is this design solved, in the status and the charts', () => {
+    const model = onScreen();
+    const job = assemblyRun(model);
+    expect(runVerdict(job, model)).toBe('current');
+    expect(currentModelStatus(model, [job])).toMatchObject({ kind: 'solved', job });
+    expect(shownResult(model, { primary: job.id }, [job])).toMatchObject({ job, canRender: true });
+  });
+
+  it('keeps fields to the assembly model, whose compiled mesh they belong to', () => {
+    const model = onScreen();
+    const job = assemblyRun(model);
+    expect(spatialResult(model, { primary: job.id }, [job])).toBeNull();
+    expect(fieldPlaneJob([job], job.id, model)).toBeNull();
+  });
+
+  it('is an earlier version once the design is edited, and another model for another design', () => {
+    const before = onScreen();
+    const job = assemblyRun(before);
+    useDesignStore.getState().updateValue('simulation.f1', 200);
+    const edited = { ...currentModel(), viewportShowing: true };
+    expect(runVerdict(job, edited)).toBe('earlier-version');
+    expect(currentModelStatus(edited, [job]).kind).toBe('never-solved');
+    expect(runVerdict(assemblyRun(before, { config_summary: { ...job.config_summary,
+      design_assembly: { design: { design_uid: 'wgu_someone_else' } } } }), edited)).toBe('other-model');
+  });
+
+  it('stays another model when the run stored no design', () => {
+    const model = onScreen();
+    expect(runVerdict(assemblyRun(model, { script_snapshot: null } as Partial<JobItem>), model)).toBe('other-model');
+  });
 });

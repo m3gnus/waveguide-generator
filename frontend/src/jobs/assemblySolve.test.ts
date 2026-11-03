@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FRONT_CONTEXT_LIMIT_MS } from '../api/assembly';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
 import { assemblyContentKey, resetAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
-import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
+import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { prepareAssemblySolve } from './assemblySolve';
 import { solveModel } from './actions';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -117,6 +117,8 @@ describe('assembly Solve press', () => {
     const { press } = await prepareAssemblySolve(fetcher, () => 'p1');
     const geometry = (press.setup as unknown as { geometry: { drive_channels: Array<{ id: string }> } }).geometry;
     expect(geometry.drive_channels.map(channel => channel.id)).toEqual(['horn-throat', id]);
+    // The run keeps the design it was pressed from, so Results can tie it to this design.
+    expect(press.design).toEqual(serializeDesign(useDesignStore.getState().design));
   });
 
   it('refuses a design without an assembly', async () => {

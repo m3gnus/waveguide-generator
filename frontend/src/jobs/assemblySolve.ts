@@ -46,6 +46,8 @@ export async function prepareAssemblySolve(fetcher: typeof fetch = fetch,
     modelId: published.model.model_id, notice,
     press: {
       prepared_id: published.record.ingest_id,
+      // The run keeps the design it was pressed from, so it is this design's run.
+      design: serializeDesign(design),
       client_request_id: `assembly-${newPressId()}`,
       setup: { schema_version: 1, ...setup } as unknown as ModelSolvePress['setup'],
     },
