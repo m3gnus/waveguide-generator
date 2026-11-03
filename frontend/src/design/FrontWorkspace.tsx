@@ -167,6 +167,11 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
   const problems = [...placementProblems(shown, resolved).values()].flat();
   const revision = useDesignStore(store => store.designRevision);
   const fit = fitHold(checkedRevision === revision, failure?.revision === revision ? failure : null, refusal, problems);
+  const solveDisabledReason = !hasAssembly ? 'Add a woofer to build or solve.'
+    : building ? 'Building the mesh… Wait for the build to finish.'
+      : fit.held ? fit.line
+        : !solveControl ? 'Solve is unavailable. Close this window and try again from the main workspace.'
+          : solveControl.disabled ? solveControl.title : null;
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Sources and baffle" className="front-workspace">
     <header className="front-header">
       <h2>Sources and baffle</h2><ExperimentalBadge/>
@@ -194,10 +199,10 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
       </aside>
     </div>
     <footer className="front-footer">
-      <p role="status">{hasAssembly && !building && fit.line || buildLine(hasAssembly, build.status, !!slot.prepared, designModelCurrent(design, slot))}</p>
+      <p role="status">{solveDisabledReason || hasAssembly && !building && fit.line || buildLine(hasAssembly, build.status, !!slot.prepared, designModelCurrent(design, slot))}</p>
       <div className="front-actions">
         <button className="btn" type="button" disabled={!hasAssembly || building || fit.held} title={fit.held && fit.line || undefined} onClick={() => { void prepareDesignModel(fetcher).catch(() => {}); onClose(); }}>Build</button>
-        <button className="btn-primary" type="button" disabled={!hasAssembly || building || fit.held || !solveControl || solveControl.disabled} title={fit.held && fit.line || undefined} onClick={solve}>Solve</button>
+        <button className="btn-primary" type="button" disabled={!!solveDisabledReason} title={solveDisabledReason || solveControl?.title} onClick={solve}>Solve</button>
       </div>
     </footer>
   </div></div>;

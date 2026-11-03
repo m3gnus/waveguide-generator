@@ -1,3 +1,4 @@
+import { adoptCurrentDesignAssembly } from '../jobs/assemblySolve.fixtures';
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,7 +8,7 @@ import { addWoofer, emptyAssembly, type DesignAssembly } from '../stores/assembl
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { FRONT_CONTEXT_DELAY_MS, FrontWorkspace, FrontWorkspaceLauncher, openFrontWorkspace, closeFrontWorkspace } from './FrontWorkspace';
 
-const solveControl = vi.hoisted(() => ({ current: null as Pick<NonNullable<ReturnType<typeof import('../shell/JobsCoordinator')['useOptionalSolveControl']>>, 'solve' | 'disabled' | 'actionError'> | null }));
+const solveControl = vi.hoisted(() => ({ current: null as Pick<NonNullable<ReturnType<typeof import('../shell/JobsCoordinator')['useOptionalSolveControl']>>, 'solve' | 'disabled' | 'title' | 'actionError'> | null }));
 vi.mock('../shell/JobsCoordinator', async importOriginal => ({
   ...await importOriginal<typeof import('../shell/JobsCoordinator')>(),
   useOptionalSolveControl: () => solveControl.current,
@@ -26,7 +27,7 @@ const fetcher = (async (_url: string, init?: RequestInit) => {
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  solveControl.current = null;
+  solveControl.current = { solve: vi.fn().mockResolvedValue('submitted'), disabled: false, title: 'Solve the prepared imported mesh', actionError: null };
   frames = new Map(); frameId = 0; requests = [];
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
@@ -65,7 +66,7 @@ async function mount(onClose = vi.fn()) {
 describe('front workspace', () => {
   it('submits through the shared solve control and shows the submitted words', async () => {
     const solve = vi.fn().mockResolvedValue('submitted');
-    solveControl.current = { solve, disabled: false, actionError: null };
+    solveControl.current = { solve, disabled: false, title: 'Solve the prepared imported mesh', actionError: null };
     await mount();
     expect(button('Solve').disabled).toBe(false);
     await act(async () => button('Solve').click());
@@ -75,11 +76,41 @@ describe('front workspace', () => {
 
   it('shows the shared action error and respects the shared disabled state', async () => {
     const solve = vi.fn().mockResolvedValue('blocked');
-    solveControl.current = { solve, disabled: true, actionError: 'Choose an engine for this mesh.' };
+    solveControl.current = { solve, disabled: true, title: 'Choose an engine for this mesh.', actionError: 'Choose an engine for this mesh.' };
     await mount();
     expect(button('Solve').disabled).toBe(true);
     expect(document.body.textContent).toContain('Choose an engine for this mesh.');
     expect(solve).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'No engine supports these settings. Choose another engine in Simulation.',
+    'BEAT Metal is unavailable. Prepare BEAT Metal in Simulation, then press Solve.',
+  ])('explains a disabled built Solve before a press with the shared title: %s', async title => {
+    const solve = vi.fn().mockResolvedValue('blocked');
+    solveControl.current = { solve, disabled: true, title, actionError: null };
+    adoptCurrentDesignAssembly();
+    await mount();
+    expect(button('Solve').disabled).toBe(true);
+    expect(button('Solve').title).toBe(title);
+    expect(document.querySelector('.front-footer [role="status"]')!.textContent).toBe(title);
+    expect(document.body.textContent).not.toContain('Ready to solve');
+    expect(solve).not.toHaveBeenCalled();
+    solveControl.current = { solve, disabled: false, title: 'Solve the prepared imported mesh', actionError: null };
+    await act(async () => root.render(<FrontWorkspace onClose={vi.fn()} fetcher={fetcher}/>));
+    expect(button('Solve').disabled).toBe(false);
+    expect(button('Solve').title).toBe(solveControl.current.title);
+    expect(document.querySelector('.front-footer [role="status"]')!.textContent).toBe('Built. Ready to solve.');
+  });
+
+  it('explains an unavailable Solve control even when the assembly is built', async () => {
+    solveControl.current = null;
+    adoptCurrentDesignAssembly();
+    await mount();
+    expect(button('Solve').disabled).toBe(true);
+    expect(button('Solve').title).toContain('try again from the main workspace');
+    expect(document.querySelector('.front-footer [role="status"]')!.textContent).toBe(button('Solve').title);
+    expect(document.body.textContent).not.toContain('Ready to solve');
   });
 
   it('asks the server for the context of the assembly on screen', async () => {
