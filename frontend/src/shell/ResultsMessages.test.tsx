@@ -80,3 +80,21 @@ it('never dismisses an error, even when its caller opts in or its key was dismis
   expect(host.querySelector('.results-message-dismiss')).toBeNull();
   expect(onDismiss).not.toHaveBeenCalled();
 });
+
+it('keeps every current message recoverable in the expanded list after dismissing all collapsed rows', () => {
+  act(() => root.render(<ResultsMessageArea messages={[
+    message('w', 'warning', { dismissible: true }),
+    message('i', 'info', { dismissible: true }),
+  ]}/>));
+  act(() => host.querySelector<HTMLButtonElement>('.results-message-dismiss')!.click());
+  act(() => host.querySelector<HTMLButtonElement>('.results-message-dismiss')!.click());
+  expect(rows()).toEqual([]);
+  const toggle = host.querySelector<HTMLButtonElement>('.results-messages-toggle')!;
+  expect(toggle?.textContent).toBe('+2 more');
+  act(() => toggle.click());
+  expect(rows()).toEqual(['warning', 'info']);
+  act(() => toggle.click());
+  expect(rows()).toEqual([]);
+  act(() => root.render(<ResultsMessageArea messages={[]}/>));
+  expect(host.innerHTML).toBe('');
+});

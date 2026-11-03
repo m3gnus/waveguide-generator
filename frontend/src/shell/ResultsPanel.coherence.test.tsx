@@ -181,6 +181,41 @@ describe('results run coherence', () => {
     expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe(run.id);
   });
 
+  it('keeps stale warnings non-dismissible across run changes and shows all of them when expanded', async () => {
+    const stale = ['stale-primary', 'stale-overlay-1', 'stale-overlay-2'].map((id, index) => {
+      const run = job(id, index + 1, liveDesign());
+      run.provenance = { mesher_version: '1', geometry_hash: 'sha256:old' };
+      return run;
+    });
+    const current = job('current', 4, liveDesign());
+    publishJobs([...stale, current]);
+    compareSelection.setPrimary(stale[0].id);
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(
+      url.endsWith('/mesh-freshness') ? { freshness: 'stale' } : finalResult(),
+    ), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    await act(async () => { root.render(<ResultsPanel/>); });
+    const warning = () => host.querySelector('.results-message-warning');
+    expect(warning()?.textContent).toContain('stale-primary may differ');
+    expect(warning()?.querySelector('.results-message-dismiss')).toBeNull();
+
+    await act(async () => { compareSelection.setPrimary(current.id); });
+    expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe(current.id);
+    expect(warning()).toBeNull();
+    await act(async () => { compareSelection.setPrimary(stale[0].id); });
+    expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe(stale[0].id);
+    expect(warning()?.textContent).toContain('stale-primary may differ');
+
+    await act(async () => {
+      compareSelection.toggleOverlay(stale[1].id);
+      compareSelection.toggleOverlay(stale[2].id);
+    });
+    expect(host.querySelectorAll('.results-message-warning')).toHaveLength(2);
+    await act(async () => { host.querySelector<HTMLButtonElement>('.results-messages-toggle')!.click(); });
+    expect(host.querySelectorAll('.results-message-warning')).toHaveLength(3);
+    for (const run of stale) expect(host.querySelector('.results-messages')?.textContent).toContain(`${run.id} may differ`);
+    expect(host.querySelector('.results-message-warning .results-message-dismiss')).toBeNull();
+  });
+
   it('empties charts on a new unsolved CAD model and restores matching results when its mesh returns', async () => {
     const first = job('first', 1, null, true);
     first.cad_source!.solve_model_sha256 = 'shape-a';

@@ -2891,7 +2891,7 @@ export function ResultsPanel() {
       : modelLoad === 'loading' ? [{ key: 'model-load', severity: 'progress' as const, content: 'Loading run model…' }] : []),
     ...(measuredError ? [{ key: 'measured-error', severity: 'error' as const, content: measuredError }] : []),
     ...staleMeshes.map((job) => ({
-      key: `stale-mesh:${job.id}`, severity: 'warning' as const, dismissible: true,
+      key: `stale-mesh:${job.id}`, severity: 'warning' as const,
       content: <>The mesh for {runDisplayName(job)} may differ from the one used to solve it. WG or the geometry has changed since. Solve again to update these results.</>,
     })),
     ...(showingPrevious ? [{ key: 'showing-previous', severity: 'progress' as const, content: 'Showing previous results while fetching the selected run…' }] : []),

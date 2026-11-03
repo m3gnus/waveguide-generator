@@ -170,7 +170,12 @@ describe('atomic results display transitions', () => {
     expect(line.getAttribute('role')).toBe('status');
     expect(host.querySelector('[role="alert"]')).toBeNull();
     await act(async () => line.querySelector<HTMLButtonElement>('.results-message-dismiss')!.click());
-    expect(host.querySelector('.results-messages')).toBeNull();
+    expect(host.querySelector('.results-message')).toBeNull();
+    const more = host.querySelector<HTMLButtonElement>('.results-messages-toggle')!;
+    expect(more.textContent).toBe('+1 more');
+    await act(async () => more.click());
+    expect(host.querySelector('.results-message-info')?.textContent).toBe(notice);
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('old');
   });
 
   it('keeps one complete previous set until the new set swaps atomically', async () => {

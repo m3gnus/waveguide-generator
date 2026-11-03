@@ -16,7 +16,7 @@ import { Icon } from './icons';
 export type ResultsMessageSeverity = 'error' | 'warning' | 'progress' | 'info';
 
 export interface ResultsMessage {
-  /** Identity: a dismissed message stays hidden until its key changes. */
+  /** Identity: a dismissed message stays out of the collapsed rows until its key changes. */
   key: string;
   severity: ResultsMessageSeverity;
   content: ReactNode;
@@ -65,10 +65,13 @@ export function ResultsMessageArea({ messages, label = 'Results messages' }: { m
   const [truncated, setTruncated] = useState(false);
   const [collapsedHeight, setCollapsedHeight] = useState<number | null>(null);
   const area = useRef<HTMLElement>(null);
-  const live = orderResultsMessages(messages.filter((message) => !canDismiss(message) || !dismissed.has(message.key)));
-  const rows = expanded ? live : collapsedResultsMessages(live);
-  const hidden = live.length - rows.length;
-  const open = expanded && live.length > 0;
+  const ordered = orderResultsMessages(messages);
+  const collapsed = collapsedResultsMessages(ordered.filter((message) => !canDismiss(message) || !dismissed.has(message.key)));
+  // Dismissal affects only the compact view. The full list always includes
+  // every current message, even when all compact rows have been dismissed.
+  const rows = expanded ? ordered : collapsed;
+  const hidden = ordered.length - rows.length;
+  const open = expanded && ordered.length > 0;
 
   // Whether a collapsed line cuts its text, so the toggle can offer the rest.
   const measure = useCallback(() => {
@@ -85,10 +88,10 @@ export function ResultsMessageArea({ messages, label = 'Results messages' }: { m
     const observer = new ResizeObserver(() => measure());
     observer.observe(element);
     return () => observer.disconnect();
-  }, [measure, live.length > 0]);
-  useLayoutEffect(() => { if (!live.length && expanded) setExpanded(false); }, [expanded, live.length]);
+  }, [measure, ordered.length > 0]);
+  useLayoutEffect(() => { if (!ordered.length && expanded) setExpanded(false); }, [expanded, ordered.length]);
 
-  if (!live.length) return null;
+  if (!ordered.length) return null;
   const toggle = hidden > 0 || truncated || open;
   return <section
     ref={area}
@@ -113,6 +116,7 @@ export function ResultsMessageArea({ messages, label = 'Results messages' }: { m
           title="Dismiss"
           onClick={() => {
             setDismissed((current) => new Set(current).add(message.key));
+            setExpanded(false);
             message.onDismiss?.();
           }}
         ><Icon name="close"/></button>}
