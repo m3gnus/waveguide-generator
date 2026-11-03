@@ -9,7 +9,34 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class MmdDerivation(BaseModel):
+    """Accepted free-air correction, retained as provenance, never solver input."""
+
+    method: Literal["mms_free_air"] = "mms_free_air"
+    mms_g: float = Field(gt=0, allow_inf_nan=False)
+    sd_cm2: float = Field(gt=0, allow_inf_nan=False)
+    mmd_kg: float = Field(gt=0, allow_inf_nan=False)
+    correction_kg: float = Field(gt=0, allow_inf_nan=False)
+    correction_fraction: float = Field(gt=0, le=0.5, allow_inf_nan=False)
+    rho_kg_m3: float = Field(gt=0, allow_inf_nan=False)
+
+
+class MmdSuggestion(BaseModel):
+    suggestion: MmdDerivation | None = None
+    reason: str | None = None
+    warning: str | None = None
+
+
+class ExteriorDriverInputs(BaseModel):
+    """Editor inputs and provenance, separate from the bare-driver physics."""
+
+    mms_g: float | None = Field(default=None, allow_inf_nan=False)
+    driver_id: str | None = None
+    label: str | None = None
+    derived_mmd: MmdDerivation | None = None
 
 
 class DriverVariantSummary(BaseModel):

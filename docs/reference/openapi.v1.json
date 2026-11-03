@@ -311,6 +311,16 @@
         "additionalProperties": false,
         "description": "Optional T/S driver of one radiator, bound by identity, never label.\n\n``exterior_transducer`` is the BEAT bare-driver wire without its motion\naxis: assembly diaphragms move along the axial Z direction.",
         "properties": {
+          "exterior_driver_inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExteriorDriverInputs"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "exterior_transducer": {
             "additionalProperties": true,
             "title": "Exterior Transducer",
@@ -3951,6 +3961,16 @@
               }
             ]
           },
+          "exterior_driver_inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExteriorDriverInputs"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "exterior_transducer": {
             "anyOf": [
               {
@@ -5312,6 +5332,56 @@
           }
         },
         "title": "Expr",
+        "type": "object"
+      },
+      "ExteriorDriverInputs": {
+        "description": "Editor inputs and provenance, separate from the bare-driver physics.",
+        "properties": {
+          "derived_mmd": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MmdDerivation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "driver_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Driver Id"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "mms_g": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mms G"
+          }
+        },
+        "title": "ExteriorDriverInputs",
         "type": "object"
       },
       "ExteriorTransducerSpec": {
@@ -10228,6 +10298,96 @@
           "status"
         ],
         "title": "MetadataResponse",
+        "type": "object"
+      },
+      "MmdDerivation": {
+        "description": "Accepted free-air correction, retained as provenance, never solver input.",
+        "properties": {
+          "correction_fraction": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 0.5,
+            "title": "Correction Fraction",
+            "type": "number"
+          },
+          "correction_kg": {
+            "exclusiveMinimum": 0.0,
+            "title": "Correction Kg",
+            "type": "number"
+          },
+          "method": {
+            "const": "mms_free_air",
+            "default": "mms_free_air",
+            "title": "Method",
+            "type": "string"
+          },
+          "mmd_kg": {
+            "exclusiveMinimum": 0.0,
+            "title": "Mmd Kg",
+            "type": "number"
+          },
+          "mms_g": {
+            "exclusiveMinimum": 0.0,
+            "title": "Mms G",
+            "type": "number"
+          },
+          "rho_kg_m3": {
+            "exclusiveMinimum": 0.0,
+            "title": "Rho Kg M3",
+            "type": "number"
+          },
+          "sd_cm2": {
+            "exclusiveMinimum": 0.0,
+            "title": "Sd Cm2",
+            "type": "number"
+          }
+        },
+        "required": [
+          "mms_g",
+          "sd_cm2",
+          "mmd_kg",
+          "correction_kg",
+          "correction_fraction",
+          "rho_kg_m3"
+        ],
+        "title": "MmdDerivation",
+        "type": "object"
+      },
+      "MmdSuggestion": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MmdDerivation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
+          }
+        },
+        "title": "MmdSuggestion",
         "type": "object"
       },
       "ModelSetupWrite": {
@@ -17802,6 +17962,59 @@
           }
         },
         "summary": "Library Rescan",
+        "tags": [
+          "drivers"
+        ]
+      }
+    },
+    "/api/drivers/mmd-suggestion": {
+      "get": {
+        "operationId": "mmd_suggestion_api_drivers_mmd_suggestion_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "mms_g",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "title": "Mms G",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sd_cm2",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "title": "Sd Cm2",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmdSuggestion"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mmd Suggestion",
         "tags": [
           "drivers"
         ]

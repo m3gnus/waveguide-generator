@@ -1,4 +1,4 @@
-import { parseExteriorTransducer } from './exteriorTransducer';
+import { parseExteriorTransducer, parseExteriorDriverInputs } from './exteriorTransducer';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadSolveSetup } from '../api/cadOperations';
 import type { CadSetup } from '../api/jobsSocket';
@@ -45,6 +45,7 @@ function savedDriveChannels(setup: CadSetup | null | undefined, record: CadRetur
       ))) return [];
     channel.source_ids.forEach((id) => assigned.add(id));
     return [{ id: channel.id, source_ids: [...channel.source_ids], motion: channel.motion ?? 'normal',
+      ...(channel.exterior_driver_inputs ? { exterior_driver_inputs: parseExteriorDriverInputs(channel.exterior_driver_inputs) } : {}),
       ...(channel.exterior_transducer !== undefined ? { exterior_transducer: parseExteriorTransducer(channel.exterior_transducer) } : {}) }];
   });
   return channels.length === raw.length ? channels : [];

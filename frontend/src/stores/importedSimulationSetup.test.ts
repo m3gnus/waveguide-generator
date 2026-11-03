@@ -72,6 +72,25 @@ it('lets another adapter keep an explicit group spanning roles', () => {
   expect(adapter.get().driveChannels.map(channel => channel.motion)).toEqual(['axial', 'axial']);
 });
 
+it('retains exterior Mms inputs and accepted provenance through the file adapter and setup restore', () => {
+  const id = 'source:left';
+  const derived = { method: 'mms_free_air' as const, mms_g: 17.9, sd_cm2: 124.7, mmd_kg: .0162940347065,
+    correction_kg: .0016059652935, correction_fraction: .08971873148, rho_kg_m3: 1.2041 };
+  const form = { version: 2, re_ohm: 6.4, le_h: .00073, bl_n_per_a: 7.82,
+    cms_m_per_n: .00112, rms_n_s_per_m: 1, sd_m2: .01247, motion_axis: [0, 0, 1] as [number, number, number] };
+  importedSimulationSetup().setExteriorTransducer(id, form, { mms_g: 17.9 });
+  expect(importedSimulationSetup().driveChannels.find(channel => channel.id === id)?.exterior_driver_inputs?.mms_g).toBe(17.9);
+  const inputs = { mms_g: 17.9, driver_id: 'library:rs180', derived_mmd: derived };
+  importedSimulationSetup().setExteriorTransducer(id, { ...form, mmd_kg: derived.mmd_kg }, inputs);
+  const state = importedSimulationSetup();
+  const geometry = simulationDriverGeometry(state);
+  const channel = geometry.drive_channels!.find(channel => channel.id === id)!;
+  expect(channel.exterior_driver_inputs).toEqual(inputs);
+  expect(channel.exterior_transducer).not.toHaveProperty('mms_g');
+  const restored = seedFileSimulation(mesh, { geometry: { ...geometry, skipped_source_ids: [] }, options: {} } as unknown as ImportedSetup);
+  expect(restored.driveChannels.find(channel => channel.id === id)?.exterior_driver_inputs).toEqual(inputs);
+});
+
 it('matches the server aperture roles and exact legacy source names', () => {
   expect(hasPassiveCardioidSurface([{ id: 'group_7', role: 'PASSIVE_CARDIOID' }])).toBe(true);
   expect(hasPassiveCardioidSurface([{ id: 'opening', role: 'port_exit' }])).toBe(true);

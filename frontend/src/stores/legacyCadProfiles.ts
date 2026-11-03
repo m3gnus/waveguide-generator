@@ -1,6 +1,6 @@
 import type { SolveAccuracy } from './solveOptions';
 import { namespaceStorage } from './durableSettings';
-import { parseExteriorTransducer } from './exteriorTransducer';
+import { parseExteriorTransducer, parseExteriorDriverInputs } from './exteriorTransducer';
 import { expandLegacy, parseSpec, type CrossoverSpec } from '../results/crossoverSpec';
 import { DRIVER_FIELD_KEYS, PASSIVE_CARDIOID_DEFAULTS, PASSIVE_CARDIOID_NUMBER_FIELDS,
   normalizePassiveCardioid, chainDefaults, memberOrder, combineLevelMatchDefault,
@@ -103,6 +103,7 @@ function parseDriveChannels(value: unknown, inventory: SourceInventoryEntry[], s
     if (!ids?.length || ids.some((id) => !sourceIds.has(id) || skipped.has(id) || assigned.has(id))) return [];
     ids.forEach((id) => assigned.add(id));
     return [{ id: item.id, source_ids: ids, motion: item.motion,
+      ...(item.exterior_driver_inputs ? { exterior_driver_inputs: parseExteriorDriverInputs(item.exterior_driver_inputs) } : {}),
       ...(item.exterior_transducer !== undefined ? { exterior_transducer: parseExteriorTransducer(item.exterior_transducer) } : {}) }];
   });
   return channels.length === value.length ? channels : null;

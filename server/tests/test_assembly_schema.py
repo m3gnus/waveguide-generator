@@ -98,6 +98,19 @@ def test_assembly_round_trips_api_and_cfg_with_identity_and_disabled_data() -> N
     assert "WG.Geometry" in serialize(reopened.design)
 
 
+def test_assembly_driver_mass_provenance_roundtrips_cfg() -> None:
+    from server.drivers.mass import suggest_mmd
+
+    inputs = {"mms_g": 17.9, "driver_id": "library:rs180",
+              "derived_mmd": suggest_mmd(17.9, 124.7).suggestion.model_dump()}
+    assembly = _assembly()
+    assembly["drivers"][W1]["exterior_driver_inputs"] = inputs
+    design = DesignConfig.model_validate(_osse(assembly=assembly))
+    reopened = parse(serialize(design)).design
+    assert reopened.root.assembly.drivers[W1].exterior_driver_inputs.model_dump(exclude_none=True) == inputs
+    assert reopened.root.assembly.drivers[W1].exterior_transducer == DRIVER
+
+
 @pytest.mark.parametrize("formula", ["OSSE-NATIVE", "LOOKUP"])
 def test_native_payload_designs_carry_the_assembly_in_their_json(formula: str) -> None:
     payload = ({"formula": "LOOKUP", "lookup_profile": [[0, 12.7], [120, 140]], "a0": 0}

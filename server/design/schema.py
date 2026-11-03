@@ -14,6 +14,8 @@ import re
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
+from server.drivers.models import ExteriorDriverInputs
+
 from pydantic import (
     AfterValidator,
     AliasChoices,
@@ -894,6 +896,7 @@ class AssemblyDriver(StrictModel):
     """
 
     exterior_transducer: dict[str, Any]
+    exterior_driver_inputs: ExteriorDriverInputs | None = Field(default=None, exclude_if=lambda v: v is None)
     reference: AssemblyDriverReference | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @field_validator("exterior_transducer", mode="before")

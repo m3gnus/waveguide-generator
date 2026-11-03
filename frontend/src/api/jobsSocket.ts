@@ -172,6 +172,7 @@ export interface CadSetup {
     motion?: 'normal' | 'axial';
     driver?: Record<string, number> | null;
     exterior_transducer?: ExteriorTransducerForm;
+    exterior_driver_inputs?: components['schemas']['ExteriorDriverInputs'];
   }>;
   /** Both crossover generations: the per-channel v2 form every new submission
    * writes, and the legacy triple older jobs still carry. */

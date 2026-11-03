@@ -4,6 +4,7 @@ import type { components } from '../api/generated/openapi';
 import type { CadSolveSetup } from '../api/cadOperations';
 import { deadlineSignal, PLAN_TIMEOUT_MS } from '../api/deadlineFetch';
 import type { ExteriorTransducerForm } from '../stores/exteriorTransducer';
+import type { ExteriorDriverInputs } from '../api/drivers';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
@@ -121,6 +122,7 @@ export interface ImportedGeometrySubmission {
      * `label` naming the driver they came from. */
     driver?: Record<string, number | string>;
     exterior_transducer?: ExteriorTransducerForm;
+    exterior_driver_inputs?: ExteriorDriverInputs;
   }>;
   /** Physical channels sharing one crossover branch. A signal group (design
    * assemblies) states each member's weight, delay and polarity before its sum. */

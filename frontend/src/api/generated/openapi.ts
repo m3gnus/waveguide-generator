@@ -1084,6 +1084,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/drivers/mmd-suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Mmd Suggestion */
+        get: operations["mmd_suggestion_api_drivers_mmd_suggestion_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/drivers/{driver_id}": {
         parameters: {
             query?: never;
@@ -2851,6 +2868,7 @@ export interface components {
          *     axis: assembly diaphragms move along the axial Z direction.
          */
         AssemblyDriver: {
+            exterior_driver_inputs?: components["schemas"]["ExteriorDriverInputs"] | null;
             /** Exterior Transducer */
             exterior_transducer: {
                 [key: string]: unknown;
@@ -4033,6 +4051,7 @@ export interface components {
         /** DriveChannel */
         DriveChannel: {
             driver?: components["schemas"]["DriverSpec"] | null;
+            exterior_driver_inputs?: components["schemas"]["ExteriorDriverInputs"] | null;
             exterior_transducer?: components["schemas"]["ExteriorTransducerSpec"] | null;
             /** Id */
             id: string;
@@ -4491,6 +4510,19 @@ export interface components {
             raw?: string | null;
             /** Value */
             value?: number | null;
+        };
+        /**
+         * ExteriorDriverInputs
+         * @description Editor inputs and provenance, separate from the bare-driver physics.
+         */
+        ExteriorDriverInputs: {
+            derived_mmd?: components["schemas"]["MmdDerivation"] | null;
+            /** Driver Id */
+            driver_id?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Mms G */
+            mms_g?: number | null;
         };
         /**
          * ExteriorTransducerSpec
@@ -5941,6 +5973,38 @@ export interface components {
              * @constant
              */
             status: "ok";
+        };
+        /**
+         * MmdDerivation
+         * @description Accepted free-air correction, retained as provenance, never solver input.
+         */
+        MmdDerivation: {
+            /** Correction Fraction */
+            correction_fraction: number;
+            /** Correction Kg */
+            correction_kg: number;
+            /**
+             * Method
+             * @default mms_free_air
+             * @constant
+             */
+            method?: "mms_free_air";
+            /** Mmd Kg */
+            mmd_kg: number;
+            /** Mms G */
+            mms_g: number;
+            /** Rho Kg M3 */
+            rho_kg_m3: number;
+            /** Sd Cm2 */
+            sd_cm2: number;
+        };
+        /** MmdSuggestion */
+        MmdSuggestion: {
+            /** Reason */
+            reason?: string | null;
+            suggestion?: components["schemas"]["MmdDerivation"] | null;
+            /** Warning */
+            warning?: string | null;
         };
         /**
          * ModelSetupWrite
@@ -9415,6 +9479,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DriverLibraryInfo"];
+                };
+            };
+        };
+    };
+    mmd_suggestion_api_drivers_mmd_suggestion_get: {
+        parameters: {
+            query: {
+                mms_g: number;
+                sd_cm2: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MmdSuggestion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

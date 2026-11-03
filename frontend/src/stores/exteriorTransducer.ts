@@ -1,3 +1,24 @@
+import type { ExteriorDriverInputs, MmdDerivation } from '../api/drivers';
+
+/** Read optional editor notes separately; malformed notes never change physics. */
+export function parseExteriorDriverInputs(value: unknown): ExteriorDriverInputs | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const parsed: ExteriorDriverInputs = {};
+  if (typeof raw.mms_g === 'number' && Number.isFinite(raw.mms_g)) parsed.mms_g = raw.mms_g;
+  if (typeof raw.driver_id === 'string') parsed.driver_id = raw.driver_id;
+  if (typeof raw.label === 'string') parsed.label = raw.label;
+  const derived = raw.derived_mmd;
+  if (derived && typeof derived === 'object' && !Array.isArray(derived)) {
+    const record = derived as Record<string, unknown>;
+    if (record.method === 'mms_free_air' && ['mms_g', 'sd_cm2', 'mmd_kg', 'correction_kg', 'correction_fraction', 'rho_kg_m3']
+      .every(key => typeof record[key] === 'number' && Number.isFinite(record[key]) && record[key] > 0)) {
+      parsed.derived_mmd = derived as MmdDerivation;
+    }
+  }
+  return parsed;
+}
+
 /** Bare driver parameters for BEAT's coupled exterior solve. SI throughout. */
 export const EXTERIOR_FIELDS = [
   ['re_ohm', 'Resistance', 'Ω'], ['le_h', 'Inductance', 'mH'],

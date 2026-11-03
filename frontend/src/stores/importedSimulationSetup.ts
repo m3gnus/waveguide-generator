@@ -279,8 +279,8 @@ export function createImportedSimulationSetup(config: {
   const rawActions = {
     ...singleActions,
     ...Object.fromEntries(groupedActionNames.map(name => [name, groupedAction(name)])) as Pick<SimulationActions, typeof groupedActionNames[number]>,
-    setExteriorTransducer: (channelId: string, form: Parameters<SimulationActions['setExteriorTransducer']>[1]) => {
-      singleActions.setExteriorTransducer(channelId, form);
+    setExteriorTransducer: (...args: Parameters<SimulationActions['setExteriorTransducer']>) => {
+      singleActions.setExteriorTransducer(...args);
       config.write(state => ({ driverGroups: adapterGroups(config.sources(), state), persistDriverGroups: true }));
     },
     setSweep: config.setSweep,

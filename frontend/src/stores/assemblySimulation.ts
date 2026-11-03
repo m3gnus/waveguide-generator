@@ -60,7 +60,9 @@ export function assemblySimulationData(design: DesignDocument, record: CompiledA
   const compiled = new Set(excitations.map(excitation => excitation.id));
   const driveChannels: CadDriveChannel[] = excitations.map(excitation => {
     const form = assemblyDriverForm(assembly.drivers?.[excitation.id]);
+    const inputs = assembly.drivers?.[excitation.id]?.exterior_driver_inputs;
     return { id: excitation.id, source_ids: [...excitation.source_ids], motion: excitation.motion,
+      ...(inputs ? { exterior_driver_inputs: inputs } : {}),
       ...(form ? { exterior_transducer: form } : {}) };
   });
   const spec = assembly.crossover?.spec;
@@ -98,6 +100,7 @@ export function applyAssemblySimulation(assembly: DesignAssembly, next: Simulati
     if (!channel.exterior_transducer || channel.id === HF_RADIATOR_ID) continue;
     const { motion_axis: _axis, ...exterior } = channel.exterior_transducer;
     drivers[channel.id] = { exterior_transducer: exterior as AssemblyDriver['exterior_transducer'],
+      ...(channel.exterior_driver_inputs ? { exterior_driver_inputs: channel.exterior_driver_inputs } : {}),
       ...(result.drivers?.[channel.id]?.reference ? { reference: result.drivers[channel.id].reference } : {}) };
   }
   if (Object.keys(drivers).length) result.drivers = drivers; else delete result.drivers;

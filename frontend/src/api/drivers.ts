@@ -1,5 +1,17 @@
 import { httpErrorMessage } from './httpError';
 import { deadlineFetch } from './deadlineFetch';
+import type { components } from './generated/openapi';
+
+export type ExteriorDriverInputs = components['schemas']['ExteriorDriverInputs'];
+export type MmdDerivation = components['schemas']['MmdDerivation'];
+export type MmdSuggestion = components['schemas']['MmdSuggestion'];
+
+export async function suggestMmd(mms_g: number, sd_cm2: number, fetcher: typeof fetch = fetch): Promise<MmdSuggestion> {
+  const params = new URLSearchParams({ mms_g: String(mms_g), sd_cm2: String(sd_cm2) });
+  const response = await deadlineFetch(fetcher, `/api/drivers/mmd-suggestion?${params}`);
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not suggest Mmd. Check Mms and Sd, or enter the manufacturer’s Mmd.'));
+  return response.json() as Promise<MmdSuggestion>;
+}
 /**
  * The driver library's REST surface (CADLINK-CROSSOVER-DRIVERS.md section 4).
  *

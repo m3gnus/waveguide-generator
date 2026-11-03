@@ -6,11 +6,14 @@ import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOpt
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { useDriverLibraryStore } from '../stores/driverLibrary';
 import { type ExteriorTransducerForm } from '../stores/exteriorTransducer';
+import { suggestMmd } from '../api/drivers';
+import { workspaceModeStore } from '../stores/workspaceMode';
 
 vi.mock('../api/drivers', () => ({
   searchDrivers: vi.fn(async () => ({ items: [], hiddenIncomplete: 0, matchesByKind: {} })),
   getDriver: vi.fn(),
   getDriverLibrary: vi.fn(),
+  suggestMmd: vi.fn(),
 }));
 
 let host: HTMLDivElement;
@@ -41,11 +44,12 @@ async function pick(label: string) {
   const row = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')]
     .find(option => option.textContent?.includes(label));
   expect(row).toBeDefined();
-  act(() => row!.click());
+  await act(async () => row!.click());
 }
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   resetCadReturnStore();
+  workspaceModeStore.setImportedInput('cad');
   useCadReturnStore.setState({ driveChannels: [{ id: 'driver', source_ids: ['front'], motion: 'axial', exterior_transducer: base }] });
   useDriverLibraryStore.setState({ status: 'ready', info: null, saved: [{
     id: 'saved', label: 'Library driver', based_on: 'database', base: { re_ohm: 4 }, overrides: {}, kind: 'lf', z_ohm: null, xo_min_hz: null,
@@ -53,7 +57,7 @@ beforeEach(() => {
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   act(() => root.render(<Editor/>));
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); vi.clearAllMocks(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); vi.resetAllMocks(); });
 
 it('preserves every typed field and shows no library note after choosing hand entry', async () => {
   for (const [label, value] of [['Resistance', '6'], ['Inductance', '.1'], ['Force factor', '7'],
@@ -111,4 +115,64 @@ it('retains disabled semi-inductance values while hand-editing ordinary fields',
   enter('Sd', '200');
   act(() => input('Semi-inductance').click());
   expect(input('Re′').value).toBe('5');
+});
+
+const derived = { method: 'mms_free_air' as const, mms_g: 17.9, sd_cm2: 124.7, mmd_kg: .0162940347065,
+  correction_kg: .0016059652935, correction_fraction: .08971873148, rho_kg_m3: 1.2041 };
+const buttons = () => [...host.querySelectorAll<HTMLButtonElement>('button')];
+
+it.each(['library', 'manual'])('offers %s Mms explicitly, accepts once, edits normally and undoes acceptance', async source => {
+  vi.mocked(suggestMmd).mockResolvedValue({ suggestion: derived });
+  if (source === 'library') {
+    act(() => useDriverLibraryStore.setState({ saved: [{ ...useDriverLibraryStore.getState().saved[0],
+      base: { re_ohm: 6.4, sd_cm2: 124.7, mms_g: 17.9 } }] }));
+    await pick('Library driver');
+  } else {
+    enter('Mms', '17.9'); enter('Sd', '124.7');
+  }
+  await act(async () => {});
+  expect(suggestMmd).toHaveBeenLastCalledWith(17.9, 124.7);
+  expect(input('Bare moving mass (Mmd)').value).toBe('');
+  expect(host.textContent).toContain('Suggested from Mms and Sd (free-air air-load removed)');
+  const accept = buttons().find(button => button.textContent === 'Use suggested Mmd')!;
+  act(() => accept.click());
+  expect(input('Bare moving mass (Mmd)').valueAsNumber).toBe(derived.mmd_kg);
+  expect(useCadReturnStore.getState().driveChannels[0].exterior_driver_inputs?.derived_mmd).toEqual(derived);
+  expect(buttons().find(button => button.textContent === 'Use suggested Mmd')).toBeUndefined();
+  act(() => buttons().find(button => button.textContent === 'Undo Mmd suggestion')!.click());
+  expect(input('Bare moving mass (Mmd)').value).toBe('');
+  expect(useCadReturnStore.getState().driveChannels[0].exterior_driver_inputs?.derived_mmd).toBeUndefined();
+  await act(async () => {});
+  act(() => buttons().find(button => button.textContent === 'Use suggested Mmd')!.click());
+  enter('Bare moving mass (Mmd)', '.02');
+  expect(input('Bare moving mass (Mmd)').valueAsNumber).toBe(0.02);
+  expect(host.textContent).toContain('edited after derivation');
+});
+
+it('withholds a refused correction and displays its reason', async () => {
+  vi.mocked(suggestMmd).mockResolvedValue({ suggestion: null, reason: 'Correction exceeds 50% of Mms; check Sd/Mms' });
+  enter('Mms', '55'); enter('Sd', '850');
+  await act(async () => {});
+  expect(host.textContent).toContain('No Mmd suggestion: Correction exceeds 50%');
+  expect(buttons().find(button => button.textContent === 'Use suggested Mmd')).toBeUndefined();
+  expect(input('Bare moving mass (Mmd)').value).toBe('');
+});
+
+it('keeps a manufacturer Mmd and never requests a correction for it', async () => {
+  act(() => useDriverLibraryStore.setState({ saved: [{ ...useDriverLibraryStore.getState().saved[0],
+    base: { mmd_g: 16, mms_g: 17.9, sd_cm2: 124.7 } }] }));
+  await pick('Library driver');
+  expect(input('Bare moving mass (Mmd)').value).toBe('0.016');
+  expect(suggestMmd).not.toHaveBeenCalled();
+});
+
+it('ignores late responses when a driver or its inputs change', async () => {
+  let finish!: (value: { suggestion: typeof derived }) => void;
+  vi.mocked(suggestMmd).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue({ suggestion: null, reason: 'Refused new inputs' });
+  enter('Mms', '17.9'); enter('Sd', '124.7');
+  enter('Mms', '1');
+  await act(async () => { finish({ suggestion: derived }); });
+  expect(host.textContent).toContain('Refused new inputs');
+  expect(buttons().find(button => button.textContent === 'Use suggested Mmd')).toBeUndefined();
 });

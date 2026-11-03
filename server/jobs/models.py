@@ -21,6 +21,7 @@ from server.contracts import DriverSpec as DriverSpec, JobModel as JobModel
 from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig
 from server.design.uid import DesignUid
+from server.drivers.models import ExteriorDriverInputs
 
 
 # Serializer return annotations intentionally remain absent: Pydantic uses them
@@ -365,12 +366,15 @@ class DriveChannel(JobModel):
     patch_weights: dict[str, float] | None = None
     driver: DriverSpec | None = None
     exterior_transducer: ExteriorTransducerSpec | None = None
+    exterior_driver_inputs: ExteriorDriverInputs | None = None
 
     @model_serializer(mode="wrap")
     def omit_absent_transducer(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
         wire = handler(self)
         if self.exterior_transducer is None:
             wire.pop("exterior_transducer", None)
+        if self.exterior_driver_inputs is None:
+            wire.pop("exterior_driver_inputs", None)
         if self.physical_source_id is None:
             wire.pop("physical_source_id", None)
         if self.patch_weights is None:

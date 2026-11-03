@@ -59,6 +59,28 @@ describe('assembly as the shared Simulation input', () => {
     expect(useDesignStore.getState().design.assembly).toEqual(before);
   });
 
+  it('saves accepted Mmd provenance and undoes both the value and derivation in one step', () => {
+    const { first } = setup();
+    const derived = { method: 'mms_free_air' as const, mms_g: 17.9, sd_cm2: 124.7, mmd_kg: .0162940347065,
+      correction_kg: .0016059652935, correction_fraction: .08971873148, rho_kg_m3: 1.2041 };
+    const incomplete = { ...DRIVER, mmd_kg: undefined, motion_axis: [0, 0, 1] as [number, number, number] };
+    assemblyImportedSetup().setExteriorTransducer(first, incomplete, { mms_g: 17.9, driver_id: 'library:rs180' });
+    const before = structuredClone(useDesignStore.getState().design);
+    assemblyImportedSetup().setExteriorTransducer(first, { ...incomplete, mmd_kg: derived.mmd_kg },
+      { mms_g: 17.9, driver_id: 'library:rs180', derived_mmd: derived });
+    const saved = JSON.parse(JSON.stringify(useDesignStore.getState().design));
+    const reopened = assemblySimulationData(saved, compiledFor([first]));
+    expect(reopened.driveChannels.find(channel => channel.id === first)?.exterior_driver_inputs?.derived_mmd).toEqual(derived);
+    const geometry = resolveAssemblySetup(assemblyImportedSetup(), saved.assembly, { engine: 'beat-cpu', polar_config: {} } as never, saved.simulation).setup.geometry;
+    const channel = geometry.drive_channels.find(channel => channel.id === first)!;
+    expect(channel.exterior_transducer?.mmd_kg).toBe(derived.mmd_kg);
+    expect(channel.exterior_transducer).not.toHaveProperty('mms_g');
+    expect(channel.exterior_transducer).not.toHaveProperty('derived_mmd');
+    expect(channel.exterior_driver_inputs?.derived_mmd).toEqual(derived);
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design).toEqual(before);
+  });
+
   it('keeps member processing, disabled radiators and the crossover when groups change', () => {
     const { first, second } = setup();
     commitAssembly(setMemberProcessing(useDesignStore.getState().design.assembly!, second, { delay_ms: 0.5, invert: true }));

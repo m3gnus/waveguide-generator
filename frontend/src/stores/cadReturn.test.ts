@@ -158,6 +158,21 @@ describe('CAD return store', () => {
     expect(useCadReturnStore.getState().meshSizes.source_size_mm).toEqual({ 'source-mf': 9, 'source-hf': 6 });
   });
 
+  it('retains exterior mass provenance during listing refresh and unrelated source assignment', () => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    const inputs = { mms_g: 17.9, driver_id: 'library:rs180', derived_mmd: {
+      method: 'mms_free_air' as const, mms_g: 17.9, sd_cm2: 124.7, mmd_kg: .0162940347065,
+      correction_kg: .0016059652935, correction_fraction: .08971873148, rho_kg_m3: 1.2041 } };
+    const form = { version: 1, motion_axis: [0, 0, 1] as [number, number, number], mmd_kg: inputs.derived_mmd.mmd_kg };
+    useCadReturnStore.getState().setExteriorTransducer('drive-mf', form, inputs);
+    useCadReturnStore.getState().refreshSelectedBundle({ ...bundle });
+    expect(useCadReturnStore.getState().driveChannels.find(channel => channel.id === 'drive-mf'))
+      .toMatchObject({ exterior_transducer: form, exterior_driver_inputs: inputs });
+    useCadReturnStore.getState().setSkipped('source-hf', false);
+    useCadReturnStore.getState().setSourceChannel('source-hf', 'other');
+    expect(useCadReturnStore.getState().driveChannels.find(channel => channel.id === 'drive-mf')?.exterior_driver_inputs).toEqual(inputs);
+  });
+
   it('distinguishes a first arrival from resetting an existing solve setup', () => {
     expect(useCadReturnStore.getState().selectArrivedBundle(bundle)).toBe('initial');
 

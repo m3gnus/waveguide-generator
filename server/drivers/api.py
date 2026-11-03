@@ -11,12 +11,22 @@ from server.drivers.models import (
     DriverDetail,
     DriverLibraryInfo,
     DriverSearchResponse,
+    MmdSuggestion,
 )
 from server.drivers.paths import resolve_driver_library_dir
 
 
 def create_drivers_router(library: DriverLibrary) -> APIRouter:
     router = APIRouter(prefix="/api/drivers", tags=["drivers"])
+
+    @router.get("/mmd-suggestion", response_model=MmdSuggestion)
+    async def mmd_suggestion(
+        mms_g: float = Query(gt=0, allow_inf_nan=False),
+        sd_cm2: float = Query(gt=0, allow_inf_nan=False),
+    ) -> MmdSuggestion:
+        from server.drivers.mass import suggest_mmd
+
+        return suggest_mmd(mms_g, sd_cm2)
 
     @router.get("", response_model=DriverSearchResponse)
     async def search_drivers(

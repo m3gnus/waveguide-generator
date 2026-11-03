@@ -9,6 +9,9 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 
 const form = { version: 1, motion_axis: [1, 2, 3] as [number, number, number],
   re_ohm: 6, le_h: .0005, bl_n_per_a: 7, mmd_kg: .02, cms_m_per_n: .001, rms_n_s_per_m: 1.5 };
+const inputs = { mms_g: 30, driver_id: 'library:driver', derived_mmd: {
+  method: 'mms_free_air' as const, mms_g: 30, sd_cm2: 132, mmd_kg: .02,
+  correction_kg: .01, correction_fraction: 1 / 3, rho_kg_m3: 1.2041 } };
 beforeEach(() => { resetCadReturnStore(); resetSolveOptionsStore(); });
 
 function enable() {
@@ -76,10 +79,11 @@ it('passes and persists v2 physical models with a declared Sd', () => {
   enable();
   const extended = { ...form, version: 2, power_w: 100, xmax_mm: 2, sd_m2: .0132, semi_inductance: semi,
     lumped_sealed_rear_chamber: { enabled: true, volume_m3: .01 } };
-  useCadReturnStore.getState().setExteriorTransducer('d', extended);
+  useCadReturnStore.getState().setExteriorTransducer('d', extended, inputs);
   expect(parseExteriorTransducer(JSON.parse(JSON.stringify(extended)))).toEqual(extended);
   expect(exteriorTransducerError(extended)).toBeNull();
   expect(buildImportedSubmission().geometry.drive_channels[0].exterior_transducer).toEqual(extended);
+  expect(buildImportedSubmission().geometry.drive_channels[0].exterior_driver_inputs).toEqual(inputs);
   useCadReturnStore.setState({ selectedBundle: { sources: [{ id: 's', role: 'LF', required: true }] } as never });
   const setup = buildCadProjectSetup(useCadReturnStore.getState(), useImportedSolveOptionsStore.getState(), 'lineage')!;
   const savedChannels = setup.setup.geometry.drive_channels as Array<{ exterior_transducer: unknown }>;
@@ -130,12 +134,13 @@ it('restores v2 driver options through the durable CAD draft parser', async () =
   expect(await waitForCadProjectSettings()).toBe(true);
   const extended = { ...form, version: 2, power_w: 100, xmax_mm: 2, sd_m2: .0132, semi_inductance: semi,
     lumped_sealed_rear_chamber: { enabled: true, volume_m3: .01 } };
-  useCadReturnStore.getState().setExteriorTransducer('d', extended);
+  useCadReturnStore.getState().setExteriorTransducer('d', extended, inputs);
   expect(retainCadDraft()).not.toBeNull();
   resetCadReturnStore();
   useCadReturnStore.getState().selectBundle(bundle, 'driver-project', false, fetcher);
   expect(await waitForCadProjectSettings()).toBe(true);
   expect(useCadReturnStore.getState().driveChannels[0].exterior_transducer).toEqual(extended);
+  expect(useCadReturnStore.getState().driveChannels[0].exterior_driver_inputs).toEqual(inputs);
   localStorage.clear();
 });
 
