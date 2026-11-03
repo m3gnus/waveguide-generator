@@ -136,22 +136,42 @@ def flush_log_sinks() -> None:
         return
 
 
-def read_log_text(path: Path, *, limit: int, tail: bool = False) -> str | None:
-    """Read a log completely, or not at all.
+def _read_log_bytes(path: Path, *, limit: int, tail: bool) -> tuple[bytes, int] | None:
+    """Read the retained log bytes and close the file before packaging them.
 
-    Read fully and close, rather than streaming into the zip from an open
-    handle. ``RotatingFileHandler`` rolls over by renaming, and on Windows a
+    Read at most the positive byte limit and release the handle before building
+    the zip. ``RotatingFileHandler`` rolls over by renaming, and on Windows a
     rename fails outright while any other handle is open on the source -- so a
     lazily-consumed handle would turn "somebody asked for a report" into
     "logging stopped", which is precisely backwards.
     """
 
+    start = 0
     try:
-        raw = path.read_bytes()
+        with path.open("rb") as handle:
+            if limit > 0:
+                if tail:
+                    start = max(0, handle.seek(0, io.SEEK_END) - limit)
+                    handle.seek(start)
+                raw = handle.read(limit)
+            else:
+                # Preserve the original slicing semantics for nonpositive
+                # limits; diagnostic callers all supply a positive ceiling.
+                raw = handle.read()
     except (OSError, ValueError):
         return None
     if len(raw) > limit:
         raw = raw[-limit:] if tail else raw[:limit]
+    return raw, start
+
+
+def read_log_text(path: Path, *, limit: int, tail: bool = False) -> str | None:
+    """The retained log window, keeping partial UTF-8 bytes readable."""
+
+    window = _read_log_bytes(path, limit=limit, tail=tail)
+    if window is None:
+        return None
+    raw, _ = window
     # Log files are UTF-8 by handler configuration, but a crashed native
     # solver can leave a partial sequence at the end of one. Losing the report
     # over the last three bytes of it would be an absurd trade.
@@ -171,14 +191,13 @@ def update_log_tails(logs_dir: Path, rules: ScrubRules) -> dict[str, str | None]
     for name in UPDATE_LOG_NAMES:
         # Only the tail is read: update.log is appended to for the life of an
         # installation, and each "Copy update diagnostics" reads it.
-        try:
-            with (Path(logs_dir) / name).open("rb") as handle:
-                start = max(0, handle.seek(0, io.SEEK_END) - MAX_UPDATE_LOG_BYTES)
-                handle.seek(start)
-                raw = handle.read(MAX_UPDATE_LOG_BYTES)
-        except (OSError, ValueError):
+        window = _read_log_bytes(
+            Path(logs_dir) / name, limit=MAX_UPDATE_LOG_BYTES, tail=True
+        )
+        if window is None:
             tails[name] = None
             continue
+        raw, start = window
         if start > 0:
             newline = raw.find(b"\n")
             raw = raw[newline + 1 :] if newline >= 0 else b""

@@ -1981,68 +1981,50 @@ class CadLinkStore:
     def list_designs(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """List recent registry heads without loading their snapshot text."""
 
-        if not self._initialized and (
-            str(self.db_path) == ":memory:" or not self.db_path.exists()
-        ):
-            return []
-        bounded_limit = max(1, min(int(limit), 500))
-        with self._lock:
-            try:
-                rows = self._connect().execute(
-                    """SELECT designs.design_id, designs.lineage_id,
-                              designs.edit_version, designs.design_hash,
-                              designs.filename, designs.branched_from_design_id,
-                              designs.branched_from_edit_version,
-                              designs.created_at, designs.updated_at,
-                              COUNT(exports.export_id) AS export_count,
-                              MAX(exports.created_at) AS last_exported_at
-                       FROM designs
-                       LEFT JOIN exports ON exports.design_id = designs.design_id
-                       GROUP BY designs.design_id
-                       ORDER BY designs.updated_at DESC, designs.design_id DESC
-                       LIMIT ?""",
-                    (bounded_limit,),
-                ).fetchall()
-            except sqlite3.OperationalError as exc:
-                if "no such table" in str(exc):
-                    return []
-                raise
-        return [dict(row) for row in rows]
+        return self._list_design_heads(limit=limit, canonical=False)
 
     def list_projects(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """List one canonical, newest design head per lineage."""
 
+        return self._list_design_heads(limit=limit, canonical=True)
+
+    def _list_design_heads(self, *, limit: int, canonical: bool) -> list[dict[str, Any]]:
         if not self._initialized and (
             str(self.db_path) == ":memory:" or not self.db_path.exists()
         ):
             return []
         bounded_limit = max(1, min(int(limit), 500))
+        head_filter = """WHERE NOT EXISTS (
+            SELECT 1 FROM designs AS newer
+            WHERE newer.lineage_id = designs.lineage_id
+              AND (newer.updated_at > designs.updated_at
+                   OR (newer.updated_at = designs.updated_at
+                       AND newer.design_id > designs.design_id))
+        )""" if canonical else ""
         with self._lock:
             try:
+                # Export summaries do not affect membership or ordering. Select
+                # the page first, then use exports' (design_id, sequence) index
+                # to aggregate only those heads, rather than the entire history.
                 rows = self._connect().execute(
-                    """SELECT designs.design_id, designs.lineage_id,
+                    f"""WITH recent AS (
+                       SELECT designs.design_id, designs.lineage_id,
                               designs.edit_version, designs.design_hash,
                               designs.filename, designs.branched_from_design_id,
                               designs.branched_from_edit_version,
-                              designs.created_at, designs.updated_at,
+                              designs.created_at, designs.updated_at
+                       FROM designs
+                       {head_filter}
+                       ORDER BY designs.updated_at DESC, designs.design_id DESC
+                       LIMIT ?
+                       )
+                       SELECT recent.*,
                               COUNT(exports.export_id) AS export_count,
                               MAX(exports.created_at) AS last_exported_at
-                       FROM designs
-                       LEFT JOIN exports ON exports.design_id = designs.design_id
-                       WHERE NOT EXISTS (
-                         SELECT 1 FROM designs AS newer
-                         WHERE newer.lineage_id = designs.lineage_id
-                           AND (
-                             newer.updated_at > designs.updated_at
-                             OR (
-                               newer.updated_at = designs.updated_at
-                               AND newer.design_id > designs.design_id
-                             )
-                           )
-                       )
-                       GROUP BY designs.design_id
-                       ORDER BY designs.updated_at DESC, designs.design_id DESC
-                       LIMIT ?""",
+                       FROM recent
+                       LEFT JOIN exports ON exports.design_id = recent.design_id
+                       GROUP BY recent.design_id
+                       ORDER BY recent.updated_at DESC, recent.design_id DESC""",
                     (bounded_limit,),
                 ).fetchall()
             except sqlite3.OperationalError as exc:

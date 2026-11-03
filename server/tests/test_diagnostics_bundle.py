@@ -243,6 +243,37 @@ def test_read_log_text_returns_none_for_a_file_that_is_not_there(tmp_path: Path)
     assert read_log_text(tmp_path / "absent.log", limit=1024) is None
 
 
+@pytest.mark.parametrize("tail", [False, True])
+@pytest.mark.parametrize("limit", [-2, 0, 1, 2, 7, 200])
+def test_bounded_log_reads_preserve_byte_slicing(tmp_path, tail, limit):
+    raw = "first line\r\nlast line: \u00e5\u00e4\u00f6\n".encode() + b"\xc3"
+    path = tmp_path / "server.log"
+    path.write_bytes(raw)
+    expected = raw
+    if len(raw) > limit:
+        expected = raw[-limit:] if tail else raw[:limit]
+    assert read_log_text(path, limit=limit, tail=tail) == expected.decode("utf-8", errors="replace")
+
+
+@pytest.mark.parametrize("tail", [False, True])
+def test_log_reads_only_request_the_retained_bytes(monkeypatch, tmp_path, tail):
+    from io import BytesIO
+
+    raw = b"first line\n" * 10000 + b"last line\n"
+    reads = []
+
+    class LogFile(BytesIO):
+        def read(self, size=-1):
+            reads.append(size)
+            assert 0 <= size <= 64, "log reader must not read the whole file"
+            return super().read(size)
+
+    monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: LogFile(raw))
+    expected = raw[-64:] if tail else raw[:64]
+    assert read_log_text(tmp_path / "server.log", limit=64, tail=tail) == expected.decode()
+    assert reads == [64]
+
+
 def test_summary_text_leads_with_the_build_label() -> None:
     text = summary_text(summary_for())
     assert text.splitlines()[0] == "Waveguide Generator 0.3.0 (0.3.0+gabcd1234)"
