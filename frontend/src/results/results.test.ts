@@ -592,6 +592,60 @@ describe('recombineJobResults', () => {
     expect(resultsCache.get('job-order')).toEqual(combined(8));
     resultsCache.clear();
   });
+
+  describe.each(['archive snapshot', 'results GET'] as const)('with %s', (source) => {
+    it.each([
+      { readStarts: 'before', readFinishes: 'after' },
+      { readStarts: 'during', readFinishes: 'before' },
+      { readStarts: 'during', readFinishes: 'after' },
+    ] as const)(
+      'preserves the recombination when the read starts $readStarts and finishes $readFinishes it',
+      async ({ readStarts, readFinishes }) => {
+        resultsCache.clear();
+        const jobId = `job-late-${source}`;
+        const members = ['mf', 'hf'];
+        const original = combinedChannel(result(), members);
+        const updated = {
+          ...combinedChannel(result(6), members),
+          metadata: { combine: { members, crossovers_hz: [900] } },
+        };
+        let replyRead!: (response: Response) => void;
+        let replyCombine!: (response: Response) => void;
+        const pendingRead = new Promise<Response>((resolve) => { replyRead = resolve; });
+        const pendingCombine = new Promise<Response>((resolve) => { replyCombine = resolve; });
+        const fetcher = vi.fn((input: RequestInfo | URL) => String(input).endsWith('/combine')
+          ? pendingCombine : pendingRead);
+        const read = () => source === 'archive snapshot'
+          ? fetchJobArchiveSnapshot(jobId, fetcher).then(snapshot => snapshot.results)
+          : fetchJobResults(jobId, fetcher);
+
+        const earlierRead = readStarts === 'before' ? read() : null;
+        const recombining = recombineJobResults(jobId, { members, crossovers_hz: [900] }, fetcher);
+        const older = earlierRead ?? read();
+        const finishRead = async () => {
+          replyRead(new Response(JSON.stringify(source === 'archive snapshot' ? {
+            schema_version: 1,
+            results: original,
+            results_sha256: 'a'.repeat(64),
+            mesh_artifact: null,
+            pressure_bases: [],
+            radiation_impedance: null,
+          } : original), { status: 200 }));
+          expect(await older).toEqual(original);
+        };
+
+        if (readFinishes === 'before') await finishRead();
+        replyCombine(new Response(JSON.stringify(updated), { status: 200 }));
+        const recombined = await recombining;
+        expect(resultsCache.get(jobId)).toEqual(updated);
+        if (readFinishes === 'after') await finishRead();
+        expect(resultsCache.get(jobId)).toBe(recombined);
+        expect(await fetchJobResults(jobId, fetcher)).toBe(recombined);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        resultsCache.clear();
+      },
+    );
+  });
 });
 
 describe('polar cut mirroring', () => {

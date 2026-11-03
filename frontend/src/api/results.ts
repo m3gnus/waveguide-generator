@@ -374,13 +374,18 @@ export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fet
   const existing = inFlightResults.get(jobId);
   if (existing) return existing;
   const request = (async () => {
-    const response = await deadlineFetch(fetcher, `/api/results/${encodeURIComponent(jobId)}`);
-    if (!response.ok) {
-      throw new Error(await httpErrorMessage(response, 'WG could not load this run’s results. Select the run again.'));
+    const revision = issueResultsRequest(jobId, 'read');
+    let result: JobResults | null = null;
+    try {
+      const response = await deadlineFetch(fetcher, `/api/results/${encodeURIComponent(jobId)}`);
+      if (!response.ok) {
+        throw new Error(await httpErrorMessage(response, 'WG could not load this run’s results. Select the run again.'));
+      }
+      result = parseFinalResultEnvelope(await response.json());
+      return result;
+    } finally {
+      settleResultsRequest(jobId, revision, result);
     }
-    const result = parseFinalResultEnvelope(await response.json());
-    resultsCache.set(jobId, result);
-    return result;
   })();
   inFlightResults.set(jobId, request);
   try {
@@ -413,15 +418,21 @@ export async function fetchJobArchiveSnapshot(
   jobId: string,
   fetcher: typeof fetch = fetch,
 ): Promise<JobArchiveSnapshot> {
-  const response = await deadlineFetch(fetcher, `/api/jobs/${encodeURIComponent(jobId)}/archive-snapshot`);
-  if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, 'WG could not read this run’s saved copy. Select the run again.'));
+  const revision = issueResultsRequest(jobId, 'read');
+  let result: JobResults | null = null;
+  try {
+    const response = await deadlineFetch(fetcher, `/api/jobs/${encodeURIComponent(jobId)}/archive-snapshot`);
+    if (!response.ok) {
+      throw new Error(await httpErrorMessage(response, 'WG could not read this run’s saved copy. Select the run again.'));
+    }
+    const value = await response.json();
+    if (!isRecord(value)) throw new ProgramFault('invalid archive snapshot');
+    const snapshot = { ...value, results: parseFinalResultEnvelope(value.results) } as unknown as JobArchiveSnapshot;
+    result = snapshot.results;
+    return snapshot;
+  } finally {
+    settleResultsRequest(jobId, revision, result);
   }
-  const value = await response.json();
-  if (!isRecord(value)) throw new ProgramFault('invalid archive snapshot');
-  const snapshot = { ...value, results: parseFinalResultEnvelope(value.results) } as unknown as JobArchiveSnapshot;
-  resultsCache.set(jobId, snapshot.results);
-  return snapshot;
 }
 
 /** The optional matrix artifact is stored separately from the result JSON.
@@ -459,32 +470,35 @@ export interface RecombineSpec {
  * only describes the durable result until a later recombine of the same job
  * replaces it. Publishing a superseded reply into the cache would leave the
  * cached job holding a crossover the run no longer has, and a later reload,
- * field evaluation or export would read it back. The entry is dropped once
- * nothing for that job is in flight, so this map is bounded by concurrency
- * rather than by how many jobs a session touches.
+ * field evaluation or export would read it back. Reads (including archive
+ * snapshots) share this guard at the last published revision. They may have
+ * captured the old result while a recombine was pending, so starting a read
+ * must never advance the revision or supersede that recombine.
+ * The entry is dropped once nothing for that job is in flight, so this map
+ * is bounded by concurrency rather than by how many jobs a session touches.
  */
-interface RecombineOrder { issued: number; published: number; inFlight: number }
-const recombineOrder = new Map<string, RecombineOrder>();
+interface ResultsRequestOrder { issued: number; published: number; inFlight: number }
+const resultsRequestOrder = new Map<string, ResultsRequestOrder>();
 
-function issueRecombine(jobId: string): number {
-  const order = recombineOrder.get(jobId) ?? { issued: 0, published: 0, inFlight: 0 };
-  order.issued += 1;
+function issueResultsRequest(jobId: string, kind: 'read' | 'recombine'): number {
+  const order = resultsRequestOrder.get(jobId) ?? { issued: 0, published: 0, inFlight: 0 };
+  if (kind === 'recombine') order.issued += 1;
   order.inFlight += 1;
-  recombineOrder.set(jobId, order);
-  return order.issued;
+  resultsRequestOrder.set(jobId, order);
+  return kind === 'recombine' ? order.issued : order.published;
 }
 
-/** Publish this reply unless a later recombine of the job already published,
+/** Publish this reply unless a newer recombine of the job already published,
  * then retire the request. `result` is null when it never became one. */
-function settleRecombine(jobId: string, revision: number, result: JobResults | null): void {
-  const order = recombineOrder.get(jobId);
+function settleResultsRequest(jobId: string, revision: number, result: JobResults | null): void {
+  const order = resultsRequestOrder.get(jobId);
   if (!order) return;
-  if (result !== null && revision > order.published) {
+  if (result !== null && revision >= order.published) {
     order.published = revision;
     resultsCache.set(jobId, result);
   }
   order.inFlight -= 1;
-  if (order.inFlight <= 0) recombineOrder.delete(jobId);
+  if (order.inFlight <= 0) resultsRequestOrder.delete(jobId);
 }
 
 /** Recompute a job's combined channel from its stored complex bases. The
@@ -495,7 +509,7 @@ export async function recombineJobResults(
   spec: RecombineSpec,
   fetcher: typeof fetch = fetch,
 ): Promise<JobResults> {
-  const revision = issueRecombine(jobId);
+  const revision = issueResultsRequest(jobId, 'recombine');
   let result: JobResults | null = null;
   try {
     const response = await fetcher(`/api/results/${encodeURIComponent(jobId)}/combine`, {
@@ -509,7 +523,7 @@ export async function recombineJobResults(
     result = parseFinalResultEnvelope(await response.json());
     return result;
   } finally {
-    settleRecombine(jobId, revision, result);
+    settleResultsRequest(jobId, revision, result);
   }
 }
 
