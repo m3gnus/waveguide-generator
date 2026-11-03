@@ -63,10 +63,10 @@ function layoutOf(series: LineSeries, option: EChartsOption): Layout | null {
     // floor would draw outside the dial.
     return { param: 1, value: 0, logarithmic: false, clamp: [min, max] };
   }
+  // Only frequency responses. A linear axis carries geometry (the bore
+  // profile), whose corners are real and must not be rounded off.
   const axis = axisAt(option.xAxis, series.xAxisIndex ?? 0);
-  if (axis?.type === 'log') return { param: 0, value: 1, logarithmic: true, clamp: [-Infinity, Infinity] };
-  if (axis?.type === 'value') return { param: 0, value: 1, logarithmic: false, clamp: [-Infinity, Infinity] };
-  return null;
+  return axis?.type === 'log' ? { param: 0, value: 1, logarithmic: true, clamp: [-Infinity, Infinity] } : null;
 }
 
 function isDatum(item: unknown): item is Datum {

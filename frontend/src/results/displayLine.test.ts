@@ -54,7 +54,7 @@ describe('smooth display lines', () => {
     expect(curve.data.every(([radius]) => (radius as number) <= 0 && (radius as number) >= -30)).toBe(true);
   });
 
-  it('leaves alone what it cannot smooth: areas, steps, category axes and long traces', () => {
+  it('leaves alone what it must not smooth: areas, steps, linear and category axes, long traces', () => {
     const data = sweep.map((frequency, index) => [frequency, levels[index]]);
     const untouched = option([
       { name: 'area', type: 'line', areaStyle: {}, data },
@@ -63,6 +63,9 @@ describe('smooth display lines', () => {
     expect(withDisplayLines(untouched)).toBe(untouched);
     const category = option([{ name: 'c', type: 'line', data }], { type: 'category' });
     expect(withDisplayLines(category)).toBe(category);
+    // A bore profile on a linear axis has real corners.
+    const profile = option([{ name: 'H', type: 'line', data }], { type: 'value' });
+    expect(withDisplayLines(profile)).toBe(profile);
     const long = option([{ name: 'measured', type: 'line', data: Array.from({ length: 2_000 }, (_value, index) => [20 + index * 10, index % 7]) }]);
     expect(withDisplayLines(long)).toBe(long);
   });
