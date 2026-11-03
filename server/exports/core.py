@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, nullcontext
+
 import copy
 from dataclasses import dataclass
 import logging
@@ -293,7 +295,7 @@ def _assert_step(step_text: str, *, require_bspline: bool = True) -> None:
         )
 
 
-def _write_step(inner_points: np.ndarray) -> str:
+def _write_step(inner_points: np.ndarray, work_dir: str | None = None) -> str:
     import gmsh
     from hornlab_mesher.cad import normalise_step_header
 
@@ -340,7 +342,7 @@ def _write_step(inner_points: np.ndarray) -> str:
             prefix="waveguide-inner-",
             suffix=".step",
             delete=False,
-            dir=temporary_directory_root(),
+            dir=work_dir or temporary_directory_root(),
         ) as handle:
             step_path = Path(handle.name)
         gmsh.write(str(step_path))
@@ -728,10 +730,18 @@ def _refuse_ath_step(design: DesignConfig) -> None:
         )
 
 
-def _native_step(design: DesignConfig) -> StepSolidResult:
+def _export_directory(work_dir: str | None, prefix: str) -> AbstractContextManager[str]:
+    # HTTP callers lend the child's entire workspace from the parent. Direct
+    # synchronous callers still own and clean a directory in the usual session.
+    return nullcontext(work_dir) if work_dir else tempfile.TemporaryDirectory(
+        prefix=prefix, dir=spawned_directory_root(),
+    )
+
+
+def _native_step(design: DesignConfig, work_dir: str | None = None) -> StepSolidResult:
     from hornlab_mesher.cad import write_step_from_config
 
-    with tempfile.TemporaryDirectory(prefix="wg2-native-step-", dir=temporary_directory_root()) as folder:
+    with _export_directory(work_dir, "wg2-native-step-") as folder:
         path = Path(folder) / "geometry.step"
         with _preserve_native_windows_path():
             _, info = write_step_from_config(design_to_mesher_config(design), path)
@@ -741,10 +751,10 @@ def _native_step(design: DesignConfig) -> StepSolidResult:
     return StepSolidResult(step_text=text, cad_info=info)
 
 
-def _build_step_sync(design_dump: dict[str, Any]) -> StepSurfaceResult:
+def _build_step_sync(design_dump: dict[str, Any], work_dir: str | None = None, *, cancel_cb: Any = None) -> StepSurfaceResult:
     design = DesignConfig.model_validate(design_dump)
     if design.formula in NATIVE_FORMULAS:
-        result = _native_step(design)
+        result = _native_step(design, work_dir)
         return StepSurfaceResult(step_text=result.step_text)
     _refuse_ath_step(design)
     plan = _surface_grid_plan(design)
@@ -758,12 +768,27 @@ def _build_step_sync(design_dump: dict[str, Any]) -> StepSurfaceResult:
         STL_CHORD_TOLERANCE_MM,
     )
     return StepSurfaceResult(
-        step_text=_write_step(_inner_grid(design, grid=(plan.angular, plan.length))),
+        step_text=_write_step(_inner_grid(design, grid=(plan.angular, plan.length)), work_dir),
         warning=plan.warning,
     )
 
 
-async def build_step(design: DesignConfig) -> StepSurfaceResult:
+async def _export_child(fn: Any, design: DesignConfig, cancel_cb: Any, progress_cb: Any) -> Any:
+    if cancel_cb is not None:
+        cancel_cb()
+    dump = design.model_dump(mode="json")
+    if progress_cb is not None:
+        progress_cb("resolve")
+    with tempfile.TemporaryDirectory(prefix="wg2-export-", dir=temporary_directory_root()) as work_dir:
+        result = await run_mesh_build(fn, dump, work_dir, **({"cancel_cb": cancel_cb} if cancel_cb else {}))
+    if cancel_cb is not None:
+        cancel_cb()
+    if progress_cb is not None:
+        progress_cb("mesh")
+    return result
+
+
+async def build_step(design: DesignConfig, *, cancel_cb: Any = None, progress_cb: Any = None) -> StepSurfaceResult:
     """Build the open, ruled, full-domain HornLab inner acoustic surface.
 
     The plan's warning rides with the text. This export sizes itself, and when
@@ -779,13 +804,13 @@ async def build_step(design: DesignConfig) -> StepSurfaceResult:
     ``test_public_builders_return_their_result_objects`` pins the shape.
     """
 
-    return await run_mesh_build(_build_step_sync, design.model_dump(mode="json"))
+    return await _export_child(_build_step_sync, design, cancel_cb, progress_cb)
 
 
-def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
+def _build_step_solid_sync(design_dump: dict[str, Any], work_dir: str | None = None, *, cancel_cb: Any = None) -> StepSolidResult:
     design = DesignConfig.model_validate(design_dump)
     if design.formula in NATIVE_FORMULAS:
-        return _native_step(design)
+        return _native_step(design, work_dir)
     _refuse_ath_step(design)
     try:
         from hornlab_mesher.cad import write_step_from_config
@@ -835,7 +860,7 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     if plan.warning:
         logger.warning("Solid STEP export sizing: %s", plan.warning)
     with tempfile.NamedTemporaryFile(
-        prefix="waveguide-solid-", suffix=".step", delete=False, dir=temporary_directory_root()
+        prefix="waveguide-solid-", suffix=".step", delete=False, dir=work_dir or temporary_directory_root()
     ) as handle:
         step_path = Path(handle.name)
     try:
@@ -851,7 +876,7 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     return StepSolidResult(step_text=text, cad_info=cad_info, warning=plan.warning)
 
 
-async def build_step_solid(design: DesignConfig) -> StepSolidResult:
+async def build_step_solid(design: DesignConfig, *, cancel_cb: Any = None, progress_cb: Any = None) -> StepSolidResult:
     """Build the manufacturable solid: wall thickness, enclosure, open throat.
 
     Unlike the inner-surface export this needs no Thicken or cap step in CAD --
@@ -860,9 +885,7 @@ async def build_step_solid(design: DesignConfig) -> StepSolidResult:
     the mesher falls back to a surface body for those.
     """
 
-    return await run_mesh_build(
-        _build_step_solid_sync, design.model_dump(mode="json")
-    )
+    return await _export_child(_build_step_solid_sync, design, cancel_cb, progress_cb)
 
 
 def binary_stl(
@@ -1017,7 +1040,7 @@ def _build_ath_stl_mesh(design: DesignConfig) -> dict[str, Any]:
     }
 
 
-def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
+def _build_stl_mesh_sync(design_dump: dict[str, Any], work_dir: str | None = None, *, cancel_cb: Any = None) -> dict[str, Any]:
     """Mesh the export's own pinned grid, sized to a print-resolution chord."""
 
     design = DesignConfig.model_validate(design_dump)
@@ -1038,7 +1061,7 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
 
     if design.formula in NATIVE_FORMULAS:
         config = design_to_mesher_config(design)
-        with tempfile.TemporaryDirectory(prefix="wg2-native-stl-", dir=spawned_directory_root()) as folder:
+        with _export_directory(work_dir, "wg2-native-stl-") as folder:
             path = Path(folder) / "geometry.msh"
             with _preserve_native_windows_path():
                 build_from_config(config, path)
@@ -1076,9 +1099,7 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
         "unmeasured" if plan.deviation_mm is None else f"{plan.deviation_mm:.5f}",
         STL_CHORD_TOLERANCE_MM,
     )
-    with tempfile.TemporaryDirectory(
-        prefix="wg2-stl-mesh-", dir=spawned_directory_root()
-    ) as temp_dir:
+    with _export_directory(work_dir, "wg2-stl-mesh-") as temp_dir:
         mesh_path = Path(temp_dir) / "waveguide.msh"
         # Normally Gmsh is already open on the owner thread. Preserve the
         # native environment when this synchronous seam is exercised directly
@@ -1107,18 +1128,15 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def build_stl(design: DesignConfig, model_name: str = "MWG Horn") -> StlResult:
+async def build_stl(design: DesignConfig, model_name: str = "MWG Horn", *, cancel_cb: Any = None, progress_cb: Any = None) -> StlResult:
     """Build the horn surface at print resolution, sized by the export itself."""
 
     from hornlab_mesher import printable_surface_tags
 
     # Same mesher call, same crash risk as the solve mesh: killable child.
-    canonical = await run_mesh_build(
-        _build_stl_mesh_sync,
-        design.model_dump(mode="json"),
-    )
+    canonical = await _export_child(_build_stl_mesh_sync, design, cancel_cb, progress_cb)
     warnings = [str(item) for item in canonical.get("warnings") or []]
-    return StlResult(
+    result = StlResult(
         data=binary_stl(
             canonical.get("vertices", []),
             canonical.get("indices", []),
@@ -1128,6 +1146,9 @@ async def build_stl(design: DesignConfig, model_name: str = "MWG Horn") -> StlRe
         ),
         warning=" ".join(warnings) or None,
     )
+    if cancel_cb is not None:
+        cancel_cb()
+    return result
 
 
 def profile_csv(inner_points_mm: np.ndarray, kind: str) -> str:

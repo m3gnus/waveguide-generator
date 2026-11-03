@@ -942,6 +942,9 @@ def create_app(
 
     mount_runtime_preparation(application)
     mount_solver_mesh(application, engine_registry)
+    from server.jobs.operation_progress import mount_operation_progress
+
+    mount_operation_progress(application)
     mount_preview(application, extra_ws_origins=extra_ws_origins)
     mount_design_io(application)
     from server.preview.freeform import mount_freeform

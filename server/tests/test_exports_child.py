@@ -14,7 +14,7 @@ from server.exports import api, core
 from server.mesh import child
 
 
-def _failed_geometry(design_dump):
+def _failed_geometry(design_dump, work_dir=None):
     Path(os.environ["WG_TEST_EXPORT_MARKER"]).write_text(str(os.getpid()))
     if os.environ["WG_TEST_EXPORT_FAILURE"] == "crash":
         os._exit(7)

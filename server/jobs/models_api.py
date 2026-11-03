@@ -25,7 +25,7 @@ import shutil
 import uuid
 from typing import Any, Literal, Mapping
 
-from fastapi import APIRouter, FastAPI, Query, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, ValidationError, model_validator
@@ -47,6 +47,7 @@ from server.jobs.imported_setup import (
     solve_request_for,
     validate_setup,
 )
+from server.jobs.operation_progress import request_operation
 from server.jobs.request_cancellation import ClientDisconnected, RequestCancellation
 from server.jobs.model_solve import ModelSolveRefusal, ModelSolveRequest, solve_model
 from server.jobs.models import SolveAccepted
@@ -881,7 +882,7 @@ def mount_models_api(application: FastAPI) -> None:
             return _refusal(500, "assembly_failed", user_error_message(exc))
 
     @router.post("/assembly/compile", responses={**refused, **prepared_response})
-    async def assembly_compile(body: AssemblyCompileRequest) -> Any:
+    async def assembly_compile(body: AssemblyCompileRequest, http_request: Request, http_response: Response) -> Any:
         """Compile the design's assembly and publish it as its design model's prepared mesh.
 
         ``superseded``: a newer revision of the design was asked for meanwhile,
@@ -891,11 +892,15 @@ def mount_models_api(application: FastAPI) -> None:
         if (blocked := restart_pending()) is not None:
             return blocked
         try:
-            outcome = await compile_design_assembly(
-                store, data_dir, body.design, design_uid=body.design_uid,
-                design_name=body.design_name, design_revision=body.design_revision,
-                build_session=body.build_session,
-            )
+            with request_operation(http_request, ("resolve", "mesh", "check", "publish")) as operation:
+                outcome = await compile_design_assembly(
+                    store, data_dir, body.design, design_uid=body.design_uid,
+                    design_name=body.design_name, design_revision=body.design_revision,
+                    build_session=body.build_session, cancel_cb=operation.check, progress_cb=operation.progress,
+                )
+                operation.attach(http_response)
+        except HTTPException:
+            raise
         except AssemblySuperseded:
             return {"status": "superseded"}
         except SolverMemoryTooLarge as exc:

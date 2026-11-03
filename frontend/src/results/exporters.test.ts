@@ -1378,6 +1378,42 @@ it.each(['format', 'download bundle', 'workspace', 'automatic', 'mesh download',
   },
 );
 
+it.each(['stl', 'step'] as const)('Stop aborts %s and saves no file', async format => {
+  activityStore.reset();
+  const saveBlob = vi.fn();
+  let signal: AbortSignal | null | undefined;
+  const fetcher: typeof fetch = (_url, init) => new Promise((_resolve, reject) => {
+    signal = init?.signal;
+    signal?.addEventListener('abort', () => reject(signal?.reason), { once: true });
+  });
+  const pending = runExportFormat(format, {
+    jobStem: 'horn', preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), fetcher, saveBlob,
+  });
+  const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  activityStore.getSnapshot()[0].cancel!();
+  await rejected;
+  expect(signal?.aborted).toBe(true);
+  expect(saveBlob).not.toHaveBeenCalled();
+  expect(activityStore.getSnapshot()).toEqual([]);
+});
+
+it('Stop ends a composed export without continuing with another format', async () => {
+  activityStore.reset();
+  const saveBlob = vi.fn(); const saveText = vi.fn();
+  const fetcher: typeof fetch = (_url, init) => new Promise((_resolve, reject) => {
+    const signal = init!.signal!;
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+  const pending = runExportBundle({ jobStem: 'horn', preferences: preferencesStore.getSnapshot(),
+    design: designForFamily('OSSE'), fetcher, saveBlob, saveText }, ['stl', 'mwg_config']);
+  const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  activityStore.getSnapshot()[0].cancel!();
+  await rejected;
+  expect(saveBlob).not.toHaveBeenCalled();
+  expect(saveText).not.toHaveBeenCalled();
+  expect(activityStore.getSnapshot()).toEqual([]);
+});
+
 it('ends an archive activity on a failed snapshot read', async () => {
   activityStore.reset();
   const waiting = deferred<Response>();

@@ -332,13 +332,15 @@ def compose_record(
     return record, solver_text
 
 
-def _publish(parent: Path, destination: Path, solver_text: str) -> None:
+def _publish(parent: Path, destination: Path, solver_text: str, cancel_cb: Any = None) -> None:
     stage = publish_staging_directory(parent, ".mesh-")
     try:
         with (stage / "solve.msh").open("wb") as handle:
             handle.write(solver_text.encode("utf-8"))
             handle.flush()
             os.fsync(handle.fileno())
+        if cancel_cb is not None:
+            cancel_cb()
         os.replace(stage, destination)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
@@ -360,23 +362,29 @@ def _reuse(store: Any, model_id: str, spec_digest: str) -> tuple[dict[str, Any] 
     return None, [str(row["ingest_id"]) for row in candidates]
 
 
+def _current(fence: AssemblyBuildFence, token: tuple[str, str, int], cancel_cb: Any) -> bool:
+    if cancel_cb is not None:
+        cancel_cb()
+    return fence.current(token)
+
+
 def _select_reused(store: Any, model_id: str, ingest_id: str, fence: AssemblyBuildFence,
-                   token: tuple[str, str, int]) -> bool:
+                   token: tuple[str, str, int], cancel_cb: Any = None) -> bool:
     """Make a reused record the model's latest again, only while this compile is current."""
 
     try:
-        store.select_model_ingest(model_id, ingest_id, commit_guard=lambda _conn: fence.current(token))
+        store.select_model_ingest(model_id, ingest_id, commit_guard=lambda _conn: _current(fence, token, cancel_cb))
     except StaleAttempt:
         return False
     return True
 
 
 def _reuse_and_select(store: Any, model_id: str, spec_digest: str, fence: AssemblyBuildFence,
-                      token: tuple[str, str, int]) -> tuple[dict[str, Any] | None, list[str], bool]:
+                      token: tuple[str, str, int], cancel_cb: Any = None) -> tuple[dict[str, Any] | None, list[str], bool]:
     """Lookup and selection share one collection hold; a hit cannot disappear between them."""
 
     reused, known = _reuse(store, model_id, spec_digest)
-    selected = reused is not None and _select_reused(store, model_id, str(reused["ingest_id"]), fence, token)
+    selected = reused is not None and _select_reused(store, model_id, str(reused["ingest_id"]), fence, token, cancel_cb)
     return reused, known, selected
 
 
@@ -384,6 +392,7 @@ def _publish_record(
     store: Any, data_dir: Path, design: DesignConfig, built: Mapping[str, Any], *,
     design_uid: str, design_name: str, design_revision: int, spec_digest: str,
     model_id: str, known: list[str], fence: AssemblyBuildFence, token: tuple[str, str, int],
+    cancel_cb: Any = None, progress_cb: Any = None,
 ) -> dict[str, Any] | None:
     parent = data_dir / "imports" / "files"
     parent.mkdir(parents=True, exist_ok=True)
@@ -400,13 +409,15 @@ def _publish_record(
         archive_stem=archive_stem, destination=destination,
     )
     record_json = seal_prepared_record(record, producer=PRODUCER)
-    _publish(parent, destination, solver_text)
+    if progress_cb is not None:
+        progress_cb("check")
     try:
+        _publish(parent, destination, solver_text, cancel_cb)
         row, created = store.insert_file_ingest(
             ingest_id=ingest_id, created_at=created_at, manifest_sha256=spec_digest,
             artifact_sha256=record["artifact_sha256"], record_json=record_json,
             known_ingest_ids=known, model_id=model_id,
-            commit_guard=lambda _conn: fence.current(token),
+            commit_guard=lambda _conn: _current(fence, token, cancel_cb),
         )
     except StaleAttempt:
         shutil.rmtree(destination, ignore_errors=True)
@@ -422,7 +433,7 @@ def _publish_record(
 async def compile_design_assembly(
     store: Any, data_dir: Path, design_dump: Mapping[str, Any], *,
     design_uid: str, design_name: str, design_revision: int, build_session: str = "",
-    fence: AssemblyBuildFence = FENCE, cancel_cb: Any = None,
+    fence: AssemblyBuildFence = FENCE, cancel_cb: Any = None, progress_cb: Any = None,
 ) -> dict[str, Any]:
     """Compile and publish the design's assembly, or report it superseded.
 
@@ -433,6 +444,8 @@ async def compile_design_assembly(
 
     import asyncio
 
+    if cancel_cb is not None:
+        cancel_cb()
     design = DesignConfig.model_validate(dict(design_dump))
     if design.root.assembly is None:
         raise AssemblyRefusal(AssemblyRefusal.NO_ASSEMBLY)
@@ -441,20 +454,29 @@ async def compile_design_assembly(
         raise AssemblyRefusal("Save the design before solving its assembly.")
     token = fence.begin(design_uid, design_revision, build_session)
     spec_digest = compile_spec_digest(design)
+    if progress_cb is not None:
+        progress_cb("resolve")
     reused, known, selected = await asyncio.to_thread(
-        _held, _reuse_and_select, store, model_id, spec_digest, fence, token)
+        _held, _reuse_and_select, store, model_id, spec_digest, fence, token, cancel_cb)
     if reused is not None:
+        if progress_cb is not None:
+            for stage in (("mesh", "check", "publish") if selected else ("mesh", "check")):
+                progress_cb(stage)
         return {"status": "published", "record": reused, "reused": True} if selected else {"status": "superseded"}
     built = await build_assembly_mesh(design, cancel_cb)
-    if not fence.current(token):
+    if progress_cb is not None:
+        progress_cb("mesh")
+    if not _current(fence, token, cancel_cb):
         return {"status": "superseded"}
     record = await asyncio.to_thread(
             _held, _publish_record, store, data_dir, design, built, design_uid=design_uid,
             design_name=design_name, design_revision=design_revision, spec_digest=spec_digest,
-            model_id=model_id, known=known, fence=fence, token=token,
+            model_id=model_id, known=known, fence=fence, token=token, cancel_cb=cancel_cb, progress_cb=progress_cb,
         )
     if record is None:
         return {"status": "superseded"}
+    if progress_cb is not None:
+        progress_cb("publish")
     return {"status": "published", "record": record, "reused": False}
 
 

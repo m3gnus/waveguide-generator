@@ -8,6 +8,8 @@ Gmsh artifact and that artifact is parsed back for solver statistics/tags.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import asyncio
 import functools
 import hashlib
@@ -32,7 +34,7 @@ from server.contracts.canonical import canonical_ascii_strict_json
 from server.design.schema import DesignConfig, Expr
 from server.integration.mesher_identity import mesher_identity
 from server.platform.memory import PhysicalMemory, physical_memory
-from server.platform.temp_session import spawned_directory_root
+from server.platform.temp_session import spawned_directory_root, temporary_directory_root
 from server.preview.translate import design_to_mesher_config, outer_body_mode
 from server.preview import wall_check
 from server.preview.core import _cache_relevant_config, _recentred_preview_config
@@ -1212,13 +1214,14 @@ async def estimate_solver_mesh(design: DesignConfig, cancel_cb: CancelCallback |
 
 def _build_assembly_sync(
     design_dump: dict[str, Any],
-    cancel_cb: CancelCallback | None = None,
+    work_dir: str | None = None,
+    *, cancel_cb: CancelCallback | None = None,
 ) -> dict[str, Any]:
     """A design assembly's artifact, in the same child and guards as a design mesh."""
 
     design = DesignConfig.model_validate(design_dump)
     config, placement = assembly_mesher_config(design)
-    result = _build_design_artifact(design, config, cancel_cb, assembly=True)
+    result = _build_design_artifact(design, config, cancel_cb, assembly=True, work_dir=work_dir)
     result["placement"] = placement
     return result
 
@@ -1232,7 +1235,8 @@ async def build_assembly_mesh(
     is content-addressed by its producer, which reuses a published artifact.
     """
 
-    return await run_mesh_build(_build_assembly_sync, design.model_dump(mode="json"), cancel_cb=cancel_cb)
+    with tempfile.TemporaryDirectory(prefix="wg2-assembly-", dir=temporary_directory_root()) as work_dir:
+        return await run_mesh_build(_build_assembly_sync, design.model_dump(mode="json"), work_dir, cancel_cb=cancel_cb)
 
 
 def _build_design_artifact(
@@ -1241,6 +1245,7 @@ def _build_design_artifact(
     cancel_cb: CancelCallback | None = None,
     *,
     assembly: bool = False,
+    work_dir: str | None = None,
 ) -> dict[str, Any]:
     try:
         from hornlab_mesher import TriangleBudgetExceeded
@@ -1260,11 +1265,11 @@ def _build_design_artifact(
     )
     memory_limit = dense_solver_memory_limit()
     _check_cancel(cancel_cb)
-    # Inside the process's session (server/platform/temp_session.py): a stop
-    # during this build ends without cleanup, and the next start sweeps it.
-    with tempfile.TemporaryDirectory(
+    # Assembly requests lend a parent-owned directory, cleaned even on a child
+    # kill. Other callers retain their existing process-session ownership.
+    with (nullcontext(work_dir) if work_dir else tempfile.TemporaryDirectory(
         prefix="wg2-solver-mesh-", dir=spawned_directory_root()
-    ) as temp_dir:
+    )) as temp_dir:
         mesh_path = Path(temp_dir) / "waveguide.msh"
         try:
             result = _build_with_memory_stop(

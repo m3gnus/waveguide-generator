@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,6 +23,7 @@ from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
 from server.design.uid import DesignUid
+from server.jobs.request_cancellation import ClientDisconnected
 from server.mesh.child import run_mesh_build
 from server.platform.paths import app_root
 from server.preview.translate import design_to_mesher_config
@@ -325,6 +326,8 @@ def export_wglink_sync(
     idempotency_key: str,
     unavailable_detail: str = UNAVAILABLE_WORKSPACE,
     handoff: Mapping[str, object] | None = None,
+    cancel_cb: Callable[[], None] | None = None,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Build one identity-bearing bundle under ``workspace_root/wglink``.
 
@@ -335,6 +338,8 @@ def export_wglink_sync(
     place in the export sequence, is the same either way.
     """
 
+    if cancel_cb is not None:
+        cancel_cb()
     from server.design.native import NATIVE_FORMULAS
 
     if request.design.formula == "LOOKUP":
@@ -368,8 +373,15 @@ def export_wglink_sync(
             request.identity is not None and request.identity.design_id != retry["design_id"]
         ):
             raise HTTPException(status_code=409, detail="WG could not match this send to the design. Send it again.")
+        if cancel_cb is not None:
+            cancel_cb()
+        if progress_cb is not None:
+            for stage in ("resolve", "mesh", "check"):
+                progress_cb(stage)
         result = _wglink_response(retry, _identity_for_export(store, retry))
         result.update(_finish_publication(store, retry))
+        if progress_cb is not None:
+            progress_cb("publish")
         return result
 
     design_name = normalize_base_name(request.base_name)
@@ -386,6 +398,9 @@ def export_wglink_sync(
         raise HTTPException(status_code=409, detail=unavailable_detail) from exc
 
 
+    if progress_cb is not None:
+        progress_cb("resolve")
+
     def build(facts: Mapping[str, object]) -> Mapping[str, str]:
         if (
             int(facts["editVersion"]) != identity.base_edit_version
@@ -400,16 +415,22 @@ def export_wglink_sync(
             # this parent thread; child failure cannot publish partial bytes.
             asyncio.run(run_mesh_build(build_bundle,
                 request.design.model_dump(mode="json"), str(staged), dict(facts),
-                identity.lineage_id, design_name, instance_slug, _app_version()))
+                identity.lineage_id, design_name, instance_slug, _app_version(),
+                **({"cancel_cb": cancel_cb} if cancel_cb else {})))
+            if progress_cb is not None:
+                progress_cb("mesh")
 
-        return publish_bundle(store, wglink_root, facts, write, handoff=handoff)
+        return publish_bundle(store, wglink_root, facts, write, handoff=handoff,
+                              cancel_cb=cancel_cb, progress_cb=progress_cb)
 
     try:
         row = store.allocate_export(
             design_id=identity.design_id,
             idempotency_key=idempotency_key,
-            export_builder=build,
+            export_builder=build, cancel_cb=cancel_cb,
         )
+    except ClientDisconnected:
+        raise
     except _ExportIdentityConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PublicationConflict as exc:
@@ -421,6 +442,8 @@ def export_wglink_sync(
 
     result = _wglink_response(row, identity)
     result.update(_finish_publication(store, row))
+    if progress_cb is not None:
+        progress_cb("publish")
     return result
 
 

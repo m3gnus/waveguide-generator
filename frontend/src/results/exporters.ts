@@ -1,3 +1,4 @@
+import { stagedActivity } from '../shell/stagedActivity';
 import type { ActivityHandle } from '../shell/activity';
 import { activityOperation } from '../shell/activityOperation';
 import { fetchMeshReplay, MeshReplayRefusal } from '../api/meshReplay';
@@ -450,11 +451,16 @@ export async function writeWorkspaceFiles(
 async function fetchGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<GeometryDownload> {
   if (!context.design) throw new Error(MISSING_RUN_DESIGN_EXPORT_REASON);
   const fetcher = context.fetcher ?? fetch;
+  const design = context.design;
   const baseName = context.jobStem;
   const query = kind === 'profiles' ? `?kind=${profileKind ?? 'profiles'}` : '';
-  const response = await fetcher(`/api/export/${kind}${query}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: serializeDesign(context.design), designRevision: context.designRevision ?? 0, baseName }) });
-  if (!response.ok) throw await responseError(response);
-  return { blob: await response.blob(), filename: filenameFromResponse(response, filename) };
+  const download = async (fetcher: typeof fetch, signal?: AbortSignal) => {
+    const response = await fetcher(`/api/export/${kind}${query}`, { method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: serializeDesign(design), designRevision: context.designRevision ?? 0, baseName }) });
+    if (!response.ok) throw await responseError(response);
+    return { blob: await response.blob(), filename: filenameFromResponse(response, filename) };
+  };
+  return kind === 'profiles' ? download(fetcher)
+    : stagedActivity({ kind: 'export', label: `Exporting ${kind.toUpperCase()}` }, fetcher, undefined, download);
 }
 
 async function postGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<string> {
@@ -931,6 +937,7 @@ async function runAttributedExportBundle(inputContext: ExportContext, formats: r
         formatFiles.set(format, own);
       }
       catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') throw error;
         reportCaughtError('export-build', error, { job_id: context.jobId ?? null, format });
         failures.push({ format, reason: failureWords(error, 'WG could not write this file. Try again.') });
       }

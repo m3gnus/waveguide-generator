@@ -148,7 +148,7 @@ def test_binary_stl_filters_to_horn_and_applies_mm_axis_transform() -> None:
 def _stl_through_build(monkeypatch, formula: str) -> bytes:
     from types import SimpleNamespace
 
-    async def fake_mesh(_fn, _dump):
+    async def fake_mesh(_fn, _dump, _work_dir):
         return {
             "vertices": [0.001, 0.002, 0.003, 0.004, 0.002, 0.003, 0.001, 0.006, 0.003, 0.001, 0.002, 0.008],
             "indices": [0, 1, 2, 0, 2, 3, 1, 2, 3],
@@ -396,11 +396,11 @@ def test_core_all_contains_public_builders() -> None:
 def test_step_route_body_selects_the_solid_or_the_inner_surface(monkeypatch) -> None:
     called: list[str] = []
 
-    async def fake_solid(_design):
+    async def fake_solid(_design, **_callbacks):
         called.append("solid")
         return _step_result()
 
-    async def fake_surface(_design):
+    async def fake_surface(_design, **_callbacks):
         called.append("surface")
         return _surface_result()
 
@@ -423,7 +423,7 @@ _SIZING_WARNING = "This geometry did not reach its 0.1 mm target before the refi
 
 
 def test_the_surface_step_route_carries_a_sizing_warning_to_the_client(monkeypatch) -> None:
-    async def fake_surface(_design):
+    async def fake_surface(_design, **_callbacks):
         return _surface_result(warning=_SIZING_WARNING)
 
     monkeypatch.setattr(api, "build_step", fake_surface)
@@ -432,7 +432,7 @@ def test_the_surface_step_route_carries_a_sizing_warning_to_the_client(monkeypat
 
 
 def test_the_surface_step_route_stays_quiet_when_nothing_was_compromised(monkeypatch) -> None:
-    async def fake_surface(_design):
+    async def fake_surface(_design, **_callbacks):
         return _surface_result()
 
     monkeypatch.setattr(api, "build_step", fake_surface)
@@ -443,7 +443,7 @@ def test_the_surface_step_route_stays_quiet_when_nothing_was_compromised(monkeyp
 def test_the_solid_step_route_carries_its_own_sizing_warning(monkeypatch) -> None:
     """The solid sizes itself too, and falls back when it cannot measure."""
 
-    async def fake_solid(_design):
+    async def fake_solid(_design, **_callbacks):
         return replace(_step_result(), warning=_SIZING_WARNING)
 
     monkeypatch.setattr(api, "build_step_solid", fake_solid)
@@ -477,11 +477,11 @@ def test_step_route_defaults_to_the_solid_over_http(monkeypatch) -> None:
 
     called: list[str] = []
 
-    async def fake_solid(_design):
+    async def fake_solid(_design, **_callbacks):
         called.append("solid")
         return _step_result()
 
-    async def fake_surface(_design):
+    async def fake_surface(_design, **_callbacks):
         called.append("surface")
         return _surface_result()
 
@@ -562,7 +562,7 @@ def _step_text_of(size_bytes: int) -> str:
 def test_a_large_step_export_is_served_whole_with_a_size_note(monkeypatch) -> None:
     oversize = api.EXPORT_SIZE_NOTE_BYTES + 1024 * 1024
 
-    async def fake_surface(_design):
+    async def fake_surface(_design, **_callbacks):
         return _surface_result(step_text=_step_text_of(oversize))
 
     monkeypatch.setattr(api, "build_step", fake_surface)
@@ -582,7 +582,7 @@ def test_a_large_step_export_is_served_whole_with_a_size_note(monkeypatch) -> No
 def test_an_export_at_the_size_threshold_says_nothing(monkeypatch) -> None:
     """The header means a compromise was made, so it must not fire routinely."""
 
-    async def fake_surface(_design):
+    async def fake_surface(_design, **_callbacks):
         return _surface_result(step_text=_step_text_of(api.EXPORT_SIZE_NOTE_BYTES))
 
     monkeypatch.setattr(api, "build_step", fake_surface)
@@ -596,7 +596,7 @@ def test_a_size_note_joins_a_sizing_warning_rather_than_replacing_it(
 ) -> None:
     """A compromised grid and a large file are two facts about one export."""
 
-    async def fake_surface(_design):
+    async def fake_surface(_design, **_callbacks):
         return _surface_result(
             step_text=_step_text_of(api.EXPORT_SIZE_NOTE_BYTES + 1024 * 1024),
             warning=_SIZING_WARNING,

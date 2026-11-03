@@ -13,6 +13,8 @@ from fastapi.responses import Response
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 from server.cadlink.store import CadLinkStore
 from server.workspace.api import WorkspaceState
+from server.jobs.operation_progress import request_operation
+from server.jobs.request_cancellation import ClientDisconnected
 
 from server.platform.cad_launch import focus_cad
 from server.cadlink.fusion.fusion_status import ADDIN_OUTDATED_MESSAGE, read_fusion_status
@@ -97,52 +99,71 @@ def _headers(
 @router.post("/step")
 async def export_step(
     request: ExportRequest,
+    http_request: Request = None,
     body: Literal["solid", "surface"] = Query(default="solid"),
 ) -> Response:
     """Export STEP. ``solid`` is the manufacturable part; ``surface`` the bore."""
 
-    try:
-        if body == "solid":
-            solid = await build_step_solid(request.design)
-            content, warning = solid.step_text, solid.warning
-        else:
-            surface = await build_step(request.design)
-            content, warning = surface.step_text, surface.warning
-    except Exception as exc:
-        raise _export_error(exc, request.design) from exc
-    # Both bodies size themselves and both can end up on a grid that missed the
-    # target or was never measured against it. The file is still served -- an
-    # export is never refused for this -- and the note rides with it, exactly as
-    # the STL's sizing backstop already did.
-    if warning:
-        logger.warning("STEP %s export sizing: %s", body, warning)
-    # Encoded once, here, so the size the note quotes is the size of the bytes
-    # that go out rather than a second measurement of the same text.
-    payload = content.encode("utf-8")
-    return Response(
-        content=payload,
-        media_type="model/step",
-        headers=_headers(
-            request, f"{normalize_base_name(request.base_name)}.step", warning, payload
-        ),
-    )
+    with request_operation(http_request, ("resolve", "mesh", "check", "write")) as operation:
+        callbacks = {"cancel_cb": operation.check, "progress_cb": operation.progress} if http_request else {}
+        try:
+            if body == "solid":
+                solid = await build_step_solid(request.design, **callbacks)
+                content, warning = solid.step_text, solid.warning
+            else:
+                surface = await build_step(request.design, **callbacks)
+                content, warning = surface.step_text, surface.warning
+        except ClientDisconnected:
+            raise
+        except Exception as exc:
+            raise _export_error(exc, request.design) from exc
+        # Both bodies size themselves and both can end up on a grid that missed the
+        # target or was never measured against it. The file is still served -- an
+        # export is never refused for this -- and the note rides with it, exactly as
+        # the STL's sizing backstop already did.
+        if warning:
+            logger.warning("STEP %s export sizing: %s", body, warning)
+        # Encoded once, here, so the size the note quotes is the size of the bytes
+        # that go out rather than a second measurement of the same text.
+        payload = content.encode("utf-8")
+        operation.check()
+        operation.progress("check")
+        response = Response(
+            content=payload,
+            media_type="model/step",
+            headers=_headers(
+                request, f"{normalize_base_name(request.base_name)}.step", warning, payload
+            ),
+        )
+        operation.progress("write")
+        operation.attach(response)
+        return response
 
 
 @router.post("/stl")
-async def export_stl(request: ExportRequest) -> Response:
-    try:
-        result = await build_stl(request.design, request.model_name)
-    except Exception as exc:
-        raise _export_error(exc, request.design) from exc
-    if result.warning:
-        logger.warning("STL export sizing: %s", result.warning)
-    return Response(
-        content=result.data,
-        media_type="application/sla",
-        headers=_headers(
-            request, f"{normalize_base_name(request.base_name)}.stl", result.warning, result.data
-        ),
-    )
+async def export_stl(request: ExportRequest, http_request: Request = None) -> Response:
+    with request_operation(http_request, ("resolve", "mesh", "check", "write")) as operation:
+        callbacks = {"cancel_cb": operation.check, "progress_cb": operation.progress} if http_request else {}
+        try:
+            result = await build_stl(request.design, request.model_name, **callbacks)
+        except ClientDisconnected:
+            raise
+        except Exception as exc:
+            raise _export_error(exc, request.design) from exc
+        if result.warning:
+            logger.warning("STL export sizing: %s", result.warning)
+        operation.check()
+        operation.progress("check")
+        response = Response(
+            content=result.data,
+            media_type="application/sla",
+            headers=_headers(
+                request, f"{normalize_base_name(request.base_name)}.stl", result.warning, result.data
+            ),
+        )
+        operation.progress("write")
+        operation.attach(response)
+        return response
 
 
 @router.post("/profiles")
@@ -170,6 +191,7 @@ async def export_wglink(
     payload: WgLinkExportRequest,
     request: Request,
     idempotency_key: str = Header(min_length=1, max_length=240, alias="Idempotency-Key"),
+    response: Response = None,
 ) -> dict[str, Any]:
     """Write an identity-bearing CAD-link bundle into the selected workspace."""
 
@@ -187,17 +209,21 @@ async def export_wglink(
             detail="No WGLink folder has been selected. Choose one in Settings → CAD Link first.",
         )
     store: CadLinkStore = request.app.state.cadlink_store
-    result = await asyncio.to_thread(
-        export_wglink_sync,
-        payload,
-        store,
-        selected.resolve(),
-        idempotency_key,
-        handoff={"dataDir": str(request.app.state.data_dir),
-                 "documentId": payload.expected_fusion_document_id,
-                 "instanceId": payload.expected_fusion_instance_id,
-                 "returnStateHash": payload.expected_fusion_return_state_hash},
-    )
+    with request_operation(request, ("resolve", "mesh", "check", "publish")) as operation:
+        result = await asyncio.to_thread(
+            export_wglink_sync,
+            payload,
+            store,
+            selected.resolve(),
+            idempotency_key,
+            handoff={"dataDir": str(request.app.state.data_dir),
+                     "documentId": payload.expected_fusion_document_id,
+                     "instanceId": payload.expected_fusion_instance_id,
+                     "returnStateHash": payload.expected_fusion_return_state_hash},
+            cancel_cb=operation.check, progress_cb=operation.progress,
+        )
+        if response is not None:
+            operation.attach(response)
     # Startup repairs artifacts only. A live request earns the delivery outcome
     # above before this courtesy focus operation.
     waiting = await asyncio.to_thread(_handoff_waiting_notice, Path(request.app.state.data_dir))

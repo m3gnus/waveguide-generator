@@ -1,4 +1,4 @@
-import { activityStore } from '../shell/activity';
+import { stagedActivity } from '../shell/stagedActivity';
 /**
  * The design assembly's background build: one captured revision at a time.
  *
@@ -95,16 +95,23 @@ async function compileRequested(design: DesignDocument, requested: NonNullable<A
   fetcher: typeof fetch): Promise<AssemblyCompileResult | null> {
   const { designUid, designName } = useDocumentStore.getState();
   const { revision: designRevision, load } = requested;
-  useAssemblyBuildStore.setState({ status: 'building', requested, refusal: null, failureDetail: null });
   const owns = () => {
     const current = useAssemblyBuildStore.getState().requested;
     return isCurrentDocumentLoad(load) && current?.revision === requested.revision && current.load === load;
   };
   try {
-    const result = await activityStore.track({ kind: 'assembly-build', label: 'Building the mesh' }, () => compileAssembly({
-      design: serializeDesign(design), design_uid: designUid ?? '', design_name: designName, design_revision: designRevision,
-      build_session: `${PAGE_SESSION}:${load}`,
-    }, fetcher));
+    const before = useAssemblyBuildStore.getState();
+    const result = await stagedActivity({ kind: 'assembly-build', label: 'Building the mesh' }, fetcher, undefined, (fetcher, signal) => {
+      useAssemblyBuildStore.setState({ status: 'building', requested, refusal: null, failureDetail: null });
+      return compileAssembly({
+        design: serializeDesign(design), design_uid: designUid ?? '', design_name: designName, design_revision: designRevision,
+        build_session: `${PAGE_SESSION}:${load}`,
+      }, fetcher, signal);
+    }).catch(error => {
+      if (error?.name !== 'AbortError') throw error;
+      if (owns()) useAssemblyBuildStore.setState(before);
+      return { status: 'superseded' as const };
+    });
     if (!owns()) return { status: 'superseded' };
     if (result.status === 'published') {
       adoptDesignBuild({ record: result.prepared, model: result.model }, {

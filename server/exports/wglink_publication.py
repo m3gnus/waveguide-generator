@@ -20,6 +20,7 @@ import uuid
 
 from server.platform.json_file import json_bytes, sync_directory, write_json_atomic
 from server.cadlink.operations import CANCELLED, RECEIVED
+from server.jobs.request_cancellation import ClientDisconnected
 from server.cadlink.store import CadLinkStore
 
 BUNDLE_LAYOUT = "immutable-v1"
@@ -193,8 +194,12 @@ def publish_bundle(
     build: Callable[[Path], None],
     *,
     handoff: Mapping[str, object] | None = None,
+    cancel_cb: Callable[[], None] | None = None,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> Mapping[str, str]:
     """Persist intent, stage/validate/fsync, then rename to a unique export name."""
+    if cancel_cb is not None:
+        cancel_cb()
     # Reservations and snapshots must survive power loss before their bytes
     # become visible. The store otherwise uses WAL synchronous=NORMAL.
     store.make_durable()
@@ -224,6 +229,8 @@ def publish_bundle(
         staged = staging / "bundle.wglink"
         build(staged)
         bundle_products(staged, facts)
+        if progress_cb is not None:
+            progress_cb("check")
         for artifact in staged.rglob("*"):
             if artifact.is_file():
                 with artifact.open("rb+") as handle:
@@ -232,11 +239,17 @@ def publish_bundle(
             _sync_directory(directory)
         _sync_directory(staged)
         with _LOCK:
+            if cancel_cb is not None:
+                cancel_cb()
             if destination.exists() or destination.is_symlink():
                 return bundle_products(destination, facts)
             os.rename(staged, destination)
             _sync_directory(root)
         return bundle_products(destination, facts)
+    except ClientDisconnected:
+        # An intentional Stop is not a crash to recover at the next startup.
+        journal.unlink(missing_ok=True)
+        raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 

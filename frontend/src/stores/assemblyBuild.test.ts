@@ -39,12 +39,32 @@ describe('assembly background build', () => {
   it.each([200, 422])('registers one shared build through success or failure (%s)', async status => {
     const { fetcher, answer } = deferredFetcher();
     const build = requestAssemblyBuild(fetcher);
-    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'assembly-build', label: 'Building the mesh', cancel: null }]);
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'assembly-build', label: 'Building the mesh', cancel: expect.any(Function) }]);
     const settled = status === 200 ? build : expect(build).rejects.toThrow('Set an enclosure depth.');
     answer(0, status === 200 ? record('activity') : null, status);
     await settled;
     expect(activityStore.getSnapshot()).toHaveLength(0);
     expect(activityStore.typicalMs('assembly-build') === null).toBe(status !== 200);
+  });
+
+  it('Stop restores the entire previous build state and keeps the prepared model', async () => {
+    useAssemblyBuildStore.setState({ status: 'refused', refusal: 'Previous refusal', failureDetail: 'Previous detail' });
+    const before = useAssemblyBuildStore.getState();
+    const model = useDesignModelStore.getState();
+    let signal: AbortSignal | null | undefined;
+    const fetcher: typeof fetch = (_url, init) => new Promise((_resolve, reject) => {
+      signal = init?.signal;
+      signal?.addEventListener('abort', () => reject(signal?.reason), { once: true });
+    });
+    const build = requestAssemblyBuild(fetcher);
+    expect(useAssemblyBuildStore.getState().status).toBe('building');
+    activityStore.getSnapshot()[0].cancel!();
+    await expect(build).resolves.toEqual({ status: 'superseded' });
+    expect(signal?.aborted).toBe(true);
+    expect(useAssemblyBuildStore.getState()).toEqual(before);
+    expect(useDesignModelStore.getState()).toBe(model);
+    expect(activityStore.getSnapshot()).toEqual([]);
+    expect(activityStore.typicalMs('assembly-build')).toBeNull();
   });
 
   it('publishes only the newest captured revision, whatever order answers arrive in', async () => {

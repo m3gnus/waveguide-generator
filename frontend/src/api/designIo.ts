@@ -1,3 +1,4 @@
+import { stagedActivity } from '../shell/stagedActivity';
 import { activityOperation } from '../shell/activityOperation';
 import { usesCurrentAthImport, isAthImportVersion } from '../design/athImportVersion';
 import { httpErrorMessage, refusalText, ProgramFault } from './httpError';
@@ -189,7 +190,7 @@ export async function sendDesignToCad(
   designUid?: string,
   assertCurrent?: () => void,
 ): Promise<WgLinkExportResponse> {
-  return activityOperation({ kind: 'send-to-cad', label: 'Sending to CAD' }, fetcher, async (fetcher) => {
+  return stagedActivity({ kind: 'send-to-cad', label: 'Sending to CAD' }, fetcher, undefined, async (fetcher, signal) => {
     const bindAttention = solveAttention.captureOperationArm();
     // No save gate here. The server commits the design on screen into the
     // CAD-link registry as part of the export, so an unsaved or edited design
@@ -205,7 +206,7 @@ export async function sendDesignToCad(
     }
 
     const response = await fetcher('/api/export/wglink', {
-      method: 'POST',
+      method: 'POST', signal,
       headers: {
         'Content-Type': 'application/json',
         'Idempotency-Key': idempotencyKey,
@@ -792,12 +793,13 @@ export async function buildGeometryExport(
   stepBody: StepBody = 'solid',
   fetcher: typeof fetch = fetch,
 ): Promise<GeometryExportFile> {
-  return activityOperation({ kind: 'export', label: `Exporting ${kind === 'profiles' ? 'profile CSV' : kind.toUpperCase()}` }, fetcher, async (fetcher) => {
+  const start = { kind: 'export' as const, label: `Exporting ${kind === 'profiles' ? 'profile CSV' : kind.toUpperCase()}` };
+  const build = async (fetcher: typeof fetch, signal?: AbortSignal) => {
     const query = kind === 'profiles'
       ? `?kind=${profileKind ?? 'profiles'}`
       : kind === 'step' ? `?body=${stepBody}` : '';
     const response = await fetcher(`/api/export/${kind}${query}`, {
-      method: 'POST',
+      method: 'POST', signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         design: serializeDesign(design),
@@ -811,7 +813,9 @@ export async function buildGeometryExport(
     const filename = responseFilename(response, `${baseName}${suffix}`);
     const built: GeometryExportFile = { filename, blob: await response.blob() };
     return warning ? { ...built, warning } : built;
-  });
+  };
+  return kind === 'profiles' ? activityOperation(start, fetcher, fetcher => build(fetcher))
+    : stagedActivity(start, fetcher, undefined, build);
 }
 
 /**

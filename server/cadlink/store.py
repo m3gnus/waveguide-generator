@@ -2789,6 +2789,7 @@ class CadLinkStore:
         bundle_id: str | None = None,
         parent_export_id: str | None = None,
         created_at: str | None = None,
+        cancel_cb: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """Reserve quickly, build unlocked, then atomically finalize an export."""
 
@@ -2803,6 +2804,8 @@ class CadLinkStore:
         self.initialize()
         build_lock = self._export_build_lock(design_id)
         with build_lock:
+            if cancel_cb is not None:
+                cancel_cb()
             now = created_at or utc_now()
             with self._lock, self._transaction() as conn:
                 retry = conn.execute(
@@ -2938,10 +2941,16 @@ class CadLinkStore:
                         (idempotency_key,),
                     ).fetchone()
             except BaseException:
+                cancelled = False
+                if cancel_cb is not None:
+                    try:
+                        cancel_cb()
+                    except BaseException:
+                        cancelled = True
                 with self._lock, self._transaction() as conn:
                     conn.execute(
-                        "UPDATE export_reservations SET state = 'retryable' "
-                        "WHERE idempotency_key = ?",
+                        "DELETE FROM export_reservations WHERE idempotency_key = ?" if cancelled else
+                        "UPDATE export_reservations SET state = 'retryable' WHERE idempotency_key = ?",
                         (idempotency_key,),
                     )
                 raise

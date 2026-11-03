@@ -1808,6 +1808,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/operation-progress/{operation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Operation Progress */
+        get: operations["operation_progress_api_operation_progress__operation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/partial-results/{job_id}": {
         parameters: {
             query?: never;
@@ -6312,6 +6329,13 @@ export interface components {
             designId: string;
             /** Instanceid */
             instanceId?: string | null;
+        };
+        /** OperationProgress */
+        OperationProgress: {
+            /** Stages */
+            stages: string[];
+            /** Total */
+            total: number;
         };
         /** OutputConfig */
         OutputConfig: {
@@ -10998,6 +11022,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    operation_progress_api_operation_progress__operation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationProgress"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

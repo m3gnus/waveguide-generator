@@ -86,4 +86,4 @@ export function fetchAssemblyContext(design: Record<string, unknown>, fetcher: t
 
 export const compileAssembly = (body: { design: Record<string, unknown>; design_uid: string; design_name: string;
   design_revision: number; build_session: string },
-  fetcher: typeof fetch = fetch) => post<AssemblyCompileResult>('/api/models/assembly/compile', body, fetcher, 'The assembly');
+  fetcher: typeof fetch = fetch, signal?: AbortSignal) => post<AssemblyCompileResult>('/api/models/assembly/compile', body, fetcher, 'The assembly', signal);

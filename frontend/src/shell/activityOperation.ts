@@ -57,7 +57,7 @@ export async function activityOperation<T>(
  * caller cancellation connected, including during response body consumption. */
 export async function abortableActivity<T>(
   start: StartActivity, fetcher: typeof fetch, signal: AbortSignal | undefined,
-  work: (fetcher: typeof fetch, signal: AbortSignal) => Promise<T>,
+  work: (fetcher: typeof fetch, signal: AbortSignal, activity: ActivityHandle) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort(signal?.reason);
@@ -65,6 +65,6 @@ export async function abortableActivity<T>(
   else signal?.addEventListener('abort', abort, { once: true });
   try {
     return await activityOperation({ ...start, cancel: () => controller.abort() }, fetcher,
-      (scopedFetch) => work(scopedFetch, controller.signal));
+      (scopedFetch, activity) => work(scopedFetch, controller.signal, activity));
   } finally { signal?.removeEventListener('abort', abort); }
 }

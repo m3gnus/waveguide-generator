@@ -1,3 +1,4 @@
+import { activityStore } from '../shell/activity';
 import { readFileSync } from 'node:fs';
 import { failureWords, PLAIN_REQUEST_FAILURE } from './httpError';
 import { describe, expect, it, vi } from 'vitest';
@@ -580,12 +581,50 @@ describe('design copy serialization requests', () => {
   });
 });
 
+it.each(['stl', 'step'] as const)('Stop cancels %s from the design menu before any output-folder write', async kind => {
+  activityStore.reset();
+  const urls: string[] = [];
+  const fetcher: typeof fetch = (url, init) => {
+    urls.push(String(url));
+    const signal = init!.signal!;
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+  };
+  const pending = exportGeometryToOutputFolder(kind, designForFamily('OSSE'), 1, 'horn', undefined, 'solid', fetcher);
+  const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  activityStore.getSnapshot()[0].cancel!();
+  await rejected;
+  expect(urls).toEqual([kind === 'step' ? '/api/export/step?body=solid' : '/api/export/stl']);
+  expect(activityStore.getSnapshot()).toEqual([]);
+});
+
 describe('Send to CAD requests', () => {
   const identity = {
     designId: 'wgd_01K00000000000000000000000',
     lineageId: 'wgl_01K00000000000000000000000',
     baseEditVersion: 8,
   };
+
+  it('Stop aborts the Send request before any delivery result is adopted', async () => {
+    activityStore.reset();
+    let signal: AbortSignal | null | undefined;
+    const fetcher: typeof fetch = async (url, init) => {
+      if (url === '/api/cad-workspace/path') return new Response(JSON.stringify({ selected: true }));
+      signal = init?.signal;
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal?.reason), { once: true });
+      });
+    };
+    const pending = sendDesignToCad(designForFamily('OSSE'), 1, 'horn', null, fetcher, 'stop-send');
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    activityStore.getSnapshot()[0].cancel!();
+    await rejected;
+    expect(signal?.aborted).toBe(true);
+    expect(activityStore.getSnapshot()).toEqual([]);
+    expect(activityStore.typicalMs('send-to-cad')).toBeNull();
+  });
 
   it('requires the configured WGLink folder and sends identity with one idempotency key', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];

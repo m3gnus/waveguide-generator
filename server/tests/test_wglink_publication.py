@@ -372,6 +372,10 @@ def test_failed_handoff_restart_and_retry_after_newer_export_are_superseded(monk
     assert len(writes) == 2
 
 
+async def _connected():
+    return False
+
+
 @pytest.mark.parametrize("journal", ["missing", "onshape"])
 def test_journalless_or_onshape_retry_reports_no_handoff(monkeypatch, tmp_path, journal):
     import asyncio
@@ -387,7 +391,7 @@ def test_journalless_or_onshape_retry_reports_no_handoff(monkeypatch, tmp_path, 
     ))
     monkeypatch.setattr(api, "focus_cad", lambda: False)
     monkeypatch.setattr(api, "_handoff_waiting_notice", lambda _: None)
-    result = asyncio.run(api.export_wglink(_request(saved), SimpleNamespace(app=app), "A"))
+    result = asyncio.run(api.export_wglink(_request(saved), SimpleNamespace(app=app, headers={}, is_disconnected=_connected), "A"))
     assert result["exportId"] == original["exportId"]
     assert result["cadHandoff"] == "failed"
     assert result["cadHandoffReason"] == "not_published"

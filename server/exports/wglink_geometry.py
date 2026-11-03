@@ -17,7 +17,10 @@ def build_bundle(
     design_name: str,
     instance_slug: str,
     app_version: str,
+    *, cancel_cb: Any = None,
 ) -> None:
+    if cancel_cb is not None:
+        cancel_cb()
     from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
     from hornlab_mesher.config_builder import resolve_geometry
 

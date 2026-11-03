@@ -11534,6 +11534,27 @@
         "title": "OnshapeUnlinkRequest",
         "type": "object"
       },
+      "OperationProgress": {
+        "properties": {
+          "stages": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stages",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stages",
+          "total"
+        ],
+        "title": "OperationProgress",
+        "type": "object"
+      },
       "OutputConfig": {
         "additionalProperties": false,
         "properties": {
@@ -20076,6 +20097,45 @@
         "tags": [
           "Imported models"
         ]
+      }
+    },
+    "/api/operation-progress/{operation_id}": {
+      "get": {
+        "operationId": "operation_progress_api_operation_progress__operation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationProgress"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Operation Progress"
       }
     },
     "/api/partial-results/{job_id}": {
