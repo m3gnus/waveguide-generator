@@ -1309,6 +1309,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
       : definition.title === 'Solver' ? <SolveOptionsControls includeSampling={false} showOpenclGuidance />
       : definition.title === 'Frequency sweep' ? <><FrequencySweepControls idPrefix="design-solve" context="design" /><AdaptiveFrequencyControls /></>
       : definition.title === 'Drivers' ? <CadDriveChannels />
+      : definition.title === 'Crossover' ? <CadCrossover />
       : null : null;
     const slots = definition.fieldOrder ?? fields.map((field) => field.id);
     if (fields.length === 0 && !hasCustomMode && !custom && !(definition.title === 'Imported ATH values' && usesCurrentAthImport(design.text_import_version))) return null;

@@ -1,6 +1,7 @@
 import type { DesignFamily } from '../stores/design';
 import { NATIVE_FAMILIES } from './nativeFamilies';
 import { osseFeatures } from './osseFeatures';
+import { CAD_CONTROL_DESCRIPTORS } from './cadControlRegistry';
 import type { ParameterSection, ParameterTab } from './parameterRegistry';
 
 export interface ParametricControlDescriptor {
@@ -41,6 +42,9 @@ export const PARAMETRIC_CONTROLS = {
 
 export const PARAMETRIC_CONTROL_DESCRIPTORS: readonly ParametricControlDescriptor[] = [
   ...Object.values(PARAMETRIC_CONTROLS),
+  // The live assembly mounts the same editor, including its search/reveal targets.
+  ...CAD_CONTROL_DESCRIPTORS.filter(control => control.section === 'Crossover')
+    .map(control => ({ ...control, section: 'Crossover' as const })),
   ...([
     ['frequency-points', 'Sweep points', 'Frequency sweep', 'simulation', 'design-solve-frequency-mode'],
     ['frequency-spacing', 'Sweep spacing', 'Frequency sweep', 'simulation', 'design-solve-frequency-spacing'],
