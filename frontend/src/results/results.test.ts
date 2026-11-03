@@ -441,7 +441,7 @@ describe('chart data mappers', () => {
     expect(magnitude[1].data[1][1]).toBeCloseTo(90);
   });
 
-  it('renders directivity-derived line series as monotone curves without changing their samples', () => {
+  it('leaves directivity-derived line series to the renderer\'s display line, samples unchanged', () => {
     const payload = {
       frequencies: [200, 1_000, 5_000],
       di: { frequencies: [200, 1_000, 5_000], di: [2, 7, 9] },
@@ -454,10 +454,14 @@ describe('chart data mappers', () => {
     const [di] = directivityIndexSeries(payload);
     const beam = beamShapeSeries(payload);
 
-    expect(di).toMatchObject({ smooth: 0.32, smoothMonotone: 'x', data: [[200, 2], [1_000, 7], [5_000, 9]] });
+    // The renderer draws every frequency curve through one display line; a
+    // series that asked ECharts to smooth it would be drawn its own way.
+    expect(di).toMatchObject({ data: [[200, 2], [1_000, 7], [5_000, 9]] });
+    expect(di).not.toHaveProperty('smooth');
     expect(beam).toEqual(expect.arrayContaining([
-      expect.objectContaining({ smooth: 0.32, smoothMonotone: 'x', data: [[200, 120], [1_000, 90], [5_000, 60]] }),
+      expect.objectContaining({ data: [[200, 120], [1_000, 90], [5_000, 60]] }),
     ]));
+    beam.forEach((series) => expect(series).not.toHaveProperty('smooth'));
   });
 
   it('does not create a DI line when every standard DI sample is unavailable', () => {

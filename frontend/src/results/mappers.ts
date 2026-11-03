@@ -191,8 +191,6 @@ export function directivityIndexSeries(result: ResultPayload, smoothing: Smoothi
       name,
       type: 'line' as const,
       showSymbol: false,
-      smooth: 0.32,
-      smoothMonotone: 'x' as const,
       data: frequencies.map((frequency, index) => [frequency, smoothed[index] ?? null]),
     };
   });
@@ -262,8 +260,6 @@ export function beamShapeSeries(result: ResultPayload) {
     name,
     type: 'line' as const,
     showSymbol: false,
-    smooth: 0.32,
-    smoothMonotone: 'x' as const,
     data: frequencies.map((frequency, index) => [frequency, values[index] ?? null]),
   }));
 }
@@ -471,8 +467,6 @@ export function beamFitSeries(result: ResultPayload) {
     type: 'line' as const,
     showSymbol: false,
     connectNulls: false,
-    smooth: 0.32,
-    smoothMonotone: 'x' as const,
     yAxisIndex: axis,
     data: frequencies.map((frequency, index) => [frequency, values[index] ?? null]),
   }));
