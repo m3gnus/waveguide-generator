@@ -40,8 +40,13 @@ function axisSamples(pixels: number, sampleCount: number, factor: number, bottom
 
 /**
  * RGBA pixels of a directivity map. `values` holds the solved levels with row 0
- * the first angle, drawn at the bottom; `floor` is the bottom of the ramp. A
- * pixel with no solved neighbour (a masked rear hemisphere) stays transparent.
+ * the first angle, drawn at the bottom; `floor` is the bottom of the ramp.
+ *
+ * A pixel that would interpolate from any missing sample stays transparent,
+ * the rule the contours follow (`contourSegments` skips a cell with a missing
+ * corner). Renormalising over the present neighbours instead carried the last
+ * solved level of a zero-radiation run across the whole step into its masked
+ * rear hemisphere, as if it had been solved there.
  */
 export function directivityMapPixels(
   values: Array<Array<number | null>>,
@@ -74,24 +79,19 @@ export function directivityMapPixels(
     for (let px = 0; px < width; px += 1, out += 4) {
       const index = rowStart + x.lower[px];
       const tx = x.weight[px];
-      // Weights of the four neighbours; a missing one drops out and the rest
-      // are renormalised, exactly as interpolateDirectivityGrid does.
-      let sum = 0;
-      let total = 0;
-      const a = source[index];
-      const b = source[index + right];
-      const c = source[index + up];
-      const d = source[index + up + right];
-      let w = (1 - tx) * (1 - ty);
-      if (w > 0 && !Number.isNaN(a)) { sum += a * w; total += w; }
-      w = tx * (1 - ty);
-      if (w > 0 && !Number.isNaN(b)) { sum += b * w; total += w; }
-      w = (1 - tx) * ty;
-      if (w > 0 && !Number.isNaN(c)) { sum += c * w; total += w; }
-      w = tx * ty;
-      if (w > 0 && !Number.isNaN(d)) { sum += d * w; total += w; }
-      if (total === 0) continue;
-      const color = colorOffset(1 - sum / total / floor);
+      // A neighbour with no weight (a pixel exactly on a sample row or
+      // column) does not count; any weighted neighbour that is missing does.
+      const wa = (1 - tx) * (1 - ty);
+      const wb = tx * (1 - ty);
+      const wc = (1 - tx) * ty;
+      const wd = tx * ty;
+      const a = wa > 0 ? source[index] : 0;
+      const b = wb > 0 ? source[index + right] : 0;
+      const c = wc > 0 ? source[index + up] : 0;
+      const d = wd > 0 ? source[index + up + right] : 0;
+      const level = a * wa + b * wb + c * wc + d * wd;
+      if (Number.isNaN(level)) continue;
+      const color = colorOffset(1 - level / floor);
       pixels[out] = table[color];
       pixels[out + 1] = table[color + 1];
       pixels[out + 2] = table[color + 2];

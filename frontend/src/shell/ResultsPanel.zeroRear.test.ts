@@ -66,8 +66,9 @@ describe('zero-radiation rear hemisphere', () => {
     const alpha = (fromBottom: number) => pixels[((height - 1 - fromBottom) * 2) * 4 + 3];
     // Up to the last solved row, 90 degrees, every row is drawn.
     for (let row = 0; row <= 34; row += 1) expect(alpha(row)).toBe(255);
-    // From the first masked row on (120 degrees), nothing is.
-    for (let row = 45; row < height; row += 1) expect(alpha(row)).toBe(0);
+    // Past it nothing is: not even the step from 90 to the first masked row
+    // at 120, which would otherwise take the 90 degree level.
+    for (let row = 35; row < height; row += 1) expect(alpha(row)).toBe(0);
 
     const sampled = payload('sampled');
     const full = directivityMapPixels(interpolateDirectivityGrid(sampled, 'horizontal', 1).values, -30, tokens.colormap, 2, height, 1);
