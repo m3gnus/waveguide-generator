@@ -172,7 +172,7 @@ describe('document-scoped design size regressions',()=>{
   ])('formats the real emitted %s morph target', (name, mouth, morphDetail) => {
     const fixtures = JSON.parse(new TextDecoder().decode(readFileSync('../shared/preview-fixtures/c2-dimensions-morph-metadata.json')));
     answer(fixtures[name].metadata, { lod: 'fine' });
-    expect(dimensions()?.querySelector('span')?.textContent).toBe(`Mouth ${mouth}`);
+    expect(dimensions()?.querySelector('span')?.textContent).toBe(`Mouth ${mouth} mm`);
     expect(dimensions()?.textContent).toMatch(/ mm$/);
     expect(dimensions()?.getAttribute('title')).toBe(morphDetail ? `Current preview. ${morphDetail}` : 'Current preview');
     if(morphDetail)expect(dimensions()?.getAttribute('aria-label')).toContain(morphDetail);
