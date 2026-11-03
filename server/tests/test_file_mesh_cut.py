@@ -204,7 +204,40 @@ def test_a_driver_keeps_its_whole_area_however_the_file_was_reduced(tmp_path, ex
 def test_a_preparation_saved_with_the_cut_area_is_not_reused():
     saved = {"sources": [{"id": "group_101", "observed": {"total_area_mm2": 10000.0}}]}
     assert not _has_whole_areas(saved, {"101": 40000.0})
+    # Matching an old observation is insufficient: unmarked preparations must
+    # be prepared again, even if no area change would be needed.
+    assert not _has_whole_areas(saved, {"101": 10000.0})
+    saved["sources"][0]["completion_factor"] = 1.0
+    assert not _has_whole_areas(saved, {"101": 40000.0})
     assert _has_whole_areas(saved, {"101": 10000.0})
+
+
+@pytest.mark.parametrize("saved_area_mm2", [10000.0, 40000.0], ids=["cut-area", "whole-area"])
+def test_unmarked_preparation_is_reprepared_then_current_preparation_is_reused(tmp_path, saved_area_mm2):
+    body = cutting_registration(auto_cut=True)
+    store = CadLinkStore.for_data_dir(tmp_path)
+    try:
+        prepared = prepare(full_mesh(), auto_cut=True)
+        original = register_mesh(store, tmp_path, body, prepared=prepared)
+        # Retain a real preparation's files and identity, but give its saved
+        # sources the legacy contract, including the coincidentally whole case.
+        legacy = json.loads(json.dumps(original))
+        for source in legacy["sources"]:
+            source.pop("completion_factor")
+            source["observed"]["total_area_mm2"] = saved_area_mm2
+        with store._lock, store._transaction() as conn:
+            conn.execute("UPDATE ingests SET record_json = ? WHERE ingest_id = ?",
+                         (json.dumps(legacy), original["ingest_id"]))
+        current = register_mesh(store, tmp_path, body, prepared=prepared)
+        assert current["ingest_id"] != original["ingest_id"]
+        assert all(source["completion_factor"] == 1.0 for source in current["sources"])
+        assert [source["observed"]["total_area_mm2"] for source in current["sources"]] == pytest.approx([40000, 40000])
+        reused = register_mesh(store, tmp_path, body, prepared=prepared)
+        assert reused["ingest_id"] == current["ingest_id"]
+        # Repreparation never rewrites the retained record used by old replay.
+        assert json.loads(store.get_ingest(original["ingest_id"])["record_json"]) == legacy
+    finally:
+        store.close()
 
 
 def test_record_reimport_setup_and_replay_share_effective_cut(tmp_path):
