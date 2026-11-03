@@ -201,7 +201,10 @@ function compareRun(job: JobItem, model: CurrentModel): { verdict: RunVerdict; f
     && (!run.authoring || !model.designUid || run.authoring.designUid !== model.designUid)) {
     return { verdict: 'other-model' };
   }
-  const facet = run.prepared && model.prepared ? 'prepared' : model.kind === 'parametric' && run.authoring && model.authoring ? 'authoring' : null;
+  // CAD/file snapshots are anchors, not the authoring source of solved geometry.
+  const facet = run.prepared && model.prepared ? 'prepared'
+    : model.kind === 'parametric' && (run.kind === 'parametric' || run.kind === 'assembly')
+      && run.authoring && model.authoring ? 'authoring' : null;
   if (!facet) return { verdict: 'other-model' };
   const saved = run[facet]!;
   const live = model[facet]!;

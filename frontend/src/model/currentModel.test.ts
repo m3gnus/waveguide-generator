@@ -279,6 +279,23 @@ it.each(['file', 'cad'] as const)('keeps legacy ingest fallback and prepared lin
   expect(runVerdict(modern, { ...changed, prepared: { ...changed.prepared, lineage: 'other-model' } })).toBe('other-model');
 });
 
+it.each(oldRuns.filter(job => ['cad', 'file'].includes(modelForRun(job).kind)))(
+  'never treats the anchor snapshot of $id as solved parametric geometry', saved => {
+    const model = { ...currentModel(), viewportShowing: true };
+    const job = { ...saved, design_uid: model.designUid,
+      script_snapshot: { version: 1, design: serializeDesign(model.design!) } } as JobItem;
+    // The imported solve's geometry can differ even though its document UID
+    // and captured anchor still match the untouched authoring document.
+    expect(modelForRun(job).authoring).toMatchObject({ key: model.authoring!.key, designUid: model.designUid });
+    expect(runVerdict(job, model)).toBe('other-model');
+    expect(currentModelStatus(model, [job]).kind).toBe('never-solved');
+    for (const primary of [job.id, null]) {
+      expect(shownResult(model, { primary }, [job])).toMatchObject({ job: null, latest: null, ids: [], canRender: false });
+      expect(spatialResult(model, { primary }, [job])).toBeNull();
+    }
+    expect(runVerdict(job, modelForRun(job))).toBe('current');
+  });
+
 describe('a design assembly run on its parametric design', () => {
   let counter = 0;
   const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '0')}`;
