@@ -10293,6 +10293,19 @@
             "title": "Client Request Id",
             "type": "string"
           },
+          "design": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The design on screen when solving its compiled Sources and baffle assembly.",
+            "title": "Design"
+          },
           "frame_axis": {
             "anyOf": [
               {

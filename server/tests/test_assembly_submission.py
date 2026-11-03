@@ -122,11 +122,109 @@ def test_assembly_jobs_are_created_through_the_model_solve_for_each_engine(compi
                 assert geometry["required_features"] == ["wg-design-assembly-v1"]
                 assert row["task_metadata"]["imported_geometry"]["model_id"] == model_id
                 assert row["config_summary_json"]["import_origin"] == "design-assembly"
+                assert row["script_snapshot"] is None
                 channels = {c["id"]: c for c in geometry["drive_channels"]}
                 assert ("exterior_transducer" in channels[W1]) is drivers
                 assert channels["horn-throat"]["motion"] == "normal" and channels[W1]["motion"] == "axial"
                 assert [g["member_processing"] for g in geometry["driver_groups"]]
                 assert geometry["combine"]["members"][1] == record["signal_groups"][0]["id"]
+        finally:
+            await runtime.shutdown()
+    asyncio.run(scenario())
+
+
+def test_an_assembly_solve_keeps_the_pressed_design_even_when_the_record_was_reused(compiled_app):
+    from server.jobs.design_availability import resolve_job_design
+    from server.jobs.models import ImportedGeometrySource
+
+    app, runtime, _store = compiled_app
+    runtime._ensure_scheduler = lambda: None  # admission only; no engine is run
+
+    async def scenario():
+        try:
+            original = compile_body()
+            original["design"]["R"] = {"raw": "100"}
+            compiled = await call(app, "POST", "/api/models/assembly/compile", original)
+            current = compile_body(2)
+            current["design"]["assembly"]["signal_groups"][0]["label"] = "Renamed HF"
+            current["design"]["R"] = {"raw": "100"}
+            reused = await call(app, "POST", "/api/models/assembly/compile", current)
+            record = reused["prepared"]
+            assert reused["reused"] and record["ingest_id"] == compiled["prepared"]["ingest_id"]
+            assert record["design"]["revision"] == 1
+            path = f"/api/models/{compiled['model']['model_id']}/solve"
+            body = {"prepared_id": record["ingest_id"], "client_request_id": "design-press",
+                    "setup": setup_for(record, engine="metal"), "design": current["design"]}
+            accepted = await call(app, "POST", path, body)
+            job_id = accepted["job_id"]
+            snapshot = {"version": 1, "design": current["design"]}
+            row = runtime.store.get_job_row(job_id)
+            assert row["script_snapshot"] == snapshot
+            assert row["script_snapshot"]["design"]["R"] == {"raw": "100"}
+            assert resolve_job_design(snapshot).as_availability() == {
+                "reopenable": True, "source": "v2-snapshot", "reason_code": "ok", "reason": None, "note": None,
+            }
+            detail = await runtime.get_job(job_id)
+            listed, total = await runtime.list_jobs(status=None, limit=10, offset=0)
+            assert total == 1 and listed[0]["script_snapshot"] == detail["script_snapshot"] == snapshot
+            # Imported history still replays the compiled mesh, rather than
+            # trying the ordinary parametric path (which refuses assemblies).
+            assert detail["design_availability"]["source"] == "cad-import"
+            assert detail["design_availability"]["reason_code"] == "imported_geometry"
+            assert not detail["design_availability"]["reopenable"]
+            assert isinstance((await runtime.get_effective_request(job_id)).geometry, ImportedGeometrySource)
+            assert (await runtime.get_mesh_artifact_download(job_id)).content
+
+            # Another press, including another design label, deduplicates to
+            # this job and never rewrites its snapshot.
+            other = copy.deepcopy(body)
+            other["client_request_id"] = "design-double-click"
+            other["design"]["assembly"]["signal_groups"][0]["label"] = "Another label"
+            assert (await call(app, "POST", path, other))["job_id"] == job_id
+            assert runtime.store.get_job_row(job_id)["script_snapshot"] == snapshot
+            runtime.store.update_job(job_id, status="complete")
+            assert (await call(app, "POST", path, body))["job_id"] == job_id
+            assert (await call(app, "POST", path, other))["job_id"] == job_id
+            changed = {**body, "design": other["design"]}
+            refused = await call(app, "POST", path, changed, expected=409)
+            assert refused["error"]["code"] == "submission_key_conflict"
+            assert runtime.store.list_jobs()[1] == 1
+
+            retried = await runtime.retry(job_id)
+            assert retried != job_id
+            assert runtime.store.get_job_row(retried)["script_snapshot"] == snapshot
+            assert isinstance((await runtime.get_effective_request(retried)).geometry, ImportedGeometrySource)
+        finally:
+            await runtime.shutdown()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["geometry", "invalid", "no-assembly", "unbuildable"])
+def test_an_assembly_solve_refuses_a_design_that_does_not_describe_its_record(compiled_app, change):
+    app, runtime, _store = compiled_app
+    runtime._ensure_scheduler = lambda: None
+
+    async def scenario():
+        try:
+            current = compile_body()
+            compiled = await call(app, "POST", "/api/models/assembly/compile", current)
+            record = compiled["prepared"]
+            design = copy.deepcopy(current["design"])
+            if change == "geometry":
+                design["assembly"]["woofers"][0]["placement"]["gap_mm"] = 20
+            elif change == "invalid":
+                design["formula"] = "not-a-formula"
+            elif change == "unbuildable":
+                design["source"] = {"contours": "unsupported contour"}
+            else:
+                design.pop("assembly")
+            refused = await call(app, "POST", f"/api/models/{compiled['model']['model_id']}/solve", {
+                "prepared_id": record["ingest_id"], "client_request_id": "changed-design",
+                "setup": setup_for(record, engine="metal"), "design": design,
+            }, expected=422)
+            assert refused["error"]["code"] == ("design_changed" if change == "geometry" else "design_refused")
+            assert "Solve again" in refused["error"]["message"]
+            assert runtime.store.list_jobs() == ([], 0)
         finally:
             await runtime.shutdown()
     asyncio.run(scenario())

@@ -1749,6 +1749,7 @@ class JobRuntime:
         *,
         cad_provenance: Mapping[str, Any] | None = None,
         setup_revision_id: str | None = None,
+        script_snapshot: Mapping[str, Any] | None = None,
         _validation: SubmissionValidation | None = None,
     ) -> str:
         """Queue a solve.
@@ -1759,6 +1760,8 @@ class JobRuntime:
         ``setup_revision_id`` is the setup revision an imported request was
         made from when no CAD provenance names one (a file model's solve,
         ``server/jobs/model_solve.py``).
+        ``script_snapshot`` retains the validated design wire of an assembly
+        press, independently of its immutable imported solver request.
         """
 
         _refuse_removed_solver(request)
@@ -1770,9 +1773,10 @@ class JobRuntime:
             # collection deciding meanwhile keeps it (server/mesh/prepared_gc.py).
             await asyncio.to_thread(touch, str(ingest_id))
         submission_key = request.client_request_id
-        submission_request_sha256 = canonical_json_sha256(
-            _submission_identity(request)
-        )
+        identity = _submission_identity(request)
+        if script_snapshot is not None:
+            identity["script_snapshot"] = dict(script_snapshot)
+        submission_request_sha256 = canonical_json_sha256(identity)
         if submission_key is not None:
             existing_job_id = await asyncio.to_thread(
                 self.store.resolve_submission,
@@ -1804,7 +1808,7 @@ class JobRuntime:
             "has_mesh_artifact": imported is not None,
             "mesh_stats": composed.mesh_stats,
             "label": composed.request.label,
-            "script_snapshot": composed.script_snapshot,
+            "script_snapshot": dict(script_snapshot) if script_snapshot is not None else composed.script_snapshot,
             "task_metadata": composed.task_metadata,
         }
         initial_event = ("queued", {"status": "queued", "progress": 0.0})
@@ -2945,6 +2949,11 @@ class JobRuntime:
             return await submit_imported_request(
                 self, request, cad_provenance=provenance,
                 setup_revision_id=recorded_setup_revision(row),
+                script_snapshot=(
+                    row.get("script_snapshot")
+                    if row.get("config_summary_json", {}).get("import_origin") == "design-assembly"
+                    else None
+                ),
             )
         return await self.submit(request)
 

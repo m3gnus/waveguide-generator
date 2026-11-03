@@ -193,10 +193,12 @@ def test_a_press_of_a_mesh_prepared_with_solve_anyway_carries_the_choice(harness
     from server.contracts.canonical import canonical_utf8_strict_json
 
     plain = ModelSolveRequest(prepared_id="p", client_request_id="c", setup=_setup(engine="metal"))
-    before = plain.model_dump(mode="json", exclude={"client_request_id", "mesh_limit_override"})
+    before = plain.model_dump(mode="json", exclude={"client_request_id", "mesh_limit_override", "design"})
     assert press_digest(plain) == "sha256:" + hashlib.sha256(
         canonical_utf8_strict_json(before).encode("utf-8")).hexdigest()
     assert press_digest(plain) != press_digest(plain.model_copy(update={"mesh_limit_override": True}))
+    assert press_digest(plain) != press_digest(plain.model_copy(update={"design": {"formula": "OSSE"}}))
+    assert press_digest(plain) == press_digest(plain.model_copy(update={"design": None}))
 
 
 def test_solve_anyway_never_applies_to_a_mesh_prepared_without_it(harness) -> None:
@@ -452,6 +454,7 @@ def test_a_file_solve_records_its_setup_revision_and_a_duplicate_is_the_same_job
         status, first = await _file_solve(app, model_id, body)
         assert status == 200, first
         job = runtime.store.get_job_row(first["job_id"])
+        assert job["script_snapshot"] is None
         revision = setup_digest(validate_setup(setup))
         recorded = job["task_metadata"]["imported_geometry"]["setup_revision_id"]
         assert store.get_setup_revision(recorded)["content_sha256"] == revision
@@ -477,6 +480,28 @@ def test_a_file_solve_records_its_setup_revision_and_a_duplicate_is_the_same_job
         assert status == 200 and next_run["job_id"] != first["job_id"]
 
     _file_scenario(tmp_path, scenario)
+
+
+def test_a_file_model_cannot_claim_a_design_snapshot(tmp_path) -> None:
+    async def scenario(store, app, runtime):
+        record = register_mesh(store, tmp_path, registration())
+        status, refused = await _file_solve(app, "mesh-file:" + record["artifact_sha256"], {
+            "prepared_id": record["ingest_id"], "client_request_id": "file-design",
+            "setup": setup_for(record), "design": {"formula": "OSSE"},
+        })
+        assert (status, refused["error"]["code"]) == (422, "design_refused")
+        assert "Sources and baffle assembly" in refused["error"]["message"]
+        assert runtime.store.list_jobs() == ([], 0)
+
+    _file_scenario(tmp_path, scenario)
+
+
+def test_a_cad_model_cannot_claim_a_design_snapshot(harness) -> None:
+    model = _cad_model(harness)
+    status, refused = _solve(harness, _models_app(harness), model, client_request_id="cad-design",
+                             setup=_setup(engine="metal"), design={"formula": "OSSE"})
+    assert (status, refused["error"]["code"]) == (422, "design_refused")
+    assert _job_count(harness) == 0
 
 
 def test_file_mesh_limit_requires_choice_for_model_and_direct_solve(tmp_path, monkeypatch) -> None:

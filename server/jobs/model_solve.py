@@ -38,6 +38,7 @@ import weakref
 
 from pydantic import Field, field_validator, model_validator
 
+from server.cadlink.intake.design_assembly import PRODUCER as ASSEMBLY_PRODUCER, compile_spec_digest
 from server.cadlink.intake.ingest import mesh_preparation, read_snapshot, retained_snapshot_path
 from server.cadlink.intake.readings import (
     confirm_frame,
@@ -61,6 +62,7 @@ from server.cadlink.roles import prepared_inventory_sha256
 from server.cadlink.store import UNFILED_MODEL_ID
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
+from server.design.schema import DesignConfig
 from server.jobs.solve_anyway import Answered, Pressed, carries
 from server.jobs.cad_intent import CAD_INTENT, cad_of
 from server.jobs.cad_preparation import preparation_options
@@ -112,6 +114,9 @@ class ModelSolveRequest(JobModel):
         description="Stable id of this press; a replay recovers its original job.",
     )
     label: str | None = None
+    design: dict[str, Any] | None = Field(
+        default=None, description="The design on screen when solving its compiled Sources and baffle assembly.",
+    )
     #: The solver frame axis a person chose for an unlinked CAD model, if any.
     #: It is confirmed for the model's project, and the solve is held to it.
     #: Absent, WG decides the axis itself and never asks.
@@ -465,6 +470,8 @@ def press_digest(body: ModelSolveRequest) -> str:
     # Left out when not chosen, so presses made before the field existed keep
     # their digests.
     exclude = {"client_request_id"} | (set() if body.mesh_limit_override else {"mesh_limit_override"})
+    if body.design is None:
+        exclude.add("design")
     content = body.model_dump(mode="json", exclude=exclude)
     return "sha256:" + hashlib.sha256(canonical_utf8_strict_json(content).encode("utf-8")).hexdigest()
 
@@ -588,6 +595,34 @@ def _refuse_restart(runtime: Any) -> None:
 # -- a file model ----------------------------------------------------------------
 
 
+def _assembly_snapshot(body: ModelSolveRequest, record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Keep the press's wire, after proving it names this compiled geometry."""
+
+    if body.design is None:
+        return None
+    if record.get("producer") != ASSEMBLY_PRODUCER:
+        raise ModelSolveRefusal(
+            422, "design_refused",
+            "A design can only be stored when solving its built Sources and baffle assembly.",
+        )
+    try:
+        design = DesignConfig.model_validate(body.design)
+        manifest_sha256 = compile_spec_digest(design) if design.root.assembly is not None else None
+    except ValueError as exc:
+        raise ModelSolveRefusal(
+            422, "design_refused", "This design cannot be built as an assembly. Check the design, then press Solve again.",
+        ) from exc
+    if design.root.assembly is None:
+        raise ModelSolveRefusal(
+            422, "design_refused", "This design has no Sources and baffle assembly. Build it, then press Solve again.",
+        )
+    if manifest_sha256 != record.get("manifest_sha256"):
+        raise ModelSolveRefusal(
+            422, "design_changed", "The design changed after its assembly was built. Press Solve again.",
+        )
+    return {"version": 1, "design": body.design}
+
+
 def _check_file_mesh_limit(record: Mapping[str, Any], *, override: bool) -> None:
     stats = (record.get("mesh") or {}).get("stats") or {}
     count = stats.get("triangle_count")
@@ -625,7 +660,8 @@ def _acknowledged(record: Mapping[str, Any], body: ModelSolveRequest) -> list[st
 
 
 async def _solve_file(
-    runtime: Any, store: Any, model_id: str, body: ModelSolveRequest, record: Mapping[str, Any]
+    runtime: Any, store: Any, model_id: str, body: ModelSolveRequest, record: Mapping[str, Any],
+    script_snapshot: dict[str, Any] | None = None,
 ) -> str:
     key = f"model-solve:{body.client_request_id}"
     existing = await asyncio.to_thread(runtime.store.job_for_submission_key, key)
@@ -654,7 +690,8 @@ async def _solve_file(
             if active is not None:
                 return active
         try:
-            return await runtime.submit(request, setup_revision_id=revision_id)
+            snapshot_args = {"script_snapshot": script_snapshot} if script_snapshot is not None else {}
+            return await runtime.submit(request, setup_revision_id=revision_id, **snapshot_args)
         except SUBMISSION_REFUSALS as exc:
             raise refusal_from(exc) from exc
 
@@ -857,8 +894,9 @@ async def solve_model(state: Any, model_id: str, body: ModelSolveRequest) -> str
     # Marked used before it is read: a collection deciding meanwhile keeps it.
     await asyncio.to_thread(store.touch_ingest, body.prepared_id)
     model, record = await asyncio.to_thread(_model_and_record, store, model_id, body.prepared_id)
+    script_snapshot = await asyncio.to_thread(_assembly_snapshot, body, record)
     if model.get("producer") in READY_MESH_PRODUCERS:
-        job_id = await _solve_file(runtime, store, model_id, body, record)
+        job_id = await _solve_file(runtime, store, model_id, body, record, script_snapshot)
     else:
         job_id = await _solve_cad(state, runtime, store, model_id, body, record)
     return await asyncio.to_thread(_bind_press, store, model_id, body, job_id)
@@ -870,6 +908,7 @@ async def submit_imported_request(
     *,
     cad_provenance: Mapping[str, Any] | None = None,
     setup_revision_id: str | None = None,
+    script_snapshot: Mapping[str, Any] | None = None,
 ) -> str:
     """Submit an exact imported request as its model's solve.
 
@@ -883,6 +922,7 @@ async def submit_imported_request(
 
     geometry = request.geometry
     assert isinstance(geometry, ImportedGeometrySource)
+    snapshot_args = {"script_snapshot": script_snapshot} if script_snapshot is not None else {}
     await runtime.start()
     store = runtime.cadlink_store
     if store is not None:
@@ -890,11 +930,13 @@ async def submit_imported_request(
         await asyncio.to_thread(store.touch_ingest, geometry.ingest_id)
     row = await asyncio.to_thread(store.get_ingest, geometry.ingest_id) if store is not None else None
     if row is None:
-        return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id)
+        return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id,
+                                    **snapshot_args)
     if request.client_request_id is not None and await asyncio.to_thread(
         runtime.store.job_for_submission_key, request.client_request_id
     ) is not None:
-        return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id)
+        return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id,
+                                    **snapshot_args)
     record = json.loads(row["record_json"])
     if is_ready_mesh(record):
         try:
@@ -912,6 +954,7 @@ async def submit_imported_request(
         return await runtime.submit(
             request, cad_provenance=cad_provenance,
             setup_revision_id=effective_revision, _validation=validation,
+            **snapshot_args,
         )
 
     model_id = row.get("model_id") or None
@@ -923,7 +966,8 @@ async def submit_imported_request(
         ) is not None
         if replay:
             # Exact transport replay recovers even if readiness has since changed.
-            return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=revision)
+            return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=revision,
+                                        **snapshot_args)
         inputs = _revision_inputs(store, revision, {})
         if inputs is None and revision is None:
             setup = _request_setup(request, record)

@@ -5969,6 +5969,13 @@ export interface components {
              * @description Stable id of this press; a replay recovers its original job.
              */
             client_request_id: string;
+            /**
+             * Design
+             * @description The design on screen when solving its compiled Sources and baffle assembly.
+             */
+            design?: {
+                [key: string]: unknown;
+            } | null;
             /** Frame Axis */
             frame_axis?: string | null;
             /** Label */

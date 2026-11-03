@@ -117,6 +117,12 @@ def compile_spec(design: DesignConfig) -> dict[str, Any]:
     }
 
 
+def compile_spec_digest(design: DesignConfig) -> str:
+    """The manifest identity a compiled assembly is published under."""
+
+    return _digest(compile_spec(design))
+
+
 def _intact(record: Mapping[str, Any]) -> bool:
     try:
         read_verified_import_mesh(record)
@@ -434,7 +440,7 @@ async def compile_design_assembly(
     if not model_id:
         raise AssemblyRefusal("Save the design before solving its assembly.")
     token = fence.begin(design_uid, design_revision, build_session)
-    spec_digest = _digest(compile_spec(design))
+    spec_digest = compile_spec_digest(design)
     reused, known, selected = await asyncio.to_thread(
         _held, _reuse_and_select, store, model_id, spec_digest, fence, token)
     if reused is not None:
@@ -459,6 +465,7 @@ __all__ = [
     "PRODUCER",
     "compile_design_assembly",
     "compile_spec",
+    "compile_spec_digest",
     "compose_record",
     "geometry_spec",
 ]
