@@ -10,6 +10,7 @@
   {"path": "simulation.f1", "value": 100, "reuses": true},
   {"path": "simulation.f2", "value": 2400, "reuses": true},
   {"path": "simulation.num_frequencies", "value": 5, "reuses": true},
+  {"path": "mesh.vertical_offset", "value": 80, "reuses": true},
   {"path": "assembly.woofers.0.radius_mm", "value": 90, "reuses": false},
   {"path": "assembly.woofers.0.placement.gap_mm", "value": 20, "reuses": false},
   {"path": "assembly.woofers.0.shape.kind", "value": "piston", "reuses": false},

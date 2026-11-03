@@ -33,8 +33,8 @@ export interface AssemblyRadiator {
   projected_area_m2?: number;
 }
 
-/** A compiled assembly record as a model read returns it, with its solver mesh. */
-export interface CompiledAssembly extends PreparedSummary {
+/** A compiled assembly record's metadata, with mesh text when the client needs it. */
+export interface CompiledAssemblyMetadata extends PreparedSummary {
   producer: 'design-assembly';
   design: { design_uid: string; name: string; revision: number; content_sha256: string;
     assembly_sha256: string; geometry_sha256: string };
@@ -44,8 +44,10 @@ export interface CompiledAssembly extends PreparedSummary {
   signal_groups: Array<{ id: string; label: string; members: string[] }>;
   sources: Array<{ id: string; role: string; radiator_id: string; segment_id: string | null }>;
   source_tags: Record<string, number>;
-  msh_text: string;
 }
+
+/** A compiled assembly record with its solver mesh available locally. */
+export interface CompiledAssembly extends CompiledAssemblyMetadata { msh_text: string }
 
 export type AssemblyCompileResult =
   | { status: 'published'; reused: boolean; model: ImportedModelSummary; prepared: CompiledAssembly }
@@ -84,6 +86,21 @@ export function fetchAssemblyContext(design: Record<string, unknown>, fetcher: t
   });
 }
 
-export const compileAssembly = (body: { design: Record<string, unknown>; design_uid: string; design_name: string;
+/** The server may omit only the mesh text of the immutable record we already hold. */
+type AssemblyCompileResponse =
+  | { status: 'published'; reused: boolean; model: ImportedModelSummary;
+    prepared: CompiledAssemblyMetadata }
+  | { status: 'superseded' };
+
+export async function compileAssembly(body: { design: Record<string, unknown>; design_uid: string; design_name: string;
   design_revision: number; build_session: string },
-  fetcher: typeof fetch = fetch, signal?: AbortSignal) => post<AssemblyCompileResult>('/api/models/assembly/compile', body, fetcher, 'The assembly', signal);
+  fetcher: typeof fetch = fetch, signal?: AbortSignal, knownPrepared: CompiledAssembly | null = null): Promise<AssemblyCompileResult> {
+  const result = await post<AssemblyCompileResponse>('/api/models/assembly/compile', {
+    ...body, ...(knownPrepared ? { known_prepared_id: knownPrepared.ingest_id } : {}),
+  }, fetcher, 'The assembly', signal);
+  if (result.status !== 'published') return result;
+  const mshText = result.prepared.msh_text
+    ?? (knownPrepared && knownPrepared.ingest_id === result.prepared.ingest_id ? knownPrepared.msh_text : undefined);
+  if (mshText === undefined) throw new Error('The assembly mesh was not returned. Build the assembly again, then press Solve.');
+  return { ...result, prepared: { ...result.prepared, msh_text: mshText } };
+}

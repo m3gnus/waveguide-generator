@@ -41,7 +41,7 @@ describe('assembly Solve press', () => {
     expect(designAssemblySnapshot).toThrow(NEEDS_BUILD);
   });
 
-  it('reuses prepared geometry after setup edits and sends the updated setup without context or mesh requests', async () => {
+  it('checks reuse on the backend after setup edits and sends the updated setup without transferring the mesh again', async () => {
     const { assembly, id } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
     useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });
     useSolveOptionsStore.getState().setEngine('beat-cpu');
@@ -49,9 +49,14 @@ describe('assembly Solve press', () => {
       sources: [{ id: 'horn-throat', role: 'HF' }, { id: `${id}/piston`, role: 'LF' }],
       excitations: [{ id: 'horn-throat', source_ids: ['horn-throat'], motion: 'normal' },
         { id, source_ids: [`${id}/piston`], motion: 'axial' }] };
-    const fetcher = vi.fn<typeof fetch>(async url => Response.json(String(url).endsWith('/context')
-      ? { minimum_clearance_mm: 0.1, clearances: {} }
-      : { status: 'published', prepared: record, model: { model_id: 'design-assembly:wgu_x', producer: 'design-assembly', display_name: 'x' } }));
+    const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+      if (String(url).endsWith('/context')) return Response.json({ minimum_clearance_mm: 0.1, clearances: {} });
+      const body = JSON.parse(String(init?.body));
+      const { msh_text: _mesh, ...metadata } = record;
+      return Response.json({ status: 'published', reused: !!body.known_prepared_id,
+        prepared: body.known_prepared_id === record.ingest_id ? metadata : record,
+        model: { model_id: 'design-assembly:wgu_x', producer: 'design-assembly', display_name: 'x' } });
+    });
     await prepareDesignAssembly(fetcher);
     expect(fetcher).toHaveBeenCalledTimes(2);
     const driver = { version: 1, re_ohm: 6, le_h: 0.0005, bl_n_per_a: 7, mmd_kg: 0.02, cms_m_per_n: 0.001, rms_n_s_per_m: 1.5 };
@@ -61,7 +66,8 @@ describe('assembly Solve press', () => {
     useDesignStore.getState().updateValue('simulation.f1', 100);
     expect(designModelCurrent(useDesignStore.getState().design)).toBe(false);
     const next = await prepareDesignAssembly(fetcher);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(String(fetcher.mock.calls[3][1]?.body)).known_prepared_id).toBe(record.ingest_id);
     expect(designModelCurrent(useDesignStore.getState().design)).toBe(true);
     expect(next.prepared.ingest_id).toBe('wgi_setup');
     expect(next.setup.geometry.driver_groups?.find(group => group.channel_ids.includes(id))?.member_processing?.[id])
