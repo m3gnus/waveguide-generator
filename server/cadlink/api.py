@@ -6,7 +6,6 @@ from server.preview.errors import user_error_message
 
 import asyncio
 import functools
-import hashlib
 import json
 import logging
 import math
@@ -16,7 +15,6 @@ import platform
 import re
 import secrets
 import sqlite3
-import stat
 import subprocess
 import tempfile
 import time
@@ -100,6 +98,7 @@ from server.cadlink.intake.ingest import (
     cad_document_member,
 )
 from server.cadlink.joblane.preparation_inputs import _retained_manifest
+from server.cadlink.retained_files import copy_verified_member
 from server.cadlink.joblane.manual_solve import create_manual_solve, recover_manual_solve
 # The Onshape leg publishes its bundles under WG's own data directory rather
 # than a user-chosen WGLink folder, so re-ingesting one has to be anchored to
@@ -1451,26 +1450,7 @@ def _verified_run_document(
         size = evidence.get("size_bytes")
         if not evidence.get("sha256") or not isinstance(size, int) or size < 0:
             return False
-        checksum = hashlib.sha256()
-        copied = 0
-        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-        descriptor = os.open(document, flags)
-        with os.fdopen(descriptor, "rb") as stream:
-            file_stat = os.fstat(stream.fileno())
-            if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size != size:
-                return False
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                copied += len(chunk)
-                if copied > size:
-                    return False
-                checksum.update(chunk)
-                if copy_to is not None:
-                    copy_to.write(chunk)
-        actual = "sha256:" + checksum.hexdigest()
-        verified = copied == size and actual == evidence["sha256"]
-        if verified and checksum_out is not None:
-            checksum_out.append(actual)
-        return verified
+        return copy_verified_member(document, evidence, copy_to=copy_to, checksum_out=checksum_out)
     except FileNotFoundError:
         return False
     except OSError:

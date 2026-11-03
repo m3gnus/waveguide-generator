@@ -13293,6 +13293,30 @@
         "title": "RetainedMeshInspection",
         "type": "object"
       },
+      "ReturnedStepAvailability": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "ReturnedStepAvailability",
+        "type": "object"
+      },
       "RunProvenance": {
         "additionalProperties": true,
         "description": "Extensible provenance shared by a run and its result.",
@@ -18173,6 +18197,93 @@
           }
         },
         "summary": "Export Profiles",
+        "tags": [
+          "exports"
+        ]
+      }
+    },
+    "/api/export/runs/{job_id}/step": {
+      "post": {
+        "description": "Read exact returned bytes; the existing run bundle owns publication.",
+        "operationId": "export_returned_step_api_export_runs__job_id__step_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "model/step": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Returned Step",
+        "tags": [
+          "exports"
+        ]
+      }
+    },
+    "/api/export/runs/{job_id}/step/availability": {
+      "post": {
+        "description": "Check the same identity and checksum as the eventual returned-STEP export.",
+        "operationId": "returned_step_availability_api_export_runs__job_id__step_availability_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReturnedStepAvailability"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Returned Step Availability",
         "tags": [
           "exports"
         ]

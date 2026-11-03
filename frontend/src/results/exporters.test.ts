@@ -101,7 +101,7 @@ function workspacePayload(init?: RequestInit) {
 
 describe('result exporters', () => {
   beforeEach(() => { activityStore.reset(); preferencesStore.resetForTests(); });
-  it.each(['step', 'stl', 'fusion_csv', 'mwg_config'] as const)('refuses %s generation even if an imported run carries a parametric anchor', async format => {
+  it.each(['stl', 'fusion_csv', 'mwg_config'] as const)('refuses %s generation even if an imported run carries a parametric anchor', async format => {
     const selectedRun = {
       id: 'cad-anchor', config_summary: { geometry_type: 'imported' },
       script_snapshot: { version: 1, design: { formula: 'OSSE', L: 120 } },
@@ -114,6 +114,46 @@ describe('result exporters', () => {
       jobStem: 'cad-run', preferences: preferencesStore.getSnapshot(), fetcher,
     })).rejects.toThrow(/imported models/i);
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('publishes exact returned STEP bytes with the existing destination and run guards', async () => {
+    const selectedRun = { id: 'cad-return', config_summary: { geometry_type: 'imported' },
+      script_snapshot: { version: 1, design: { formula: 'OSSE', L: 120 } }, design_revision: 7,
+      solve_options: {} } as unknown as JobItem;
+    const bytes = new Uint8Array([73, 83, 79, 13, 10, 255, 0, 13, 10]);
+    const requests: Array<{ path: string; init?: RequestInit }> = [];
+    const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+      const path = String(url);
+      requests.push({ path, init });
+      if (path === '/api/export/runs/cad-return/step') return new Response(bytes);
+      if (path === '/api/workspace/write-export') return new Response(JSON.stringify({
+        directory: '/chosen', files: ['/chosen/saved-run.step'],
+      }));
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const output = await runWorkspaceExportBundle({ selectedRun, jobId: selectedRun.id,
+      design: designForFamily('OSSE'), jobStem: 'saved-run', preferences: preferencesStore.getSnapshot(),
+      destinationToken: 'chosen-destination', fetcher }, ['step'], 'confirm');
+    expect(output.failures).toEqual([]);
+    expect(requests.map(({ path }) => path)).toEqual(['/api/export/runs/cad-return/step', '/api/workspace/write-export']);
+    expect(requests[0].init?.body).toBeUndefined();
+    const publication = workspacePayload(requests[1].init);
+    expect(publication).toMatchObject({ jobId: 'cad-return', destination: 'chosen-destination', existing: 'confirm' });
+    expect(new Uint8Array(await publication.members[0].blob.arrayBuffer())).toEqual(bytes);
+  });
+
+  it('publishes nothing when the returned STEP fails verification', async () => {
+    const selectedRun = { id: 'cad-return', config_summary: { geometry_type: 'imported' },
+      design_revision: 7, script_snapshot: null, solve_options: {} } as unknown as JobItem;
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      detail: "The saved STEP does not match the CAD return used by this run. Send the model again from Fusion and solve it before exporting STEP.",
+    }), { status: 422 }));
+    const output = await runWorkspaceExportBundle({ selectedRun, jobId: selectedRun.id,
+      jobStem: 'saved-run', preferences: preferencesStore.getSnapshot(), fetcher }, ['step']);
+    expect(output.files).toEqual([]);
+    expect(output.failures[0].reason).toContain('does not match');
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0][0]).toBe('/api/export/runs/cad-return/step');
   });
 
   it.each(['parametric', 'assembly'] as const)('exports %s run config from its captured design even if passed a draft', async kind => {

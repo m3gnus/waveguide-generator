@@ -1,4 +1,5 @@
 import { stagedActivity } from '../shell/stagedActivity';
+import { modelKindForRun } from '../model/currentModel';
 import type { ActivityHandle } from '../shell/activity';
 import { activityOperation } from '../shell/activityOperation';
 import { fetchMeshReplay, MeshReplayRefusal } from '../api/meshReplay';
@@ -449,13 +450,16 @@ export async function writeWorkspaceFiles(
 }
 
 async function fetchGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<GeometryDownload> {
-  if (!context.design) throw new Error(MISSING_RUN_DESIGN_EXPORT_REASON);
+  const returnedStep = kind === 'step' && context.selectedRun && modelKindForRun(context.selectedRun) === 'cad';
+  if (!returnedStep && !context.design) throw new Error(MISSING_RUN_DESIGN_EXPORT_REASON);
   const fetcher = context.fetcher ?? fetch;
   const design = context.design;
   const baseName = context.jobStem;
   const query = kind === 'profiles' ? `?kind=${profileKind ?? 'profiles'}` : '';
   const download = async (fetcher: typeof fetch, signal?: AbortSignal) => {
-    const response = await fetcher(`/api/export/${kind}${query}`, { method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: serializeDesign(design), designRevision: context.designRevision ?? 0, baseName }) });
+    const response = returnedStep
+      ? await fetcher(`/api/export/runs/${encodeURIComponent(context.selectedRun!.id)}/step`, { method: 'POST', signal })
+      : await fetcher(`/api/export/${kind}${query}`, { method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: serializeDesign(design!), designRevision: context.designRevision ?? 0, baseName }) });
     if (!response.ok) throw await responseError(response);
     return { blob: await response.blob(), filename: filenameFromResponse(response, filename) };
   };
