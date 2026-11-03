@@ -53,7 +53,11 @@ export function EChartRenderer({ option, label, live = false }: { option: EChart
     if (!host.current) return;
     chart.current = echarts.init(host.current, undefined, {
       renderer: 'canvas',
-      useDirtyRect: true,
+      // Whole-frame repaints. With dirty rectangles, hovering the directivity
+      // map cleared the colour ramp's hover indicator region to the background
+      // and painted nothing back: a blank box over the ramp. A full repaint of
+      // the expanded map measured 5.7 ms (median), and a line chart less.
+      useDirtyRect: false,
       devicePixelRatio: chartPixelRatio(),
     });
     // A ruler drawn for the old card size would keep its pixel row while the

@@ -53,6 +53,7 @@ describe('interactive chart updates', () => {
     render({ series: [] });
     expect(init).toHaveBeenCalledWith(expect.any(HTMLElement), undefined, expect.objectContaining({
       renderer: 'canvas',
+      useDirtyRect: false,
       devicePixelRatio: 2,
     }));
   });
