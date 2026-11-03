@@ -2,8 +2,8 @@
  * The design assembly as the third input of the shared imported Simulation.
  *
  * Same sections, same mutations (`createImportedSimulationSetup`), another
- * owner of the state: the design document. Channels are the compiled record's
- * excitations, one per radiator; drivers, signal groups, the crossover and the
+ * owner of the state: the design document. Channels are the design's driven
+ * radiators, as the compiled record excites them; drivers, signal groups, the crossover and the
  * drive voltage are the design's `assembly`; the sweep is the design's own.
  * Every control action is one project history step, however many channels a
  * grouped card fans out to, so Undo, Redo, New and Open need nothing here.
@@ -15,15 +15,21 @@ import { useAssemblyBuildStore } from './assemblyBuild';
 import { PASSIVE_CARDIOID_DEFAULTS, type CadDriveChannel, type RoleSource, type SimulationData } from './cadReturn';
 import { useDesignStore, type DesignDocument } from './design';
 import { parseExteriorTransducer, type ExteriorTransducerForm } from './exteriorTransducer';
-import { createImportedSimulationSetup, type ImportedSimulationSetup } from './importedSimulationSetup';
+import { createImportedSimulationSetup, registerLiveAssemblySimulation, type ImportedSimulationSetup } from './importedSimulationSetup';
 import { DEFAULT_DRIVE_VOLTAGE_V } from './solveDefaults';
 
 /** Assembly diaphragms move along the axial Z direction of the horn frame. */
 export const ASSEMBLY_MOTION_AXIS: [number, number, number] = [0, 0, 1];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-function exteriorForm(driver: AssemblyDriver | undefined): ExteriorTransducerForm | undefined {
+/** A woofer's bound driver as the shared driver editor and check read it. */
+export function assemblyDriverForm(driver: AssemblyDriver | undefined): ExteriorTransducerForm | undefined {
   return driver ? parseExteriorTransducer({ ...driver.exterior_transducer, motion_axis: ASSEMBLY_MOTION_AXIS }) : undefined;
+}
+
+/** A radiator as the user named it: the woofer's own name, or the horn. */
+export function assemblyRadiatorLabel(design: DesignDocument, id: string): string {
+  return id === HF_RADIATOR_ID ? 'The horn' : design.assembly?.woofers?.find(woofer => woofer.id === id)?.label ?? 'A woofer';
 }
 
 /** The record's sources, as the shared sections name them (HF horn, LF woofers). */
@@ -31,13 +37,28 @@ export function assemblySources(record: CompiledAssembly | null): RoleSource[] {
   return (record?.sources ?? []).map(({ id, role }) => ({ id, role }));
 }
 
+/**
+ * The radiators the design drives: the horn and every enabled woofer that is
+ * not rigid, which is what the compiled record excites. Before a build, or
+ * while one is behind the design, a radiator the record lacks still has its
+ * channel (axial for a woofer, no faces yet), so its driver can be set up;
+ * Solve builds the design first, and then every channel is the record's.
+ */
+function drivenRadiators(design: DesignDocument, record: CompiledAssembly | null): CompiledAssembly['excitations'] {
+  if (!design.assembly) return [];
+  const compiled = new Map((record?.excitations ?? []).map(excitation => [excitation.id, excitation]));
+  const woofers = (design.assembly.woofers ?? []).filter(woofer => woofer.enabled !== false && woofer.drive !== 'rigid');
+  return [HF_RADIATOR_ID, ...woofers.map(woofer => woofer.id)].map(id => compiled.get(id)
+    ?? { id, source_ids: [], motion: id === HF_RADIATOR_ID ? 'normal' : 'axial', patch_weights: {} });
+}
+
 /** Simulation data of a design assembly and the compiled record it is solved on. */
 export function assemblySimulationData(design: DesignDocument, record: CompiledAssembly | null): SimulationData {
   const assembly = design.assembly ?? {};
-  const excitations = record?.excitations ?? [];
+  const excitations = drivenRadiators(design, record);
   const compiled = new Set(excitations.map(excitation => excitation.id));
   const driveChannels: CadDriveChannel[] = excitations.map(excitation => {
-    const form = exteriorForm(assembly.drivers?.[excitation.id]);
+    const form = assemblyDriverForm(assembly.drivers?.[excitation.id]);
     return { id: excitation.id, source_ids: [...excitation.source_ids], motion: excitation.motion,
       ...(form ? { exterior_transducer: form } : {}) };
   });
@@ -169,6 +190,13 @@ export const assemblySimulationSetup = createImportedSimulationSetup({
     if (Object.keys(values).length) useDesignStore.getState().updateValues(values);
   },
   signal: batched,
+});
+
+// In Parametric, the shared Simulation sections set up this design's assembly.
+registerLiveAssemblySimulation({
+  get: () => assemblySimulationSetup.get(),
+  active: () => !!useDesignStore.getState().design.assembly,
+  use: () => { useDesignStore(state => state.design); useAssemblyBuildStore(state => state.published); },
 });
 
 export function assemblyImportedSetup(): ImportedSimulationSetup {

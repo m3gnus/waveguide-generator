@@ -402,9 +402,26 @@ function readyMeshSimulationSetup(input: 'file' | 'assembly') {
 export const fileSimulationSetup = readyMeshSimulationSetup('file');
 export const retainedAssemblySimulationSetup = readyMeshSimulationSetup('assembly');
 
-/** One interface for the shared imported Simulation sections and their children. */
+/** The open design's assembly input, whether the design has one, and the hook that follows its stores. */
+interface LiveAssemblySimulation { get(): ImportedSimulationSetup; active(): boolean; use(): void }
+let liveAssembly: LiveAssemblySimulation | null = null;
+
+/**
+ * Its own module registers the live design's assembly input, once, as it loads:
+ * that module reads the design store, which already depends on this one.
+ */
+export function registerLiveAssemblySimulation(input: LiveAssemblySimulation): void {
+  liveAssembly = input;
+}
+
+/**
+ * One interface for the shared imported Simulation sections and their children.
+ * In Parametric they set up the open design's Sources and baffle assembly, when it has one; in
+ * CAD Link, the CAD return, the mesh file or the retained assembly run.
+ */
 export function importedSimulationSetup(): ImportedSimulationSetup {
-  const input = workspaceModeStore.getSnapshot().importedInput;
+  const { mode, importedInput: input } = workspaceModeStore.getSnapshot();
+  if (mode === 'parametric' && liveAssembly?.active()) return liveAssembly.get();
   return (input === 'cad' ? cadSimulationSetup : input === 'assembly' ? retainedAssemblySimulationSetup : fileSimulationSetup).get();
 }
 
@@ -412,6 +429,7 @@ export function useImportedSimulationSetup(): ImportedSimulationSetup {
   useCadReturnStore();
   useImportedModelStore();
   useImportedSolveOptionsStore();
+  liveAssembly?.use();
   useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot);
   return importedSimulationSetup();
 }
