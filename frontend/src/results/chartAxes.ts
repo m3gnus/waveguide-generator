@@ -4,6 +4,13 @@ export type ChartDensity = 'compact' | 'regular' | 'full';
 
 export const LABEL_FONT: Record<ChartDensity, number> = { compact: 11, regular: 11, full: 12 };
 
+/**
+ * The charts' type family: the interface's own `--ui` stack (tokens.css). The
+ * app ships no web font, so naming one here only ever fell through to this.
+ * Contour and band labels use the monospace stack on purpose, as figures.
+ */
+export const CHART_FONT_FAMILY = '-apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif';
+
 export function axes(tokens: ChartTokens, density: ChartDensity = 'regular') {
   return {
     // The x axis stays on the bottom edge. With ECharts' default it followed

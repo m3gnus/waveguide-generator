@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { CHART_FONT_FAMILY } from '../results/chartAxes';
 import type { ChartTokens } from '../results/EChart';
 import { beamShapeSeries } from '../results/mappers';
 import type { NamedResult } from '../results/mappers';
 import type { ResultPayload } from '../results/types';
-import { chartDensity, clearingRail, directivityIndexOption, heatmapOption, impedanceOption, lineOption, middleEllipsis, type ChartDensity } from './ResultsPanel';
+import { chartDensity, clearingRail, directivityIndexOption, formatChartValue, heatmapOption, impedanceOption, lineOption, middleEllipsis, type ChartDensity } from './ResultsPanel';
 
 /**
  * Layout locks for the result dock.
@@ -101,6 +103,26 @@ describe('result dock chart layout', () => {
 
   it.each(DENSITIES)('draws %s legend keys as the line alone, without a symbol dot', (density) => {
     lineCharts(density).forEach(({ legend }) => expect(legend).toMatchObject({ itemStyle: { opacity: 0 } }));
+  });
+
+  it('rounds tooltip readings and states the frequency in Hz or kHz', () => {
+    expect(formatChartValue(11.927767604314896)).toBe('11.93');
+    expect(formatChartValue([6_223.34, -3.14159])).toBe('-3.14');
+    expect(formatChartValue(0.042137)).toBe('0.0421');
+    expect(formatChartValue(null)).toBe('—');
+    const option = lineCharts('full')[0] as unknown as {
+      tooltip: { valueFormatter: (value: unknown) => string };
+      xAxis: { axisPointer: { label: { formatter: (params: { value: unknown }) => string } } };
+    };
+    expect(option.tooltip.valueFormatter(84.123)).toBe('84.12');
+    expect(option.xAxis.axisPointer.label.formatter({ value: 6_223.34 })).toBe('6.22 kHz');
+    expect(option.xAxis.axisPointer.label.formatter({ value: 412.6 })).toBe('413 Hz');
+  });
+
+  it('sets chart text in the interface\'s own --ui stack', () => {
+    const css = new TextDecoder().decode(readFileSync('src/styles/tokens.css'));
+    expect(css.match(/--ui:\s*([^;]+);/)?.[1].trim()).toBe(CHART_FONT_FAMILY);
+    expect((lineCharts('regular')[0] as unknown as { textStyle: { fontFamily: string } }).textStyle.fontFamily).toBe(CHART_FONT_FAMILY);
   });
 
   it('drops a one-name legend on a compact card, where the title chip already names the chart', () => {

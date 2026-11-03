@@ -11,7 +11,7 @@ import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, type JobResults, type RadiationImpedancePresentation, type ResultData } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
-import { axes, LABEL_FONT, type ChartDensity } from '../results/chartAxes';
+import { axes, CHART_FONT_FAMILY, LABEL_FONT, type ChartDensity } from '../results/chartAxes';
 export type { ChartDensity } from '../results/chartAxes';
 import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, hasZeroRadiationRear, impedanceComparable, impedanceSeries, impedanceSubtitle, isOutsideHalfSpace, nearestFrequencyIndex, OUTSIDE_HALF_SPACE_LABEL, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
@@ -240,8 +240,8 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     animationDuration: 180,
     backgroundColor: tokens.background,
     color: tokens.series,
-    textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
-    tooltip: { trigger: 'axis', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 }, axisPointer: { type: 'cross', lineStyle: { color: tokens.muted } } },
+    textStyle: { color: tokens.foreground, fontFamily: CHART_FONT_FAMILY },
+    tooltip: { trigger: 'axis', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 }, axisPointer: { type: 'cross', lineStyle: { color: tokens.muted } }, valueFormatter: formatChartValue },
     // Compact legends truncate rather than crowd the title chip, and scroll in
     // a single row rather than wrapping down over the plot on a narrow card.
     // The tooltip and the detail view still name every series in full.
@@ -259,7 +259,7 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     grid: { ...inset, containLabel: false },
     // The tick labels already read as frequencies; the caption only earns its
     // 20px on a chart big enough to spare them.
-    xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 24, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), minorTick: { show: true }, ...axis, ...frequencyTicks },
+    xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 24, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), minorTick: { show: true }, ...axis, ...frequencyTicks, axisPointer: { label: { formatter: ({ value }: { value: unknown }) => formatPolarFrequency(Number(value)) } } },
     // In-grid cards carry the unit in their title chip, which occupies exactly
     // the top-left corner an axis name would be drawn into.
     // A second axis is for a companion quantity in different units (phase
@@ -919,7 +919,7 @@ export function heatmapOption(
   return {
     animationDuration: live ? 0 : 180,
     backgroundColor: tokens.background,
-    textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
+    textStyle: { color: tokens.foreground, fontFamily: CHART_FONT_FAMILY },
     ...(comparing && comparison?.showLegend !== false ? { legend: {
       data: comparisonLabels,
       top: 1,
@@ -1083,18 +1083,31 @@ export function phaseOption(items: NamedResult[], tokens: ChartTokens, density: 
   return withZeroReference(lineOption(series, tokens, 'Phase [°]', density), tokens);
 }
 
+/**
+ * The number an axis tooltip hands over. Cartesian tooltips pass the value
+ * dimension, but a series whose data are [frequency, value] pairs can pass the
+ * pair; take the last element either way rather than reading a frequency.
+ * `Number(null)` is 0, so a gap stays NaN instead of becoming a value.
+ */
+function tooltipNumber(value: unknown): number {
+  const sample = Array.isArray(value) ? value[value.length - 1] : value;
+  return typeof sample === 'number' || typeof sample === 'string' ? Number(sample) : Number.NaN;
+}
+
+/** A tooltip value rounded to what a reading needs: 11.93, 0.0421. */
+export function formatChartValue(value: unknown): string {
+  const numeric = tooltipNumber(value);
+  if (!Number.isFinite(numeric)) return '—';
+  return numeric === 0 || Math.abs(numeric) >= 1 ? numeric.toFixed(2) : String(Number(numeric.toPrecision(3)));
+}
+
 /** Decimals that keep a group delay readable in the unit it is drawn in. */
 const GROUP_DELAY_DIGITS: Record<GroupDelayUnit, number> = { ms: 3, cycles: 2 };
 
 /** How one group delay sample reads in the tooltip, unit included. */
 export function formatGroupDelay(value: unknown, unit: GroupDelayUnit): string {
-  // Cartesian tooltips hand over the value dimension, but a series whose data
-  // are [frequency, value] pairs can hand over the pair; take the last element
-  // either way rather than printing a frequency as a delay.
-  const sample = Array.isArray(value) ? value[value.length - 1] : value;
-  // `Number(null)` is 0, and a gap printed as "0.000 ms" is a delay the solve
-  // never reported.
-  const numeric = typeof sample === 'number' || typeof sample === 'string' ? Number(sample) : Number.NaN;
+  // A gap printed as "0.000 ms" would be a delay the solve never reported.
+  const numeric = tooltipNumber(value);
   return Number.isFinite(numeric) ? `${numeric.toFixed(GROUP_DELAY_DIGITS[unit])} ${unit}` : '—';
 }
 
@@ -1304,7 +1317,7 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
     animationDuration: 180,
     backgroundColor: tokens.background,
     color: tokens.series,
-    textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
+    textStyle: { color: tokens.foreground, fontFamily: CHART_FONT_FAMILY },
     tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 } },
     legend: { top: 1, right: LEGEND_INSET, ...(shadeRear ? { data: items.map(({ label }) => label) } : {}), textStyle: { color: tokens.muted, fontSize: 11 }, formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22), itemWidth: density === 'compact' ? 10 : 14, itemHeight: 2, ...LEGEND_LINE_KEY },
     ...(shadeRear ? { graphic: [{ type: 'text', left: 'center', top: density === 'compact' ? '72%' : '82%', silent: true, style: { text: OUTSIDE_HALF_SPACE_LABEL, fill: tokens.muted, font: `${labelSize}px ui-monospace, monospace`, align: 'center' } }] } : {}),
