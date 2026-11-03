@@ -961,7 +961,9 @@ function CadDriveChannels() {
       {state.driverGroups.map((group) => {
         const channel = state.driveChannels.find(channel => channel.id === group.channelIds[0])!;
         const driverForm = state.channelDrivers[channel.id];
-        const driverEligible = channelAcceptsDriver(channel);
+        // Live assemblies persist only woofer exterior transducers, not the
+        // legacy channelDrivers edited by ChannelDriverPicker.
+        const driverEligible = !designAssembly && channelAcceptsDriver(channel);
         const channelName = label(channel.id);
         const hornSource = designAssembly && channel.id === HF_RADIATOR_ID;
         return <div className="cad-channel" data-channel-id={channel.id} data-driver-group-id={group.id} key={group.id}>

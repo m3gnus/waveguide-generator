@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addWoofer, emptyAssembly, setWooferDrive } from '../stores/assembly';
-import { resetAssemblyBuild } from '../stores/assemblyBuild';
+import { resetAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
 import '../stores/assemblySimulation';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { useDriverLibraryStore } from '../stores/driverLibrary';
@@ -82,6 +82,38 @@ describe('a design assembly in the shared Drivers section', () => {
     expect(drivers()?.[woofer]).toEqual({ exterior_transducer: { version: 1 } });
     act(() => useDesignStore.getState().undo());
     expect(drivers()).toBeUndefined();
+  });
+
+  it('hides the unpersisted legacy picker after Build while keeping the woofer driver editable', async () => {
+    act(() => useAssemblyBuildStore.setState({ status: 'published', published: {
+      revision: useDesignStore.getState().designRevision, contentKey: null,
+      model: { model_id: 'design-assembly:test', producer: 'design-assembly', display_name: 'Assembly' },
+      record: {
+        ingest_id: 'wgi_test', model_id: 'design-assembly:test', producer: 'design-assembly',
+        manifest_sha256: 'm', artifact_sha256: 'a', msh_text: '$MeshFormat',
+        design: { design_uid: 'test', name: 'Assembly', revision: 1, content_sha256: 'c', assembly_sha256: 'a', geometry_sha256: 'g' },
+        radiators: [], signal_groups: [], source_tags: {},
+        sources: [
+          { id: 'horn-throat', role: 'HF', radiator_id: 'horn-throat', segment_id: null },
+          { id: `${woofer}/piston`, role: 'LF', radiator_id: woofer, segment_id: 'piston' },
+        ],
+        excitations: [
+          { id: 'horn-throat', source_ids: ['horn-throat'], motion: 'normal', patch_weights: { 'horn-throat': 1 } },
+          { id: woofer, source_ids: [`${woofer}/piston`], motion: 'axial', motion_axis: [0, 0, 1], patch_weights: { [`${woofer}/piston`]: 1 } },
+        ],
+      },
+    } }));
+
+    expect(host.querySelector('[data-channel-id="horn-throat"]')?.textContent).toContain("Drivers go on woofers.");
+    expect(host.querySelector('[data-channel-id="horn-throat"]')?.querySelector('input, select, button')).toBeNull();
+    expect(host.querySelector('.driver-installation')).toBeNull();
+    expect(host.querySelector('.driver-picker')).toBeNull();
+    expect(host.querySelector('select[aria-label^="Motion for"], [aria-label^="Motion axis"], [aria-label^="Max drive"]')).toBeNull();
+    act(() => solveDriver().click());
+    await pick('Library woofer');
+    enter('Resistance', '6.2');
+    expect(drivers()?.[woofer].exterior_transducer).toMatchObject({ re_ohm: 6.2, bl_n_per_a: 9, mmd_kg: 0.03 });
+    expect(host.querySelector('.driver-picker')).toBeNull();
   });
 
   it('refuses an unfinished driver on BEAT, and names the backends that solve drivers otherwise', () => {
