@@ -62,6 +62,13 @@ it.each([100, 120, 4])('zooms a mouse notch with deltaY %s and legacy wheelDelta
     .toEqual({ kind: 'zoom', factor: Math.exp(-deltaY * .001) });
 });
 
+it.each([40, 40.5, -40.5, Math.log(20) * 1000, -Math.log(20) * 1000])
+('immediately zooms vertical sketch deltas at or above 40 pixels without legacy data: %s', async deltaY => {
+  const { wheelGesture } = await import('./view');
+  expect(wheelGesture({ deltaX: 0, deltaY, deltaMode: 0, ctrlKey: false }))
+    .toEqual({ kind: 'zoom', factor: Math.exp(-deltaY * .001) });
+});
+
 it('preserves immediate sketch zoom for proportional WebKit notches and pans precise samples', async () => {
   const { wheelGesture } = await import('./view');
   for (const deltaY of [40, 80, 120]) {

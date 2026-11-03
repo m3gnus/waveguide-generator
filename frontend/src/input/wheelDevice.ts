@@ -2,7 +2,7 @@ export type ScrollDevice = 'wheel' | 'trackpad';
 export type WheelDeviceSample = Pick<WheelEvent, 'deltaX' | 'deltaY' | 'deltaMode'>
   & { wheelDeltaY?: number; wheelDelta?: number };
 
-/** Shared start-of-stream evidence for the sketch and 3D viewport.
+/** Start-of-stream evidence for the 3D viewport's buffered gesture policy.
  * WebKit uses pixels for BOTH devices: a native line step becomes 40 pixels,
  * while wheelDeltaY can be -3 * deltaY for either device. Precise trackpad
  * deltas can also be integers. Neither legacy multiples nor integers suffice.
@@ -10,7 +10,7 @@ export type WheelDeviceSample = Pick<WheelEvent, 'deltaX' | 'deltaY' | 'deltaMod
  * scroll_zoom.ts (historical fractional notch); VS Code scrollableElement.ts.
  */
 export function wheelDeviceEvidence(event: WheelDeviceSample): ScrollDevice | null {
-  // Numeric constants also allow use outside a browser (sketch math tests).
+  // Numeric constants also allow use outside a browser.
   if (event.deltaMode !== 0) return 'wheel';
   if (event.deltaX !== 0) return 'trackpad';
   const y = Math.abs(event.deltaY);
