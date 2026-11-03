@@ -145,11 +145,12 @@ function triangleInSolvedDomain(
 export function markParametricSolvedDomain(
   scene: FrameScene,
   quadrants: DisplayQuadrants,
+  partition = true,
 ): FrameScene {
-  if (quadrants === 1234) return {
+  if (!partition || quadrants === 1234) return {
     ...scene,
-    symmetryPlanes: [],
-    surfaces: scene.surfaces.map((surface) => ({ ...surface, solvedDomain: false })),
+    symmetryPlanes: cutPlanesForQuadrants(quadrants),
+    surfaces: scene.surfaces.map(surface => ({ ...surface, solvedDomain: false })),
   };
   const surfaces = scene.surfaces.flatMap((surface): SceneSurface[] => {
     const solved: number[] = [];

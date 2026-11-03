@@ -2,7 +2,7 @@ import { activityStore } from '../shell/activity';
 import { readFileSync } from 'node:fs';
 import { failureWords, keepRefusalOriginals, PLAIN_REQUEST_FAILURE } from './httpError';
 import { describe, expect, it, vi } from 'vitest';
-import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, openDesignText, sendDesignToCad, serializeDesignDocument } from './designIo';
+import { buildGeometryExport, chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, openDesignText, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { setAnchorAngle } from '../design/customProfileEdit';
 import { expectNoJargon } from '../testing/expectNoJargon';
@@ -464,6 +464,9 @@ describe('geometry export requests', () => {
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
       }
+      if (String(url).includes('delivery=staged')) return new Response(JSON.stringify({
+        filename: 'horn.step', artifactId: 'retained-file', sizeBytes: 13,
+      }), { headers: { 'Content-Type': 'application/json' } });
       return exportResponse('ISO-10303-21;', 'model/step');
     }) as unknown as typeof fetch;
     return { urls, fetcher };
@@ -474,21 +477,21 @@ describe('geometry export requests', () => {
   it('asks for the manufacturable solid by default', async () => {
     const { urls, fetcher } = recordingFetcher();
     await exportGeometryToOutputFolder('step', design, 3, 'horn', undefined, undefined, fetcher);
-    expect(urls).toEqual(['/api/export/step?body=solid', '/api/workspace/write-export']);
+    expect(urls).toEqual(['/api/export/step?body=solid&delivery=staged', '/api/workspace/write-export']);
   });
 
   it('asks for the inner surface when that body is chosen', async () => {
     const { urls, fetcher } = recordingFetcher();
     await exportGeometryToOutputFolder('step', design, 3, 'horn', undefined, 'surface', fetcher);
-    expect(urls).toEqual(['/api/export/step?body=surface', '/api/workspace/write-export']);
+    expect(urls).toEqual(['/api/export/step?body=surface&delivery=staged', '/api/workspace/write-export']);
   });
 
-  it('leaves the other geometry exports unqueried', async () => {
+  it('retains STL while keeping profile CSV on its existing upload path', async () => {
     const { urls, fetcher } = recordingFetcher();
     await exportGeometryToOutputFolder('stl', design, 3, 'horn', undefined, undefined, fetcher);
     await exportGeometryToOutputFolder('profiles', design, 3, 'horn', 'slices', undefined, fetcher);
     expect(urls).toEqual([
-      '/api/export/stl', '/api/workspace/write-export',
+      '/api/export/stl?delivery=staged', '/api/workspace/write-export',
       '/api/export/profiles?kind=slices', '/api/workspace/write-export',
     ]);
   });
@@ -496,8 +499,9 @@ describe('geometry export requests', () => {
   it('returns an STL warning after the file has been written successfully', async () => {
     const { fetcher } = recordingFetcher();
     const warningFetcher = (async (url: string, init?: RequestInit) => (
-      String(url) === '/api/export/stl'
-        ? exportResponse('stl', 'application/sla', 'fine detail was coarsened')
+      String(url) === '/api/export/stl?delivery=staged'
+        ? new Response(JSON.stringify({ filename: 'horn.stl', artifactId: 'retained-stl', sizeBytes: 84,
+          warning: 'fine detail was coarsened' }), { headers: { 'Content-Type': 'application/json' } })
         : fetcher(url, init)
     )) as typeof fetch;
     const result = await exportGeometryToOutputFolder(
@@ -505,6 +509,38 @@ describe('geometry export requests', () => {
     );
     expect(result.warning).toBe('fine detail was coarsened');
     expect(result.directory).toBe('C:/Output/horn');
+  });
+
+  it('confirms replacement using the same retained identifier without reading a Blob', async () => {
+    const writes: Record<string, unknown>[] = [];
+    let builds = 0;
+    const fetcher: typeof fetch = async (url, init) => {
+      if (String(url).startsWith('/api/export/stl')) {
+        builds += 1;
+        const response = new Response(JSON.stringify({ filename: 'horn.stl', artifactId: 'retained-stl', sizeBytes: 84 }));
+        response.blob = async () => { throw new Error('file bytes must stay on the server'); };
+        return response;
+      }
+      expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
+      writes.push(JSON.parse(String(init?.body)));
+      if (writes.length === 1) return new Response(JSON.stringify({ code: 'export_collision', directory: 'chosen', paths: ['horn.stl'] }), { status: 409 });
+      return new Response(JSON.stringify({ directory: 'chosen', files: ['horn.stl'], replaced: ['horn.stl'] }));
+    };
+    const confirm = vi.fn(async () => true);
+    await exportGeometryToOutputFolder('stl', design, 3, 'horn', undefined, 'solid', fetcher, 'destination-token', confirm);
+    expect(builds).toBe(1);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(writes).toEqual(['confirm', 'overwrite'].map(existing => ({
+      subdirectory: '', destination: 'destination-token', existing,
+      members: [{ relative_path: 'horn.stl', artifact_id: 'retained-stl' }],
+    })));
+  });
+
+  it('keeps the download response for file consumers', async () => {
+    const { urls, fetcher } = recordingFetcher();
+    const result = await buildGeometryExport('step', design, 3, 'horn', undefined, 'solid', fetcher);
+    expect(urls).toEqual(['/api/export/step?body=solid']);
+    expect(result.blob.size).toBe(13);
   });
 });
 
@@ -595,7 +631,7 @@ it.each(['stl', 'step'] as const)('Stop cancels %s from the design menu before a
   const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
   activityStore.getSnapshot()[0].cancel!();
   await rejected;
-  expect(urls).toEqual([kind === 'step' ? '/api/export/step?body=solid' : '/api/export/stl']);
+  expect(urls).toEqual([kind === 'step' ? '/api/export/step?body=solid&delivery=staged' : '/api/export/stl?delivery=staged']);
   expect(activityStore.getSnapshot()).toEqual([]);
 });
 

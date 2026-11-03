@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import math
 import struct
@@ -385,6 +386,14 @@ def encode(
     while len(payload) % 8:
         payload.append(0)
     header["sections"] = sections
+    frame = _assemble_frame(header, bytes(payload), max_frame_bytes=max_frame_bytes)
+    decode(frame, max_frame_bytes=max_frame_bytes)
+    return frame
+
+
+def _assemble_frame(header: Header, payload: bytes, *, max_frame_bytes: int) -> bytes:
+    """Shared header framing for new and already validated owned payloads."""
+
     try:
         header_bytes = json.dumps(
             header, ensure_ascii=False, allow_nan=False, separators=(",", ":")
@@ -397,5 +406,34 @@ def encode(
     frame = prefix + bytes(_align8(len(prefix)) - len(prefix)) + payload
     if len(frame) > max_frame_bytes:
         _fail("frame-too-large", f"{len(frame)} > {max_frame_bytes}")
-    decode(frame, max_frame_bytes=max_frame_bytes)
     return frame
+
+
+@dataclass(frozen=True)
+class PreparedFrame:
+    """Owned immutable wire data produced by the validated preview encoder.
+
+    Only request identifiers and evaluation timing may change. Static section
+    declarations and metadata are stored as JSON bytes, never mutable mappings.
+    """
+
+    header_json: bytes
+    payload: bytes
+
+    @classmethod
+    def _from_validated_frame(cls, frame: bytes) -> PreparedFrame:
+        header_end = 8 + struct.unpack_from("<I", frame, 4)[0]
+        return cls(bytes(frame[8:header_end]), bytes(frame[_align8(header_end):]))
+
+    @property
+    def nbytes(self) -> int:
+        return len(self.header_json) + len(self.payload)
+
+    def encode(
+        self, *, epoch: int, seq: int, design_revision: int, lod: str,
+        eval_ms: float, max_frame_bytes: int = DEFAULT_MAX_FRAME_BYTES,
+    ) -> bytes:
+        header = json.loads(self.header_json)
+        header.update(epoch=epoch, seq=seq, designRevision=design_revision,
+                      lod=lod, evalMs=float(eval_ms))
+        return _assemble_frame(header, self.payload, max_frame_bytes=max_frame_bytes)

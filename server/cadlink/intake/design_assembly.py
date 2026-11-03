@@ -49,7 +49,13 @@ from server.mesh.builder import (
     assembly_woofer_rows,
     build_assembly_mesh,
 )
-from server.mesh.file_import import file_mesh_integrity, mesh_text, parse_file_mesh, prepare_file_mesh, solve_group_tags
+from server.mesh.file_import import (
+    finish_file_mesh_preparation,
+    mesh_text,
+    parse_file_mesh,
+    prepare_file_mesh_input,
+    solve_group_tags,
+)
 from server.mesh.imported import polar_grid_from_symmetry
 from server.mesh.preparation_fence import (
     PreparationFence as AssemblyBuildFence,
@@ -216,7 +222,8 @@ def compose_record(
     original = parse_file_mesh(str(built["msh_text"]))
     by_tag = {tag: roles[source_id] for source_id, tag in tag_by_source.items()}
     # The design mesher writes metres in its horn-throat frame: identity frame.
-    mesh, transform = prepare_file_mesh(original, "m", "+z", "+y", roles=by_tag)
+    preparation = prepare_file_mesh_input(original, "m", "+z", "+y", roles=by_tag)
+    mesh, transform = finish_file_mesh_preparation(preparation)
     written = solve_group_tags(mesh)
     solver_text = mesh_text(mesh)
     areas = _areas_mm2(mesh.points, mesh.triangles)
@@ -313,7 +320,7 @@ def compose_record(
         "evidence": {"fem_regions": [], "fem_air_volumes": []},
         "mesh": {
             "stats": {"triangle_count": len(mesh.triangles), "node_count": len(mesh.points)},
-            "integrity": file_mesh_integrity(mesh, []),
+            "integrity": preparation.integrity,
             "metadata": {
                 "mesher_identity": mesher_identity(),
                 "mesher_features": ["design-enclosure-woofers"] if assembly_meta else [],

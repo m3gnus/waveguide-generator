@@ -372,6 +372,8 @@ class FileMeshPreparation:
     candidate_planes: tuple[str, ...]
     roles: dict[int, str]
     input_triangle_count: int
+    # Evidence for `mesh`, before any native cut in finish_file_mesh_preparation.
+    integrity: dict[str, Any]
 
     @property
     def needs_native_cut(self) -> bool:
@@ -397,18 +399,21 @@ def prepare_file_mesh_input(
     mesh, transform = transform_file_mesh(mesh, units, forward, up)
     # A requested plane can describe an existing open cut, or ask WG to cut
     # a full mesh. Validate the immutable input before attempting optimisation.
-    sides = _symmetry_evidence(mesh, ())[1]["detection"]["plane_vertex_side_counts"]
+    evidence = _symmetry_evidence(mesh, ())
+    sides = evidence[1]["detection"]["plane_vertex_side_counts"]
     crossing = tuple(plane for plane in planes if sides[plane]["positive"] and sides[plane]["negative"])
     _check_lid_crossing(remove_lid_planes, crossing)
     declared = tuple(plane for plane in planes if plane not in crossing)
     if crossing and file_mesh_integrity(mesh, declared)["off_plane_open_edge_count"]:
         raise FileMeshRefusal(f"The mesh crosses {_plane_labels(list(crossing))} and has an opening away from its declared planes. Close it in the meshing tool.")
     reflections = None if reflect_planes is None else tuple(plane for plane in reflect_planes if plane in declared)
+    integrity: dict[str, Any] = {}
     mesh, transform = _prepare_transformed_file_mesh(
         mesh, transform, declared, reflections, remove_lid_planes, roles or {},
+        evidence=evidence if not declared else None, integrity_out=integrity,
     )
     candidates = crossing or (tuple(SYMMETRY_PLANE_AXIS) if auto_cut and not planes else ())
-    return FileMeshPreparation(mesh, transform, declared, candidates, dict(roles or {}), input_triangle_count)
+    return FileMeshPreparation(mesh, transform, declared, candidates, dict(roles or {}), input_triangle_count, integrity)
 
 
 def whole_source_areas_mm2(mesh: FileMesh, planes: tuple[str, ...]) -> dict[str, float]:
@@ -462,9 +467,11 @@ def finish_file_mesh_preparation(
 def _prepare_transformed_file_mesh(
     mesh: FileMesh, transform: dict[str, Any], planes: tuple[str, ...],
     reflect_planes: tuple[str, ...] | None, remove_lid_planes: tuple[str, ...],
-    roles: Mapping[int, str],
+    roles: Mapping[int, str], *,
+    evidence: tuple[dict[str, Any], dict[str, Any]] | None = None,
+    integrity_out: dict[str, Any] | None = None,
 ) -> tuple[FileMesh, dict[str, Any]]:
-    report, verification = _symmetry_evidence(mesh, planes)
+    report, verification = evidence if evidence is not None else _symmetry_evidence(mesh, planes)
     if remove_lid_planes:
         mesh, removed = _remove_lids(mesh, remove_lid_planes, verification, roles or {})
         transform["removed_lids"] = removed
@@ -536,6 +543,8 @@ def _prepare_transformed_file_mesh(
         raise FileMeshRefusal(
             "Each closed mesh shell must face outward. Reverse inward normals in the authoring tool."
         )
+    if integrity_out is not None:
+        integrity_out.update(report)
     return mesh, transform
 
 

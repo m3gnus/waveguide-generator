@@ -779,6 +779,14 @@ export interface GeometryExportFile {
   warning?: string;
 }
 
+/** Retained server bytes awaiting the ordinary output-folder write decision. */
+export interface StagedGeometryExportFile {
+  filename: string;
+  artifactId: string;
+  sizeBytes: number;
+  warning?: string;
+}
+
 /**
  * Build one geometry export, without writing it.
  *
@@ -787,6 +795,16 @@ export interface GeometryExportFile {
  * two replacement questions for one user action, and the dialog answers only
  * one at a time.
  */
+export function buildGeometryExport(
+  kind: 'step' | 'stl' | 'profiles', design: DesignDocument, designRevision: number,
+  baseName: string, profileKind?: 'profiles' | 'slices', stepBody?: StepBody,
+  fetcher?: typeof fetch, staged?: false,
+): Promise<GeometryExportFile>;
+export function buildGeometryExport(
+  kind: 'step' | 'stl', design: DesignDocument, designRevision: number,
+  baseName: string, profileKind: 'profiles' | 'slices' | undefined, stepBody: StepBody,
+  fetcher: typeof fetch, staged: true,
+): Promise<StagedGeometryExportFile>;
 export async function buildGeometryExport(
   kind: 'step' | 'stl' | 'profiles',
   design: DesignDocument,
@@ -795,12 +813,14 @@ export async function buildGeometryExport(
   profileKind?: 'profiles' | 'slices',
   stepBody: StepBody = 'solid',
   fetcher: typeof fetch = fetch,
-): Promise<GeometryExportFile> {
+  staged = false,
+): Promise<GeometryExportFile | StagedGeometryExportFile> {
   const start = { kind: 'export' as const, label: `Exporting ${kind === 'profiles' ? 'profile CSV' : kind.toUpperCase()}` };
   const build = async (fetcher: typeof fetch, signal?: AbortSignal) => {
-    const query = kind === 'profiles'
+    let query = kind === 'profiles'
       ? `?kind=${profileKind ?? 'profiles'}`
       : kind === 'step' ? `?body=${stepBody}` : '';
+    if (staged) query += `${query ? '&' : '?'}delivery=staged`;
     const response = await fetcher(`/api/export/${kind}${query}`, {
       method: 'POST', signal,
       headers: { 'Content-Type': 'application/json' },
@@ -814,6 +834,13 @@ export async function buildGeometryExport(
     const warning = response.headers.get('X-Export-Warning')?.trim() || undefined;
     const suffix = kind === 'profiles' ? `_${profileKind ?? 'profiles'}.csv` : `.${kind}`;
     const filename = responseFilename(response, `${baseName}${suffix}`);
+    if (staged) {
+      const descriptor = await response.json() as StagedGeometryExportFile;
+      if (!descriptor.artifactId || !descriptor.filename || !Number.isFinite(descriptor.sizeBytes)) {
+        throw new Error('WG could not retain the generated file. Export again to rebuild it.');
+      }
+      return { ...descriptor, ...(warning ? { warning } : {}) };
+    }
     const built: GeometryExportFile = { filename, blob: await response.blob() };
     return warning ? { ...built, warning } : built;
   };
@@ -842,15 +869,16 @@ export async function exportGeometryToOutputFolder(
   confirmReplacements?: ConfirmReplacements,
 ): Promise<GeometryExportWrite> {
   return activityOperation({ kind: 'export', label: `Exporting ${kind === 'profiles' ? 'profile CSV' : kind.toUpperCase()}` }, fetcher, async (fetcher) => {
-    const { filename, blob, warning } = await buildGeometryExport(
-      kind, design, designRevision, baseName, profileKind, stepBody, fetcher,
-    );
+    const built = kind === 'profiles'
+      ? await buildGeometryExport(kind, design, designRevision, baseName, profileKind, stepBody, fetcher)
+      : await buildGeometryExport(kind, design, designRevision, baseName, profileKind, stepBody, fetcher, true);
+    const { warning } = built;
     // Overwrite: re-exporting after an edit is the ordinary case, and a stale
     // file of the same name is exactly what the user is replacing.
     const written = await writeToOutputFolder(
       // `confirm` only when there is a folder to collide in: a workspace export
       // keeps replacing its own last output without asking.
-      baseName, [{ filename, blob }], fetcher,
+      baseName, [built], fetcher,
       destination ? 'confirm' : 'overwrite', destination, confirmReplacements,
     );
     return warning ? { ...written, warning } : written;
