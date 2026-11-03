@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import json
 import logging
 import os
@@ -693,7 +693,7 @@ def _migrate_legacy_file_setups(conn: sqlite3.Connection) -> None:
 
 
 _EXPORT_BUILD_LOCKS_GUARD = threading.Lock()
-_EXPORT_BUILD_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_EXPORT_BUILD_LOCKS: dict[tuple[str, str], threading.RLock] = {}
 
 _LEGACY_SOLVE_STATES = {"accepted": ACCEPTED, "refused": REJECTED}
 
@@ -2763,6 +2763,90 @@ class CadLinkStore:
             "from": from_data,
         }
 
+    @contextmanager
+    def cancellable_export_design(
+        self,
+        requested: SaveIdentity | None,
+        design_uid: str | None,
+        prepare: Callable[[], tuple[SaveIdentity, str]],
+    ) -> Iterator[tuple[SaveIdentity, str]]:
+        """Undo this Send's unpublished save on Stop, preserving newer writers.
+
+        Preparation and compensation hold only short registry locks; geometry
+        runs without a lock or an open SQLite transaction.
+        """
+        from server.jobs.request_cancellation import ClientDisconnected
+
+        # Reuse the allocator's per-design lock across preparation and undo.
+        # A second Send must prepare only after the first has kept or undone
+        # its save, rather than capturing a head that Stop can still rewind.
+        with ExitStack() as locks:
+            if requested is not None:
+                locks.enter_context(self._export_build_lock(requested.lineage_id))
+                locks.enter_context(self._export_build_lock(requested.design_id))
+            self.initialize()
+            with self._lock, self._transaction():
+                before = self.get_design(requested.design_id) if requested else None
+                lineage = requested.lineage_id if requested else None
+                names_before = self.get_lineage_cad_names(lineage) if lineage else None
+                keys = [f"design:{design_uid}"] if design_uid else []
+                if lineage:
+                    keys.append(f"lineage:{lineage}")
+                archives_before = {
+                    key: self._read_one("SELECT * FROM archive_folders WHERE owner_key = ?", (key,))
+                    for key in keys
+                }
+                identity, slug = prepare()
+                if requested is None:
+                    locks.enter_context(self._export_build_lock(identity.lineage_id))
+                    locks.enter_context(self._export_build_lock(identity.design_id))
+                committed = self.get_design(identity.design_id)
+                names_committed = self.get_lineage_cad_names(identity.lineage_id)
+                keys = list(dict.fromkeys([*keys, f"lineage:{identity.lineage_id}"]))
+                archives_committed = {
+                    key: self._read_one("SELECT * FROM archive_folders WHERE owner_key = ?", (key,))
+                    for key in keys
+                }
+            try:
+                yield identity, slug
+            except ClientDisconnected:
+                with self._lock, self._transaction() as conn:
+                    # A newer save or another export owns the head now. Never
+                    # rewind it or delete a design another request has referenced.
+                    # Another store can also save before our post-prepare read.
+                    if (
+                        committed is None
+                        or int(committed["edit_version"]) != identity.base_edit_version
+                        or self.get_design(identity.design_id) != committed
+                        or conn.execute(
+                            "SELECT 1 FROM exports WHERE design_id = ? AND edit_version = ? "
+                            "UNION ALL SELECT 1 FROM export_reservations "
+                            "WHERE design_id = ? AND edit_version = ? LIMIT 1",
+                            (identity.design_id, identity.base_edit_version, identity.design_id, identity.base_edit_version),
+                        ).fetchone()
+                    ):
+                        raise
+
+                    def restore(table, key_column, key, old, ours):
+                        current = self._row(conn.execute(
+                            f"SELECT * FROM {table} WHERE {key_column} = ?", (key,),
+                        ).fetchone())
+                        if current != ours or old == ours:
+                            return
+                        if old is None:
+                            conn.execute(f"DELETE FROM {table} WHERE {key_column} = ?", (key,))
+                        else:
+                            conn.execute(
+                                f"UPDATE {table} SET {', '.join(f'{column} = ?' for column in old)} "
+                                f"WHERE {key_column} = ?", (*old.values(), key),
+                            )
+
+                    restore("designs", "design_id", identity.design_id, before, committed)
+                    restore("lineage_cad_names", "lineage_id", identity.lineage_id, names_before, names_committed)
+                    for key in keys:
+                        restore("archive_folders", "owner_key", key, archives_before.get(key), archives_committed[key])
+                raise
+
     def publication_exports(self) -> list[dict[str, Any]]:
         """Registered artifacts, retained indefinitely for retries/offline links."""
         self.initialize()
@@ -2956,7 +3040,7 @@ class CadLinkStore:
                 raise
         return self._row(row) or {}
 
-    def _export_build_lock(self, design_id: str) -> threading.Lock:
+    def _export_build_lock(self, design_id: str) -> threading.RLock:
         database = (
             f"memory:{id(self)}"
             if str(self.db_path) == ":memory:"
@@ -2964,7 +3048,7 @@ class CadLinkStore:
         )
         key = (database, design_id)
         with _EXPORT_BUILD_LOCKS_GUARD:
-            return _EXPORT_BUILD_LOCKS.setdefault(key, threading.Lock())
+            return _EXPORT_BUILD_LOCKS.setdefault(key, threading.RLock())
 
     def get_onshape_link(
         self, design_id: str, account_id: str | None = None
@@ -3229,6 +3313,18 @@ class CadLinkStore:
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         conn = self._connect()
+        if conn.in_transaction:
+            # Export preparation groups the ordinary short writes with its
+            # before/after snapshot. Inner writes must not commit the owner.
+            conn.execute("SAVEPOINT cadlink_nested_write")
+            try:
+                yield conn
+            except BaseException:
+                conn.execute("ROLLBACK TO cadlink_nested_write")
+                raise
+            finally:
+                conn.execute("RELEASE cadlink_nested_write")
+            return
         try:
             conn.execute("BEGIN IMMEDIATE")
             yield conn

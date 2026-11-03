@@ -1,5 +1,5 @@
 import { activityStore } from '../shell/activity';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { addWoofer, commitAssembly, emptyAssembly, setPlacement } from './assembly';
 import {
   designModelCurrent, assemblyPreviewLabel, prepareDesignModel, requestAssemblyBuild, resetAssemblyBuild, useAssemblyBuildStore,
@@ -61,6 +61,30 @@ describe('assembly background build', () => {
     activityStore.getSnapshot()[0].cancel!();
     await expect(build).resolves.toEqual({ status: 'superseded' });
     expect(signal?.aborted).toBe(true);
+    expect(useAssemblyBuildStore.getState()).toEqual(before);
+    expect(useDesignModelStore.getState()).toBe(model);
+    expect(activityStore.getSnapshot()).toEqual([]);
+    expect(activityStore.typicalMs('assembly-build')).toBeNull();
+  });
+
+  it.each([200, 422])('Stop during the response body restores the pre-press build state (%s)', async status => {
+    useAssemblyBuildStore.setState({ status: 'refused', refusal: 'Previous refusal', failureDetail: 'Previous detail' });
+    const before = useAssemblyBuildStore.getState();
+    const model = useDesignModelStore.getState();
+    const reading = vi.fn();
+    const fetcher: typeof fetch = async (_url, init) => ({
+      ok: status === 200, status,
+      json: () => new Promise((_resolve, reject) => {
+        reading();
+        const signal = init!.signal!;
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }),
+      headers: new Headers(),
+    }) as Response;
+    const build = requestAssemblyBuild(fetcher);
+    await vi.waitFor(() => expect(reading).toHaveBeenCalledOnce());
+    activityStore.getSnapshot()[0].cancel!();
+    await expect(build).resolves.toEqual({ status: 'superseded' });
     expect(useAssemblyBuildStore.getState()).toEqual(before);
     expect(useDesignModelStore.getState()).toBe(model);
     expect(activityStore.getSnapshot()).toEqual([]);

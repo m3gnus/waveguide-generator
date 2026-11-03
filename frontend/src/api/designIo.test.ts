@@ -626,6 +626,38 @@ describe('Send to CAD requests', () => {
     expect(activityStore.typicalMs('send-to-cad')).toBeNull();
   });
 
+  it.each(['headers', 'body'].flatMap(phase => ['deadline', 'Stop'].map(via => ({ phase, via }))))('the preliminary workspace read honours $via while waiting for $phase', async ({ phase, via }) => {
+    vi.useFakeTimers();
+    // Exercise the WebView fallback timer so fake time also drives the deadline.
+    const timeout = AbortSignal.timeout;
+    Object.defineProperty(AbortSignal, 'timeout', { value: undefined, configurable: true });
+    activityStore.reset();
+    try {
+      const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+        const wait = () => new Promise<never>((_resolve, reject) => {
+          const signal = init!.signal!;
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+        if (phase === 'headers') return wait();
+        return { ok: true, json: wait } as unknown as Response;
+      });
+      const pending = sendDesignToCad(designForFamily('OSSE'), 1, 'horn', null, fetcher, 'deadline-send');
+      const result = pending.catch(error => error);
+      if (via === 'Stop') {
+        await vi.advanceTimersByTimeAsync(0);
+        activityStore.getSnapshot()[0].cancel!();
+        await vi.advanceTimersByTimeAsync(0);
+      } else await vi.advanceTimersByTimeAsync(30_000);
+      expect(await Promise.race([result, Promise.resolve('still waiting')])).toMatchObject({ name: via === 'Stop' ? 'AbortError' : 'TimeoutError' });
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(activityStore.getSnapshot()).toEqual([]);
+    } finally {
+      activityStore.getSnapshot()[0]?.cancel?.();
+      Object.defineProperty(AbortSignal, 'timeout', { value: timeout, configurable: true });
+      vi.useRealTimers();
+    }
+  });
+
   it('requires the configured WGLink folder and sends identity with one idempotency key', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetcher = (async (url: string, init?: RequestInit) => {

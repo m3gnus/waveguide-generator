@@ -780,3 +780,102 @@ def test_a_pathological_record_is_unfiled_and_never_stops_the_registry_opening(t
         assert store.get_model("mesh-file:sha256:" + "1" * 64) is not None
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("new_owner", ["save_before_snapshot", "save", "export"])
+def test_cancelled_export_never_undoes_a_newer_registry_owner(tmp_path, new_owner):
+    from server.jobs.request_cancellation import ClientDisconnected
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    other = CadLinkStore(store.db_path)
+    first = _save(store)
+    requested = _request(first)
+
+    pending = None
+    pool = ThreadPoolExecutor(max_workers=1)
+    attempted = threading.Event()
+    finished = threading.Event()
+
+    def save_during_snapshot(identity):
+        attempted.set()
+        try:
+            return _save(other, identity, marker="three")
+        finally:
+            finished.set()
+
+    def prepare():
+        nonlocal pending
+        identity = _request(_save(store, requested, marker="two"))
+        if new_owner == "save_before_snapshot":
+            pending = pool.submit(save_during_snapshot, identity)
+            assert attempted.wait(3)
+            # The snapshot and save share one short transaction. A foreign
+            # save can complete as soon as preparation releases that boundary.
+            assert not finished.wait(0.05)
+        return identity, "design"
+
+    try:
+        with pytest.raises(ClientDisconnected):
+            with store.cancellable_export_design(requested, None, prepare) as (identity, _):
+                if pending is not None:
+                    pending.result(timeout=3)
+                if new_owner == "save":
+                    _save(other, identity, marker="three")
+                elif new_owner == "export":
+                    other.allocate_export(design_id=identity.design_id, idempotency_key="other",
+                        geometry_hash="geometry", artifact_sha256="artifact", manifest_json="{}")
+                owned = other.get_design(identity.design_id)
+                raise ClientDisconnected()
+        assert store.get_design(requested.design_id) == owned
+    finally:
+        pool.shutdown(wait=True)
+        store.close()
+        other.close()
+
+
+def test_cancelled_export_restores_head_despite_an_older_retryable_reservation(tmp_path):
+    from server.jobs.request_cancellation import ClientDisconnected
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    first = _save(store)
+    requested = _request(first)
+    before = store.get_design(requested.design_id)
+
+    def failed_build(_facts):
+        raise RuntimeError("Mesh failed")
+
+    def prepare():
+        return _request(_save(store, requested, marker="two")), "design"
+
+    try:
+        with pytest.raises(RuntimeError, match="Mesh failed"):
+            store.allocate_export(design_id=requested.design_id, idempotency_key="older", export_builder=failed_build)
+        reservation = store.publication_reservation_for_key("older")
+        with pytest.raises(ClientDisconnected):
+            with store.cancellable_export_design(requested, None, prepare):
+                raise ClientDisconnected()
+        assert store.get_design(requested.design_id) == before
+        assert store.publication_reservation_for_key("older") == reservation
+    finally:
+        store.close()
+
+
+def test_export_preparation_rolls_back_the_save_if_name_claim_fails(tmp_path):
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    first = _save(store)
+    requested = _request(first)
+    before = store.get_design(requested.design_id)
+
+    def prepare():
+        identity = _request(_save(store, requested, marker="two"))
+        store.record_lineage_cad_names(identity.lineage_id, parameter_slug="design")
+        raise OSError("Name claim unavailable")
+
+    try:
+        with pytest.raises(OSError, match="Name claim unavailable"):
+            with store.cancellable_export_design(requested, None, prepare):
+                pytest.fail("Preparation must fail before geometry starts")
+        assert store.get_design(requested.design_id) == before
+        assert store.get_lineage_cad_names(requested.lineage_id) is None
+    finally:
+        store.close()

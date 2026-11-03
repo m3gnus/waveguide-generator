@@ -386,59 +386,61 @@ def export_wglink_sync(
 
     design_name = normalize_base_name(request.base_name)
     current_design_hash = design_hash(request.design)
-    identity = _commit_design_for_export(
-        store, request.identity, request.design, current_design_hash, design_name, request.design_uid
-    )
-    bind_design_lineage(store, identity.lineage_id, request.design_uid, design_name)
-    instance_slug = _instance_slug(store, identity.lineage_id, design_name)
 
-    try:
-        wglink_root.mkdir(exist_ok=True)
-    except OSError as exc:
-        raise HTTPException(status_code=409, detail=unavailable_detail) from exc
-
-
-    if progress_cb is not None:
-        progress_cb("resolve")
-
-    def build(facts: Mapping[str, object]) -> Mapping[str, str]:
-        if (
-            int(facts["editVersion"]) != identity.base_edit_version
-            or str(facts["designHash"]) != current_design_hash
-        ):
-            raise _ExportIdentityConflict(
-                "The design changed while the CAD export was starting. "
-                "Send it to CAD again."
-            )
-        def write(staged: Path) -> None:
-            # Only the child builds geometry. Publication and SQLite stay in
-            # this parent thread; child failure cannot publish partial bytes.
-            asyncio.run(run_mesh_build(build_bundle,
-                request.design.model_dump(mode="json"), str(staged), dict(facts),
-                identity.lineage_id, design_name, instance_slug, _app_version(),
-                **({"cancel_cb": cancel_cb} if cancel_cb else {})))
-            if progress_cb is not None:
-                progress_cb("mesh")
-
-        return publish_bundle(store, wglink_root, facts, write, handoff=handoff,
-                              cancel_cb=cancel_cb, progress_cb=progress_cb)
-
-    try:
-        row = store.allocate_export(
-            design_id=identity.design_id,
-            idempotency_key=idempotency_key,
-            export_builder=build, cancel_cb=cancel_cb,
+    def prepare_design() -> tuple[SaveIdentity, str]:
+        identity = _commit_design_for_export(
+            store, request.identity, request.design, current_design_hash, design_name, request.design_uid
         )
-    except ClientDisconnected:
-        raise
-    except _ExportIdentityConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except PublicationConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise export_error(exc, request.design) from exc
+        bind_design_lineage(store, identity.lineage_id, request.design_uid, design_name)
+        return identity, _instance_slug(store, identity.lineage_id, design_name)
+
+    with store.cancellable_export_design(request.identity, request.design_uid, prepare_design) as (identity, instance_slug):
+        try:
+            wglink_root.mkdir(exist_ok=True)
+        except OSError as exc:
+            raise HTTPException(status_code=409, detail=unavailable_detail) from exc
+
+        if progress_cb is not None:
+            progress_cb("resolve")
+
+        def build(facts: Mapping[str, object]) -> Mapping[str, str]:
+            if (
+                int(facts["editVersion"]) != identity.base_edit_version
+                or str(facts["designHash"]) != current_design_hash
+            ):
+                raise _ExportIdentityConflict(
+                    "The design changed while the CAD export was starting. "
+                    "Send it to CAD again."
+                )
+            def write(staged: Path) -> None:
+                # Only the child builds geometry. Publication and SQLite stay in
+                # this parent thread; child failure cannot publish partial bytes.
+                asyncio.run(run_mesh_build(build_bundle,
+                    request.design.model_dump(mode="json"), str(staged), dict(facts),
+                    identity.lineage_id, design_name, instance_slug, _app_version(),
+                    **({"cancel_cb": cancel_cb} if cancel_cb else {})))
+                if progress_cb is not None:
+                    progress_cb("mesh")
+
+            return publish_bundle(store, wglink_root, facts, write, handoff=handoff,
+                                  cancel_cb=cancel_cb, progress_cb=progress_cb)
+
+        try:
+            row = store.allocate_export(
+                design_id=identity.design_id,
+                idempotency_key=idempotency_key,
+                export_builder=build, cancel_cb=cancel_cb,
+            )
+        except ClientDisconnected:
+            raise
+        except _ExportIdentityConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PublicationConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise export_error(exc, request.design) from exc
 
     result = _wglink_response(row, identity)
     result.update(_finish_publication(store, row))

@@ -1,4 +1,4 @@
-import { deadlineFetch } from '../api/deadlineFetch';
+import { combineAbortSignals, deadlineFetch } from '../api/deadlineFetch';
 import type { StartActivity } from './activity';
 import { abortableActivity } from './activityOperation';
 
@@ -37,11 +37,12 @@ export function stagedActivity<T>(
     const countedFetch: typeof fetch = (input, init) => {
       // Preliminary folder reads are ordinary reads; only the operation POST
       // starts a channel. One id belongs to exactly one POST.
-      if (init?.method?.toUpperCase() !== 'POST') return scoped(input, { ...init, signal });
+      const requestSignal = init?.signal ? combineAbortSignals([init.signal, signal]) : signal;
+      if (init?.method?.toUpperCase() !== 'POST') return scoped(input, { ...init, signal: requestSignal });
       const headers = new Headers(init.headers);
       headers.set('X-WG-Operation-Id', id);
       activity.progress(0, 4);
-      const response = scoped(input, { ...init, headers, signal }).then(response => {
+      const response = scoped(input, { ...init, headers, signal: requestSignal }).then(response => {
         // A fast operation can finish between polls. Its final header carries
         // the very same history, without delaying the result for another GET.
         const completed = response.headers.get('X-WG-Operation-Stages');

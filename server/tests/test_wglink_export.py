@@ -6,6 +6,7 @@ import json
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 from fastapi import HTTPException
@@ -702,3 +703,136 @@ def test_ath_cad_link_refusal_is_422_before_identity_or_geometry_work(tmp_path, 
     assert 'STEP export of ATH' in caught.value.detail
     assert not (tmp_path / 'cadlink.sqlite3').exists()
     assert not (tmp_path / 'wglink').exists()
+
+
+@pytest.mark.parametrize("saved_first", [False, True])
+@pytest.mark.parametrize("stop_stage", ["mesh", "check"])
+def test_stopped_send_restores_design_registry_and_allows_next_edit(
+    tmp_path, monkeypatch, saved_first, stop_stage,
+):
+    from server.jobs.request_cancellation import ClientDisconnected
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    store.initialize()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    saved = _saved(store, _design()) if saved_first else None
+    from server.workspace.archive_identity import claim_project_folder
+
+    uid = "wgu_01K00000000000000000000001"
+    claim_project_folder(store, f"design:{uid}", "demo-horn")
+    before = store.list_designs()
+    names_before = store._read_one("SELECT count(*) AS n FROM lineage_cad_names", ())
+    with store._lock:
+        archives_before = [dict(row) for row in store._connect().execute("SELECT * FROM archive_folders")]
+    head = store.get_design(saved["identity"].design_id) if saved else None
+    edited = DesignConfig.model_validate({"formula": "OSSE", "L": 130, "a": 45})
+    request = _request(saved, edited, "demo-horn") if saved else service.WgLinkExportRequest(
+        design=edited, designRevision=1, baseName="demo-horn",
+    )
+    request = request.model_copy(update={"design_uid": uid})
+    stopped = False
+
+    def cancel():
+        if stopped:
+            raise ClientDisconnected()
+
+    _install_fake_write(monkeypatch)
+    native_build = service.run_mesh_build
+
+    async def build(*args, **kwargs):
+        nonlocal stopped
+        if stop_stage == "mesh":
+            stopped = True
+            cancel()
+        return await native_build(*args, **kwargs)
+
+    def progress(stage):
+        nonlocal stopped
+        if stage == stop_stage:
+            stopped = True
+
+    monkeypatch.setattr(service, "run_mesh_build", build)
+    try:
+        with pytest.raises(ClientDisconnected):
+            service.export_wglink_sync(request, store, workspace, "stop", cancel_cb=cancel, progress_cb=progress)
+        assert store.list_designs() == before
+        if saved:
+            assert store.get_design(saved["identity"].design_id) == head
+        else:
+            assert store._read_one("SELECT count(*) AS n FROM lineage_cad_names", ())["n"] == 0
+        assert store._read_one("SELECT count(*) AS n FROM lineage_cad_names", ()) == names_before
+        with store._lock:
+            assert [dict(row) for row in store._connect().execute("SELECT * FROM archive_folders")] == archives_before
+        assert store.publication_exports() == []
+        assert store.publication_reservation_for_key("stop") is None
+        stopped = False
+        monkeypatch.setattr(service, "run_mesh_build", native_build)
+        request = request.model_copy(update={"design": DesignConfig.model_validate({"formula": "OSSE", "L": 140, "a": 45})})
+        result = service.export_wglink_sync(request, store, workspace, "next-edit")
+        assert result["identity"]["baseEditVersion"] == (2 if saved else 1)
+    finally:
+        store.close()
+
+
+def test_stopping_one_send_does_not_rewind_another_sends_prepared_identity(tmp_path, monkeypatch):
+    from server.jobs.request_cancellation import ClientDisconnected
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    other = CadLinkStore(store.db_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    saved = _saved(store, _design())
+    edited = DesignConfig.model_validate({"formula": "OSSE", "L": 130, "a": 45})
+    request = _request(saved, edited, "demo-horn")
+    _install_fake_write(monkeypatch)
+    native_build = service.run_mesh_build
+    first_meshing = threading.Event()
+    second_started = threading.Event()
+    stop_first = threading.Event()
+    second_prepared = threading.Event()
+    native_commit = service._commit_design_for_export
+
+    def commit(registry, *args):
+        result = native_commit(registry, *args)
+        if registry is other:
+            second_prepared.set()
+        return result
+
+    async def mesh(*args, **kwargs):
+        if "cancel_cb" in kwargs:
+            first_meshing.set()
+            assert stop_first.wait(3)
+            kwargs["cancel_cb"]()
+        return await native_build(*args, **kwargs)
+
+    def cancel():
+        if stop_first.is_set():
+            raise ClientDisconnected()
+
+    def second():
+        second_started.set()
+        return service.export_wglink_sync(request, other, workspace, "second")
+
+    monkeypatch.setattr(service, "run_mesh_build", mesh)
+    monkeypatch.setattr(service, "_commit_design_for_export", commit)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(service.export_wglink_sync, request, store, workspace, "first", cancel_cb=cancel)
+            try:
+                assert first_meshing.wait(3)
+                next_send = pool.submit(second)
+                assert second_started.wait(3)
+                # B either prepares while A is meshing (the regression), or
+                # waits on the same design lock until A's compensation ends.
+                second_prepared.wait(0.1)
+            finally:
+                stop_first.set()
+            with pytest.raises(ClientDisconnected):
+                first.result(timeout=3)
+            result = next_send.result(timeout=3)
+        assert result["identity"]["baseEditVersion"] == 2
+        assert len(store.publication_exports()) == 1
+    finally:
+        store.close()
+        other.close()

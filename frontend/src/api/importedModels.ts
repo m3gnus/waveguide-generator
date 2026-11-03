@@ -77,7 +77,10 @@ export interface RunWorkspace {
 export async function requestImportedModel<T>(path: string, fetcher: typeof fetch, what: string, init?: RequestInit): Promise<T> {
   const response = await fetcher(path, init);
   if (!response.ok) {
-    const body = await response.json().catch(() => null) as { error?: { message?: unknown; code?: unknown }; detail?: unknown } | null;
+    const body = await response.json().catch((error: unknown) => {
+      if (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError') throw error;
+      return null;
+    }) as { error?: { message?: unknown; code?: unknown }; detail?: unknown } | null;
     const message = refusalText(typeof body?.error?.message === 'string' ? body.error.message : body?.detail, what, `${what} could not be read. Try again.`);
     throw new ImportedModelApiError(message, response.status,
       typeof body?.error?.code === 'string' ? body.error.code : null);
