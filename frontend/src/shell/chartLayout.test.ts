@@ -5,7 +5,7 @@ import type { ChartTokens } from '../results/EChart';
 import { beamShapeSeries } from '../results/mappers';
 import type { NamedResult } from '../results/mappers';
 import type { ResultPayload } from '../results/types';
-import { chartDensity, clearingRail, directivityIndexOption, formatChartValue, heatmapOption, impedanceOption, lineOption, middleEllipsis, type ChartDensity } from './ResultsPanel';
+import { chartDensity, clearingRail, withCompactLegend, directivityIndexOption, formatChartValue, heatmapOption, impedanceOption, lineOption, middleEllipsis, type ChartDensity } from './ResultsPanel';
 
 /**
  * Layout locks for the result dock.
@@ -23,6 +23,11 @@ const tokens: ChartTokens = {
   series: ['#0ff', '#f90', '#f55'], colormap: ['#000', '#fff'],
 };
 const DENSITIES: ChartDensity[] = ['compact', 'regular', 'full'];
+type EChartsLike = { legend: unknown };
+const mapPayload = {
+  frequencies: [500, 1_000, 2_000],
+  directivity: { horizontal: [500, 1_000, 2_000].map(() => [0, 30, 60, 90].map((angle) => [angle, -angle / 10])) },
+} as unknown as ResultPayload;
 
 const payload: ResultPayload = {
   frequencies: [500, 1_000, 2_000],
@@ -136,6 +141,20 @@ describe('result dock chart layout', () => {
     const bottom = (density: ChartDensity) => (clearingRail(lineOption(series, tokens, 'dB', density), density).grid as Inset).bottom;
     expect(bottom('full')).toBe((lineOption(series, tokens, 'dB', 'full').grid as Inset).bottom + 20);
     expect(bottom('compact')).toBe((lineOption(series, tokens, 'dB', 'compact').grid as Inset).bottom);
+  });
+
+  it('drops a single run\'s legend on a compact card only', () => {
+    const option = lineCharts('compact')[0] as unknown as EChartsLike;
+    expect((withCompactLegend(option as never, 1, 'compact').legend as { show?: boolean }).show).toBe(false);
+    expect((withCompactLegend(option as never, 2, 'compact').legend as { show?: boolean }).show).toBe(true);
+    expect(withCompactLegend(option as never, 1, 'regular')).toBe(option);
+  });
+
+  it('keeps the top angle label out of the title chip band on a map card', () => {
+    const map = (density: ChartDensity) => (heatmapOption(mapPayload, tokens, 'horizontal', -6, density).yAxis as { axisLabel: { showMaxLabel?: boolean } }).axisLabel.showMaxLabel;
+    expect(map('compact')).toBe(false);
+    expect(map('regular')).toBe(false);
+    expect(map('full')).toBeUndefined();
   });
 
   it('keeps the top value label out of the title chip band on a card', () => {

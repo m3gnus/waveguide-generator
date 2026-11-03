@@ -193,6 +193,17 @@ const RAIL_CLEARANCE = 20;
  * otherwise cover the tick labels and "Frequency [Hz]". A card instead keeps
  * its rail hidden until hovered (app.css), because 20px is a sixth of a card.
  */
+/**
+ * A compact card's legend shares the title row with the chip and the card's
+ * buttons, and there is no room left in it for a run name. With a single run
+ * it only repeats the run already named above the cards, so it is dropped;
+ * the tooltip and the detail view still name every series.
+ */
+export function withCompactLegend(option: EChartsOption, runs: number, density: ChartDensity): EChartsOption {
+  if (density !== 'compact' || runs > 1 || !option.legend) return option;
+  return { ...option, legend: { ...(option.legend as object), show: false } };
+}
+
 export function clearingRail(option: EChartsOption, density: ChartDensity): EChartsOption {
   if (density !== 'full') return option;
   const grid = option.grid as { bottom?: number } | undefined;
@@ -953,7 +964,7 @@ export function heatmapOption(
     // `hideOverlap` is off here on purpose: the label set is already chosen to
     // fit this card size, and letting ECharts thin it again is what broke the
     // axis's symmetry and dropped 0 deg.
-    yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameLocation: 'start' as const, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'right' as const, verticalAlign: 'top' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, hideOverlap: false, interval: (index: number) => angleLabels.has(index) } },
+    yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameLocation: 'start' as const, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'right' as const, verticalAlign: 'top' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, hideOverlap: false, ...(density === 'full' ? {} : { showMaxLabel: false }), interval: (index: number) => angleLabels.has(index) } },
     visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 1, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: 11 }, inRange: { color: tokens.colormap } },
     series: [...mapSeries, ...angleGuideSeries, ...rearBand, ...contourSeries, ...comparisonSeries] as EChartsOption['series'],
   };
@@ -1640,7 +1651,7 @@ function PolarResponseCard({ items, tokens, density, live }: { items: NamedResul
   const available = POLAR_PLANES.filter((candidate) => items.some(({ result }) => result.directivity?.[candidate]?.length));
   const drawnPlane = available.includes(plane) ? plane : available[0];
   const option = useMemo(
-    () => drawnPlane ? polarOption(items, tokens, drawnPlane, frequencies[index] ?? 0, POLAR_FLOOR_DB, density) : null,
+    () => drawnPlane ? withCompactLegend(polarOption(items, tokens, drawnPlane, frequencies[index] ?? 0, POLAR_FLOOR_DB, density), items.length, density) : null,
     [density, drawnPlane, frequencies, index, items, tokens],
   );
   if (!drawnPlane || !option) return <ChartStub reason="Polar Response needs the horizontal or vertical plane. Turn one on under Directivity map in Simulation, then solve again."/>;
@@ -1979,7 +1990,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     const railed = (option: EChartsOption) => (measurementSelection.available.length >= 2 ? clearingRail(option, density) : option);
     if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length
       ? <div className="frequency-canvas">
-        <EChart option={railed(mark(splOption(angled, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull)))} label="Interactive HornLab sound pressure frequency response" live={live}/>
+        <EChart option={railed(withCompactLegend(mark(splOption(angled, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull)), angled.length + measured.length, density))} label="Interactive HornLab sound pressure frequency response" live={live}/>
         <MeasurementAngleControls selection={measurementSelection} onChange={(next) => preferencesStore.update({
           ...(next.plane === undefined ? {} : { measurementPlane: next.plane }),
           ...(next.angles === undefined ? {} : { measurementAngles: next.angles }),
@@ -1988,11 +1999,11 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       : <ChartStub reason="This run has no on-axis response yet. Wait for it to finish, or choose a completed run."/>;
     if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} normAngle={normAngle} angleGuideInterval={preferences.directivityGuideInterval} showContourNames={preferences.showContourNames} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
-      const option = mark(directivityIndexOption(overlays, tokens, preferences.smoothing, density));
+      const option = withCompactLegend(mark(directivityIndexOption(overlays, tokens, preferences.smoothing, density)), overlays.length, density);
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field. Choose an engine that provides one, then solve again."/>;
     }
     if (chartType === 'power_response') {
-      const option = mark(powerResponseOption(overlays, tokens, preferences.smoothing, density));
+      const option = withCompactLegend(mark(powerResponseOption(overlays, tokens, preferences.smoothing, density)), overlays.length, density);
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab spatially averaged power response from the solved spherical balloon" live={live}/>
         : <ChartStub reason="Power Response needs a complete spherical field. Choose an engine that provides one, then solve again."/>;
@@ -2011,7 +2022,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     if (chartType === 'beam_map') return <ForwardBeamRenderer result={result}/>;
     if (chartType === 'polar_response') return <PolarResponseCard items={overlays} tokens={tokens} density={density} live={live}/>;
     if (chartType === 'phase_response') {
-      const option = railed(mark(phaseOption(angled, tokens, density)));
+      const option = railed(withCompactLegend(mark(phaseOption(angled, tokens, density)), angled.length, density));
       return Array.isArray(option.series) && option.series.length
         ? <div className="frequency-canvas">
           <EChart option={option} label="Interactive HornLab pressure phase by frequency" live={live}/>
@@ -2023,7 +2034,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="This run has no directivity phase. Solve again to get it."/>;
     }
     if (chartType === 'group_delay') {
-      const option = clearingRail(mark(groupDelayOption(overlays, tokens, density, preferences.groupDelayUnit)), density);
+      const option = clearingRail(withCompactLegend(mark(groupDelayOption(overlays, tokens, density, preferences.groupDelayUnit)), overlays.length, density), density);
       // The unit rail only rides along with a curve: on the stub there is no
       // axis to rename, and offering the switch there would suggest the empty
       // card is the wrong projection rather than a result with no phase.
@@ -2060,7 +2071,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     }
     if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
     if (chartType === 'impedance') {
-      const option = mark(impedanceOption(overlays, tokens, preferences.smoothing, density, preferences.impedanceDisplay));
+      const option = withCompactLegend(mark(impedanceOption(overlays, tokens, preferences.smoothing, density, preferences.impedanceDisplay)), overlays.length, density);
       // The spoken label follows the units for the same reason the axis does:
       // a driver-coupled run's ohms announced as "acoustic impedance" is the
       // screen-reader version of the mislabelled axis. The stub cannot follow
