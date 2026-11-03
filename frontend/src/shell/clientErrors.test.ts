@@ -48,6 +48,12 @@ describe('reportCaughtError', () => {
   beforeEach(() => resetClientErrorReporting());
   afterEach(() => resetClientErrorReporting());
 
+  it.each([new DOMException('Stopped', 'AbortError'), { name: 'AbortError', message: 'Stopped' }])('does not record Stop as a problem (%s)', error => {
+    const report = vi.fn(async () => true);
+    expect(reportCaughtError('export', error, undefined, report)).toBe(false);
+    expect(report).not.toHaveBeenCalled();
+  });
+
   it('carries the operation, its context and the error stack', () => {
     const report = vi.fn(async () => true);
     const error = new Error('disk full');

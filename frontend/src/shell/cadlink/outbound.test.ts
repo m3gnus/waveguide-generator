@@ -13,6 +13,8 @@ import panelSource from '../CadLinkPanel.tsx?raw';
 import coordinatorSource from '../CadWorkspaceOwners.tsx?raw';
 import projectSource from '../CadProjectPanel.tsx?raw';
 import runSource from '../../jobs/RunExportControl.tsx?raw';
+import { activityStore } from '../activity';
+import * as caughtErrors from './caughtErrors';
 
 const controllers: ReturnType<typeof createCadOutboundController>[] = [];
 const connections: ReturnType<typeof createCadConnectionStore>[] = [];
@@ -342,4 +344,30 @@ describe.each(['file', 'cad'] as const)('send guard begun on imported %s', (kind
     await expect(controller[entry]()).rejects.toThrow(reason);
     expect(reader).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
   });
+});
+
+
+it('Stop on Send ends with Stopped and records no CAD error or identity', async () => {
+  activityStore.reset();
+  const report = vi.spyOn(caughtErrors, 'reportCadAutomationError');
+  let signal: AbortSignal | undefined;
+  const fetcher = vi.fn<typeof fetch>((url, init) => {
+    if (String(url).endsWith('/wglink')) {
+      signal = init!.signal!;
+      return new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }));
+    }
+    return Promise.resolve(json({ selected: true }));
+  });
+  const { controller } = setup(undefined, fetcher);
+  const before = useDocumentStore.getState().identity;
+  const pending = controller.sendWgToFusion();
+  const stopped = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  await vi.waitFor(() => expect(signal).toBeDefined());
+  activityStore.getSnapshot()[0].cancel!();
+  await stopped;
+  expect(controller.getState().sendingToFusion).toBe(false);
+  expect(useDocumentStore.getState().identity).toEqual(before);
+  expect(useCadSendOutcome.getState().outcome).toMatchObject({ tone: 'status', text: 'Stopped' });
+  expect(report).not.toHaveBeenCalled();
+  expect(activityStore.getSnapshot()).toEqual([]);
 });

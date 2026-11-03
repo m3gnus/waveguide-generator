@@ -1,7 +1,7 @@
 """What the per-request middleware writes, and what it deliberately does not.
 
-uvicorn's access log is off (``launch/serve.py``), so ``log_request`` in
-``server/app.py`` is the only per-request line anything writes. Measured on the
+uvicorn's access log is off (``launch/serve.py``), so ``RequestMiddleware`` in
+``server/request_middleware.py`` is the only per-request line anything writes. Measured on the
 packaged app sitting idle with nobody touching the window, that was ~8 lines a
 second appended to ``server.log`` forever: a health probe, the shell document
 and three CAD-link pollers, none of which says anything the second time it is
@@ -16,12 +16,14 @@ went wrong is ever quietened with them.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
 import pytest
 
-from server.app import QUIET_REQUEST_ROUTES, create_app
+from server.app import create_app
+from server.request_middleware import QUIET_REQUEST_ROUTES, RESTART_GATED_POSTS, RequestMiddleware
 
 # The suite's ASGI harness rather than a second copy of it. ``server/tests`` is
 # a namespace package, which is the same import shape the suite already uses
@@ -128,3 +130,65 @@ def test_the_quiet_list_names_the_measured_idle_traffic() -> None:
     # a CAD client posts a solve's outcome back to.
     assert ("POST", "/api/cadlink/solve-command/outcome") not in QUIET_REQUEST_ROUTES
     assert ("POST", "/health") not in QUIET_REQUEST_ROUTES
+
+
+@pytest.mark.parametrize("scope_type", ["http", "websocket", "lifespan"])
+def test_middleware_passes_receive_through_untouched(scope_type):
+    async def receive():
+        raise AssertionError("only the endpoint may read from the connection")
+
+    async def send(message):
+        pass
+
+    called = []
+
+    async def endpoint(scope, endpoint_receive, endpoint_send):
+        assert endpoint_receive is receive
+        called.append(scope["type"])
+
+    wrapped = RequestMiddleware(endpoint, extra_origins=frozenset())
+    asyncio.run(wrapped({
+        "type": scope_type, "method": "GET", "path": "/health", "scheme": "http",
+        "headers": [(b"host", b"127.0.0.1:3100")], "server": ("127.0.0.1", 3100),
+    }, receive, send))
+    assert called == [scope_type]
+
+
+def test_endpoint_exception_keeps_the_request_failure_log(caplog):
+    async def endpoint(scope, receive, send):
+        raise RuntimeError("fixture failure")
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        pytest.fail(f"an unhandled failure sent a response: {message}")
+
+    with caplog.at_level(logging.ERROR, logger=REQUEST_LOGGER), pytest.raises(RuntimeError, match="fixture failure"):
+        asyncio.run(RequestMiddleware(endpoint, extra_origins=frozenset())({
+            "type": "http", "method": "GET", "path": "/fixture", "scheme": "http", "headers": [(b"host", b"127.0.0.1:3100")],
+            "server": ("127.0.0.1", 3100),
+        }, receive, send))
+    assert _messages(caplog, logging.ERROR)[0].startswith("GET /fixture failed after ")
+    assert caplog.records[-1].exc_info is not None
+
+
+@pytest.mark.parametrize("path", sorted(RESTART_GATED_POSTS))
+@pytest.mark.parametrize("hold", ["update_restart", "retirement_hold"])
+@pytest.mark.parametrize("host", ["127.0.0.1:3100", "attacker.test:3100"])
+def test_restart_refusals_precede_origin_guard_and_request_logging(tmp_path, caplog, path, hold, host):
+    app = create_app(data_dir=tmp_path)
+    latch = getattr(app.state, hold)
+    if hold == "update_restart":
+        latch.approve("v2.0.1")
+    else:
+        latch.hold("fixture retirement")
+    with caplog.at_level(logging.DEBUG, logger=REQUEST_LOGGER):
+        response = TestClient(app).post(path, b"", {"Host": host, "Origin": "https://example.com"})
+    assert response.status_code == 409
+    message = latch.refusal()
+    assert response.json() == {"detail": message, "error": {
+        "schema_version": 1, "code": "update_restart_pending", "stage": "submission",
+        "message": message, "retryable": True, "details": {}, "client_request_id": None,
+    }}
+    assert not [record for record in caplog.records if record.name == REQUEST_LOGGER]

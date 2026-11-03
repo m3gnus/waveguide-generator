@@ -12,7 +12,7 @@ import threading
 import time
 from typing import Awaitable, Callable
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,11 +37,7 @@ from server.cadlink.fusion.addin_update import shutdown_addin_refresh, start_add
 from server.mesh.child import begin_mesher_child_shutdown, close_mesher_child
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
-from server.platform.origin import (
-    local_request_host,
-    parse_extra_websocket_origins,
-    request_origin_allowed,
-)
+from server.platform.origin import parse_extra_websocket_origins
 from server.platform.acl_migration import (
     legacy_acl_repair_feedback,
     repair_legacy_acls,
@@ -55,8 +51,10 @@ from server.solver.symmetry import resolve_symmetry
 from server.workspace import mount_workspace
 from server.workspace.api import MAX_EXPORT_REQUEST_BODY_BYTES
 from server.updates import mount_updates
-from server.updates.restart import UPDATE_RESTART_PENDING, RestartApproval
+from server.updates.restart import RestartApproval
 from server.integration.contracts import error_envelope
+# Re-export for the launcher lifetime tracker.
+from server.request_middleware import QUIET_REQUEST_ROUTES as QUIET_REQUEST_ROUTES, RequestMiddleware
 
 
 APP_ROOT = app_root()
@@ -73,35 +71,10 @@ BUILD = build_label(APP_ROOT)
 BUILD_IDENTITY = build_identity(APP_ROOT)
 FRONTEND_DIST = APP_ROOT / "frontend" / "dist"
 LEGACY_WORKSPACE_DIR = APP_ROOT / "output"
-request_log = logging.getLogger("wg.requests")
 _BEAT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 DEFAULT_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
 MAX_REQUEST_BODY_BYTES = DEFAULT_MAX_REQUEST_BODY_BYTES
 _WORKSPACE_EXPORT_PATH = "/api/workspace/write-export"
-#: ``(method, path)`` pairs whose successful responses log at DEBUG.
-#:
-#: uvicorn's own access log is off (``launch/serve.py``), so ``log_request``
-#: below is the only thing writing a line per request -- and at idle, with the
-#: packaged app open and nobody touching it, these five were ~8 lines a second
-#: appended to ``server.log`` forever. That is a continuous trickle of small
-#: writes that keeps the disk out of its low-power states, and it buries the
-#: lines somebody opened the log to find under megabytes of the ones they did
-#: not. None of the five says anything after the first time it is read: the
-#: health probe, the shell document, and the three CAD-link pollers all mean
-#: "still here".
-#:
-#: Keyed by method as well as path so a route that is idle chatter one way and
-#: a real action the other keeps its voice. The chatter itself is being fixed
-#: at the callers; this is the backstop for the next poller that appears.
-QUIET_REQUEST_ROUTES: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("GET", "/health"),
-        ("GET", "/"),
-        ("GET", "/api/cadlink/solve-command"),
-        ("GET", "/api/cadlink/returns"),
-        ("POST", "/api/cadlink/fusion-status"),
-    }
-)
 
 
 class _RequestBodyLimitMiddleware:
@@ -450,12 +423,6 @@ class _HashedAssetStaticFiles(StaticFiles):
         return response
 
 
-#: Routes refused while an update restart is approved (contract §4.2) that are
-#: not in a router with the latch of its own. ``POST /api/cadlink/ingest`` starts
-#: work that outlives its request -- a deferred viewport, and a capture of the
-#: CAD document that copies tens of megabytes -- and it is refused before its
-#: handler runs, so the return stays on disk exactly as it was.
-RESTART_GATED_POSTS = frozenset({"/api/cadlink/ingest", "/api/source-editor/export", "/api/source-editor/assembly/ingest", "/api/source-editor/assembly/export"})
 def create_app(
     *,
     data_dir: str | Path | None = None,
@@ -801,108 +768,8 @@ def create_app(
 
         application.router.add_event_handler("startup", prewarm_selected_native)
 
-    @application.middleware("http")
-    async def origin_guard(request: Request, call_next):
-        server = request.scope.get("server")
-        bound_port = (
-            server[1]
-            if isinstance(server, (list, tuple)) and len(server) > 1
-            else None
-        )
-        host = request.headers.get("host")
-        if not local_request_host(
-            host,
-            scheme=request.url.scheme,
-            bound_port=bound_port,
-        ):
-            request_log.warning(
-                "Rejected %s %s for non-local Host %r; use the local application URL",
-                request.method,
-                request.url.path,
-                host,
-            )
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "detail": "Non-local Host rejected. Open Waveguide Generator "
-                    "from the loopback URL printed by the launcher."
-                },
-            )
-        origin = request.headers.get("origin")
-        if not request_origin_allowed(
-            origin=origin,
-            host=host,
-            scheme=request.url.scheme,
-            bound_port=bound_port,
-            extra_origins=extra_ws_origins,
-        ):
-            request_log.warning(
-                "Rejected %s %s from disallowed Origin %r; use the local application URL",
-                request.method,
-                request.url.path,
-                origin,
-            )
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "detail": "Non-local Origin or unapproved cross-origin request "
-                    "rejected. Open Waveguide Generator from its current loopback URL."
-                },
-            )
-        return await call_next(request)
-
-    @application.middleware("http")
-    async def log_request(request: Request, call_next):
-        began = time.monotonic()
-        try:
-            response = await call_next(request)
-        except Exception:
-            request_log.exception(
-                "%s %s failed after %.1f ms",
-                request.method,
-                request.url.path,
-                (time.monotonic() - began) * 1000,
-            )
-            raise
-        # A quietened route that starts answering 4xx or 5xx is exactly what
-        # someone reads this log to discover, so failure keeps INFO wherever it
-        # came from; only the boring successes drop. 3xx counts as boring on
-        # purpose -- the 304 a browser gets revalidating the shell document is
-        # the same idle traffic wearing a different status code.
-        quiet = (
-            response.status_code < 400
-            and (request.method, request.url.path) in QUIET_REQUEST_ROUTES
-        )
-        request_log.log(
-            logging.DEBUG if quiet else logging.INFO,
-            "%s %s -> %d in %.1f ms",
-            request.method,
-            request.url.path,
-            response.status_code,
-            (time.monotonic() - began) * 1000,
-        )
-        return response
-
-    @application.middleware("http")
-    async def refuse_during_update_restart(request: Request, call_next):
-        # The solve and retry routes refuse in their own router; see
-        # ``RESTART_GATED_POSTS`` for the rest.
-        if request.method == "POST" and request.url.path in RESTART_GATED_POSTS:
-            approval = getattr(application.state, "update_restart", None)
-            refusal = approval.refusal() if approval is not None else None
-            if refusal is None:
-                refusal = application.state.retirement_hold.refusal()
-            if refusal is not None:
-                return JSONResponse(
-                    status_code=409,
-                    content=error_envelope(
-                        code=UPDATE_RESTART_PENDING,
-                        stage="submission",
-                        message=refusal,
-                        retryable=True,
-                    ),
-                )
-        return await call_next(request)
+    # Restart refusals bypass logging; origin rejections are logged.
+    application.add_middleware(RequestMiddleware, extra_origins=extra_ws_origins)
 
     @application.get("/health")
     async def health() -> dict[str, object]:

@@ -18,7 +18,7 @@ import { runGuardedFusionSend } from './send';
 import { reportCadAutomationError } from './caughtErrors';
 import { followCadSend, fusionSendOf, sentToCadMessage, showCadSendOutcome } from '../../design/useSendToCad';
 import { useCadDeliveryHealthStore } from '../../stores/cadDeliveryHealth';
-import { failureWords } from '../../api/httpError';
+import { failureWords, isAbortError } from '../../api/httpError';
 
 export class OutboundSupersededError extends Error {}
 /** UI callers return quietly from their catch when true. */
@@ -173,6 +173,10 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
       });
     } catch (reason) {
       if (reason instanceof ConflictChangedError) return null;
+      if (isAbortError(reason)) {
+        if (current()) showCadSendOutcome({ tone: 'status', text: 'Stopped' }, true);
+        throw reason;
+      }
       if (!(reason instanceof OutboundSupersededError)) reportCadAutomationError('send-to-fusion', reason);
       if (current()) { conflict = null; store.setState({ pendingFusionConflict: false }); }
       if (exportedIdentity !== undefined) {

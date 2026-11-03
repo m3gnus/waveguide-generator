@@ -381,6 +381,17 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle.mock.calls[0][0].normalizationAngle).toBe(kind === 'imported' ? 30 : 10);
   });
 
+  it('shows Stopped for an aborted run Send and records no problem', async () => {
+    mocks.sendDesignToCad.mockRejectedValueOnce(new DOMException('Stopped', 'AbortError'));
+    const job = completeJob();
+    render(job);
+    openMenu();
+    await act(async () => { menuItem('Send to CAD').click(); await settle(); });
+    expect(useRunExportStore.getState().jobs[job.id]).toMatchObject({ busy: false, lastError: null, lastNotice: 'Stopped' });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it('puts Send to CAD first and hands off the selected run snapshot', async () => {
     const polarConfig = {
       angle_range: [0, 120, 25], angle_step: 5, distance: 3, norm_angle: 7,

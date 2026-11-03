@@ -1,7 +1,7 @@
 import { stagedActivity } from '../shell/stagedActivity';
 import { activityOperation } from '../shell/activityOperation';
 import { usesCurrentAthImport, isAthImportVersion } from '../design/athImportVersion';
-import { httpErrorMessage, refusalText, ProgramFault } from './httpError';
+import { httpErrorMessage, refusalText, ProgramFault, isAbortError } from './httpError';
 import { profileSamples, profileSections, type ProfileSample } from './profileSamples';
 import { deadlineFetch } from './deadlineFetch';
 import {
@@ -98,7 +98,10 @@ async function errorMessage(response: Response): Promise<string> {
   try {
     const body = await response.json() as { detail?: unknown };
     return refusalText(body.detail, 'design request');
-  } catch { /* a body that is not JSON has no words for the user */ }
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    // A body that is not JSON has no words for the user.
+  }
   return refusalText(null, 'design request');
 }
 

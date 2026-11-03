@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { ExportFormat } from '../prefs/preferences';
 import { reportCaughtError } from '../shell/clientErrors';
-import { failureWords } from '../api/httpError';
+import { failureWords, isAbortError } from '../api/httpError';
 
 export interface RunExportJobState {
   busy: boolean;
@@ -86,16 +86,20 @@ export const useRunExportStore = create<RunExportStore>((set) => ({
         await Promise.resolve();
         outcome = await task();
       } catch (error) {
-        const reason = message(error);
-        reportCaughtError('run-export', error, { job_id: jobId, formats: formats.join(',') });
-        set((state) => ({
-          jobs: {
-            ...state.jobs,
-            [jobId]: { busy: false, busyFormats: [], lastError: reason, lastErrorFormats: [...formats], lastNotice: null },
-          },
-        }));
-        if (pending.get(jobId) === operation) pending.delete(jobId);
-        throw error;
+        if (isAbortError(error)) {
+          outcome = { notice: 'Stopped' };
+        } else {
+          const reason = message(error);
+          reportCaughtError('run-export', error, { job_id: jobId, formats: formats.join(',') });
+          set((state) => ({
+            jobs: {
+              ...state.jobs,
+              [jobId]: { busy: false, busyFormats: [], lastError: reason, lastErrorFormats: [...formats], lastNotice: null },
+            },
+          }));
+          if (pending.get(jobId) === operation) pending.delete(jobId);
+          throw error;
+        }
       }
       set((state) => ({
         jobs: {

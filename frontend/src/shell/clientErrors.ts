@@ -1,5 +1,5 @@
 import { reportClientError, type ClientErrorReport } from '../api/diagnostics';
-import { keepRefusalOriginals } from '../api/httpError';
+import { isAbortError, keepRefusalOriginals } from '../api/httpError';
 
 /**
  * Interface errors, reported to the backend so a problem report can carry them.
@@ -66,6 +66,7 @@ export function reportCaughtError(
   context?: ClientErrorReport['context'],
   report: typeof reportClientError = reportClientError,
 ): boolean {
+  if (isAbortError(error)) return false;
   const message = error instanceof Error ? (error.message || error.name) : String(error);
   const stack = error instanceof Error && error.stack ? error.stack : new Error(message).stack;
   return reportInterfaceError({ message: `${operation}: ${message}`, stack, source: 'caught', operation, context }, report);

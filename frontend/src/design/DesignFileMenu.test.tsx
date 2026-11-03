@@ -25,6 +25,8 @@ import { DesignFileMenu } from './DesignFileMenu';
 import { RunNameField } from '../shell/RunNameField';
 import { applyOpenedDesign as applyOpenedDocument, takeDesignOpenTicket } from './openCadProject';
 import { discardConfirmation } from './replacementCheck';
+import { activityStore } from '../shell/activity';
+import { resetClientErrorReporting } from '../shell/clientErrors';
 
 /**
  * The export menu is the whole point of the CAD path: someone who wants a
@@ -1834,4 +1836,27 @@ it.each([404, 405, 500, 'unavailable', 'cancelled'])('Open uses the browser inpu
   const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => undefined);
   await nativeOpen();
   expect(click).toHaveBeenCalledTimes(result === 'cancelled' ? 0 : 1);
+});
+
+
+it.each(['STL', 'STEP solid', 'STEP inner surface'])('Stop on %s ends silently and records no problem', async label => {
+  activityStore.reset();
+  resetClientErrorReporting();
+  let signal: AbortSignal | undefined;
+  const fetcher = vi.fn<typeof fetch>((url, init) => {
+    if (String(url).startsWith('/api/export/')) {
+      signal = init!.signal!;
+      return new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }));
+    }
+    return Promise.resolve(Response.json({}));
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const item = open().find(button => button.querySelector('span')?.textContent === label)!;
+  await act(async () => { item.click(); });
+  await vi.waitFor(() => expect(signal).toBeDefined());
+  await act(async () => { activityStore.getSnapshot().find(item => item.kind === 'export')!.cancel!(); });
+  expect(signal!.aborted).toBe(true);
+  expect(activityStore.getSnapshot()).toEqual([]);
+  expect(container.querySelector('[role="status"]')).toBeNull();
+  expect(fetcher.mock.calls.some(([url]) => /client-errors|write-export/.test(String(url)))).toBe(false);
 });

@@ -79,6 +79,21 @@ describe('refusalText', () => {
 });
 
 describe('failureWords', () => {
+  it('calls Stop Stopped without recording a failure', () => {
+    const reported: unknown[] = [];
+    keepRefusalOriginals(entry => reported.push(entry));
+    expect(failureWords(new DOMException('Stopped', 'AbortError'))).toBe('Stopped');
+    expect(failureWords({ name: 'AbortError', message: 'Stopped' })).toBe('Stopped');
+    expect(reported).toEqual([]);
+    keepRefusalOriginals(() => {});
+  });
+
+  it('preserves cancellation while reading a failed response body', async () => {
+    const error = new DOMException('Stopped', 'AbortError');
+    const response = new Response(null, { status: 422 });
+    response.json = async () => { throw error; };
+    await expect(httpErrorMessage(response, 'Failure')).rejects.toBe(error);
+  });
   it('shows a plain sentence and hides what the program caused', () => {
     const kept: string[] = [];
     keepRefusalOriginals(({ message }) => kept.push(message));

@@ -2,8 +2,11 @@
 
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
+import socket
+import threading
 import time
 from types import SimpleNamespace
 from uuid import uuid4
@@ -245,3 +248,175 @@ def test_export_stage_callbacks_preserve_exact_bytes_from_the_same_native_write(
             assert result.step_text == original.step_text
 
     asyncio.run(scenario())
+
+
+def test_real_socket_stop_reaches_create_app_and_kills_the_mesher(tmp_path, monkeypatch, caplog):
+    """No fake receive/is_disconnected: exercise the shipped middleware stack."""
+    import uvicorn
+    from websockets.asyncio.client import connect
+    from websockets.exceptions import InvalidStatus
+    from server import app as app_module
+
+    caplog.set_level(logging.DEBUG, logger="wg.requests")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text('<!doctype html><div id="root"></div>')
+    monkeypatch.setattr(app_module, "FRONTEND_DIST", dist)
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(5)
+        listener.setblocking(False)
+    except OSError as exc:
+        listener.close()
+        pytest.skip(f"loopback port unavailable: {exc}")
+    marker = tmp_path / "live-child-marker"
+    monkeypatch.setenv("WG_TEST_STAGE_MARKER", str(marker))
+    monkeypatch.delenv(child.IN_PROCESS_ENV, raising=False)
+    child.close_mesher_child()
+    monkeypatch.setattr(core, "_build_stl_mesh_sync", _blocked_geometry)
+    killed = threading.Event()
+    native_kill = child._Channel.kill
+
+    def kill(channel):
+        native_kill(channel)
+        killed.set()
+
+    monkeypatch.setattr(child._Channel, "kill", kill)
+
+    async def scenario():
+        app = app_module.create_app(data_dir=tmp_path / "app")
+        completed = []
+        status = None
+
+        async def observed(scope, receive, send):
+            async def record(message):
+                nonlocal status
+                if message["type"] == "http.response.start":
+                    status = message["status"]
+                if message["type"] == "http.response.body" and not message.get("more_body", False):
+                    completed.append(status)
+                await send(message)
+
+            await app(scope, receive, record)
+
+        # Lifespan prewarms unrelated native solvers. Route owners and every
+        # production middleware still come from the real create_app.
+        server = uvicorn.Server(uvicorn.Config(
+            observed, lifespan="off", log_config=None, access_log=False,
+            timeout_graceful_shutdown=1,
+        ))
+        task = asyncio.create_task(server.serve(sockets=[listener]))
+        writer = None
+        try:
+            async with asyncio.timeout(10):
+                while not server.started:
+                    if task.done():
+                        await task
+                        pytest.fail("uvicorn exited before accepting requests")
+                    await asyncio.sleep(0.01)
+                port = listener.getsockname()[1]
+
+                async def request(method, path, host):
+                    reader, connection = await asyncio.open_connection("127.0.0.1", port)
+                    try:
+                        connection.write((
+                            f"{method} {path} HTTP/1.1\r\nHost: {host}\r\n"
+                            "Content-Length: 0\r\nConnection: close\r\n\r\n"
+                        ).encode())
+                        await connection.drain()
+                        raw = await reader.read()
+                    finally:
+                        connection.close()
+                        await connection.wait_closed()
+                    head, body = raw.split(b"\r\n\r\n", 1)
+                    status_line, *headers = head.decode().split("\r\n")
+                    return int(status_line.split()[1]), dict(
+                        line.lower().split(": ", 1) for line in headers
+                    ), body
+
+                status_code, headers, body = await request("GET", "/health", "attacker.test")
+                expected = json.dumps({
+                    "detail": "Non-local Host rejected. Open Waveguide Generator "
+                    "from the loopback URL printed by the launcher."
+                }, separators=(",", ":")).encode()
+                assert status_code == 403 and body == expected
+                assert headers["content-type"] == "application/json"
+                assert int(headers["content-length"]) == len(expected)
+                records = [r for r in caplog.records if r.name == "wg.requests"]
+                assert [(r.levelno, r.getMessage()) for r in records[:1]] == [(
+                    logging.WARNING,
+                    "Rejected GET /health for non-local Host 'attacker.test'; use the local application URL",
+                )]
+                assert len(records) == 2 and records[1].levelno == logging.INFO
+                assert records[1].getMessage().startswith("GET /health -> 403 in ")
+                caplog.clear()
+
+                url = f"ws://127.0.0.1:{port}/ws/preview"
+                async with connect(url, origin=f"http://127.0.0.1:{port}", proxy=None) as ws:
+                    hello = json.loads(await ws.recv())
+                    assert hello["kind"] == "hello"
+                    await ws.send(json.dumps({
+                        "v": 1, "epoch": hello["epoch"], "kind": "fixture-unsupported",
+                        "seq": 42, "designRevision": 1,
+                    }))
+                    reply = json.loads(await ws.recv())
+                    assert (reply["kind"], reply["code"], reply["seq"]) == ("error", "validation", 42)
+                for path in ("/ws/preview", "/ws/jobs"):
+                    with pytest.raises(InvalidStatus) as rejected:
+                        async with connect(f"ws://127.0.0.1:{port}{path}", origin="https://example.com", proxy=None):
+                            pytest.fail("a disallowed websocket Origin connected")
+                    assert rejected.value.response.status_code == 403
+                assert not [r for r in caplog.records if r.name == "wg.requests"]
+
+                app.state.update_restart.approve("v2.0.1")
+                for host in (f"127.0.0.1:{port}", "attacker.test"):
+                    status_code, headers, body = await request("POST", "/api/cadlink/ingest", host)
+                    assert status_code == 409
+                    message = app.state.update_restart.refusal()
+                    assert json.loads(body) == {"detail": message, "error": {
+                        "schema_version": 1, "code": "update_restart_pending", "stage": "submission",
+                        "message": message, "retryable": True, "details": {}, "client_request_id": None,
+                    }}
+                    assert headers["content-type"] == "application/json"
+                    assert int(headers["content-length"]) == len(body)
+                assert not [r for r in caplog.records if r.name == "wg.requests"]
+                app.state.update_restart.release("fixture complete")
+                completed.clear()
+                reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                path, payload = _body("stl")
+                body = json.dumps(payload).encode()
+                writer.write((
+                    f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+                    f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n"
+                ).encode() + body)
+                await writer.drain()
+                while not marker.exists():
+                    await asyncio.sleep(0.02)
+                # Work really started; there is no response to stop reading yet.
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.read(1), 0.05)
+                writer.close()
+                await writer.wait_closed()
+            async with asyncio.timeout(4):
+                while not killed.is_set() or not completed:
+                    await asyncio.sleep(0.02)
+            assert completed == [499], "a stopped export completed successfully"
+            evidence = json.loads(marker.read_text())
+            assert not pid_is_running(evidence["pid"])
+            assert not Path(evidence["output"]).exists()
+        finally:
+            if writer is not None:
+                writer.close()
+                await writer.wait_closed()
+            server.should_exit = True
+            await asyncio.wait_for(task, 3)
+            await app.state.jobs_runtime.shutdown()
+            app.state.cadlink_store.close()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        listener.close()
+        child.close_mesher_child()

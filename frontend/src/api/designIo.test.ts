@@ -1,6 +1,6 @@
 import { activityStore } from '../shell/activity';
 import { readFileSync } from 'node:fs';
-import { failureWords, PLAIN_REQUEST_FAILURE } from './httpError';
+import { failureWords, keepRefusalOriginals, PLAIN_REQUEST_FAILURE } from './httpError';
 import { describe, expect, it, vi } from 'vitest';
 import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, openDesignText, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
@@ -824,4 +824,33 @@ it('keeps unquoted internal names private even on a design parse refusal', async
     shown = failureWords(error);
   }
   expect(shown).toBe(PLAIN_REQUEST_FAILURE);
+});
+
+
+it.each(['stl', 'step', 'send'] as const)('Stop while reading a refused %s body stays an abort and records no problem', async kind => {
+  activityStore.reset();
+  const recorded = vi.fn();
+  keepRefusalOriginals(recorded);
+  let reading = false;
+  const fetcher: typeof fetch = async (url, init) => {
+    if (url === '/api/cad-workspace/path') return Response.json({ selected: true });
+    const response = new Response(null, { status: 422 });
+    response.json = () => new Promise((_resolve, reject) => {
+      reading = true;
+      const signal = init!.signal!;
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+    return response;
+  };
+  try {
+    const design = designForFamily('OSSE');
+    const pending = kind === 'send' ? sendDesignToCad(design, 1, 'horn', null, fetcher)
+      : exportGeometryToOutputFolder(kind, design, 1, 'horn', undefined, 'solid', fetcher);
+    const stopped = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(reading).toBe(true));
+    activityStore.getSnapshot()[0].cancel!();
+    await stopped;
+    expect(recorded).not.toHaveBeenCalled();
+    expect(activityStore.getSnapshot()).toEqual([]);
+  } finally { keepRefusalOriginals(() => {}); }
 });

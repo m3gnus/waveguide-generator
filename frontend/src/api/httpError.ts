@@ -120,6 +120,11 @@ export class ProgramFault extends Error {
   constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = 'ProgramFault'; }
 }
 
+/** Fetch cancellation is a user action, including errors from another realm. */
+export function isAbortError(reason: unknown): boolean {
+  return !!reason && typeof reason === 'object' && 'name' in reason && reason.name === 'AbortError';
+}
+
 /** Text no user should read: engine, framework or transport words, wire keys and status codes. */
 const NOT_FOR_USERS = [
   /\b(?:is not a function|is not iterable|is not defined|Cannot read propert|Cannot set propert|undefined is not|null is not|Unexpected token|Unexpected end of|Maximum call stack|Traceback|\[object Object\])/i,
@@ -160,8 +165,8 @@ function shown(original: string, operation: string, fallback: string): string {
  * reaches the screen goes through here.
  */
 export function failureWords(reason: unknown, fallback = PLAIN_REQUEST_FAILURE, operation = 'caught failure'): string {
+  if (isAbortError(reason)) return 'Stopped';
   const text = withoutCode(reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : String(reason ?? ''));
-  if (reason instanceof DOMException && reason.name === 'AbortError') return fallback;
   if (LOST_TRANSPORT.test(text.trim())) return LOST_CONTACT;
   if (reason instanceof ProgramFault || !readsPlain(text)) return shown(text, operation, fallback);
   return text;
@@ -212,6 +217,9 @@ export async function httpErrorMessage(response: Response, fallback: string): Pr
   try {
     const body = await response.json() as { detail?: unknown };
     if (body.detail !== undefined && body.detail !== null) return refusalText(body.detail, `request ${response.status}`, fallback);
-  } catch { /* The response has no readable body; the original below records its status. */ }
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    // The response has no readable body; the original below records its status.
+  }
   return shown(`request failed with status ${response.status}`, 'request', fallback);
 }

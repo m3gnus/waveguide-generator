@@ -58,7 +58,7 @@ import {
   takeDesignOpenTicket,
 } from './openCadProject';
 import { showCadSendOutcome, useCadSendOutcome } from './useSendToCad';
-import { failureWords } from '../api/httpError';
+import { failureWords, isAbortError } from '../api/httpError';
 
 // Extensions only. The macOS desktop window (pywebview on WKWebView) filters its
 // open panel by the MIME types in `accept` and ignores the extensions, so a MIME
@@ -230,7 +230,7 @@ export function DesignFileMenu() {
     setSendNote(null);
     setAdoptionCandidate(null);
     try { await operation(); } catch (error) {
-      if (isOutboundSupersededError(error)) return;
+      if (isOutboundSupersededError(error) || isAbortError(error)) return;
       setMessage(failureWords(error));
     } finally {
       busyRef.current = false;
