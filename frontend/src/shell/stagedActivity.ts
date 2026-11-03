@@ -5,6 +5,7 @@ import { abortableActivity } from './activityOperation';
 // Stages count completed work. Name the step now underway, using the same
 // vocabulary for Build, exports and Send rather than another progress surface.
 const nextStep: Record<string, string> = {
+  locate: 'Verifying returned bytes', verify: 'Returned STEP verified',
   resolve: 'Building geometry', mesh: 'Checking geometry',
   check: 'Writing files', write: 'Files ready', publish: 'Files ready',
 };

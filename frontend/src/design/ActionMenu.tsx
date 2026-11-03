@@ -33,6 +33,7 @@ export interface ActionMenuProps {
   triggerLabel: string;
   triggerTitle?: string;
   onPrimary?: () => void | Promise<void>;
+  onOpen?: () => void;
   chevronLabel?: string;
   disabled?: boolean;
   placement?: 'auto' | 'above' | 'below';
@@ -54,6 +55,7 @@ export function ActionMenu({
   triggerLabel,
   triggerTitle,
   onPrimary,
+  onOpen,
   chevronLabel = 'More options',
   disabled = false,
   placement: preferredPlacement = 'auto',
@@ -129,6 +131,8 @@ export function ActionMenu({
   }, [close, preferredPlacement]);
 
   useEffect(() => clearTimers, [clearTimers]);
+
+  useEffect(() => { if (open) onOpen?.(); }, [open, onOpen]);
 
   useEffect(() => {
     if (disabled && open) close();

@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel
 
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 from server.cadlink.store import CadLinkStore
@@ -22,6 +23,7 @@ from server.cadlink.fusion.fusion_status import ADDIN_OUTDATED_MESSAGE, read_fus
 from .artifacts import STAGED_EXPORTS
 from .cad_handoff import UPDATE_TARGET_REQUIRED
 from .core import build_profiles, build_step, build_step_solid, build_stl
+from .returned_step import ReturnedStepUnavailable, read_returned_step
 from .wglink_publication import recover_publications
 from .wglink_service import (
     ExportRequest as ExportRequest,
@@ -123,6 +125,65 @@ def _file_response(
             headers=headers,
         )
     return Response(content=payload, media_type=media_type, headers=headers)
+
+
+class ReturnedStepAvailability(BaseModel):
+    available: bool
+    reason: str | None = None
+
+
+def _run_step(request: Request, job_id: str, operation: Any, *, check_only: bool) -> bytes:
+    row = request.app.state.jobs_runtime.store.get_job_row(job_id)
+    if row is None:
+        raise HTTPException(404, "This run no longer exists. Select another run.")
+    try:
+        return read_returned_step(
+            row, request.app.state.cadlink_store, Path(request.app.state.data_dir),
+            request.app.state.workspace.selected_path(),
+            check_only=check_only, cancel_cb=operation.check, progress_cb=operation.progress,
+        )
+    except OSError as exc:
+        logger.warning("Could not read returned STEP for run %s", job_id, exc_info=True)
+        raise ReturnedStepUnavailable(
+            "WG could not read this run's saved STEP. Reconnect its Runs folder and try again, "
+            "or send the model again from Fusion and solve it."
+        ) from exc
+
+
+@router.post("/runs/{job_id}/step/availability", response_model=ReturnedStepAvailability)
+async def returned_step_availability(job_id: str, request: Request, response: Response) -> ReturnedStepAvailability:
+    """Check the same identity and checksum as the eventual returned-STEP export."""
+
+    with request_operation(request, ("locate", "verify")) as operation:
+        try:
+            await asyncio.to_thread(_run_step, request, job_id, operation, check_only=True)
+        except ReturnedStepUnavailable as exc:
+            return ReturnedStepAvailability(available=False, reason=_export_error(exc).detail)
+        except (ClientDisconnected, HTTPException):
+            raise
+        except Exception as exc:
+            raise _export_error(exc) from exc
+        operation.attach(response)
+        return ReturnedStepAvailability(available=True)
+
+
+@router.post("/runs/{job_id}/step", response_class=Response,
+             responses={200: {"content": {"model/step": {"schema": {"type": "string", "format": "binary"}}}}})
+async def export_returned_step(job_id: str, request: Request) -> Response:
+    """Read exact returned bytes; the existing run bundle owns publication."""
+
+    with request_operation(request, ("locate", "verify", "write")) as operation:
+        try:
+            payload = await asyncio.to_thread(_run_step, request, job_id, operation, check_only=False)
+        except (ClientDisconnected, HTTPException):
+            raise
+        except Exception as exc:
+            raise _export_error(exc) from exc
+        operation.check()
+        response = Response(content=payload, media_type="model/step", headers={"Cache-Control": "no-store"})
+        operation.progress("write")
+        operation.attach(response)
+        return response
 
 
 @router.post("/step")

@@ -1155,6 +1155,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/export/runs/{job_id}/step": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Export Returned Step
+         * @description Read exact returned bytes; the existing run bundle owns publication.
+         */
+        post: operations["export_returned_step_api_export_runs__job_id__step_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/export/runs/{job_id}/step/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Returned Step Availability
+         * @description Check the same identity and checksum as the eventual returned-STEP export.
+         */
+        post: operations["returned_step_availability_api_export_runs__job_id__step_availability_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/export/step": {
         parameters: {
             query?: never;
@@ -6897,6 +6937,13 @@ export interface components {
              */
             up?: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
         };
+        /** ReturnedStepAvailability */
+        ReturnedStepAvailability: {
+            /** Available */
+            available: boolean;
+            /** Reason */
+            reason?: string | null;
+        };
         /**
          * RunProvenance
          * @description Extensible provenance shared by a run and its result.
@@ -9649,6 +9696,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_returned_step_api_export_runs__job_id__step_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "model/step": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    returned_step_availability_api_export_runs__job_id__step_availability_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnedStepAvailability"];
                 };
             };
             /** @description Validation Error */
