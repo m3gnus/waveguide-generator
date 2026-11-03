@@ -36,6 +36,9 @@ function answer(path: string): Response {
   if (path === '/api/design/serialize') return json({ text: 'design', suggestedFilename: 'horn.cfg' });
   if (path === '/api/solver-mesh') return json({ msh_text: mesh, stats: { mesh_cache_key: 'mesh', triangle_count: 1 }, cut_planes: [] });
   if (path.endsWith('/mesh')) return new Response(mesh);
+  if (path === '/api/export/step?body=solid&delivery=staged') {
+    return json({ artifactId: 'retained-step', filename: 'horn.step', sizeBytes: 13 });
+  }
   if (path.startsWith('/api/export/') && !path.endsWith('/wglink')) {
     const response = new Response('profile or geometry');
     response.blob = async () => new Blob(['geometry']);

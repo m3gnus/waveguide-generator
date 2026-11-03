@@ -8,12 +8,20 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from server.exports import api
+from server.exports import artifacts
 from server.exports.artifacts import StagedArtifactStore
 from server.workspace import api as workspace
 
 
-def test_staged_stl_reuses_bytes_through_replacement_confirmation(monkeypatch, tmp_path):
+@pytest.mark.parametrize("delay", [0, 360, 1799, 1800])
+@pytest.mark.parametrize("pressure", [False, True])
+def test_staged_stl_reuses_bytes_through_replacement_confirmation(monkeypatch, tmp_path, delay, pressure):
     data = b'stl-exact\x00\xff'
+    now = [0.0]
+    store = StagedArtifactStore(max_entries=2, max_bytes=2 * len(data), clock=lambda: now[0])
+    monkeypatch.setattr(api, "STAGED_EXPORTS", store)
+    monkeypatch.setattr(artifacts, "STAGED_EXPORTS", store)
+    monkeypatch.setattr(workspace, "time", SimpleNamespace(monotonic=lambda: now[0]))
 
     async def build(*_args, **_kwargs):
         return SimpleNamespace(data=data, warning="sizing warning")
@@ -52,12 +60,63 @@ def test_staged_stl_reuses_bytes_through_replacement_confirmation(monkeypatch, t
         refused = client.post('/api/workspace/write-export', json=write)
         assert refused.status_code == 409 and refused.json()["code"] == "export_collision"
         assert (folder / "horn.stl").read_bytes() == b'old'
+        now[0] += delay
+        if pressure:
+            for _ in range(3):
+                store.stage(data)
         result = client.post('/api/workspace/write-export', json={**write, "existing": "overwrite"})
         assert result.status_code == 200
         assert (folder / "horn.stl").read_bytes() == downloaded.content == data
         expired = client.post('/api/workspace/write-export', json={**write, "existing": "overwrite"})
         assert expired.status_code == 422
         assert 'export again' in expired.json()["detail"].lower()
+
+
+def test_cancelling_replacement_releases_the_retained_file(monkeypatch, tmp_path):
+    now = [0.0]
+    store = StagedArtifactStore(max_entries=1, max_bytes=8, clock=lambda: now[0])
+    monkeypatch.setattr(api, "STAGED_EXPORTS", store)
+    monkeypatch.setattr(artifacts, "STAGED_EXPORTS", store)
+    state = workspace.WorkspaceState(tmp_path / "data", default_path=tmp_path / "output")
+    destinations = workspace.ExportDestinationStore(tmp_path / "data")
+    token = destinations.issue(tmp_path)
+    (tmp_path / "horn.stl").write_bytes(b'old')
+    artifact_id = store.stage(b'new')
+    application = FastAPI()
+    application.include_router(api.router)
+    application.include_router(workspace.create_workspace_router(state, destinations))
+    with TestClient(application) as client:
+        refused = client.post('/api/workspace/write-export', json={
+            "destination": token, "existing": "confirm", "members": [
+                {"relative_path": "horn.stl", "artifact_id": artifact_id},
+            ],
+        })
+        assert refused.status_code == 409
+        for _ in range(2):
+            assert client.delete(f'/api/export/artifacts/{artifact_id}').status_code == 204
+        with pytest.raises(ValueError, match="Export again"):
+            store.read(artifact_id)
+        assert store._bytes == 0
+        assert store.read(store.stage(b'next')) == b'next'
+        assert (tmp_path / "horn.stl").read_bytes() == b'old'
+
+
+@pytest.mark.parametrize("limits", [{"max_entries": 1}, {"max_bytes": 4}])
+def test_pending_artifacts_resist_capacity_eviction_until_the_destination_expires(limits):
+    now = [0.0]
+    store = StagedArtifactStore(clock=lambda: now[0], **limits)
+    artifact_id = store.stage(b'1234')
+    assert store.read(artifact_id, retain_until=1800) == b'1234'
+    now[0] = 360
+    with pytest.raises(ValueError, match="Finish or cancel another export"):
+        store.stage(b'5678')
+    now[0] = 1800
+    assert store.read(artifact_id) == b'1234'
+    now[0] += 0.001
+    with pytest.raises(ValueError, match="Export again"):
+        store.read(artifact_id)
+    assert store._bytes == 0
+    assert store.read(store.stage(b'5678')) == b'5678'
 
 
 def test_retained_artifacts_expire_and_obey_count_and_byte_limits():
@@ -78,21 +137,43 @@ def test_retained_artifacts_expire_and_obey_count_and_byte_limits():
         store.stage(b'123456789')
 
 
-def test_staged_step_preserves_normalized_download_bytes(monkeypatch):
-    async def build(*_args, **_kwargs):
-        return SimpleNamespace(step_text="ISO-10303-21;\r\nexact STEP data\n", warning=None)
+@pytest.mark.parametrize("body", ["solid", "surface"])
+def test_staged_step_preserves_normalized_download_bytes(monkeypatch, tmp_path, body):
+    data = "ISO-10303-21;\r\nexact STEP data\n"
+    warning = "This geometry did not reach its target before the refinement budget ran out."
 
-    monkeypatch.setattr(api, "build_step", build)
+    async def build(*_args, **_kwargs):
+        return SimpleNamespace(step_text=data, warning=warning)
+
+    monkeypatch.setattr(api, "build_step_solid" if body == "solid" else "build_step", build)
+    store = StagedArtifactStore()
+    monkeypatch.setattr(api, "STAGED_EXPORTS", store)
+    monkeypatch.setattr(artifacts, "STAGED_EXPORTS", store)
+    state = workspace.WorkspaceState(tmp_path / "data", default_path=tmp_path / "output")
+    destinations = workspace.ExportDestinationStore(tmp_path / "data")
+    folder = tmp_path / "chosen"
+    folder.mkdir()
+    token = destinations.issue(folder)
     application = FastAPI()
     application.include_router(api.router)
+    application.include_router(workspace.create_workspace_router(state, destinations))
     with TestClient(application) as client:
-        body = {"design": {"formula": "OSSE"}, "designRevision": 7, "baseName": "horn"}
-        downloaded = client.post('/api/export/step?body=surface', json=body)
-        staged = client.post('/api/export/step?body=surface&delivery=staged', json=body)
+        request = {"design": {"formula": "OSSE"}, "designRevision": 7, "baseName": "horn"}
+        downloaded = client.post(f'/api/export/step?body={body}', json=request)
+        staged = client.post(f'/api/export/step?body={body}&delivery=staged', json=request)
         assert staged.status_code == downloaded.status_code == 200
         descriptor = staged.json()
-        try:
-            assert api.STAGED_EXPORTS.read(descriptor["artifactId"]) == downloaded.content
-            assert descriptor["sizeBytes"] == len(downloaded.content)
-        finally:
-            api.STAGED_EXPORTS.discard(descriptor["artifactId"])
+        assert descriptor["filename"] == "horn.step"
+        assert descriptor["sizeBytes"] == len(downloaded.content)
+        assert staged.headers["x-design-revision"] == downloaded.headers["x-design-revision"] == "7"
+        assert descriptor["warning"] == staged.headers["x-export-warning"] == downloaded.headers["x-export-warning"] == warning
+        result = client.post('/api/workspace/write-export', json={
+            "destination": token, "subdirectory": "", "existing": "confirm", "members": [
+                {"relative_path": descriptor["filename"], "artifact_id": descriptor["artifactId"]},
+            ],
+        })
+        assert result.status_code == 200
+        assert result.json() == {"directory": str(folder), "files": [str(folder / "horn.step")], "replaced": []}
+        assert (folder / "horn.step").read_bytes() == downloaded.content == data.encode("utf-8")
+        with pytest.raises(ValueError, match="Export again"):
+            store.read(descriptor["artifactId"])

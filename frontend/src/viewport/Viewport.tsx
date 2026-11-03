@@ -474,7 +474,8 @@ export function Viewport() {
   const symmetryDocument = currentDocumentLoad();
   const symmetryBody = useMemo(() => JSON.stringify(toSolveDesign(design)), [design]);
   useEffect(() => {
-    if (workspaceMode !== 'parametric' || solveSymmetry !== 'auto' || !previewReady) return undefined;
+    if (workspaceMode !== 'parametric' || solveSymmetry !== 'auto' || !previewReady
+      || preview.connection !== 'connected') return undefined;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void postSymmetry(symmetryBody, fetch, controller.signal)
@@ -489,7 +490,8 @@ export function Viewport() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [design.mesh.quadrants, workspaceMode, previewReady, solveSymmetry, symmetryBody, symmetryDocument]);
+  }, [design.mesh.quadrants, workspaceMode, previewReady, solveSymmetry, symmetryBody, symmetryDocument,
+    preview.connection, preview.epoch]);
   const recordedQuadrants = resultRun?.symmetry?.resolved_quadrants;
   const resultQuadrants = recordedQuadrants === 1 || recordedQuadrants === 12
     || recordedQuadrants === 14 || recordedQuadrants === 1234 ? recordedQuadrants : null;

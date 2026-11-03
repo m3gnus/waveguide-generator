@@ -542,6 +542,26 @@ describe('geometry export requests', () => {
     expect(urls).toEqual(['/api/export/step?body=solid']);
     expect(result.blob.size).toBe(13);
   });
+
+  it('releases retained geometry when replacement is cancelled', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher: typeof fetch = async (url, init) => {
+      requests.push({ url: String(url), init });
+      if (String(url).startsWith('/api/export/stl')) return new Response(JSON.stringify({
+        filename: 'horn.stl', artifactId: 'retained-stl', sizeBytes: 84,
+      }));
+      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({ code: 'export_collision', directory: 'chosen', paths: ['horn.stl'] }), { status: 409 });
+    };
+    await expect(exportGeometryToOutputFolder(
+      'stl', design, 3, 'horn', undefined, 'solid', fetcher, 'destination-token', async () => false,
+    )).rejects.toThrow('Export cancelled');
+    expect(requests.map(({ url, init }) => [url, init?.method])).toEqual([
+      ['/api/export/stl?delivery=staged', 'POST'],
+      ['/api/workspace/write-export', 'POST'],
+      ['/api/export/artifacts/retained-stl', 'DELETE'],
+    ]);
+  });
 });
 
 describe('design copy serialization requests', () => {
