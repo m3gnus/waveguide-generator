@@ -2,6 +2,13 @@ import { combineAbortSignals, deadlineFetch } from '../api/deadlineFetch';
 import type { StartActivity } from './activity';
 import { abortableActivity } from './activityOperation';
 
+// Stages count completed work. Name the step now underway, using the same
+// vocabulary for Build, exports and Send rather than another progress surface.
+const nextStep: Record<string, string> = {
+  resolve: 'Building geometry', mesh: 'Checking geometry',
+  check: 'Writing files', write: 'Files ready', publish: 'Files ready',
+};
+
 /** The same request-owned stage channel for Build, geometry exports and Send.
  * Fetch bodies inside work so Stop also covers response body consumption. */
 export function stagedActivity<T>(
@@ -37,6 +44,8 @@ export function stagedActivity<T>(
     const advance = (count: { stages?: unknown; total?: unknown }) => {
       if (polling.signal.aborted || !Array.isArray(count.stages) || !Number.isInteger(count.total) || Number(count.total) <= 0) return;
       while (done < count.stages.length && done < Number(count.total)) {
+        const stage = count.stages[done];
+        if (typeof stage === 'string' && nextStep[stage]) activity.label(`${start.label} · ${nextStep[stage]}`);
         activity.progress(++done, Number(count.total));
       }
     };

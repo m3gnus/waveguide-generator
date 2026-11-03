@@ -51,7 +51,7 @@ async def _http(app, method, path, body=None, *, operation_id=None, marker=None)
     async def send(message):
         messages.append(message)
 
-    headers = [(b"content-type", b"application/json"), (b"idempotency-key", b"stage-send")]
+    headers = [(b"host", b"127.0.0.1"), (b"content-type", b"application/json"), (b"idempotency-key", b"stage-send")]
     if operation_id:
         headers.append((b"x-wg-operation-id", operation_id.encode()))
     target, _, query = path.partition("?")
@@ -166,6 +166,46 @@ def test_progress_ids_are_validated_and_isolated():
     mount_operation_progress(app)
     assert asyncio.run(_http(app, "GET", "/api/operation-progress/not-an-id"))[0] == 422
     assert asyncio.run(_http(app, "GET", f"/api/operation-progress/{uuid4()}"))[0] == 404
+
+
+@pytest.mark.parametrize("body", ["solid", "surface"])
+def test_live_step_stages_and_stop_use_the_real_app(body, tmp_path, monkeypatch):
+    """Poll while STEP is still building, through the shipped middleware."""
+    from server.app import create_app
+
+    entered = asyncio.Event()
+
+    async def building(_fn, _dump, _work_dir, *, cancel_cb):
+        entered.set()
+        while True:
+            cancel_cb()
+            await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(core, "run_mesh_build", building)
+
+    async def scenario():
+        app = create_app(data_dir=tmp_path / "app")
+        operation_id = str(uuid4())
+        pending = asyncio.create_task(_http(
+            app, "POST", f"/api/export/step?body={body}", _body("step")[1], operation_id=operation_id,
+        ))
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            status, _, progress = await _http(app, "GET", f"/api/operation-progress/{operation_id}")
+            assert status == 200
+            assert json.loads(progress) == {"stages": ["resolve"], "total": 4}
+            assert not pending.done()
+            status, _, _ = await _http(app, "DELETE", f"/api/operation-progress/{operation_id}")
+            assert status == 204
+            assert (await asyncio.wait_for(pending, 5))[0] == 499
+        finally:
+            if not pending.done():
+                pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+            await app.state.jobs_runtime.shutdown()
+            app.state.cadlink_store.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("kind", ["build", "send"])

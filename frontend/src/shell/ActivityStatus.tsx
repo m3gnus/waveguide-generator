@@ -33,14 +33,16 @@ export function activityMeta(activity: Activity, now: number, typicalMs: number 
 }
 
 /**
- * The status bar's activity slot: the oldest wait that has earned a place
+ * The status bar's activity slot: the oldest foreground wait that has earned a place
  * (two seconds, or known to take longer), with a progress bar and, when it
  * can be stopped, a Stop button. Further waits are counted beside it.
  */
 export function ActivityStatus() {
   const activities = useSyncExternalStore(activityStore.subscribe, activityStore.getSnapshot, activityStore.getSnapshot);
   const now = useSolveClock(activities.length > 0);
-  const shown = activities.filter((item) => activityVisible(item, now, activityStore.typicalMs(item.kind)));
+  const shown = activities
+    .filter((item) => activityVisible(item, now, activityStore.typicalMs(item.kind)))
+    .sort((a, b) => Number(a.background) - Number(b.background));
   if (!shown.length) return null;
   const [activity, ...others] = shown;
   const typical = activityStore.typicalMs(activity.kind);

@@ -114,3 +114,24 @@ it('offers Stop when the operation can be stopped, and counts further waits', ()
 it('reads the elapsed clock alone when nothing is known', () => {
   expect(activityMeta(activity(), 5_000, null)).toBe('0:05');
 });
+
+it('gives the foreground export its bar and Stop while an older background count runs', () => {
+  const host = mount();
+  let background!: ReturnType<typeof activityStore.start>;
+  let exporting!: ReturnType<typeof activityStore.start>;
+  const cancel = vi.fn();
+  act(() => {
+    background = activityStore.start({ kind: 'mesh-count', label: 'Counting triangles', background: true });
+    vi.advanceTimersByTime(3_000);
+    exporting = activityStore.start({ kind: 'export', label: 'Exporting STEP', cancel });
+    exporting.progress(1, 4);
+    vi.advanceTimersByTime(2_000);
+  });
+  expect(host.querySelector('[role="progressbar"]')?.getAttribute('aria-label')).toBe('Exporting STEP');
+  expect(host.textContent).toContain('+1 more');
+  act(() => host.querySelector('button')!.click());
+  expect(cancel).toHaveBeenCalledOnce();
+  act(() => exporting.end(false));
+  expect(host.querySelector('[role="progressbar"]')?.getAttribute('aria-label')).toBe('Counting triangles');
+  act(() => background.end());
+});

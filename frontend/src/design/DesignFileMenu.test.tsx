@@ -26,6 +26,7 @@ import { RunNameField } from '../shell/RunNameField';
 import { applyOpenedDesign as applyOpenedDocument, takeDesignOpenTicket } from './openCadProject';
 import { discardConfirmation } from './replacementCheck';
 import { activityStore } from '../shell/activity';
+import { ActivityStatus } from '../shell/ActivityStatus';
 import { resetClientErrorReporting } from '../shell/clientErrors';
 
 /**
@@ -1859,4 +1860,45 @@ it.each(['STL', 'STEP solid', 'STEP inner surface'])('Stop on %s ends silently a
   expect(activityStore.getSnapshot()).toEqual([]);
   expect(container.querySelector('[role="status"]')).toBeNull();
   expect(fetcher.mock.calls.some(([url]) => /client-errors|write-export/.test(String(url)))).toBe(false);
+});
+
+it.each(['STEP solid', 'STEP inner surface'])('shows stages and Stop for a long %s menu export', async label => {
+  activityStore.reset();
+  vi.useFakeTimers();
+  let stages = ['resolve'];
+  let operationId: string | null = null;
+  let exportSignal: AbortSignal | undefined;
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    if (String(url).startsWith('/api/export/step')) {
+      operationId = new Headers(init?.headers).get('X-WG-Operation-Id');
+      exportSignal = init!.signal!;
+      return new Promise((_resolve, reject) => exportSignal!.addEventListener('abort', () => reject(exportSignal!.reason), { once: true }));
+    }
+    if (String(url).startsWith('/api/operation-progress/')) {
+      expect(String(url)).toBe(`/api/operation-progress/${operationId}`);
+      return Response.json({ stages, total: 4 });
+    }
+    return Response.json({});
+  });
+  vi.stubGlobal('fetch', fetcher);
+  try {
+    const item = open().find(button => button.querySelector('span')?.textContent === label)!;
+    act(() => root.render(<><CadWorkspaceOwners/><DesignFileMenu/><ActivityStatus/></>));
+    await act(async () => { item.click(); });
+    expect(operationId).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+    const bar = () => container.querySelector('[role="progressbar"]');
+    expect(bar()?.getAttribute('aria-label')).toBe('Exporting STEP · Building geometry');
+    expect(bar()?.getAttribute('aria-valuenow')).toBe('25');
+    stages = ['resolve', 'mesh'];
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(bar()?.getAttribute('aria-valuenow')).toBe('50');
+    expect(container.textContent).toContain('Exporting STEP · Checking geometry');
+    const stop = [...container.querySelectorAll('button')].find(button => button.textContent === 'Stop');
+    expect(stop).toBeDefined();
+    await act(async () => { stop!.click(); });
+    expect(exportSignal!.aborted).toBe(true);
+    expect(bar()).toBeNull();
+    expect(fetcher.mock.calls.some(([url]) => /write-export|client-errors/.test(String(url)))).toBe(false);
+  } finally { vi.useRealTimers(); activityStore.reset(); }
 });
