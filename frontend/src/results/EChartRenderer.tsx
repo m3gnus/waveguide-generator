@@ -10,10 +10,11 @@ import {
 } from 'echarts/components';
 import * as echarts from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EChartsOption } from 'echarts';
 import { chartGutter, inAxisGutter, rulerLabel } from './chartRuler';
 import { chartPixelRatio } from './chartPixelRatio';
+import { withDisplayLines } from './displayLine';
 
 echarts.use([
   LineChart,
@@ -40,6 +41,10 @@ export function EChartRenderer({ option, label, live = false }: { option: EChart
   const frame = useRef<HTMLDivElement>(null);
   const chart = useRef<echarts.ECharts | null>(null);
   const [ruler, setRuler] = useState<AxisRuler | null>(null);
+  // What is drawn: the same option, with each line series as a smooth display
+  // curve over its solved points. Everything that reads the chart's data (the
+  // ruler, the export) keeps reading `option`.
+  const displayed = useMemo(() => withDisplayLines(option), [option]);
 
   useEffect(() => {
     if (!host.current) return;
@@ -78,9 +83,9 @@ export function EChartRenderer({ option, label, live = false }: { option: EChart
     // another snapshot can arrive before that transition ends, leaving the
     // main thread continuously tweening charts whose data is already stale.
     // The completed snapshot retains the normal transition.
-    const renderedOption = live ? { ...option, animation: false, animationDuration: 0 } : option;
+    const renderedOption = live ? { ...displayed, animation: false, animationDuration: 0 } : displayed;
     chart.current?.setOption(renderedOption, { notMerge: true, lazyUpdate: true });
-  }, [live, option]);
+  }, [live, displayed]);
 
   // The gutter ruler. `convertFromPixel` is the chart's own axis mapping, so a
   // zoomed or auto-extended axis reads correctly without tracking its extent

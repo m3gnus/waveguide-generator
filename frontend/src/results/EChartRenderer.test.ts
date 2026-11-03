@@ -78,6 +78,18 @@ describe('interactive chart updates', () => {
     expect(option).toMatchObject({ animationDuration: 180 });
   });
 
+  it('draws each line as a smooth display curve over its hidden solved twin', () => {
+    const data = [[100, 1], [200, 3], [400, 2], [800, 4]];
+    const option: EChartsOption = { xAxis: { type: 'log' }, yAxis: { type: 'value' }, series: [{ name: 'Run A', type: 'line', data }] };
+    render(option);
+    const drawn = setOption.mock.calls[0][0] as { series: Array<{ name: string; data: unknown[]; lineStyle?: { opacity?: number } }> };
+    expect(drawn.series.map(({ name }) => name)).toEqual(['Run A', 'Run A']);
+    expect(drawn.series[0].data.length).toBeGreaterThan(data.length);
+    expect(drawn.series[1]).toMatchObject({ data, lineStyle: { opacity: 0 } });
+    // The option the panel built is not rewritten.
+    expect((option.series as unknown[]).length).toBe(1);
+  });
+
   it('disposes its instance when the card goes away', () => {
     render({ series: [] });
     act(() => root.unmount());
