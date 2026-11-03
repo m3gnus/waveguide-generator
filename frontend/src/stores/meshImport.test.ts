@@ -1,6 +1,6 @@
 import { activityStore } from '../shell/activity';
 import { saveImportedSetup } from '../api/importedModels';
-import { solveModel } from '../jobs/actions';
+import { importedSolvePlanRequestBody, solveModel } from '../jobs/actions';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createImportedMeshScene } from '../viewport/importedMesh';
@@ -115,6 +115,16 @@ describe('standalone imported mesh', () => {
     expect(activityStore.getSnapshot()).toHaveLength(0);
     expect(activityStore.typicalMs('mesh-import')).toBeNull();
     expect(useMeshImportStore.getState().busy).toBe(false);
+  });
+
+  it('keeps the exact file press and plan body', () => {
+    showPrepared();
+    const model = useImportedModelStore.getState();
+    const setup = fileMeshSetup();
+    const press = { prepared_id: model.prepared!.ingest_id, client_request_id: 'mesh-p1', label: 'speaker1',
+      ...(unchangedSetup('file', model.prepared!.ingest_id) ?? { setup: { schema_version: 1, ...setup } }) };
+    expect(JSON.stringify(press)).toMatchSnapshot();
+    expect(importedSolvePlanRequestBody(fileMeshSubmission())).toMatchSnapshot();
   });
 
   it('automatically prepares confident server guesses with roles and the detected domain', async () => {

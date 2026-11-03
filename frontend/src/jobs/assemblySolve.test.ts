@@ -106,6 +106,7 @@ describe('assembly Solve press', () => {
     useSolveOptionsStore.getState().setAccuracy('accurate');
     useSolveOptionsStore.getState().setEngine(engine);
     const prepared = await prepareAssemblySolve(fetch, () => 'p1');
+    expect(JSON.stringify(prepared.press)).toMatchSnapshot();
     expect(prepared.modelId).toBe('design-assembly:wgu_x');
     expect(prepared.notice).toBeNull();
     const body = prepared.press as unknown as { prepared_id: string; client_request_id: string; setup: { schema_version: number; geometry: Record<string, unknown> } };
