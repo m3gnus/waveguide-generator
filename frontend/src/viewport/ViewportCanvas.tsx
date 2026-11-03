@@ -777,21 +777,29 @@ function Scene({ children, scene, sceneMarker, spatialResultId, mode, showEnclos
   const maskState = useFieldPlaneMaskStore((state) => state);
   const stableClipPlane = useMemo(() => new Plane(new Vector3(1, 0, 0), 0), []);
   const camera = useThree((state) => state.camera);
-  // Which half the field-plane cut keeps is chosen once, when the cut starts:
-  // the half beyond the plane as the camera then sees it, so the plane's face
-  // and the cut model show together. Moving the plane keeps that side; orbiting
-  // round does not flip it under the user.
-  const fieldClipFlipped = useRef<boolean | null>(null);
+  // The field-plane cut keeps the half beyond the plane as the camera sees it,
+  // so the plane's face and the cut model always show together. Orbiting
+  // through the plane swaps the halves at the moment it is seen edge-on, where
+  // the swap cannot be seen.
+  const fieldClipBase = useMemo(
+    () => (fieldPlane ? fieldPlaneToClipPlane(fieldPlane, scene.unitsPerMetre) : null),
+    [fieldPlane, scene.unitsPerMetre],
+  );
+  const [cameraAboveFieldPlane, setCameraAboveFieldPlane] = useState(false);
+  useFrame(() => {
+    if (clipMode !== 'field-plane' || !fieldClipBase) return;
+    const distance = fieldClipBase.distanceToPoint(camera.position);
+    if (Math.abs(distance) < 1e-9) return;
+    if ((distance > 0) !== cameraAboveFieldPlane) setCameraAboveFieldPlane(distance > 0);
+  });
   const clipDefinition = useMemo(() => {
     if (clipMode === 'section') return sectionClipPlane(sectionAxis, scene.bounds);
-    if (clipMode === 'field-plane' && fieldCurrent && fieldPlane) {
-      const plane = fieldPlaneToClipPlane(fieldPlane, scene.unitsPerMetre);
-      fieldClipFlipped.current ??= plane.distanceToPoint(camera.position) > 0;
-      return fieldClipFlipped.current !== invertFieldClip ? plane.negate() : plane;
+    if (clipMode === 'field-plane' && fieldCurrent && fieldClipBase) {
+      const plane = fieldClipBase.clone();
+      return cameraAboveFieldPlane !== invertFieldClip ? plane.negate() : plane;
     }
-    fieldClipFlipped.current = null;
     return null;
-  }, [camera, clipMode, fieldCurrent, fieldPlane, invertFieldClip, scene.bounds, scene.unitsPerMetre, sectionAxis]);
+  }, [cameraAboveFieldPlane, clipMode, fieldClipBase, fieldCurrent, invertFieldClip, scene.bounds, sectionAxis]);
   // A section cut lying in the field plane's own plane would clip each of its
   // pixels on rounding alone, and one parallel to it would hide it whole; the
   // cut only trims a field plane it crosses.
