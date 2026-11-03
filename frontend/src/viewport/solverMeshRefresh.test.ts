@@ -1,4 +1,5 @@
 import { mesh } from '../shell/cadlink/selection.fixtures';
+import { activityStore } from '../shell/activity';
 import { commitAssembly, emptyAssembly } from '../stores/assembly';
 import { designModelCurrent, prepareDesignModel, requestAssemblyBuild, resetAssemblyBuild } from '../stores/assemblyBuild';
 import { resetDesignStore, useDesignStore } from '../stores/design';
@@ -380,11 +381,20 @@ describe('design solver mesh preparation', () => {
     const controller = new AbortController();
     const refusal = vi.fn();
     const pending = prepare(controller, refusal);
+    const requestSignal = fetcher.mock.calls[0][1]?.signal;
+    if (producer === 'horn') {
+      expect(requestSignal?.aborted).toBe(false);
+      expect(activityStore.getSnapshot().filter(activity => activity.kind === 'solver-mesh')).toHaveLength(1);
+    }
     controller.abort();
+    if (producer === 'horn') {
+      // The activity composes caller cancellation with the status-bar Stop button.
+      expect(requestSignal?.aborted).toBe(true);
+    }
     resolve(new Response(JSON.stringify(producer === 'wg-build' ? assemblyResult() : hornResult())));
     expect(await pending).toMatchObject({ ok: false });
     if (producer === 'horn') {
-      expect(fetcher.mock.calls[0][1]?.signal).toBe(controller.signal);
+      expect(activityStore.getSnapshot().filter(activity => activity.kind === 'solver-mesh')).toHaveLength(0);
       expect(importedMeshStore.getSnapshot().solver).toBeNull();
       expect(refusal).not.toHaveBeenCalled();
     } else {

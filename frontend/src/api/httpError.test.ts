@@ -136,11 +136,12 @@ describe('HTTP detail helper ownership', () => {
 });
 
 describe('solver mesh transport boundary', () => {
-  it('keeps only the HTTP helper and existing design serializer as runtime imports', () => {
+  it('keeps only activity tracking, the HTTP helper and existing design serializer as runtime imports', () => {
     // Serialization still depends on the design store. This guard removes the
-    // jobs hop and viewport construction; it does not claim store independence.
+    // jobs hop and viewport construction; activity tracking is transport-level
+    // cancellation and does not claim store independence.
     const runtimeImports = imports('./solverMesh.ts').filter(({ bindings }) => !bindings.startsWith('type '));
-    expect(runtimeImports.map(({ owner }) => owner).sort()).toEqual(['../stores/design', './httpError']);
+    expect(runtimeImports.map(({ owner }) => owner).sort()).toEqual(['../shell/activityOperation', '../stores/design', './httpError']);
     expect(source('./solverMesh.ts')).not.toMatch(/\bsolverMeshScene\b|\bparseMSH\b|\bcreateImportedMeshScene\b/);
     expect(source('./solverMesh.ts')).not.toMatch(/\b(?:import|require)\s*\(/);
   });
