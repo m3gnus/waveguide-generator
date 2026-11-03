@@ -6,17 +6,18 @@ export interface PreviewBadge {
   className: 'paused-badge' | 'reconnect-badge' | 'error-badge' | 'stale-badge' | 'live-badge';
 }
 
+/** The preview's state when it is not the normal one; following the design live has no badge. */
 export function previewBadge(
   liveUpdate: boolean,
   connection: ConnectionState,
   error: string | null,
   stale: boolean,
-): PreviewBadge {
+): PreviewBadge | null {
   if (!liveUpdate) return { label: 'PAUSED', className: 'paused-badge' };
   if (connection !== 'connected') return { label: connection.toUpperCase(), className: 'reconnect-badge' };
   if (error) return { label: 'ERROR', className: 'error-badge' };
   if (stale) return { label: 'STALE', className: 'stale-badge' };
-  return { label: 'LIVE', className: 'live-badge' };
+  return null;
 }
 
 export function previewErrorMessage(

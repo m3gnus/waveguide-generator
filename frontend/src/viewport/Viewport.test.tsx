@@ -211,6 +211,8 @@ describe('Viewport preview errors', () => {
       expect([...readout.querySelectorAll('.viewport-fact')].map((fact) => fact.textContent))
         .toEqual(['Mouth 411.7 × 320.0 mm', 'Depth 176.5 mm', 'Enclosure 450.0 × 360.0 × 240.0 mm']);
       expect(readout.classList.contains('stale')).toBe(false);
+      // The normal live state needs no badge; only the states that are not normal have one.
+      expect(host.querySelector('.viewport-live')?.textContent).toBe('');
       expect([...readout.querySelectorAll<HTMLElement>('.viewport-fact')].map((fact) => fact.dataset.drop))
         .toEqual([undefined, String(FACT_DROP.depth), String(FACT_DROP.enclosure)]);
       act(() => workspaceModeStore.setMode('cad'));

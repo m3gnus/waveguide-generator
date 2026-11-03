@@ -697,6 +697,8 @@ export function Viewport() {
     + ' — cycles X, Y, Z, off.';
   const connectionInterrupted = preferences.liveUpdate && preview.connection !== 'connected';
   const badge = previewBadge(preferences.liveUpdate, preview.connection, preview.error, preview.stale);
+  // Live is the normal state and says nothing; a refresh in flight always says so.
+  const shownBadge = refreshRequestedAt === null ? badge : { label: 'REFRESHING', className: badge?.className ?? 'live-badge' };
   const previewError = preview.error ? previewErrorMessage(preview.error, preview.errorRevision, designRevision) : null;
   const showPreviewError = workspaceMode === 'parametric' && previewError !== null && dismissedPreviewError !== previewErrorKey(preview);
   // Geometry that builds but is not what was asked for. An unreachable guiding
@@ -1103,7 +1105,7 @@ export function Viewport() {
           onClick={refresh}
         ><Icon name="reset"/>{preferences.liveUpdate ? 'Refresh' : 'Resume'}</button>}
         {workspaceMode === 'parametric'
-          ? <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>
+          ? shownBadge && <span className={shownBadge.className}><i />{shownBadge.label}</span>
           : <span className="model-source-badge">{assemblyInputActive ? 'ASSEMBLY' : fileInputActive ? 'MESH FILE' : 'CAD LINK'}</span>}
       </div>
     </div>

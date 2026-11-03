@@ -7,7 +7,7 @@ describe('preview presentation', () => {
     expect(previewBadge(true, 'reconnecting', 'bad design', true)).toEqual({ label: 'RECONNECTING', className: 'reconnect-badge' });
     expect(previewBadge(true, 'connected', 'bad design', true)).toEqual({ label: 'ERROR', className: 'error-badge' });
     expect(previewBadge(true, 'connected', null, true)).toEqual({ label: 'STALE', className: 'stale-badge' });
-    expect(previewBadge(true, 'connected', null, false)).toEqual({ label: 'LIVE', className: 'live-badge' });
+    expect(previewBadge(true, 'connected', null, false)).toBeNull();
   });
 
   it('makes retained geometry explicit in preview errors', () => {
