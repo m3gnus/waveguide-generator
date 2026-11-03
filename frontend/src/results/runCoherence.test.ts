@@ -36,7 +36,10 @@ function cad(ingestId: string | null): JobItem {
 }
 
 function contextFor(design: DesignDocument, overrides: Partial<CurrentModel> = {}): CurrentModel {
-  return { kind: 'parametric', key: designFingerprint(design), lineage: 'wgd_live', label: 'Test', viewportShowing: true, ...overrides };
+  const model: CurrentModel = { kind: 'parametric', key: designFingerprint(design), lineage: 'wgd_live', label: 'Test', viewportShowing: true, ...overrides };
+  return model.kind === 'parametric'
+    ? { ...model, authoring: { key: model.key, lineage: model.lineage, designUid: null } }
+    : { ...model, prepared: { key: model.key, ingestId: model.ingestId ?? null, lineage: model.lineage } };
 }
 
 describe('run coherence', () => {
@@ -92,7 +95,7 @@ describe('run coherence', () => {
     const cadContext = contextFor(design, { kind: 'cad', key: 'wgi_live', ingestId: 'wgi_live' });
     expect(runVerdict(cad('wgi_live'), cadContext)).toBe('current');
     expect(runVerdict(cad('wgi_other'), cadContext)).toBe('other-model');
-    expect(runVerdict(cad(null), { ...cadContext, key: null, ingestId: null })).toBe('other-model');
+    expect(runVerdict(cad(null), { ...cadContext, key: null, ingestId: null, prepared: undefined })).toBe('other-model');
     expect(runVerdict(cad('wgi_live'), contextFor(design))).toBe('other-model');
     expect(runVerdict(parametric(design), cadContext)).toBe('other-model');
   });
@@ -126,7 +129,7 @@ describe('run coherence', () => {
     const run = cad('wgi_archive');
     const before = contextFor(design, { kind: 'cad', key: 'wgi_live', ingestId: 'wgi_live' });
     expect(runVerdict(run, before)).toBe('other-model');
-    const loading = { ...before, key: 'wgi_archive', ingestId: 'wgi_archive', viewportShowing: false };
+    const loading = contextFor(design, { kind: 'cad', key: 'wgi_archive', ingestId: 'wgi_archive', viewportShowing: false });
     expect(runContextMarker(run, loading)).toBe('Run model not loaded');
     expect(runContextMarker(run, loading)).toBe('Run model not loaded'); // failed load retains the marker
     expect(runContextMarker(run, { ...loading, viewportShowing: true })).toBeNull();
@@ -270,12 +273,12 @@ it.each(['70*(1+cos(p))', '2*70', '140.0000000001', '140,0'])(
   });
 
 it('matches file runs in Imported mesh even when an unrelated CAD return is retained', () => {
-  const context = { ...contextFor(designForFamily('OSSE')), kind: 'file' as const, key: 'wgi_file', ingestId: 'wgi_file' };
+  const context = contextFor(designForFamily('OSSE'), { kind: 'file', key: 'wgi_file', ingestId: 'wgi_file' });
   const file = { ...cad('wgi_file'), config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' } } as JobItem;
   expect(runVerdict(file, context)).toBe('current');
   expect(runVerdict(file, context)).toBe('current');
   expect(runVerdict(cad('wgi_cad'), context)).toBe('other-model');
-  expect(runVerdict(file, { ...context, key: null, ingestId: null })).toBe('other-model');
+  expect(runVerdict(file, { ...context, key: null, ingestId: null, prepared: undefined })).toBe('other-model');
 });
 
 // Historical snapshots exist as raw designs and versioned envelopes, with

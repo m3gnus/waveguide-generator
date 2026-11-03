@@ -1,6 +1,6 @@
 import { expectNoJargon } from '../testing/expectNoJargon';
 import '../shell/cadlink/restores';
-import { openImported, type ImportedDisplay } from '../stores/importedModel';
+import { adoptDesignBuild, openImported, type ImportedDisplay } from '../stores/importedModel';
 import { deferred, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord, workspaceFor } from '../shell/cadlink/selection.fixtures';
 /** Reopen a CAD run as history does: `openImported` of the run, shown by the CAD rail. */
 const restoreCadJobModel = (run: JobItem, display: ImportedDisplay = {}, fetcher: typeof fetch = fetch) =>
@@ -138,10 +138,13 @@ vi.mock('../api/previewSocket', () => ({
 }));
 
 import { femFieldJob, fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
+import { assemblyMeshScene } from './solverMeshScene';
+import type { CompiledAssembly } from '../api/assembly';
+import type { FrameScene } from './frameScene';
 import { FACT_DROP } from './ViewportFact';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
-import { resetAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
+import { assemblyContentKey, resetAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
 
 describe('CAD viewport empty-state copy', () => {
   it('names the model and points to Results, never repeating its status line', () => {
@@ -291,6 +294,48 @@ describe('Viewport preview errors', () => {
     expect(host.querySelector('[aria-label="Invert field-plane clip side"]')).toBeNull();
     expect(host.querySelector<HTMLButtonElement>('.section-cut-toggle')).not.toBeNull();
     expect(host.querySelectorAll('.viewport-tools .viewport-tool-group:empty')).toHaveLength(0);
+  });
+
+  it('renders a run field on the live assembly compile in its metre frame, and withdraws it after an edit', async () => {
+    vi.spyOn(canvasModule, 'canRenderWebGL').mockReturnValue(true);
+    const canvas = vi.spyOn(canvasModule.ViewportCanvas as unknown as { type: (props: { scene: FrameScene; spatialResultId: string | null }) => import('react').ReactNode }, 'type')
+      .mockImplementation(() => null);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 404 }));
+    let counter = 0;
+    const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '0')}`;
+    const { assembly } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+    const record = { ingest_id: 'wgi_field', solve_model_sha256: 'sha256:assembly-field',
+      producer: 'design-assembly', radiators: [], sources: [], source_tags: {}, msh_text: meshFixture } as unknown as CompiledAssembly;
+    const compiledScene = assemblyMeshScene('Field assembly', record, 'solver');
+    let job!: JobItem;
+    act(() => {
+      useDesignStore.getState().replaceDocument({ ...useDesignStore.getState().design, assembly });
+      const design = useDesignStore.getState().design;
+      job = { ...completeJob('live-assembly-field', true),
+        config_summary: { geometry_type: 'imported', import_origin: 'design-assembly',
+          design_assembly: { design: { design_uid: useDocumentStore.getState().designUid } } },
+        cad_source: { ingest_id: record.ingest_id, model_id: 'design-assembly:field', solve_model_sha256: record.solve_model_sha256 } } as unknown as JobItem;
+      adoptDesignBuild({ record, model: { model_id: 'design-assembly:field', producer: 'design-assembly', display_name: 'Field assembly' } },
+        { designUid: useDocumentStore.getState().designUid ?? null, revision: useDesignStore.getState().designRevision,
+          load: currentDocumentLoad(), contentKey: assemblyContentKey(design) });
+      importedMeshStore.setSolver(compiledScene, importedMeshStore.captureGeneration(), false);
+      importedMeshStore.showParametric();
+      publishJobs([job]);
+      compareSelection.setPrimary(job.id);
+      useFieldPlaneStore.setState({ enabled: true, source: 'exterior', jobId: job.id, plane: fieldPlane, status: 'ready' });
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(currentModel().kind).toBe('parametric');
+    expect(host.querySelector('[aria-label="Acoustic field plane overlay"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(host.querySelector('[aria-label="Clip model to field plane"]')).not.toBeNull();
+    expect(canvas.mock.calls.at(-1)![0]).toMatchObject({ spatialResultId: job.id });
+    expect(canvas.mock.calls.at(-1)![0].scene).toBe(compiledScene.scene);
+    expect(compiledScene.scene.unitsPerMetre).toBe(1);
+    expect(useFieldPlaneStore.getState().plane).toEqual(fieldPlane);
+    act(() => useDesignStore.getState().updateValue('simulation.f1', 200));
+    expect(host.querySelector('[aria-label="Acoustic field plane overlay"]')).toBeNull();
+    expect(canvas.mock.calls.at(-1)![0].spatialResultId).toBeNull();
+    expect(useFieldPlaneStore.getState().enabled).toBe(false);
   });
 
   it('keeps an enabled field while mesh freshness is checked, then removes it if stale', async () => {

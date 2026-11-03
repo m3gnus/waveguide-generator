@@ -8,6 +8,7 @@ import { fieldPlaneJob, femFieldJob, fieldPlaneUnavailableTooltip } from './View
 const solved = designForFamily('OSSE');
 const elsewhere = { ...structuredClone(solved), L: (solved.L ?? 0) + 5 };
 const context: CurrentModel = {
+  authoring: { key: designFingerprint(solved), lineage: null, designUid: null },
   kind: 'parametric', key: designFingerprint(solved), lineage: null, label: 'Test', viewportShowing: true,
 };
 

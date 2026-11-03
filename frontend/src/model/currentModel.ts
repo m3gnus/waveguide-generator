@@ -29,7 +29,8 @@ export interface CurrentModel {
   design?: DesignDocument;
   /** The parametric document's uid, which a design assembly's runs name. */
   designUid?: string | null;
-  prepared?: { modelId: string | null; ingestId: string; key: string; current: boolean };
+  prepared?: { modelId?: string | null; ingestId: string | null; key: string | null; lineage: string | null; current?: boolean };
+  authoring?: { key: string | null; lineage: string | null; designUid: string | null };
   manifestSha256?: string | null;
   /** An arrived Fusion request selected before it has a prepared mesh. */
   requestId?: string | null;
@@ -83,9 +84,15 @@ export function modelForRun(job: JobItem): CurrentModel {
   const ingestId = job.cad_source?.ingest_id ?? (typeof job.cad_return?.bundle_path === 'string' && job.cad_return.bundle_path.startsWith('ingest/') ? job.cad_return.bundle_path.slice('ingest/'.length) : null) ?? job.cad_state?.preparation?.ingest_id ?? null;
   const modelId = job.cad_source?.model_id && job.cad_source.model_id !== 'unfiled' ? job.cad_source.model_id : null;
   const key = imported ? job.cad_source?.solve_model_sha256 || ingestId : jobDesignFingerprint(job);
+  const lineage = imported ? modelId || ingestId : job.cad_source?.design_id ?? null;
+  const authoringKey = jobDesignFingerprint(job);
+  const capturedUid = (job.config_summary?.design_assembly as { design?: { design_uid?: unknown } } | undefined)?.design?.design_uid;
   return {
     kind,
-    key, lineage: imported ? modelId || ingestId : job.cad_source?.design_id ?? null,
+    key, lineage,
+    ...(imported ? { prepared: { key, ingestId, lineage, modelId } } : {}),
+    ...(authoringKey ? { authoring: { key: authoringKey, lineage: imported ? null : lineage,
+      designUid: kind === 'assembly' ? typeof capturedUid === 'string' ? capturedUid : null : job.design_uid ?? null } } : {}),
     label: job.label || 'Run model', viewportShowing: true, ingestId,
     manifestSha256: job.cad_state?.snapshot?.manifest_sha256 ?? job.cad_source?.manifest_sha256,
     modelId,
@@ -137,6 +144,7 @@ export function currentModel(): CurrentModel {
     const model: CurrentModel = {
       kind: 'parametric', key: parametricKey, lineage: document.identity?.designId ?? null,
       label: document.designName || 'Parametric model', design, designUid: document.designUid ?? null,
+      authoring: { key: parametricKey, lineage: document.identity?.designId ?? null, designUid: document.designUid ?? null },
       viewportShowing: false, unloadedRunId,
     };
     const slot = useDesignModelStore.getState();
@@ -145,8 +153,8 @@ export function currentModel(): CurrentModel {
     if (prepared) {
       model.modelId = slot.modelId;
       model.ingestId = prepared.ingest_id;
-      model.prepared = { modelId: slot.modelId, ingestId: prepared.ingest_id,
-        key: prepared.solve_model_sha256 || prepared.ingest_id, current };
+      if (current) model.prepared = { modelId: slot.modelId, ingestId: prepared.ingest_id,
+        key: prepared.solve_model_sha256 || prepared.ingest_id, lineage: slot.modelId || prepared.ingest_id, current };
     }
     return { ...model, viewportShowing: design.assembly && currentModelScene(model, viewport) ? current
       : !design.assembly && viewport.showing === 'solver' && viewport.solver
@@ -164,6 +172,7 @@ export function currentModel(): CurrentModel {
     label: assembly ? imported.model?.display_name || 'Assembly' : file ? 'Mesh file' : cad.label, modelId, ingestId, unloadedRunId,
     requestId: file || assembly ? null : cad.bundle?.requestId,
     returnId: file || assembly ? null : cad.bundle?.returnId,
+    prepared: { key: sha || ingestId, ingestId, lineage: modelId || ingestId, modelId },
     manifestSha256: record?.manifest_sha256,
     viewportShowing: false };
   return { ...model, viewportShowing: !!ingestId && currentModelScene(model, viewport) !== null };
@@ -183,34 +192,35 @@ export function useCurrentModel(): CurrentModel {
   return currentModel();
 }
 
-/**
- * A design assembly's run on the parametric design it was pressed from: the
- * run stores that design, so it is compared the way a parametric run is.
- * Null for every other pairing, and for older assembly runs with no design.
- */
-function designAssemblyRun(job: JobItem, model: CurrentModel): RunVerdict | null {
-  if (model.kind !== 'parametric' || !model.design?.assembly || job.config_summary?.import_origin !== 'design-assembly') return null;
-  const key = jobDesignFingerprint(job);
-  if (key === null) return null;
-  if (key === model.key) return model.viewportShowing ? 'current' : 'model-not-shown';
-  const solved = (job.config_summary.design_assembly as { design?: { design_uid?: unknown } } | undefined)?.design?.design_uid;
-  return model.designUid && solved === model.designUid ? 'earlier-version' : 'other-model';
+/** One comparison, retaining which identity matched for spatial artifacts. */
+function compareRun(job: JobItem, model: CurrentModel): { verdict: RunVerdict; facet?: 'prepared' | 'authoring' } {
+  const run = modelForRun(job);
+  if (model.unloadedRunId === job.id) return { verdict: 'model-not-shown' };
+  // An imported run's anchor design alone cannot identify a live document.
+  if (model.kind === 'parametric' && run.kind !== 'parametric'
+    && (!run.authoring || !model.designUid || run.authoring.designUid !== model.designUid)) {
+    return { verdict: 'other-model' };
+  }
+  const facet = run.prepared && model.prepared ? 'prepared' : model.kind === 'parametric' && run.authoring && model.authoring ? 'authoring' : null;
+  if (!facet) return { verdict: 'other-model' };
+  const saved = run[facet]!;
+  const live = model[facet]!;
+  const same = !!live.key && (saved.key === live.key || (facet === 'prepared'
+    && (!job.cad_source?.solve_model_sha256 || live.key === model.prepared!.ingestId)
+    && !!model.prepared!.ingestId && run.prepared!.ingestId === model.prepared!.ingestId));
+  if (same) return { verdict: model.viewportShowing ? 'current' : 'model-not-shown', facet };
+  if (saved.lineage && live.lineage && saved.lineage === live.lineage) return { verdict: 'earlier-version' };
+  if (facet === 'authoring') {
+    if (run.kind !== 'parametric' && run.authoring!.designUid && run.authoring!.designUid === model.authoring!.designUid) return { verdict: 'earlier-version' };
+    // Old parametric archives have no document id; content remains authoritative.
+    if (run.kind === 'parametric' && !saved.lineage && saved.key) return { verdict: 'earlier-version' };
+  }
+  return { verdict: 'other-model' };
 }
 
 /** The sole run-versus-viewport verdict. Legacy missing hashes use ingestion identity. */
 export function runVerdict(job: JobItem, model: CurrentModel): RunVerdict {
-  const run = modelForRun(job);
-  if (model.unloadedRunId === job.id) return 'model-not-shown';
-  const assembly = designAssemblyRun(job, model);
-  if (assembly) return assembly;
-  if (run.kind !== model.kind) return 'other-model';
-  const same = !!model.key && (run.key === model.key
-    || ((!job.cad_source?.solve_model_sha256 || model.key === model.ingestId) && !!model.ingestId && run.ingestId === model.ingestId));
-  if (same) return model.viewportShowing ? 'current' : 'model-not-shown';
-  if (run.lineage && model.lineage && run.lineage === model.lineage) return 'earlier-version';
-  // Old parametric archives have no document id; content remains authoritative.
-  if (run.kind === 'parametric' && !run.lineage && run.key) return 'earlier-version';
-  return 'other-model';
+  return compareRun(job, model).verdict;
 }
 
 export interface ResultSelection {
@@ -253,15 +263,16 @@ export function shownResult(model: CurrentModel, selection: ResultSelection, job
   return { job, latest, ids, verdict, modelNotLoaded: !!legacy, releaseSelection, canRender: !!job && drawable(job), arriving };
 }
 
-/** Spatial artifacts require the shown run's model to actually be in the viewport.
- * The unreadable-archive exception permits standalone charts only, and so
- * does a design assembly's run on its parametric preview: its fields belong
- * to the compiled mesh, which only the assembly model shows. */
+/** Fields need matching prepared geometry, or a parametric run on its authoring model. */
 export function spatialResult(model: CurrentModel, selection: ResultSelection, jobs: readonly JobItem[],
   provisional: Readonly<Record<string, unknown>> = {}): JobItem | null {
   const { job } = shownResult(model, selection, jobs, provisional);
   const meshFreshness = job && hasMeshProvenance(job) && useMeshFreshnessStore.getState().jobs[job.id];
-  return job && modelKindForRun(job) === model.kind && runVerdict(job, model) === 'current'
+  const match = job && compareRun(job, model);
+  const spatial = match?.facet === 'prepared'
+    ? model.kind !== 'parametric' || !!currentModelScene(model)
+    : match?.facet === 'authoring' && model.kind === 'parametric' && modelKindForRun(job!) === 'parametric';
+  return job && match?.verdict === 'current' && spatial
     && meshFreshness !== 'stale' && meshFreshness !== 'pending' ? job : null;
 }
 
@@ -300,7 +311,9 @@ export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[]
 export function useCurrentModelStatus(record?: CadReturnIngestRecord) {
   const current = useCurrentModel();
   const model = record ? { ...current, kind: 'cad' as const, key: record.solve_model_sha256 || record.ingest_id,
-    ingestId: record.ingest_id, manifestSha256: record.manifest_sha256 } : current;
+    ingestId: record.ingest_id, manifestSha256: record.manifest_sha256, authoring: undefined,
+    prepared: { key: record.solve_model_sha256 || record.ingest_id, ingestId: record.ingest_id,
+      lineage: record.model_id || record.ingest_id, modelId: record.model_id } } : current;
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   return { model, status: currentModelStatus(model, jobs) };
 }
