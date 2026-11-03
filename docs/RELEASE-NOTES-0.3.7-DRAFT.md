@@ -158,6 +158,9 @@ This is not a release announcement or a statement of platform qualification.
   does not establish acoustic equivalence between them.
 - **Send to CAD → Stop** is covered by automated tests only; it has not been
   checked end to end in Fusion.
+- This release was not checked as an installed app on Windows: Automatic CPU
+  preparation and its progress, Julia discovery, the run-folder junction refusal
+  and the Windows file opener are covered by automated tests only.
 - STEP solid and Send to CAD carry the horn and enclosure; STL exports the horn
   bore. These exports omit the woofers and their baffle cutouts and state their
   scope at the export. Assembly geometry export, wiring, boxes and arrays are
