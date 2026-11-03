@@ -36,12 +36,15 @@ function harness(scrollPans = true, invertWheelZoom = false) {
   } };
 }
 
-const notches: [string, Sample][] = [
+const ambiguousNotches: [string, Sample][] = [
   ['Safari pixel notch', { deltaY: 40, wheelDeltaY: -120, wheelDelta: -120 }],
-  ['small smooth mouse notch', { deltaY: 4, wheelDeltaY: -120 }],
-  ['fractional smooth mouse notch', { deltaY: 1.5, wheelDeltaY: -120 }],
   ['Safari accelerated notch', { deltaY: 80, wheelDeltaY: -240 }],
   ['legacy wheelDelta fallback', { deltaY: 40, wheelDelta: -120 }],
+];
+
+const notches: [string, Sample][] = [
+  ['small smooth mouse notch', { deltaY: 4, wheelDeltaY: -120 }],
+  ['fractional smooth mouse notch', { deltaY: 1.5, wheelDeltaY: -120 }],
   ['Chromium pixel notch', { deltaY: 100 }],
   ['120 pixel notch', { deltaY: 120 }],
   ['historical macOS fractional notch', { deltaY: 4.000244140625 }],
@@ -76,6 +79,30 @@ describe('viewport wheel gestures', () => {
     expect(h.zoom).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['small vertical sample', { deltaY: 40, wheelDeltaY: -120 }, { deltaY: 3, wheelDeltaY: -9 }],
+    ['diagonal sample', { deltaY: 40, wheelDeltaY: -120 }, { deltaX: 2, deltaY: 40, wheelDeltaY: -120 }],
+    ['varying proportional sample', { deltaY: 40, wheelDeltaY: -120 }, { deltaY: 80, wheelDeltaY: -240 }],
+    ['accelerated start', { deltaY: 80, wheelDeltaY: -240 }, { deltaY: 7, wheelDeltaY: -21 }],
+    ['negative start', { deltaY: -40, wheelDeltaY: 120 }, { deltaY: -3, wheelDeltaY: 9 }],
+    ['legacy fallback', { deltaY: 40, wheelDelta: -120 }, { deltaY: 3, wheelDelta: -9 }],
+  ] satisfies [string, Sample, Sample][])('probes a WebKit trackpad start: %s', (_, first: Sample, second: Sample) => {
+    vi.useFakeTimers();
+    const h = harness();
+    expect(h.send(first).defaultPrevented).toBe(true);
+    expect(h.pan).not.toHaveBeenCalled();
+    expect(h.zoom).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(8);
+    h.send(second, 8);
+    // Later notch-shaped momentum must keep the decision made by the probe.
+    h.send({ deltaY: 100 }, 24);
+    vi.runAllTimers();
+    expect(h.pan.mock.calls).toEqual([
+      [first.deltaX ?? 0, first.deltaY], [second.deltaX ?? 0, second.deltaY], [0, 100],
+    ]);
+    expect(h.zoom).not.toHaveBeenCalled();
+  });
+
   it('keeps a trackpad gesture panning when momentum looks like notches', () => {
     const h = harness();
     [{ deltaY: 2 }, { deltaY: 40, wheelDeltaY: -120 }, { deltaY: 100 }, { deltaY: 0.5 }]
@@ -86,7 +113,7 @@ describe('viewport wheel gestures', () => {
 
   it('keeps a wheel gesture zooming when later samples look like a trackpad', () => {
     const h = harness();
-    h.send({ deltaY: 40, wheelDeltaY: -120 });
+    h.send({ deltaY: 4, wheelDeltaY: -120 });
     h.send({ deltaX: 0.5, deltaY: 7.25 }, 16);
     h.send({ deltaY: 1 }, 32);
     expect(h.pan).not.toHaveBeenCalled();
@@ -113,9 +140,12 @@ describe('viewport wheel gestures', () => {
   });
 
   it('does not let a pinch seed the next plain-scroll device decision', () => {
+    vi.useFakeTimers();
     const h = harness();
     h.send({ deltaY: 1, ctrlKey: true });
     h.send({ deltaY: 40, wheelDeltaY: -120 }, 8);
+    expect(h.zoom).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(40);
     expect(h.pan).not.toHaveBeenCalled();
     expect(h.zoom).toHaveBeenCalledTimes(2);
   });
@@ -133,26 +163,34 @@ describe('viewport wheel gestures', () => {
     expect(h.zoom).not.toHaveBeenCalled();
   });
 
-  it('treats repeated ambiguous magnitudes as notches and preserves both zoom events', () => {
+  it.each([['plain integer', { deltaY: 51 }], ...ambiguousNotches] satisfies [string, Sample][])
+  ('treats repeated %s magnitudes as notches and preserves both zoom events', (_, sample) => {
     vi.useFakeTimers();
     const h = harness();
-    h.send({ deltaY: 51 });
-    h.send({ deltaY: -51 }, 20);
+    h.send(sample);
+    expect(h.zoom).not.toHaveBeenCalled();
+    h.send({ ...sample, deltaY: -sample.deltaY!,
+      wheelDeltaY: sample.wheelDeltaY === undefined ? undefined : -sample.wheelDeltaY,
+      wheelDelta: sample.wheelDelta === undefined ? undefined : -sample.wheelDelta,
+    }, 20);
     vi.runAllTimers();
     expect(h.pan).not.toHaveBeenCalled();
-    expect(h.zoom.mock.calls.map(([event]) => event.deltaY)).toEqual([51, -51]);
+    expect(h.zoom.mock.calls.map(([event]) => event.deltaY)).toEqual([sample.deltaY, -sample.deltaY!]);
   });
 
-  it('zooms an isolated ambiguous notch after at most 40 ms with its cursor and modifiers', () => {
+  it.each([['plain integer', { deltaY: 51 }], ...ambiguousNotches] satisfies [string, Sample][])
+  ('zooms an isolated %s after at most 40 ms with its cursor and modifiers', (_, sample) => {
     vi.useFakeTimers();
     const h = harness();
-    h.send({ deltaY: 51, clientX: 125, clientY: 75, shiftKey: true });
+    h.send({ ...sample, clientX: 125, clientY: 75, shiftKey: true });
     vi.advanceTimersByTime(39);
     expect(h.zoom).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(h.zoom).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      deltaY: 51, deltaMode: 0, clientX: 125, clientY: 75, shiftKey: true,
+      deltaY: sample.deltaY, deltaMode: 0, clientX: 125, clientY: 75, shiftKey: true,
     }));
+    h.send({ deltaX: 0.5, deltaY: 2 }, 48);
+    expect(h.zoom).toHaveBeenCalledTimes(2);
     expect(h.pan).not.toHaveBeenCalled();
   });
 
@@ -165,9 +203,11 @@ describe('viewport wheel gestures', () => {
   });
 
   it('inverts wheel and pinch zoom exactly once and leaves trackpad pan direction alone', () => {
+    vi.useFakeTimers();
     const h = harness(true, true);
     h.send({ deltaY: 40, wheelDeltaY: -120, clientX: 72, clientY: 31 });
-    h.send({ deltaY: 1.5, ctrlKey: true }, 8);
+    vi.advanceTimersByTime(40);
+    h.send({ deltaY: 1.5, ctrlKey: true }, 48);
     h.send({ deltaX: 3, deltaY: 5 }, 500);
     expect(h.zoom.mock.calls.map(([event]) => event.deltaY)).toEqual([-40, -1.5]);
     expect(h.zoom.mock.calls[0][0]).toMatchObject({ clientX: 72, clientY: 31 });
@@ -198,6 +238,7 @@ describe('viewport wheel gestures', () => {
 // Exercise the actual controls used by the canvas, not a second zoom formula.
 describe.each(['perspective', 'orthographic'] as const)('%s OrbitControls wheel integration', (projection) => {
   it.each([-40, 40])('retains pre-regression zoom speed/direction and cursor anchor for deltaY %s', (deltaY) => {
+    vi.useFakeTimers();
     const element = document.createElement('canvas');
     element.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 200 }) as DOMRect;
     const camera = projection === 'perspective'
@@ -217,6 +258,7 @@ describe.each(['perspective', 'orthographic'] as const)('%s OrbitControls wheel 
     const before = anchor.clone().project(camera);
     const distance = camera.position.distanceTo(controls.target);
     element.dispatchEvent(wheel({ deltaY, wheelDeltaY: -Math.sign(deltaY) * 120, clientX: 150, clientY: 75 }));
+    vi.advanceTimersByTime(40);
     const expectedScale = 0.95 ** (deltaY < 0 ? 1.7 : -1.7);
     if (camera instanceof PerspectiveCamera) {
       expect(camera.position.distanceTo(controls.target) / distance).toBeCloseTo(expectedScale);
