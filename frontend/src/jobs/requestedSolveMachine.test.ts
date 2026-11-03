@@ -206,6 +206,29 @@ function* permutations<T>(items: readonly T[]): Generator<T[]> {
 }
 
 describe('requested-solve pure reducer', () => {
+  it('returns a preflight to the ordinary readiness wait with the same request and attention', () => {
+    const initial = { ...initialRequestedSolve<Input>(), plan: ready };
+    const pressed = reduceRequestedSolve(initial, { type: 'press', inputs, attention: 42 });
+    const request = pressed.state.active!;
+    const waiting = reduceRequestedSolve(pressed.state, { type: 'continuation-deferred', id: request.id,
+      plan: { ...cold, capabilityGeneration: ready.capabilityGeneration } });
+    expect(waiting.state.phase).toBe('waiting-readiness');
+    expect(waiting.state.active).toMatchObject({ id: request.id, inputs, attention: 42, preparationEngine: 'engine' });
+    expect(waiting.effects).toEqual([{ type: 'observe-start' }]);
+    const resumed = reduceRequestedSolve(waiting.state, { type: 'plan-ready', plan: { ...ready, capabilityGeneration: 3 } });
+    expect(resumed.state.phase).toBe('continuing');
+    expect(resumed.effects.filter(effect => effect.type === 'continue')).toEqual([{ type: 'continue', request: resumed.state.active }]);
+    expect(reduceRequestedSolve(resumed.state, { type: 'plan-ready', plan: { ...ready, capabilityGeneration: 3 } }).effects).toEqual([]);
+  });
+
+  it('settles cancellation when a preflight returns readiness after Stop', () => {
+    const pressed = reduceRequestedSolve({ ...initialRequestedSolve<Input>(), plan: ready }, { type: 'press', inputs });
+    const stopped = reduceRequestedSolve(pressed.state, { type: 'stop' });
+    const settled = reduceRequestedSolve(stopped.state, { type: 'continuation-deferred', id: pressed.state.active!.id, plan: cold });
+    expect(settled.state.phase).toBe('cancelled');
+    expect(settled.state.active).toBeNull();
+  });
+
   it.each([
     { depth: 5, events: alphabet.slice(0, 12), count: 271_453, label: 'original events' },
     { depth: 4, events: alphabet, count: 204_205, label: 'fresh/stale snapshots, settlement and mount replay' },

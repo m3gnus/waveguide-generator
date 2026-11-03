@@ -751,6 +751,61 @@ describe('solve invocation mutex', () => {
     expect(mocks.solveModel.mock.calls[0][1]).toMatchObject({ prepared_id: 'wgi_live', label: 'horn1' });
   });
 
+  it.each(['ready', 'stop', 'model change', 'open', 'engine change', 'setup change', 'failure', 'unmount'] as const)
+  ('keeps a fresh assembly build in the shared warm-up request until %s', async outcome => {
+    const actual = await vi.importActual<typeof import('../jobs/assemblySolve')>('../jobs/assemblySolve');
+    mocks.prepareDesignAssembly.mockImplementation(() => actual.prepareDesignAssembly());
+    const build = deferred<Response>();
+    const fetcher = vi.fn(async (url: string) => url.endsWith('/context')
+      ? json({ minimum_clearance_mm: 0.1, clearances: {} }) : build.promise);
+    vi.stubGlobal('fetch', fetcher);
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: emptyAssembly() }, 'step');
+      useSolveOptionsStore.getState().setEngine('beat-metal');
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: 'preparing' } as EngineCapability];
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    let first!: Promise<unknown>;
+    await act(async () => { first = solveControlStore.getSnapshot()!.solve(); });
+    await act(async () => {
+      mocks.importedPlan.plan.engine = null;
+      mocks.importedPlan.plan.reason = 'BEAT Metal is getting ready.';
+      mocks.importedPlan.plan.readiness = { code: 'engine_unavailable', engine: 'beat-metal',
+        message: 'BEAT Metal is getting ready.', remedies: [{ kind: 'wait' }] };
+      build.resolve(json(compiledDesignAssembly()));
+      expect(await first).toBe('pending');
+    });
+    expect(solveControlStore.getSnapshot()!.waitingForEngine).toBe(true);
+    expect(solveControlStore.getSnapshot()!.actionError).toBeNull();
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+    expect(preferencesStore.getSnapshot().runSequenceNext).toBe(1);
+    expect(mocks.refreshCapabilities).toHaveBeenCalled();
+    await act(async () => {
+      if (outcome === 'stop') solveControlStore.getSnapshot()!.stopWaiting();
+      if (outcome === 'model change') useDesignStore.getState().commitEmbedded({ assembly: addWoofer(emptyAssembly(), { anchor: 'below' }).assembly }, 'step');
+      if (outcome === 'open') useDesignStore.getState().replaceDocument(structuredClone(useDesignStore.getState().design));
+      if (outcome === 'engine change') useSolveOptionsStore.getState().setEngine('bempp');
+      if (outcome === 'setup change') useDesignStore.getState().updateValue('simulation.f1', 123);
+      if (outcome === 'unmount') root.render(null);
+      if (outcome === 'failure') {
+        mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: 'failed' } as EngineCapability];
+        root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+      }
+    });
+    await act(async () => {
+      mocks.importedPlan.plan.engine = 'beat-metal';
+      mocks.importedPlan.plan.readiness = null;
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability];
+      if (outcome !== 'unmount') root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    expect(mocks.solveModel).toHaveBeenCalledTimes(outcome === 'ready' ? 1 : 0);
+    expect(preferencesStore.getSnapshot().runSequenceNext).toBe(outcome === 'ready' ? 2 : 1);
+    // Resuming reuses the adopted build; no second compile or fresh-plan press.
+    expect(fetcher.mock.calls.filter(([url]) => !url.endsWith('/context'))).toHaveLength(1);
+    expect(mocks.postImportedSolvePlan).toHaveBeenCalledOnce();
+    if (outcome === 'ready') expect(mocks.solveModel.mock.calls[0][1]).toMatchObject({ prepared_id: 'wgi_live', label: 'horn1' });
+  });
+
   it('refuses the fresh build plan with the server reason before any solve', async () => {
     mocks.prepareDesignAssembly.mockResolvedValue(assemblySnapshot());
     mocks.postImportedSolvePlan.mockResolvedValueOnce({ ...mocks.importedPlan.plan, engine: null, reason: 'This engine cannot solve the assembly.' });

@@ -14,7 +14,7 @@ import { useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/so
 import { useMeshImportStore, fileMeshSetup } from '../stores/meshImport';
 import { subscribeSolveSettingsEdits } from '../stores/solveSettingsEdits';
 import { buildImportedSubmission } from './importedSubmission';
-import type { EngineCapability } from './actions';
+import type { EngineCapability, ImportedSolvePlan } from './actions';
 import { initialRequestedSolve, reduceRequestedSolve, type RequestedSolveEvent, type SolveRequest } from './requestedSolveMachine';
 import { failureWords } from '../api/httpError';
 
@@ -86,6 +86,11 @@ export function solveCancellationReason(request: SolveInputs & { jobId?: string 
     }
   }
   return null;
+}
+
+/** A preflight discovered readiness after execution began. Return it to the same owner as a press. */
+export class DeferredSolvePlan {
+  constructor(readonly plan: ImportedSolvePlan) {}
 }
 
 interface SolveReadiness {
@@ -187,14 +192,30 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
           const task = (async () => {
             try {
               const value = await io.readiness.resume(token);
+              if (value instanceof DeferredSolvePlan) {
+                // Release this executor before the owner can start its continuation again.
+                tasks.current.delete(token.requestId);
+                executions.current.delete(token.requestId);
+                const fresh = value.plan;
+                const blocked = !!fresh.readiness?.engine;
+                dispatch({ type: 'continuation-deferred', id: token.requestId, plan: requestPlan({
+                  ...services.current.readiness, busy: false, pending: false, enabled: !!fresh.engine,
+                  blocked, warmingEngine: blocked && fresh.readiness?.remedies?.some(remedy => remedy.kind === 'wait')
+                    ? fresh.readiness.engine! : null,
+                  error: fresh.engine ? null : fresh.reason,
+                }) });
+                return machine.current.active?.id === token.requestId ? 'pending' : 'blocked';
+              }
               dispatch({ type: machine.current.active?.id === token.requestId && machine.current.phase === 'submitting' ? 'post-succeeded' : 'continuation-settled', id: token.requestId });
               return value;
             } catch (error) {
               dispatch({ type: machine.current.active?.id === token.requestId && machine.current.phase === 'submitting' ? 'post-failed' : 'continuation-settled', id: token.requestId, message: failureWords(error) });
               return 'blocked';
             } finally {
-              tasks.current.delete(token.requestId);
-              executions.current.delete(token.requestId);
+              if (executions.current.get(token.requestId)?.token === token) {
+                tasks.current.delete(token.requestId);
+                executions.current.delete(token.requestId);
+              }
             }
           })();
           tasks.current.set(token.requestId, task);
@@ -224,7 +245,7 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
     const task = tasks.current.get(active.id);
     if (task) {
       const value = await task;
-      return value === 'blocked' ? 'blocked' as const : value === 'busy' ? 'busy' as const : 'submitted' as const;
+      return value === 'blocked' ? 'blocked' as const : value === 'busy' ? 'busy' as const : value === 'pending' ? 'pending' as const : 'submitted' as const;
     }
     return active.preparationEngine || result.state.plan.ordinary === 'pending' ? 'pending' as const : 'blocked' as const;
   }, [dispatch]);

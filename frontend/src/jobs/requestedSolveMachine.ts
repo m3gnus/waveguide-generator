@@ -37,6 +37,7 @@ export type RequestedSolveEvent<T> = (
   | { type: 'press'; inputs: T; prepareEngine?: string; attention?: number }
   | { type: 'fusion-request'; inputs: T; jobId: string; engine: string; prepare?: boolean; plan?: RequestPlan; attention?: number }
   | { type: 'plan-ready'; plan: RequestPlan }
+  | { type: 'continuation-deferred'; id: number; plan: RequestPlan }
   | { type: 'preparation-done' | 'preparation-failed' | 'frame-resolved' | 'post-succeeded' | 'post-failed' | 'continuation-settled'; id: number; message?: string }
   | { type: 'inputs-changed'; ids: readonly number[]; reason?: string }
   | { type: 'stop' | 'unmount' | 'mount' }
@@ -164,6 +165,12 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
       break;
     }
     case 'plan-ready': updatePlan(event.plan); break;
+    case 'continuation-deferred':
+      if (state.active?.id === event.id && state.phase === 'continuing') {
+        updatePlan(event.plan);
+        set({ phase: 'waiting-readiness' });
+      } else if (state.active?.id === event.id && state.phase === 'cancelling') advance('cancelled');
+      break;
     case 'preparation-done':
       if (state.active?.id === event.id && state.phase === 'waiting-readiness' && state.active.preparation === 'pending') {
         // A successful explicit preparation supersedes any failure cached during it.

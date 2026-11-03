@@ -1,4 +1,4 @@
-import { useRequestedSolve, awaitSolveStep, captureSolveInputs, solveCancellationReason, type HeldSolveContinuation, type ModelSolveContinuation } from '../jobs/useRequestedSolve';
+import { useRequestedSolve, DeferredSolvePlan, awaitSolveStep, captureSolveInputs, solveCancellationReason, type HeldSolveContinuation, type ModelSolveContinuation } from '../jobs/useRequestedSolve';
 import { usePrepareEngine } from '../jobs/usePrepareEngine';
 import { runtimeSetupText } from '../jobs/runtimeSetup';
 import { heldEngineSolveJob, useHeldSolvePreparation } from '../jobs/useHeldSolvePreparation';
@@ -593,6 +593,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     let designName = '';
     let notice: string | null = null;
     let asked = false;
+    let deferred: DeferredSolvePlan | null = null;
     const onAccepted = () => {
       acceptSubmittedLabel(designName);
       if (notice) setActionError(notice);
@@ -605,7 +606,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         : fileSubmissionSnapshot();
       if (needsBuild || continuation?.checkCadPlan) {
         const freshPlan = await awaitSolveStep(postImportedSolvePlan(importedSolvePlanRequestBody(planSubmission(captured))), continuation);
-        if (!freshPlan.engine) throw new Error(freshPlan.reason || 'No engine can solve these imported mesh settings.');
+        if (!freshPlan.engine) {
+          deferred = new DeferredSolvePlan(freshPlan);
+          return null;
+        }
       }
       designName = captured.runName;
       notice = captured.notice;
@@ -615,7 +619,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         { onAccepted },
         { restored: captured.replay !== null, onAsked: () => { asked = true; } });
     }, { onAccepted, attention: continuation?.attention });
-    return jobId === null ? asked ? 'pending' as const : 'busy' as const : 'submitted' as const;
+    return deferred ?? (jobId === null ? asked ? 'pending' as const : 'busy' as const : 'submitted' as const);
   }, [acceptSubmission, beforePost, now, pressModelSolve]);
 
   // The CAD press captures the axis shown and the findings reviewed, then
