@@ -1,5 +1,6 @@
 import type { JobItem } from '../api/jobsSocket';
-import { exportStemForJob, runSourceForJob } from './exportNaming';
+import { exportStemForJob } from './exportNaming';
+import { runOrigin } from './runIdentity';
 
 /**
  * The permanent record of a solve.
@@ -58,7 +59,7 @@ export function buildRunRecord(
         rating: job.rating ?? null,
       },
       // The folder groups by design, so provenance lives here instead.
-      source: runSourceForJob(job),
+      source: runOrigin(job),
       ...(job.config_summary.import_origin === 'mesh-file' ? {
         importedMesh: { ...(job.config_summary.mesh_import as Record<string, unknown> ?? {}), setup: job.cad_setup },
       } : {}),

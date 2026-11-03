@@ -1,15 +1,16 @@
 import type { JobItem } from '../api/jobsSocket';
-import { runSourceForJob } from './exportNaming';
 
 /** Use the run's retained identity, never the live CAD connection or document. */
 export function runDocumentName(job: Partial<Pick<JobItem, 'cad_source' | 'cad_state'>>): string {
   return job.cad_source?.document_name?.trim() || job.cad_state?.snapshot?.document_name?.trim() || '';
 }
 
-/** Where a run came from, in the app's own words. Run archives keep `runSourceForJob`. */
-export type RunOrigin = ReturnType<typeof runSourceForJob> | 'assembly';
+/** One origin for run display, filtering and archives. */
+export type RunOrigin = 'parametric' | 'cadlink' | 'mesh-file' | 'assembly';
 export function runOrigin(job: Pick<JobItem, 'config_summary'>): RunOrigin {
-  return job.config_summary.import_origin === 'design-assembly' ? 'assembly' : runSourceForJob(job);
+  if (job.config_summary.import_origin === 'design-assembly') return 'assembly';
+  if (job.config_summary.import_origin === 'mesh-file') return 'mesh-file';
+  return job.config_summary.geometry_type === 'imported' ? 'cadlink' : 'parametric';
 }
 
 export function runSourceLabel(job: JobItem): string {

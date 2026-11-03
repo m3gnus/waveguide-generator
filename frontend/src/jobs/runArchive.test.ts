@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
-import { archiveFolderForJob, exportSubdirectoryForJob, runSourceForJob } from './exportNaming';
+import { archiveFolderForJob, exportSubdirectoryForJob } from './exportNaming';
+import { runOrigin } from './runIdentity';
 import { buildRunRecord, needsArchiving } from './runArchive';
 
 function jobItem(overrides: Partial<JobItem> = {}): JobItem {
@@ -26,6 +27,13 @@ describe('run archive layout', () => {
     expect(record.source).toBe('mesh-file');
     expect(record.importedMesh).toEqual({ ...spec, setup });
   });
+  it('records an assembly origin with its retained design provenance', () => {
+    const config_summary = { geometry_type: 'imported', import_origin: 'design-assembly',
+      design_assembly: { design: { design_uid: 'wgu_captured' } } };
+    const record = JSON.parse(buildRunRecord(jobItem({ config_summary })).text);
+    expect(record.source).toBe('assembly');
+    expect(record.configSummary).toEqual(config_summary);
+  });
   it('does not archive an unnumbered preparation as a run', () => {
     const unnumbered = jobItem({ run_number: null });
     expect(needsArchiving(unnumbered)).toBe(false);
@@ -46,7 +54,7 @@ describe('run archive layout', () => {
     });
 
     expect(archiveFolderForJob(renamed)).toBe('Big_Horn');
-    expect(runSourceForJob(renamed)).toBe('cadlink');
+    expect(runOrigin(renamed)).toBe('cadlink');
   });
 
   it('records provenance in the run rather than in the folder', () => {

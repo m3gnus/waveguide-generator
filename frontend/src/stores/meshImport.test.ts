@@ -18,7 +18,7 @@ import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
 import type { ImportedSetup } from '../jobs/importedSetup';
 import { bindImportedSetup } from '../jobs/importedSetup';
 import type { JobItem } from '../api/jobsSocket';
-import { runSourceForJob } from '../jobs/exportNaming';
+import { runOrigin } from '../jobs/runIdentity';
 import { runVerdict, currentModel } from '../model/currentModel';
 
 const MSH = new TextDecoder().decode(readFileSync('../server/tests/fixtures/mesh_import/tetra.msh'));
@@ -404,7 +404,7 @@ describe('a reopened file run', () => {
     expect(workspaceModeStore.getSnapshot().importedInput).toBe('file');
     expect(useMeshImportStore.getState().original).toBeNull();
     expect(fileMeshSubmission().options.frequencies_hz).toEqual([100, 200]);
-    expect(runSourceForJob(job)).toBe('mesh-file');
+    expect(runOrigin(job)).toBe('mesh-file');
     expect(runVerdict(job, currentModel())).toBe('current');
     expect(runVerdict({ ...job, config_summary: {} }, currentModel())).toBe('other-model');
   });
