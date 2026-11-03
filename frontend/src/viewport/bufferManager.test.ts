@@ -57,8 +57,14 @@ describe('SurfaceBufferManager', () => {
   it('removes stale curvature colors on an equal-size no-curvature update', () => {
     const manager = new SurfaceBufferManager();
     manager.update({ ...buffers(), colors: new Float32Array(9) });
+    const color = manager.geometry.getAttribute('color');
+    const disposedColors: unknown[] = [];
+    manager.geometry.addEventListener('dispose', () => {
+      disposedColors.push(manager.geometry.getAttribute('color'));
+    });
     const dispose = vi.spyOn(manager.geometry, 'dispose');
     manager.update(buffers());
+    expect(disposedColors).toEqual([color]);
     expect(manager.geometry.getAttribute('color')).toBeUndefined();
     expect(dispose).toHaveBeenCalledOnce();
     expect(manager.geometry.getAttribute('position')).toBeDefined();
