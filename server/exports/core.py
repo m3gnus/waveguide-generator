@@ -156,8 +156,11 @@ def _prepared_design(
     for key in ("ath_rear_shape", "ath_rear_front_offset", "ath_rear_step"):
         root["mesh"][key] = None
     root["mesh"]["vertical_offset"] = 0
-    if root.get("enclosure") is not None:
-        root["enclosure"]["depth"] = 0
+    # A bore has no enclosure. Keeping a zero-depth block is invalid for ATH
+    # imports, whose translator preserves authored blocks even in bare mode.
+    # Remove it before translation/native construction validation, just as the
+    # bare grid config does, rather than inventing an invalid enclosure.
+    root["enclosure"] = None
     root.setdefault("simulation", {})["sim_type"] = "freestanding"
     return DesignConfig.model_validate(root)
 
