@@ -1,19 +1,12 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { chartPixelRatio } from './chartPixelRatio';
+import { colorOffset, colorTable } from './colorTable';
 import { useChartTokens, type ChartTokens } from './EChart';
 import type { ResultPayload } from './types';
 
 const RANGE_DB = 30;
-
-/**
- * The balloon reads the same ramp as the directivity map, so a level means the
- * same colour whichever way you look at it. It used to hardcode viridis, which
- * belonged to neither theme and disagreed with every other view of the same
- * numbers.
- */
-function colorForDb(value: number, colormap: string[]): string {
-  const position = Math.max(0, Math.min(1, 1 + value / RANGE_DB)) * (colormap.length - 1);
-  return colormap[Math.round(position)];
-}
+/** The beam map is computed per pixel; above this it is drawn smaller and scaled up. */
+const MAX_BEAM_MAP_PIXELS = 1_000_000;
 
 export function hasBalloonData(result: ResultPayload): boolean {
   const balloon = result.balloon;
@@ -36,17 +29,19 @@ export function closestFrequencyIndex(frequencies: number[], target = 1_000): nu
 
 const InteractiveBalloon = lazy(() => import('./Balloon3D'));
 
-function sizeCanvas(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
+/** Size the backing store at the charts' own device ratio, drawing in CSS px. */
+function sizeCanvas(canvas: HTMLCanvasElement): { context: CanvasRenderingContext2D; width: number; height: number; ratio: number } | null {
   const rect = canvas.getBoundingClientRect();
   const width = Math.max(120, Math.round(rect.width || canvas.clientWidth || 300));
   const height = Math.max(100, Math.round(rect.height || canvas.clientHeight || 180));
-  const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
+  const ratio = chartPixelRatio();
   canvas.width = Math.round(width * ratio);
   canvas.height = Math.round(height * ratio);
   let context: CanvasRenderingContext2D | null = null;
   try { context = canvas.getContext('2d'); } catch { return null; }
-  context?.scale(ratio, ratio);
-  return context;
+  if (!context) return null;
+  context.scale(ratio, ratio);
+  return { context, width, height, ratio };
 }
 
 function wrappedPhiInterval(phiDegrees: number[], queryDegrees: number) {
@@ -78,24 +73,46 @@ export function sampleBalloonGrid(thetaDegrees: number[], phiDegrees: number[], 
 function drawForwardMap(canvas: HTMLCanvasElement, result: ResultPayload, frequencyIndex: number, tokens: ChartTokens): void {
   const balloon = result.balloon;
   if (!balloon) return;
-  const context = sizeCanvas(canvas);
-  if (!context) return;
-  const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
-  const width = canvas.width / ratio;
-  const height = canvas.height / ratio;
+  const sized = sizeCanvas(canvas);
+  if (!sized) return;
+  const { context, width, height, ratio } = sized;
   const radius = Math.max(1, Math.min(width, height) * .46);
   const centerX = width / 2;
   const centerY = height / 2;
   const grid = balloon.spl_norm_db[frequencyIndex] ?? [];
-  const step = Math.max(2, Math.ceil(radius / 80));
-  for (let y = -radius; y <= radius; y += step) for (let x = -radius; x <= radius; x += step) {
-    const radial = Math.hypot(x, y);
-    if (radial > radius) continue;
-    const theta = radial / radius * 90;
-    const phi = Math.atan2(-y, x) * 180 / Math.PI;
-    const db = sampleBalloonGrid(balloon.theta_deg, balloon.phi_deg, grid, theta, phi);
-    context.fillStyle = colorForDb(Number.isFinite(db) ? db : -RANGE_DB, tokens.colormap);
-    context.fillRect(centerX + x, centerY + y, step + 1, step + 1);
+  // Every pixel of the disc is sampled from the solved grid and coloured from
+  // the continuous ramp, the same table the directivity map uses. Painting
+  // 2 px squares in the ramp's ten flat stops is what made this map banded.
+  const scale = Math.min(ratio, Math.sqrt(MAX_BEAM_MAP_PIXELS) / (2 * radius));
+  const size = Math.max(1, Math.ceil(2 * radius * scale));
+  const disc = document.createElement('canvas');
+  disc.width = size;
+  disc.height = size;
+  let discContext: CanvasRenderingContext2D | null = null;
+  try { discContext = disc.getContext('2d'); } catch { discContext = null; }
+  if (discContext) {
+    const table = colorTable(tokens.colormap);
+    const image = discContext.createImageData(size, size);
+    const pixels = image.data;
+    for (let py = 0, out = 0; py < size; py += 1) {
+      const y = (py + .5) / scale - radius;
+      for (let px = 0; px < size; px += 1, out += 4) {
+        const x = (px + .5) / scale - radius;
+        const radial = Math.hypot(x, y);
+        // A one-pixel ramp of coverage rounds the rim instead of stepping it.
+        const coverage = Math.min(1, (radius - radial) * scale + .5);
+        if (coverage <= 0) continue;
+        const db = sampleBalloonGrid(balloon.theta_deg, balloon.phi_deg, grid, radial / radius * 90, Math.atan2(-y, x) * 180 / Math.PI);
+        // A missing sample reads as the bottom of the ramp, as it always has.
+        const color = colorOffset(1 + db / RANGE_DB);
+        pixels[out] = table[color];
+        pixels[out + 1] = table[color + 1];
+        pixels[out + 2] = table[color + 2];
+        pixels[out + 3] = Math.round(coverage * 255);
+      }
+    }
+    discContext.putImageData(image, 0, 0);
+    context.drawImage(disc, centerX - radius, centerY - radius, size / scale, size / scale);
   }
   // The graticule is the interface ink, not white: on Vellum a white grid
   // over the pale end of the ramp was invisible.

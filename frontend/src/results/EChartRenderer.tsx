@@ -13,6 +13,7 @@ import { CanvasRenderer } from 'echarts/renderers';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EChartsOption } from 'echarts';
 import { chartGutter, inAxisGutter, rulerLabel } from './chartRuler';
+import { chartPixelRatio } from './chartPixelRatio';
 
 echarts.use([
   LineChart,
@@ -30,17 +31,7 @@ echarts.use([
   CanvasRenderer,
 ]);
 
-/**
- * Keep thin engineering traces anti-aliased on ordinary 1x displays.
- *
- * ECharts otherwise sizes its backing canvas at exactly one physical pixel per
- * CSS pixel there, which makes diagonal directivity contours visibly stair-step
- * compared with the high-DPI PNG renderer. A 2x floor is enough to remove that
- * effect without the memory cost of letting unusually large ratios run free.
- */
-export function chartPixelRatio(deviceRatio = globalThis.devicePixelRatio || 1): number {
-  return Math.min(3, Math.max(2, deviceRatio));
-}
+export { chartPixelRatio };
 
 interface AxisRuler { y: number; left: number; width: number; text: string | null }
 

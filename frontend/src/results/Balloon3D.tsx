@@ -1,22 +1,12 @@
 import { OrbitControls } from '@react-three/drei';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useEffect, useMemo, useState } from 'react';
-import { BufferAttribute, BufferGeometry, Color, DoubleSide } from 'three';
+import { BufferAttribute, BufferGeometry, Color, DoubleSide, SRGBColorSpace } from 'three';
+import { colorOffset, colorTable } from './colorTable';
 import { readChartTokens, useChartTokens } from './EChart';
 import type { ResultPayload } from './types';
 
 const RANGE_DB = 30;
-
-/**
- * The balloon reads the same ramp as the directivity map, so a level means the
- * same colour whichever way you look at it. It used to hardcode viridis, which
- * belonged to neither theme and disagreed with every other view of the same
- * numbers.
- */
-function colorForDb(value: number, colormap: string[]): string {
-  const position = Math.max(0, Math.min(1, 1 + value / RANGE_DB)) * (colormap.length - 1);
-  return colormap[Math.round(position)];
-}
 const BALLOON_CAMERA = [2.35, 1.55, 2.75] as const;
 
 
@@ -36,6 +26,9 @@ export function buildBalloonGeometry(
   const positions = new Float32Array(thetaDegrees.length * columns * 3);
   const colors = new Float32Array(positions.length);
   const color = new Color();
+  // The balloon reads the same continuous ramp as the directivity map, so a
+  // level means the same colour whichever way you look at it.
+  const table = colorTable(colormap);
   let offset = 0;
   for (let thetaIndex = 0; thetaIndex < thetaDegrees.length; thetaIndex += 1) {
     const theta = thetaDegrees[thetaIndex] * Math.PI / 180;
@@ -50,7 +43,8 @@ export function buildBalloonGeometry(
       positions[offset] = radius * Math.sin(theta) * Math.cos(phi);
       positions[offset + 1] = radius * Math.sin(theta) * Math.sin(phi);
       positions[offset + 2] = radius * Math.cos(theta);
-      color.set(colorForDb(db, colormap));
+      const entry = colorOffset(1 + db / RANGE_DB);
+      color.setRGB(table[entry] / 255, table[entry + 1] / 255, table[entry + 2] / 255, SRGBColorSpace);
       colors[offset] = color.r;
       colors[offset + 1] = color.g;
       colors[offset + 2] = color.b;

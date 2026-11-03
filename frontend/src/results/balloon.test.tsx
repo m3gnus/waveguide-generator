@@ -12,6 +12,10 @@ vi.mock('@react-three/fiber', () => ({
 }));
 vi.mock('@react-three/drei', () => ({ OrbitControls: () => null }));
 
+function createImageData(width: number, height: number) {
+  return { width, height, data: new Uint8ClampedArray(width * height * 4) };
+}
+
 describe('spherical result renderers', () => {
   it('retains the 3D drawing buffer for Copy PNG and Download PNG', () => {
     const result: ResultPayload = { frequencies: [1_000], balloon: { frequencies: [1_000], theta_deg: [0, 90], phi_deg: [0, 120, 240], spl_norm_db: [[[0, 0, 0], [-10, -12, -14]]] } };
@@ -53,11 +57,29 @@ describe('spherical result renderers', () => {
     const result: ResultPayload = { frequencies: [500, 1_000], balloon: { frequencies: [500, 1_000], theta_deg: [0, 90], phi_deg: [0, 120, 240], spl_norm_db: [[[0, 0, 0], [-10, -12, -14]], [[0, 0, 0], [-20, -22, -24]]] } };
     const host = document.createElement('div'); document.body.append(host);
     const root = createRoot(host);
-    const context = { scale: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), beginPath: vi.fn(), arc: vi.fn(), fill: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn() };
+    const context = { scale: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), beginPath: vi.fn(), arc: vi.fn(), fill: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), createImageData, putImageData: vi.fn(), drawImage: vi.fn() };
     const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
     act(() => root.render(<><BalloonRenderer result={result}/><ForwardBeamRenderer result={result}/></>));
     expect(host.querySelector('[aria-label="Balloon frequency"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="Forward beam frequency"]')).not.toBeNull();
+    act(() => root.unmount()); getContext.mockRestore(); host.remove();
+  });
+  it('paints the Forward Beam Map per pixel on the continuous ramp, not in ten flat bands', () => {
+    // Level falls linearly off axis, so a banded map would show at most ten colours.
+    const theta = [0, 30, 60, 90];
+    const result: ResultPayload = { frequencies: [1_000], balloon: { frequencies: [1_000], theta_deg: theta, phi_deg: [0, 120, 240], spl_norm_db: [theta.map((angle) => [-angle / 3, -angle / 3, -angle / 3])] } };
+    const host = document.createElement('div'); document.body.append(host);
+    const root = createRoot(host);
+    const putImageData = vi.fn();
+    const context = { scale: vi.fn(), beginPath: vi.fn(), arc: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), createImageData, putImageData, drawImage: vi.fn() };
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    act(() => root.render(<ForwardBeamRenderer result={result}/>));
+    const image = putImageData.mock.calls[0][0] as ImageData;
+    const colours = new Set<string>();
+    for (let offset = 0; offset < image.data.length; offset += 4) if (image.data[offset + 3] === 255) colours.add(image.data.slice(offset, offset + 3).join());
+    expect(colours.size).toBeGreaterThan(40);
+    // The disc is round: its corners stay transparent.
+    expect(image.data[3]).toBe(0);
     act(() => root.unmount()); getContext.mockRestore(); host.remove();
   });
 });
