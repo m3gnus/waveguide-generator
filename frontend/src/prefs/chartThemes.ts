@@ -25,6 +25,7 @@ export async function loadChartThemes(signal?: AbortSignal): Promise<{ themes: C
 
 /** Resolve the default before charts and exports mount; a slow server keeps Match interface. */
 export async function initializeChartThemeDefault(timeoutMs = 1_500): Promise<void> {
+  if (preferencesStore.hasStoredChartTheme()) return;
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

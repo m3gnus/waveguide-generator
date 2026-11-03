@@ -39,6 +39,22 @@ from server.platform.shutdown_backstop import CLEANUP_RESERVE_SECONDS, ShutdownB
 from server.solver.base import EngineRunResult
 
 
+def test_results_route_reads_the_job_row_off_the_event_loop(monkeypatch):
+    from types import SimpleNamespace
+
+    loop_thread = threading.get_ident()
+    async def start():
+        pass
+
+    def require_job(job_id):
+        assert threading.get_ident() != loop_thread
+        return {"status": "complete"}
+
+    runtime = SimpleNamespace(start=start, _require_job=require_job,
+                              store=SimpleNamespace(get_results_payload=lambda _: ("{}", "digest")))
+    assert asyncio.run(JobRuntime.get_results_payload(runtime, "done")) == ("{}", "digest")
+
+
 def test_solver_memory_refusal_keeps_diagnostics_out_of_job_message(caplog) -> None:
     from server.jobs.runtime.core import _failure_message
     from server.mesh.errors import SolverMemoryTooLarge

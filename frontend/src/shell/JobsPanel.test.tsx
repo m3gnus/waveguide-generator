@@ -78,6 +78,25 @@ describe('jobs panel run list', () => {
     root = createRoot(host);
   });
 
+  it('only renders the card whose comparison boolean changed', async () => {
+    const rows = [job(1, 'A'), job(2, 'B'), job(3, 'C')];
+    publishJobs(rows);
+    compareSelection.setPrimary(rows[0].id);
+    await act(async () => root.render(<JobsPanel/>));
+    const formats = vi.spyOn(Intl.DateTimeFormat.prototype as unknown as { readonly format: unknown }, 'format', 'get');
+    const Formatter = Intl.DateTimeFormat;
+    const constructors = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function (locales, options) {
+      return new Formatter(locales, options);
+    });
+    await act(async () => compareSelection.toggleOverlay(rows[1].id));
+    expect(formats.mock.calls.length).toBeGreaterThan(0);
+    expect(formats.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(constructors).not.toHaveBeenCalled();
+    formats.mockClear();
+    await act(async () => compareSelection.toggleOverlay('outside-this-list'));
+    expect(formats).not.toHaveBeenCalled();
+  });
+
   it('excludes held and legacy waiting requests from Runs and failed counts', async () => {
     const waiting = { ...job(1, 'Waiting request'), ...legacyHold, id: 'waiting', status: 'held',
       cad_state: { ...legacyHold.cad_state, held: true } } as JobItem;

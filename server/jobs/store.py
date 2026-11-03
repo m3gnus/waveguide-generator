@@ -28,6 +28,7 @@ from server.cadlink.operations import (
 from server.jobs.cad_intent import return_identity
 from server.jobs.progress import METADATA_KEY as FREQUENCY_METADATA_KEY, checked_frequency_progress
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
+from server.jobs.json_encoding import result_json_text
 from server.platform.incidents import retain_job_logs
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
 from server.platform.sqlite import JournalModeStatus, configure_connection
@@ -2281,10 +2282,11 @@ class JobStore:
     def store_results(self, job_id: str, results: Mapping[str, Any]) -> None:
         """Upsert results and availability as in v1 ``server/db.py:201-221``."""
 
+        prepared = self._prepare_results(results)
         with self._lock, self._transaction() as conn:
             if not self._job_exists(conn, job_id):
                 return
-            self._upsert_results(conn, job_id, results)
+            self._upsert_results(conn, job_id, prepared)
 
     def complete_job(
         self,
@@ -2303,6 +2305,7 @@ class JobStore:
         # mutation. The original mapping is still serialized unchanged so GET
         # can continue returning the exact stored bytes without reparsing.
         RESULT_ENVELOPE_ADAPTER.validate_python(results)
+        prepared = self._prepare_results(results)
 
         with self._lock, self._transaction() as conn:
             values = {**fields, "has_results": True, "updated_at": _now_iso()}
@@ -2320,7 +2323,7 @@ class JobStore:
             ).rowcount
             if changed <= 0:
                 return None
-            self._upsert_results(conn, job_id, results)
+            self._upsert_results(conn, job_id, prepared)
             return self._append_event(conn, job_id, "completed", payload)
 
     def get_job_log(self, job_id: str) -> str:
@@ -3652,15 +3655,20 @@ class JobStore:
         )
         return cur.rowcount > 0
 
-    def _upsert_results(
-        self, conn: sqlite3.Connection, job_id: str, results: Mapping[str, Any]
-    ) -> None:
+    @staticmethod
+    def _prepare_results(results: Mapping[str, Any]) -> tuple[str, str]:
         # The HTTP response serves this exact text. Persist its digest alongside
         # it so repeated downloads of a multi-megabyte result stay O(1) in CPU.
         # Solve-time power qualification travels with the result, so a
         # recombined crossover sum is re-flagged from the members it now sums.
-        results_text = json.dumps(annotate_results(results), allow_nan=False)
+        results_text = result_json_text(annotate_results(results))
         results_sha256 = sha256(results_text.encode("utf-8")).hexdigest()
+        return results_text, results_sha256
+
+    def _upsert_results(
+        self, conn: sqlite3.Connection, job_id: str, prepared: tuple[str, str]
+    ) -> None:
+        results_text, results_sha256 = prepared
         conn.execute(
             """
             INSERT INTO simulation_results (job_id, results_json, results_sha256)
