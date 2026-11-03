@@ -99,6 +99,10 @@ describe('result dock chart layout', () => {
     expect(lineCharts('full')[0].legend.type).toBeUndefined();
   });
 
+  it.each(DENSITIES)('draws %s legend keys as the line alone, without a symbol dot', (density) => {
+    lineCharts(density).forEach(({ legend }) => expect(legend).toMatchObject({ itemStyle: { opacity: 0 } }));
+  });
+
   it('drops a one-name legend on a compact card, where the title chip already names the chart', () => {
     const single = [{ name: 'Run A', type: 'line' as const, data: [[100, 1], [1_000, 2]] }];
     expect((lineOption(single, tokens, 'dB', 'compact').legend as { show?: boolean }).show).toBe(false);

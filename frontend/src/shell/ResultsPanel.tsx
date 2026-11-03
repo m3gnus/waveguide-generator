@@ -180,6 +180,11 @@ const MAP_GRID: Record<ChartDensity, { left: number; right: number; top: number;
 const MAP_RAMP: Record<ChartDensity, number> = { compact: 38, regular: 74, full: 150 };
 /** Legend clears copy/download/expand/close buttons in the same band. */
 const LEGEND_INSET = 88;
+/**
+ * Legend keys are the line alone. ECharts adds the series symbol as a dot on
+ * the line, and no curve here is drawn with markers; the dash pattern stays.
+ */
+const LEGEND_LINE_KEY = { itemStyle: { opacity: 0 } };
 /** Height of a control rail (angle strip, unit switch) under the plot, with its 4px inset. */
 const RAIL_CLEARANCE = 20;
 
@@ -249,6 +254,7 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
       itemWidth: density === 'compact' ? 10 : 14,
       itemHeight: 2,
       itemGap: density === 'compact' ? 6 : 10,
+      ...LEGEND_LINE_KEY,
     },
     grid: { ...inset, containLabel: false },
     // The tick labels already read as frequencies; the caption only earns its
@@ -923,6 +929,7 @@ export function heatmapOption(
       itemWidth: density === 'compact' ? 10 : 14,
       itemHeight: 2,
       itemGap: density === 'compact' ? 6 : 10,
+      ...LEGEND_LINE_KEY,
     } } : {}),
     tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 }, formatter: (params) => {
       const [, , , level, frequencyValue, angleValue] = (Array.isArray(params) ? params[0] : params).value as number[];
@@ -1299,7 +1306,7 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
     color: tokens.series,
     textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
     tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 } },
-    legend: { top: 1, right: LEGEND_INSET, ...(shadeRear ? { data: items.map(({ label }) => label) } : {}), textStyle: { color: tokens.muted, fontSize: 11 }, formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22), itemWidth: density === 'compact' ? 10 : 14, itemHeight: 2 },
+    legend: { top: 1, right: LEGEND_INSET, ...(shadeRear ? { data: items.map(({ label }) => label) } : {}), textStyle: { color: tokens.muted, fontSize: 11 }, formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22), itemWidth: density === 'compact' ? 10 : 14, itemHeight: 2, ...LEGEND_LINE_KEY },
     ...(shadeRear ? { graphic: [{ type: 'text', left: 'center', top: density === 'compact' ? '72%' : '82%', silent: true, style: { text: OUTSIDE_HALF_SPACE_LABEL, fill: tokens.muted, font: `${labelSize}px ui-monospace, monospace`, align: 'center' } }] } : {}),
     polar: { radius: density === 'compact' ? '68%' : '72%', center: ['50%', '54%'] },
     angleAxis: {
