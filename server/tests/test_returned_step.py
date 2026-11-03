@@ -17,6 +17,7 @@ from server.exports.api import router
 from server.tests._asgi import _post
 from server.jobs.operation_progress import mount_operation_progress
 from server.exports.returned_step import MISMATCH, UNAVAILABLE, ReturnedStepUnavailable, read_returned_step
+from server.workspace.api import WorkspaceState
 
 
 def digest(content: bytes) -> str:
@@ -52,6 +53,18 @@ def source(tmp_path):
 
 def read(source, **kwargs):
     return read_returned_step(source.row, source.store, source.data, source.data / "runs", **kwargs)
+
+
+@pytest.fixture
+def step_app(source):
+    app = FastAPI()
+    app.include_router(router)
+    mount_operation_progress(app)
+    app.state.data_dir = source.data
+    app.state.cadlink_store = source.store
+    app.state.jobs_runtime = SimpleNamespace(store=SimpleNamespace(get_job_row=lambda key: copy.deepcopy(source.row) if key == "job-step" else None))
+    app.state.workspace = WorkspaceState(source.data, default_path=source.data / "runs", allow_adoption=False)
+    return app
 
 
 def test_returns_exact_bytes_not_the_current_document(source):
@@ -191,20 +204,65 @@ def test_export_uses_the_bytes_it_verified_if_the_path_is_replaced(source, monke
     assert read(source) == source.content
 
 
-def test_endpoint_checks_and_exports_without_building_geometry(source, monkeypatch):
+@pytest.mark.parametrize("pruned", ["step", "bundle", "bundle-and-record"])
+def test_endpoints_use_default_runs_folder_for_unrecorded_location(source, step_app, pruned):
+    source.row["task_metadata"].pop("archived_path")
+    (source.run / "saved.step").write_bytes(source.content)
+    if pruned == "step":
+        (source.bundle / "assembly.step").unlink()
+    else:
+        shutil.rmtree(source.bundle)
+    if pruned == "bundle-and-record":
+        source.records.clear()
+    assert step_app.state.workspace.selected_path() is None
+
+    async def scenario():
+        status, body = await _post(step_app, "/api/export/runs/job-step/step/availability", None)
+        assert status == 200
+        assert json.loads(body) == {"available": True, "reason": None}
+        status, body = await _post(step_app, "/api/export/runs/job-step/step", None)
+        assert status == 200
+        assert body == source.content
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("location", ["bundle", "recorded-run", "unrecorded-run"])
+def test_endpoints_resolve_runs_root_only_for_unrecorded_fallback(source, step_app, location):
+    disconnected = source.data / "disconnected-runs"
+    disconnected.mkdir()
+    step_app.state.workspace.select(disconnected)
+    disconnected.rmdir()
+    if location != "recorded-run":
+        source.row["task_metadata"].pop("archived_path")
+    if location != "bundle":
+        shutil.rmtree(source.bundle)
+        (source.run / "saved.step").write_bytes(source.content)
+
+    async def scenario():
+        status, body = await _post(step_app, "/api/export/runs/job-step/step/availability", None)
+        assert status == 200
+        availability = json.loads(body)
+        status, body = await _post(step_app, "/api/export/runs/job-step/step", None)
+        if location == "unrecorded-run":
+            assert availability["available"] is False
+            assert "Reconnect its Runs folder" in availability["reason"]
+            assert status == 422
+            assert json.loads(body)["detail"] == availability["reason"]
+        else:
+            assert availability == {"available": True, "reason": None}
+            assert status == 200
+            assert body == source.content
+    asyncio.run(scenario())
+
+
+def test_endpoint_checks_and_exports_without_building_geometry(source, step_app, monkeypatch):
     from server.exports import api
 
     def forbidden(*_args, **_kwargs):
         pytest.fail("returned STEP must never build geometry")
     monkeypatch.setattr(api, "build_step_solid", forbidden)
     monkeypatch.setattr(api, "build_step", forbidden)
-    app = FastAPI()
-    app.include_router(router)
-    mount_operation_progress(app)
-    app.state.data_dir = source.data
-    app.state.cadlink_store = source.store
-    app.state.jobs_runtime = SimpleNamespace(store=SimpleNamespace(get_job_row=lambda key: copy.deepcopy(source.row) if key == "job-step" else None))
-    app.state.workspace = SimpleNamespace(selected_path=lambda: source.data / "runs")
+    app = step_app
 
     async def scenario():
         status, body = await _post(app, "/api/export/runs/job-step/step/availability", None)

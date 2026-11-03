@@ -110,7 +110,7 @@ def _run_step(request: Request, job_id: str, operation: Any, *, check_only: bool
     try:
         return read_returned_step(
             row, request.app.state.cadlink_store, Path(request.app.state.data_dir),
-            request.app.state.workspace.selected_path(),
+            request.app.state.workspace.path,
             check_only=check_only, cancel_cb=operation.check, progress_cb=operation.progress,
         )
     except OSError as exc:

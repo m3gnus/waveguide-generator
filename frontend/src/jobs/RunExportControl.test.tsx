@@ -15,6 +15,7 @@ import { RETURNED_STEP_UNAVAILABLE } from '../api/returnedStep';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { JobsPanel } from '../shell/JobsPanel';
 import { useCadSendOutcome } from '../design/useSendToCad';
+import { activityStore } from '../shell/activity';
 
 const mocks = vi.hoisted(() => ({
   fetchJobResults: vi.fn(),
@@ -119,6 +120,7 @@ describe('RunExportControl', () => {
     compareSelection.clear();
     publishJobs([]);
     useRunExportStore.getState().resetForTests();
+    activityStore.reset();
     mocks.fetchJobResults.mockResolvedValue({ frequencies: [1000], spl_on_axis: { spl: [90] } });
     mocks.runWorkspaceExportBundle.mockResolvedValue({
       directory: 'C:/chosen/1_stored_horn_v07',
@@ -150,6 +152,7 @@ describe('RunExportControl', () => {
     publishJobs([]);
     document.querySelectorAll('.action-menu-popover, .design-menu-status').forEach((element) => element.remove());
     useRunExportStore.getState().resetForTests();
+    activityStore.reset();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -229,6 +232,62 @@ describe('RunExportControl', () => {
     render(returnedCadJob());
     await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['step'], 'confirm');
+  });
+
+  it.each(['selection', 'unmount', 'Stop'] as const)('keeps a pending preferred STEP check owned by the export across %s', async (change) => {
+    preferencesStore.update({ exportFormats: ['step'] });
+    mocks.checkReturnedStep.mockResolvedValue({ available: true, reason: null });
+    const job = returnedCadJob();
+    render(job);
+    await act(async () => { await settle(); });
+
+    // Exercise the real check and its Stop action while the response is pending.
+    const { checkReturnedStep } = await vi.importActual<typeof import('../api/returnedStep')>('../api/returnedStep');
+    mocks.checkReturnedStep.mockImplementationOnce(checkReturnedStep);
+    const response = deferred<Response>();
+    let requestSignal: AbortSignal | null | undefined;
+    const fetcher = vi.fn<typeof fetch>((_url, init) => {
+      requestSignal = init?.signal;
+      return new Promise<Response>((resolve, reject) => {
+        const abort = () => reject(requestSignal?.reason);
+        if (requestSignal?.aborted) abort();
+        else requestSignal?.addEventListener('abort', abort, { once: true });
+        void response.promise.then(resolve, reject).finally(() => requestSignal?.removeEventListener('abort', abort));
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(useRunExportStore.getState().jobs[job.id]).toMatchObject({ busy: true, busyFormats: ['step'] });
+
+    if (change === 'Stop') {
+      act(() => activityStore.getSnapshot()[0].cancel!());
+    } else if (change === 'selection') {
+      render(completeJob({ id: 'other-run' }));
+    } else {
+      act(() => root.render(<RunExportControl key="other-run" job={completeJob({ id: 'other-run' })} onOpenExportSettings={vi.fn()}/>));
+    }
+    await act(async () => {
+      response.resolve(new Response(JSON.stringify({ available: true, reason: null })));
+      await settle();
+    });
+    expect(requestSignal?.aborted).toBe(change === 'Stop');
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    if (change === 'Stop') {
+      expect(useRunExportStore.getState().jobs[job.id]).toMatchObject({ busy: false, lastNotice: 'Stopped', lastError: null });
+      expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
+      expect(patchMetadata).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.objectContaining({
+        selectedRun: job, jobId: job.id, destinationToken: 'destination-handle',
+      }), ['step'], 'confirm');
+      expect(patchMetadata).toHaveBeenCalledWith(job.id, { exported_files: [
+        'earlier.csv', 'C:/chosen/1_stored_horn_v07/1_stored_horn_v07.csv',
+      ] });
+      expect(useRunExportStore.getState().jobs[job.id]).toMatchObject({ busy: false, lastError: null });
+      expect(useRunExportStore.getState().jobs[job.id].lastNotice).toContain('1 file written');
+      expect(useRunExportStore.getState().jobs['other-run']).toBeUndefined();
+    }
   });
 
   it('rechecks a previously unavailable STEP when the menu is reopened', async () => {

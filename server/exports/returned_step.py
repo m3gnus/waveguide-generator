@@ -59,7 +59,7 @@ def _run_steps(folder: Path, cancel_cb: Callable[[], None]) -> Iterator[Path]:
 
 
 def read_returned_step(
-    row: Mapping[str, Any], store: Any, data_dir: Path, runs_root: Path | None,
+    row: Mapping[str, Any], store: Any, data_dir: Path, runs_root: Path | Callable[[], Path] | None,
     *, cancel_cb: Callable[[], None] = lambda: None,
     progress_cb: Callable[[str], None] = lambda _stage: None,
     check_only: bool = False,
@@ -123,14 +123,16 @@ def read_returned_step(
         candidates.append(bundle / member)
     progress_cb("locate")
 
-    previous = metadata.get("archived_path")
-    folder = Path(previous) if previous and Path(previous).is_absolute() else None
-    if folder is None and runs_root is not None:
-        location = job_archive_location(row)
-        folder = runs_root / location.folder / location.run
-
     def paths() -> Iterator[Path]:
         yield from candidates
+        # Resolve the effective root only after the retained return was tried.
+        # A disconnected Runs drive must not block a usable retained bundle.
+        previous = metadata.get("archived_path")
+        folder = Path(previous) if previous and Path(previous).is_absolute() else None
+        if folder is None and runs_root is not None:
+            root = runs_root() if callable(runs_root) else runs_root
+            location = job_archive_location(row)
+            folder = root / location.folder / location.run
         if folder is not None:
             yield from _run_steps(folder, cancel_cb)
 
