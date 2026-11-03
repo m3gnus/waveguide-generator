@@ -116,17 +116,28 @@
    viewport, so nothing written here floats over the model. It grows with what
    it holds; --viewport-header-height keeps the stats and mesh cards below it. */
 .viewport-top { position: relative; display: flex; flex-direction: column; }
-.viewport-header { position: relative; display: flex; align-items: center; gap: 0 var(--space-12); min-height: 34px; padding: 0 var(--space-12); border-bottom: 1px solid var(--border-subtle); background: var(--surface-panel); }
-.viewport-title { display: flex; flex: 0 100 auto; align-items: baseline; gap: 8px; min-width: 140px; }
-.viewport-title b { flex: none; max-width: 100%; overflow: hidden; color: var(--fg); font-size: var(--text-title); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.viewport-title span { flex: 0 100 auto; min-width: 0; overflow: hidden; color: var(--fg3); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.viewport-title span:empty { display: none; }
-/* Groups read left to right, most about the model first; a hairline parts them. */
-.viewport-facts { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; min-width: 0; min-height: 34px; }
-.viewport-facts > :not(.sr-only) { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-12); min-height: 22px; padding-inline: var(--space-12); border-left: 1px solid var(--hair-hi); }
+/* One line, always (see `oneLineFit.ts`): a row that does not fit first sets its
+   text a step smaller, then gives up its least important facts. The model's
+   name is not repeated here; the File menu shows it and renames it. */
+.viewport-header { position: relative; display: flex; flex-wrap: nowrap; align-items: center; gap: 0 var(--space-12); height: 34px; padding: 0 var(--space-12) 0 0; border-bottom: 1px solid var(--border-subtle); background: var(--surface-panel); }
+/* Groups read left to right, most about the model first; a hairline parts them.
+   Each group draws its hairline a pixel left of itself, so the first visible
+   one, whichever that is after a drop, has its line clipped off by the row. */
+.viewport-facts { display: flex; flex: 0 1 auto; flex-wrap: nowrap; align-items: center; min-width: 0; height: 100%; overflow: hidden; }
+.viewport-facts > :not(.sr-only) { display: inline-flex; flex: none; flex-wrap: nowrap; align-items: center; gap: 0 var(--space-12); min-height: 22px; margin-left: -1px; padding-inline: var(--space-12); border-left: 1px solid var(--hair-hi); }
+.viewport-facts > .viewport-kind { color: var(--fg3); font: var(--text-micro) var(--mono); white-space: nowrap; }
+.viewport-facts > .viewport-kind:empty,
+.viewport-facts [data-drop][hidden],
+.viewport-facts [data-drop-group][hidden] { display: none; }
 .viewport-fact { color: var(--fg3); font-size: var(--text-micro); white-space: nowrap; }
 .viewport-fact > b { color: var(--fg1); font: 500 var(--text-micro) var(--mono); font-variant-numeric: tabular-nums; }
 .viewport-fact > em { color: var(--fg3); font: var(--text-micro) var(--mono); font-style: normal; }
+/* A step smaller, not smaller still: past this the row drops facts instead. */
+.viewport-facts.compact > :not(.sr-only) { gap: 0 var(--space-8); padding-inline: var(--space-8); }
+.viewport-facts.compact > .viewport-kind,
+.viewport-facts.compact .viewport-fact,
+.viewport-facts.compact .viewport-fact > b,
+.viewport-facts.compact .viewport-fact > em { font-size: 10px; }
 .viewport-dimensions.stale { opacity: .45; }
 /* State keeps the same corner whatever the facts to its left are doing. */
 .viewport-live { display: flex; flex: none; align-items: center; gap: var(--space-8); min-height: 34px; margin-left: auto; color: var(--fg3); font: var(--text-micro) var(--mono); }
@@ -146,14 +157,6 @@
 /* The count alone says it once the word would push the facts onto a second line. */
 @container viewport (max-width: 1120px) {
   .viewport-warning-word { display: none; }
-}
-
-/* Facts take a row of their own once they no longer fit beside the name. */
-@container viewport (max-width: 900px) {
-  .viewport-header { flex-wrap: wrap; }
-  .viewport-title { flex: 1 1 0; min-height: 34px; align-items: center; }
-  .viewport-facts { order: 3; flex: 1 0 100%; min-height: 28px; padding-bottom: 4px; }
-  .viewport-facts > :first-child { padding-left: 0; border-left: 0; }
 }
 
 .viewport-notices { display: flex; flex-direction: column; }

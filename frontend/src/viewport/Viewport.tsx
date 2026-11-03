@@ -8,7 +8,8 @@ import { importedModelBlocker, useImportedModelStore } from '../stores/importedM
 import { useShallow } from 'zustand/react/shallow';
 import { LiveDimensions } from '../design/LiveDimensions';
 import { useDeveloperDetails } from '../prefs/preferences';
-import { ViewportFact } from './ViewportFact';
+import { FACT_DROP, ViewportFact } from './ViewportFact';
+import { oneLineRow } from './oneLineFit';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecodedFrame } from '../api/frame';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
@@ -1064,22 +1065,22 @@ export function Viewport() {
 
     <div className="viewport-top" ref={trackHeaderHeight}>
     <div className="viewport-header">
-      <div className="viewport-title">
-        <b title={viewportName}>{viewportName}</b>
+      {/* The model's name is the File menu's to show and edit; here it is only
+          read out, so the header says which model is on screen. */}
+      <span className="sr-only viewport-name">{viewportName}</span>
+      <div className="viewport-facts" ref={oneLineRow}>
         {/* A CAD model's subtitle is its solved triangle count; the display
             mesh's own counts are one hover away. Without a mesh it has none:
             the model's status line lives in Results. */}
-        <span title={importedMeshDetail ?? undefined}>{importedMesh
+        <span className="viewport-kind" data-drop={FACT_DROP.kind} title={importedMeshDetail ?? undefined}>{importedMesh
           ? cadMeshShown ? `${importedMesh.solvedTriangleCount.toLocaleString()} triangles` : importedMeshDetail
           : assemblyInputActive ? 'Saved mesh of a run' : fileInputActive ? 'Configure in Geometry' : workspaceMode === 'cad' ? null : design.formula}</span>
-      </div>
-      <div className="viewport-facts">
         {workspaceMode === 'parametric' && <LiveDimensions />}
-        {(activeScene && domainLabel || solveMeshState) && <span className="viewport-fact-group">
-          {activeScene && domainLabel && <span role="note" aria-label="Solved domain"><ViewportFact label="Solve domain">{domainLabel}</ViewportFact></span>}
-          {solveMeshState && <ViewportFact label="Solve mesh">{solveMeshState}</ViewportFact>}
+        {(activeScene && domainLabel || solveMeshState) && <span className="viewport-fact-group" data-drop-group="">
+          {activeScene && domainLabel && <span role="note" aria-label="Solved domain" data-drop={FACT_DROP.solveDomain}><ViewportFact label="Solve domain">{domainLabel}</ViewportFact></span>}
+          {solveMeshState && <ViewportFact label="Solve mesh" drop={FACT_DROP.solveMesh}>{solveMeshState}</ViewportFact>}
         </span>}
-        {developerDetails && workspaceMode === 'parametric' && !solverViewSelected && <span className="viewport-fact-group viewport-timing">
+        {developerDetails && workspaceMode === 'parametric' && !solverViewSelected && <span className="viewport-fact-group viewport-timing" data-drop={FACT_DROP.timing}>
           <ViewportFact label="Geometry" unit="ms">{selected?.header.evalMs?.toFixed(1) ?? '—'}</ViewportFact>
           <ViewportFact label="On screen">{formatClientLatency(clientFrameMs)}</ViewportFact>
         </span>}

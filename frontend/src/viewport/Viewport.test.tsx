@@ -138,6 +138,7 @@ vi.mock('../api/previewSocket', () => ({
 }));
 
 import { femFieldJob, fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
+import { FACT_DROP } from './ViewportFact';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 
 describe('CAD viewport empty-state copy', () => {
@@ -191,7 +192,7 @@ describe('Viewport preview errors', () => {
     expect(host.textContent).toContain('The 3D view is not available');
     expect(host.textContent).not.toContain('Waiting for geometry');
     expect(host.querySelector('.error-badge')?.textContent).toContain('ERROR');
-    expect(host.querySelector('.viewport-title b')?.textContent).toBe('loaded-design');
+    expect(host.querySelector('.viewport-name')?.textContent).toBe('loaded-design');
 
     act(() => alert?.querySelector<HTMLButtonElement>('[aria-label="Dismiss preview error"]')?.click());
     expect(host.querySelector('[role="alert"]')).toBeNull();
@@ -210,15 +211,18 @@ describe('Viewport preview errors', () => {
       expect([...readout.querySelectorAll('.viewport-fact')].map((fact) => fact.textContent))
         .toEqual(['Mouth 411.7 × 320.0 mm', 'Depth 176.5 mm', 'Enclosure 450.0 × 360.0 × 240.0 mm']);
       expect(readout.classList.contains('stale')).toBe(false);
+      expect([...readout.querySelectorAll<HTMLElement>('.viewport-fact')].map((fact) => fact.dataset.drop))
+        .toEqual([undefined, String(FACT_DROP.depth), String(FACT_DROP.enclosure)]);
       act(() => workspaceModeStore.setMode('cad'));
       expect(host.querySelector('[data-testid="design-dimensions"]')).toBeNull();
     } finally { Object.assign(previewSnapshot, saved); }
   });
 
-  it('names the family alone: the mouth and the solve domain are facts of their own', () => {
+  it('names the family, and the design only to a screen reader: the File menu shows the name', () => {
     act(() => useDesignStore.getState().setFamily('OSSE-ARC'));
     act(() => root.render(<Viewport />));
-    expect(host.querySelector('.viewport-title span')?.textContent).toBe('OSSE-ARC');
+    expect(host.querySelector('.viewport-kind')?.textContent).toBe('OSSE-ARC');
+    expect(host.querySelector('.viewport-name')?.classList.contains('sr-only')).toBe(true);
   });
 
   it('offers one Refresh that re-requests the current design', () => {
@@ -934,7 +938,7 @@ describe('Viewport preview errors', () => {
     });
     expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(archivedRecord.ingest_id);
     expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('/viewport-mesh'))).toHaveLength(1);
-    expect(host.querySelector('.viewport-title b')?.textContent).toBe('Archived speaker');
+    expect(host.querySelector('.viewport-name')?.textContent).toBe('Archived speaker');
     vi.unstubAllGlobals();
   });
 
@@ -994,8 +998,8 @@ describe('Viewport preview errors', () => {
       useCadReturnStore.setState({ ingestRecord: null, selectedBundle: { documentName: 'Speaker CAD', name: 'speaker.wgreturn' } as never });
       workspaceModeStore.setMode('cad');
     });
-    expect(host.querySelector('.viewport-title b')?.textContent).toBe('Speaker CAD');
-    expect(host.querySelector('.viewport-title span')?.textContent).toBe('');
+    expect(host.querySelector('.viewport-name')?.textContent).toBe('Speaker CAD');
+    expect(host.querySelector('.viewport-kind')?.textContent).toBe('');
     const empty = host.querySelector('.viewport-empty')!;
     expect(empty.querySelector('b')?.textContent).toBe('Speaker CAD');
     expect(empty.querySelector('.empty-state-detail')?.textContent).toBe('Its status and next step are in Results.');
@@ -1014,18 +1018,18 @@ describe('Viewport preview errors', () => {
       });
       importedMeshStore.setCad(createImportedMeshScene('Speaker CAD', parseMSH(meshFixture), 'cad', ingestId));
     });
-    expect(host.querySelector('.viewport-title b')?.textContent).toBe('loaded-design');
+    expect(host.querySelector('.viewport-name')?.textContent).toBe('loaded-design');
 
     expect(host.querySelector('.mesh-source-tools')).not.toBeNull();
 
     act(() => workspaceModeStore.setMode('cad'));
-    expect(host.querySelector('.viewport-title b')?.textContent).toBe('Speaker CAD');
+    expect(host.querySelector('.viewport-name')?.textContent).toBe('Speaker CAD');
     // This return carries no independent display artifact, so the geometry on
     // screen already is the solve mesh and there is nothing to switch between.
     expect(host.querySelector('.mesh-source-tools')).toBeNull();
 
     act(() => workspaceModeStore.setMode('parametric'));
-    expect(host.querySelector('.viewport-title b')?.textContent).toBe('loaded-design');
+    expect(host.querySelector('.viewport-name')?.textContent).toBe('loaded-design');
   });
 
   it('shows the ingested solve mesh in CAD Link when a display artifact exists', async () => {
@@ -1193,7 +1197,7 @@ describe('Viewport geometry warnings', () => {
   it('writes one header above the model and floats nothing over it', () => {
     render([UNREACHABLE], { error: 'Invalid draft', dimensions: true });
     const header = host.querySelector('.viewport-header')!;
-    expect(header.querySelector('.viewport-title')).not.toBeNull();
+    expect(header.querySelector('.viewport-facts > .viewport-kind')).not.toBeNull();
     expect(header.querySelector('.viewport-facts [data-testid="design-dimensions"]')?.textContent).toContain('Enclosure 500.0 × 400.0 × 200.0');
     expect(header.querySelector('.viewport-facts [aria-label="Solved domain"]')?.textContent).toContain('Solve domain');
     expect(header.querySelector('.viewport-live .viewport-warning')).not.toBeNull();

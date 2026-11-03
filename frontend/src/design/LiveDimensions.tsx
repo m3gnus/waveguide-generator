@@ -3,7 +3,7 @@ import { useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { currentDocumentLoad, useDesignStore } from '../stores/design';
-import { ViewportFact } from '../viewport/ViewportFact';
+import { FACT_DROP, ViewportFact } from '../viewport/ViewportFact';
 
 function formatted(value: unknown, count: number): string | null {
   if (!Array.isArray(value) || value.length !== count
@@ -50,11 +50,13 @@ export function LiveDimensions() {
   const overallValues = dimensions?.horn_overall;
   const wider = mouth && overall && mouthValues && overallValues
     && overallValues.slice(0, 2).some((value, index) => Math.abs(value - mouthValues[index]) > .05 + 1e-9);
-  const facts = (formula === 'SOURCE-DISK'
-    ? [['Source', source], ['Body', body]]
-    : [['Mouth', mouth], ['Depth', overall && overallValues![2].toFixed(1)],
-      ['Overall', wider && overallValues!.slice(0, 2).map((value) => value.toFixed(1)).join(' × ')],
-      ['Enclosure', enclosure]]).filter((fact): fact is [string, string] => Boolean(fact[1]));
+  // The third entry is the fact's rank in the header's drop order.
+  const candidates: [string, string | false | null | undefined, number?][] = formula === 'SOURCE-DISK'
+    ? [['Source', source], ['Body', body, FACT_DROP.depth]]
+    : [['Mouth', mouth], ['Depth', overall && overallValues![2].toFixed(1), FACT_DROP.depth],
+      ['Overall', wider && overallValues!.slice(0, 2).map((value) => value.toFixed(1)).join(' × '), FACT_DROP.overall],
+      ['Enclosure', enclosure, FACT_DROP.enclosure]];
+  const facts = candidates.filter((fact): fact is [string, string, number?] => Boolean(fact[1]));
   const content = facts.map(([label, value]) => `${label} ${value}`).join(' · ');
   const state = pending ? 'Updating dimensions' : !content ? 'Dimensions unavailable'
     : current ? 'Current preview' : 'Last valid preview';
@@ -63,8 +65,8 @@ export function LiveDimensions() {
     ? `Mouth requested ${requested}, effective ${mouth} mm.` : '';
   const title = [state, morphDetail].filter(Boolean).join('. ');
   return <><span className={`viewport-dimensions${!current || !content ? ' stale' : ''}`}
-    data-testid="design-dimensions" title={title}
+    data-testid="design-dimensions" data-drop-group="" title={title}
     aria-label={`Design dimensions. ${content ? `${content} mm. ` : ''}${title}`}>
-    {facts.map(([label, value]) => <ViewportFact key={label} label={label} unit="mm">{value}</ViewportFact>)}
+    {facts.map(([label, value, drop]) => <ViewportFact key={label} label={label} unit="mm" drop={drop}>{value}</ViewportFact>)}
   </span><span className="sr-only" data-testid="dimensions-status" aria-live="polite" aria-atomic="true">{state}</span></>;
 }
