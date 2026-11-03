@@ -157,7 +157,7 @@ export function currentModel(): CurrentModel {
   const cad = cadModelSelection();
   const record = file || assembly ? imported.input === workspace.importedInput ? imported.prepared : null : cad.record;
   const ingestId = record?.ingest_id ?? null;
-  const sha = (record as { solve_model_sha256?: string } | null)?.solve_model_sha256;
+  const sha = record?.solve_model_sha256;
   const registered = record?.model_id || (imported.input === workspace.importedInput && imported.prepared?.ingest_id === ingestId ? imported.modelId : null);
   const modelId = registered === 'unfiled' ? null : registered;
   const model: CurrentModel = { kind: assembly ? 'assembly' : file ? 'file' : 'cad', key: sha || ingestId, lineage: modelId || ingestId,

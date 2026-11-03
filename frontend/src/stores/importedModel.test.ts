@@ -1,15 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CompiledAssembly } from '../api/assembly';
+import { commitAssembly, emptyAssembly } from './assembly';
+import { currentDocumentLoad } from './design';
 import type { JobItem } from '../api/jobsSocket';
 import type { RegisteredMesh } from '../api/meshImport';
 import { bundle, record as cadRecord } from '../shell/cadlink/selection.fixtures';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import {
-  applyCadOptions, cadOptionsSnapshot, discardParkedCadModel, importedModelBlocker, openImported,
+  activePreparedModel, adoptDesignBuild, designPreparedRecord, resetDesignModel, useDesignModelStore, applyCadOptions, cadOptionsSnapshot, discardParkedCadModel, importedModelBlocker, openImported,
   reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore,
 } from './importedModel';
 import { migrateLastModel, readLastModel, rememberLastModel } from './lastModel';
-import { fileMeshSetup, useMeshImportStore } from './meshImport';
+import { fileMeshSetup, prepareMeshFile, useMeshImportStore } from './meshImport';
 import { resetCadReturnStore, useCadReturnStore } from './cadReturn';
 import { createCadReturnArrivalReader } from '../shell/cadlink/arrivals';
 import { createReceiptDisplay } from '../shell/cadlink/receiptDisplay';
@@ -49,6 +52,7 @@ beforeEach(() => {
   workspaceModeStore.setImportedInput('cad');
   resetSolveOptionsStore();
   resetImportedModelStore();
+  resetDesignModel();
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -650,5 +654,70 @@ describe.each(['file', 'assembly'] as const)('%s history arrival ownership', inp
     second.resolve(newer.response());
     expect(await openingSecond).toBe(true);
     expect(useImportedModelStore.getState()).toMatchObject({ input, phase: 'ready', restoredRevisionId: 'wgs_newer' });
+  });
+});
+
+describe('design prepared session', () => {
+  const built = { ...mesh, producer: 'design-assembly', ingest_id: 'wgi_design', model_id: 'design-assembly:x' } as unknown as CompiledAssembly;
+  const model = { model_id: built.model_id!, producer: 'design-assembly' as const, display_name: 'Design' };
+  const adopt = () => adoptDesignBuild({ record: built, model }, { designUid: 'wgu_design', revision: 1,
+    load: currentDocumentLoad(), contentKey: 'built-content' });
+
+  it('adopts only into its own slot and never remembers it or changes parked models', async () => {
+    await openImported({ kind: 'cad', record: cadRecord });
+    const cad = useImportedModelStore.getState();
+    workspaceModeStore.setImportedInput('file');
+    await openImported({ kind: 'file', prepared: mesh });
+    const file = useImportedModelStore.getState();
+    const workspace = workspaceModeStore.getSnapshot();
+    const last = (['cad', 'file', 'assembly'] as const).map(input => readLastModel(input));
+    const generation = importedMeshStore.captureGeneration();
+    adopt();
+    expect(useImportedModelStore.getState()).toBe(file);
+    expect(workspaceModeStore.getSnapshot()).toBe(workspace);
+    expect(importedMeshStore.captureGeneration()).toBe(generation);
+    expect((['cad', 'file', 'assembly'] as const).map(input => readLastModel(input))).toEqual(last);
+    expect(designPreparedRecord()).toBe(built);
+    expect(useDesignModelStore.getState()).toMatchObject({ phase: 'ready', input: 'assembly', modelId: model.model_id,
+      setup: null, setupEditBase: null, restoredRevisionId: null, generation: expect.any(Number) });
+    workspaceModeStore.setImportedInput('cad');
+    expect(useImportedModelStore.getState().prepared).toEqual(cad.prepared);
+    workspaceModeStore.setImportedInput('file');
+    expect(useImportedModelStore.getState().prepared).toEqual(file.prepared);
+    expect(activePreparedModel()).toBeNull();
+    commitAssembly(emptyAssembly());
+    expect(activePreparedModel()).toBe(useDesignModelStore.getState());
+    workspaceModeStore.setMode('cad');
+    expect(activePreparedModel()).toBe(useImportedModelStore.getState());
+  });
+
+  it('leaves a file preparation in flight to finish with its own scene', async () => {
+    workspaceModeStore.setImportedInput('file');
+    await openImported({ kind: 'file', prepared: mesh });
+    useMeshImportStore.setState({ filename: 'speaker.msh', original: MSH, frameDirty: false });
+    const pending = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>(() => pending.promise);
+    const preparing = prepareMeshFile(fetcher);
+    const signal = fetcher.mock.calls[0][1]?.signal;
+    const generation = importedMeshStore.captureGeneration();
+    adopt();
+    expect(signal?.aborted).toBe(false);
+    expect(importedMeshStore.captureGeneration()).toBe(generation);
+    pending.resolve(json({ model: { model_id: mesh.model_id, producer: 'mesh-file', display_name: 'speaker.msh' },
+      prepared: mesh, latest_prepared: mesh, original_available: true }));
+    await preparing;
+    expect(useMeshImportStore.getState()).toMatchObject({ busy: false, error: null });
+    expect(useImportedModelStore.getState().prepared?.ingest_id).toBe(mesh.ingest_id);
+    expect(importedMeshStore.getSnapshot().file?.ingestId).toBe(mesh.ingest_id);
+    expect(designPreparedRecord()).toBe(built);
+  });
+
+  it('resets the slot independently', () => {
+    adopt();
+    const generation = useDesignModelStore.getState().generation;
+    const imported = useImportedModelStore.getState();
+    resetDesignModel();
+    expect(useDesignModelStore.getState()).toMatchObject({ phase: 'empty', prepared: null, authoring: null, generation: generation + 1 });
+    expect(useImportedModelStore.getState()).toBe(imported);
   });
 });

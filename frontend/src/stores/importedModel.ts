@@ -1,3 +1,5 @@
+import type { CompiledAssembly } from '../api/assembly';
+import { useDesignStore } from './design';
 import { seedFileSimulation } from './importedSimulationSetup';
 import type { SimulationData } from './cadReturn';
 import type { RegisteredMesh } from '../api/meshImport';
@@ -47,7 +49,7 @@ export interface FileDraft {
   reflectPlanes?: string[] | null;
 }
 /** The prepared mesh on screen: a file's registered mesh, or a CAD ingestion record. */
-export type ImportedPrepared = { ingest_id: string; manifest_sha256: string; artifact_sha256: string; model_id?: string | null };
+export type ImportedPrepared = { ingest_id: string; manifest_sha256: string; artifact_sha256: string; model_id?: string | null; solve_model_sha256?: string | null };
 
 /** The registered model, including older CAD records that only carry a project lineage. */
 export function importedModelId(record: ImportedPrepared & { project?: { lineage_id?: string | null } | null }): string {
@@ -55,7 +57,15 @@ export function importedModelId(record: ImportedPrepared & { project?: { lineage
   return record.project?.lineage_id || 'unfiled';
 }
 
+export interface AuthoringLink {
+  designUid: string | null;
+  revision: number;
+  load: number;
+  contentKey: string | null;
+}
+
 export interface ImportedModelState {
+  authoring: AuthoringLink | null;
   input: ImportedInput | null;
   model: ImportedModelSummary | null;
   /** The model a Solve names: the model's id, or `unfiled` for a mesh filed under none. */
@@ -82,7 +92,7 @@ export const EMPTY_FILE_DRAFT: Readonly<FileDraft> = Object.freeze({ units: '', 
 
 function emptyState(input: ImportedInput | null): Omit<ImportedModelState, 'generation'> {
   return {
-    input, fileSimulation: null, model: null, modelId: null, prepared: null, originalAvailable: false, setup: null,
+    input, authoring: null, fileSimulation: null, model: null, modelId: null, prepared: null, originalAvailable: false, setup: null,
     restoredRevisionId: null, followEnginePreference: false, setupEditBase: null, fileDraft: { ...EMPTY_FILE_DRAFT, selected: [] }, phase: 'empty', error: null,
   };
 }
@@ -90,6 +100,39 @@ function emptyState(input: ImportedInput | null): Omit<ImportedModelState, 'gene
 export const useImportedModelStore = create<ImportedModelState>(() => ({
   ...emptyState(workspaceModeStore.getSnapshot().importedInput), generation: 0,
 }));
+
+/** The authoring workspace uses the same prepared session, with document-owned setup. */
+export const useDesignModelStore = create<ImportedModelState>(() => ({ ...emptyState('assembly'), generation: 0 }));
+
+function preparedState(input: ImportedInput, prepared: ImportedPrepared | null, model: ImportedModelSummary | null,
+  extras: Partial<Omit<ImportedModelState, 'generation'>> = {}): Omit<ImportedModelState, 'generation'> {
+  return { ...emptyState(input), prepared, model, modelId: prepared ? importedModelId(prepared) : null,
+    phase: prepared ? 'ready' : 'empty', ...extras };
+}
+
+/** Adopt a build without an Imported open, navigation, setup projection or viewport intent. */
+export function adoptDesignBuild({ record, model }: { record: CompiledAssembly; model: ImportedModelSummary }, authoring: AuthoringLink): void {
+  useDesignModelStore.setState(state => ({ ...preparedState('assembly', record, model, { authoring, modelId: model.model_id }),
+    generation: state.generation + 1 }));
+}
+
+export function resetDesignModel(): void {
+  useDesignModelStore.setState(state => ({ ...emptyState('assembly'), generation: state.generation + 1 }));
+}
+
+export function designPreparedRecord(): CompiledAssembly | null {
+  return useDesignModelStore.getState().prepared as CompiledAssembly | null;
+}
+
+export function useDesignPreparedRecord(): CompiledAssembly | null {
+  return useDesignModelStore(state => state.prepared) as CompiledAssembly | null;
+}
+
+export function activePreparedModel(): ImportedModelState | null {
+  return workspaceModeStore.getSnapshot().mode === 'parametric'
+    ? useDesignStore.getState().design.assembly ? useDesignModelStore.getState() : null
+    : useImportedModelStore.getState();
+}
 
 /** What the server answered a model or run read with. */
 export interface OpenedModel {
@@ -204,12 +247,8 @@ function openKnown(source: Extract<ImportedSource, { kind: 'file' | 'cad' }>): v
       || (modelId !== 'unfiled' && held.modelId === modelId && held.setupEditBase !== null));
   const previousSimulation = source.kind === 'file' && held?.input === 'file'
     && held.modelId === modelId && held.prepared === null ? held.fileSimulation : null;
-  const next: Omit<ImportedModelState, 'generation'> = {
-    ...emptyState(input),
-    model: modelId && modelId !== 'unfiled'
-      ? { model_id: modelId, producer: source.kind === 'file' ? 'mesh-file' : 'cad', display_name: filename ?? '' } : null,
-    modelId,
-    prepared,
+  const next = preparedState(input, prepared, modelId && modelId !== 'unfiled'
+    ? { model_id: modelId, producer: source.kind === 'file' ? 'mesh-file' : 'cad', display_name: filename ?? '' } : null, {
     originalAvailable: source.kind === 'file' && prepared !== null,
     setup: source.kind === 'file' ? previousSimulation ? null : source.setup ?? null : same ? held!.setup : null,
     setupEditBase: source.kind === 'file' && previousSimulation && source.setup
@@ -221,8 +260,7 @@ function openKnown(source: Extract<ImportedSource, { kind: 'file' | 'cad' }>): v
       : source.kind === 'file' ? { ...EMPTY_FILE_DRAFT, selected: [] } : useImportedModelStore.getState().fileDraft,
     fileSimulation: input === 'file' ? seedFileSimulation(prepared as RegisteredMesh | null, source.kind === 'file' ? source.setup ?? null : null,
       previousSimulation) : null,
-    phase: prepared ? 'ready' : 'empty',
-  };
+  });
   if (workspaceModeStore.getSnapshot().importedInput !== input) {
     // A return arriving while a file is on screen is the CAD input's model,
     // kept for when CAD comes back on screen.

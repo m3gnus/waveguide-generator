@@ -51,6 +51,7 @@ export interface ImportedModelSummary {
 
 /** A prepared mesh as a model read names it; a file's carries its solver mesh. */
 export interface PreparedSummary {
+  solve_model_sha256?: string | null;
   ingest_id: string;
   model_id: string | null;
   producer: string;
