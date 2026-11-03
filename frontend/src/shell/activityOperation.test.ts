@@ -49,6 +49,43 @@ it('exposes Stop only during a cancellable nested stage', async () => {
   expect(activityStore.getSnapshot()).toHaveLength(0);
 });
 
+it('marks a child failure without ending its parent or remembering a completed duration', async () => {
+  const fallback = deferred<void>();
+  const pending = activityOperation(start, fetcher, async scoped => {
+    await activityOperation(start, scoped, async (_fetcher, activity) => { activity.end(false); });
+    await fallback.promise;
+  });
+  expect(activityStore.getSnapshot()).toHaveLength(1);
+  fallback.resolve(); await pending;
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+  expect(activityStore.typicalMs('export')).toBeNull();
+});
+
+it.each([true, false])('registers child keys until the whole shared scope settles (parent first=%s)', async parentFirst => {
+  const child = deferred<void>(); const parent = deferred<void>(); const joined = deferred<void>();
+  const started = vi.spyOn(activityStore, 'start');
+  let childWork!: Promise<void>;
+  const pending = activityOperation(start, fetcher, async scoped => {
+    childWork = activityOperation(start, scoped, () => child.promise, 'child-artifact');
+    await childWork;
+    await parent.promise;
+  });
+  const other = activityOperation(start, fetcher, () => joined.promise, 'child-artifact');
+  expect(started).toHaveBeenCalledTimes(1);
+  child.resolve(); await childWork;
+  if (parentFirst) { parent.resolve(); await pending; }
+  else { joined.resolve(); await other; }
+  expect(activityStore.getSnapshot()).toHaveLength(1);
+  // Even when the keyed child has finished, another reader joins the live scope.
+  await activityOperation(start, fetcher, async () => undefined, 'child-artifact');
+  expect(started).toHaveBeenCalledTimes(1);
+  parent.resolve(); joined.resolve(); await Promise.all([pending, other]);
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+  // The key must not resurrect the ended scope on the next download.
+  await activityOperation(start, fetcher, async () => undefined, 'child-artifact');
+  expect(started).toHaveBeenCalledTimes(2);
+});
+
 it.each(['caller', 'Stop', 'already aborted'] as const)('aborts the request via %s and removes the activity', async via => {
   const caller = new AbortController();
   if (via === 'already aborted') caller.abort();

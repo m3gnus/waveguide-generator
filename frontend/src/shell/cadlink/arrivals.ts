@@ -377,8 +377,22 @@ export function createCadArrivalActions(
     setIngesting(true); setIngestError(null); setError(null); setStatus(null); setViewportNotice(null);
     meshCeilingChoice.clear();
     const selectedBundle = current.selectedBundle;
-    const operationFetch: typeof fetch = (input, init) => (options.fetcher ?? fetcher)(input,
-      { ...init, signal: init?.signal ?? abortController.signal });
+    const signalCleanups: Array<() => void> = [];
+    const operationFetch: typeof fetch = (input, init) => {
+      // Keep Stop connected even when a read supplies its own deadline signal.
+      // Retain the connection through body consumption, until the operation ends.
+      const controller = new AbortController();
+      for (const signal of new Set([abortController.signal, init?.signal])) {
+        if (!signal) continue;
+        const abort = () => controller.abort(signal.reason);
+        if (signal.aborted) abort();
+        else {
+          signal.addEventListener('abort', abort, { once: true });
+          signalCleanups.push(() => signal.removeEventListener('abort', abort));
+        }
+      }
+      return (options.fetcher ?? fetcher)(input, { ...init, signal: controller.signal });
+    };
     return activityOperation({ kind: 'cad-import', label: 'Importing the CAD model', cancel: () => abortController.abort() }, operationFetch, async (fetcher) => {
       try {
         const skipped = new Set(current.skippedSourceIds);
@@ -477,6 +491,7 @@ export function createCadArrivalActions(
         }
         throw reason instanceof Error ? reason : new Error(message);
       } finally {
+        signalCleanups.forEach(cleanup => cleanup());
         if (ingestAbortController.current === abortController) ingestAbortController.current = null;
         if (request === ingestRequest.current && mounted.current) setIngesting(false);
       }

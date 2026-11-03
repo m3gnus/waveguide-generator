@@ -8,6 +8,8 @@ import { resetDocumentStore, useDocumentStore } from '../../stores/document';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { createCadArrivalActions, createCadReturnArrivalReader, SupersededError } from './arrivals';
+import { showIngestedMeshInViewport } from './artifactLoader';
+import { REST_READ_TIMEOUT_MS } from '../../api/deadlineFetch';
 import { bundle, deferred, json, mesh, record } from './selection.fixtures';
 
 const newer = { ...bundle, name: 'new.wgreturn', bundlePath: 'wgreturn/new.wgreturn' };
@@ -484,6 +486,57 @@ it('Stop aborts the existing CAD request and removes its activity', async () => 
   activityStore.getSnapshot()[0].cancel!();
   await rejected;
   expect(signal.aborted).toBe(true);
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+  expect(activityStore.typicalMs('cad-import')).toBeNull();
+});
+
+it('shares the coordinator activity with the viewport effect while an artifact downloads', async () => {
+  vi.useFakeTimers();
+  const artifact = deferred<Response>();
+  const started = vi.spyOn(activityStore, 'start');
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/ingest') ? json(record) : artifact.promise);
+  const actions = createCadArrivalActions({}, fetcher);
+  actions.selectBundleAs(bundle);
+  const pending = actions.ingestSelected();
+  await vi.advanceTimersByTimeAsync(0);
+  const viewport = showIngestedMeshInViewport(record, 'Speaker', undefined, fetcher);
+  expect(activityStore.getSnapshot()).toHaveLength(1);
+  expect(started).toHaveBeenCalledTimes(1);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  artifact.resolve(new Response(mesh));
+  await Promise.all([pending, viewport]);
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+});
+
+it.each(['Stop', 'deadline'] as const)('aborts the running viewport download via %s, including body consumption', async via => {
+  vi.useFakeTimers();
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException('Deadline expired', 'TimeoutError')), ms);
+    return controller.signal;
+  });
+  let signal!: AbortSignal;
+  const body = deferred<string>();
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    if (String(url).endsWith('/ingest')) return json(record);
+    signal = init!.signal!;
+    if (signal.aborted) throw signal.reason;
+    signal.addEventListener('abort', () => body.reject(signal.reason), { once: true });
+    return { ok: true, status: 200, text: () => body.promise } as Response;
+  });
+  const actions = createCadArrivalActions({}, fetcher);
+  actions.selectBundleAs(bundle);
+  const pending = actions.ingestSelected();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(signal.aborted).toBe(false);
+  const viewportSignal = signal;
+  expect(activityStore.getSnapshot()).toHaveLength(1);
+  if (via === 'Stop') activityStore.getSnapshot()[0].cancel!();
+  else await vi.advanceTimersByTimeAsync(REST_READ_TIMEOUT_MS);
+  expect(viewportSignal.aborted).toBe(true);
+  expect(viewportSignal.reason.name).toBe(via === 'Stop' ? 'AbortError' : 'TimeoutError');
+  // Artifact display failures are advisory; the existing loader settles them.
+  await pending;
   expect(activityStore.getSnapshot()).toHaveLength(0);
   expect(activityStore.typicalMs('cad-import')).toBeNull();
 });

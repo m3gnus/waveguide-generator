@@ -923,6 +923,31 @@ it('rebuilds missing retained artifacts through normal registration using the re
   expect(useMeshImportStore.getState().error).toBeNull();
 });
 
+it('keeps the import activity through fallback inspection and preparation after prepared_unavailable', async () => {
+  const inspection = deferred<Response>(); const preparation = deferred<Response>();
+  const previous = { filename: 'speaker.msh', updated_at: '2026-10-26T08:31:00Z',
+    preparation: { units: 'mm', forward: '+z', up: '+x', roles: { 1: 'RIGID', 2: 'MF' } }, setup: null };
+  const started = vi.spyOn(activityStore, 'start');
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(response({ ...summary, previous_setup: previous,
+      known_model: { model_id: record.model_id, latest_prepared_id: record.ingest_id } }))
+    .mockResolvedValueOnce(response({ error: { code: 'prepared_unavailable', message: 'Retained mesh unavailable.' } }, 409))
+    .mockImplementationOnce(() => inspection.promise)
+    .mockImplementationOnce(() => preparation.promise);
+  const pending = loadMeshFile('speaker.msh', MSH, fetcher);
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+  expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'mesh-import' }]);
+  inspection.resolve(response(summary));
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(4));
+  expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'mesh-import', cancel: expect.any(Function) }]);
+  preparation.resolve(prepared(record));
+  await pending;
+  expect(registeredMesh()?.ingest_id).toBe(record.ingest_id);
+  expect(started).toHaveBeenCalledTimes(1);
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+  expect(activityStore.typicalMs('mesh-import')).toBeNull();
+});
+
 it('does not rebuild on a network error while reopening identical bytes', async () => {
   const fetcher = vi.fn<typeof fetch>(async url => {
     if (String(url).endsWith('/inspect')) return response({ ...summary, known_model: { model_id: record.model_id, latest_prepared_id: record.ingest_id } });

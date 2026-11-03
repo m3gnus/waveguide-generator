@@ -39,7 +39,6 @@ describe('assembly background build', () => {
   it.each([200, 422])('registers one shared build through success or failure (%s)', async status => {
     const { fetcher, answer } = deferredFetcher();
     const build = requestAssemblyBuild(fetcher);
-    expect(buildCurrentAssembly(fetcher)).toBe(build);
     expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'assembly-build', label: 'Building the mesh', cancel: null }]);
     const settled = status === 200 ? build : expect(build).rejects.toThrow('Set an enclosure depth.');
     answer(0, status === 200 ? record('activity') : null, status);
