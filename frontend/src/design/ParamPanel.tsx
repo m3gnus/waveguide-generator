@@ -1,6 +1,6 @@
 import { usesCurrentAthImport } from './athImportVersion';
 import { Notice } from '../shell/Notice';
-import { importedDriverLabel, useImportedSimulationSetup } from '../stores/importedSimulationSetup';
+import { importedDriverLabel, liveAssemblySimulationActive, useImportedSimulationSetup } from '../stores/importedSimulationSetup';
 import { sourceRoleLabel } from '../model/cadLabels';
 import { useDeveloperDetails } from '../prefs/preferences';
 import { osseFeatures, OSSE_SWITCH_NOTICE } from './osseFeatures';
@@ -929,8 +929,7 @@ function CadDriveChannels() {
   // A design's Sources and baffle assembly is built in WG: its build fixes each
   // radiator's motion (the horn's classic source, woofers axial along +Z), and
   // only woofers can carry a driver. Everything else is the imported setup.
-  const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const designAssembly = state.input === 'assembly' && workspaceMode === 'parametric';
+  const designAssembly = state.input === 'assembly' && liveAssemblySimulationActive();
   const label = (id: string) => state.input === 'cad' ? id : importedDriverLabel(state, id);
   const sources = state.sources;
   const activeSources = sources.filter((source) => !state.skippedSourceIds.includes(source.id));

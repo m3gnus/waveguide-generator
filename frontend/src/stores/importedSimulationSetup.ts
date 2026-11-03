@@ -402,7 +402,7 @@ function readyMeshSimulationSetup(input: 'file' | 'assembly') {
 export const fileSimulationSetup = readyMeshSimulationSetup('file');
 export const retainedAssemblySimulationSetup = readyMeshSimulationSetup('assembly');
 
-/** The open design's assembly input, whether the design has one, and the hook that follows its stores. */
+/** The open design's assembly input, whether it is the active model's setup, and the hook that follows its stores. */
 interface LiveAssemblySimulation { get(): ImportedSimulationSetup; active(): boolean; use(): void }
 let liveAssembly: LiveAssemblySimulation | null = null;
 
@@ -414,14 +414,20 @@ export function registerLiveAssemblySimulation(input: LiveAssemblySimulation): v
   liveAssembly = input;
 }
 
+/** Whether the active model is a design whose Sources and baffle assembly the shared sections set up. */
+export function liveAssemblySimulationActive(): boolean {
+  return !!liveAssembly?.active();
+}
+
 /**
  * One interface for the shared imported Simulation sections and their children.
- * In Parametric they set up the open design's Sources and baffle assembly, when it has one; in
- * CAD Link, the CAD return, the mesh file or the retained assembly run.
+ * The setup owner follows the active model: a parametric design with a Sources
+ * and baffle assembly sets up that assembly, written to the design document;
+ * otherwise the CAD return, the mesh file or the retained assembly run.
  */
 export function importedSimulationSetup(): ImportedSimulationSetup {
-  const { mode, importedInput: input } = workspaceModeStore.getSnapshot();
-  if (mode === 'parametric' && liveAssembly?.active()) return liveAssembly.get();
+  if (liveAssemblySimulationActive()) return liveAssembly!.get();
+  const input = workspaceModeStore.getSnapshot().importedInput;
   return (input === 'cad' ? cadSimulationSetup : input === 'assembly' ? retainedAssemblySimulationSetup : fileSimulationSetup).get();
 }
 

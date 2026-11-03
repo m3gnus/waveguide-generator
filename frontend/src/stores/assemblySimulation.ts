@@ -12,6 +12,7 @@ import type { CompiledAssembly } from '../api/assembly';
 import { parseWire, toWire } from '../results/crossoverSpec';
 import { HF_RADIATOR_ID, newRadiatorId, type AssemblyDriver, type AssemblySignalGroup, type DesignAssembly } from './assembly';
 import { useAssemblyBuildStore } from './assemblyBuild';
+import { currentModel } from '../model/currentModel';
 import { PASSIVE_CARDIOID_DEFAULTS, type CadDriveChannel, type RoleSource, type SimulationData } from './cadReturn';
 import { useDesignStore, type DesignDocument } from './design';
 import { parseExteriorTransducer, type ExteriorTransducerForm } from './exteriorTransducer';
@@ -195,7 +196,7 @@ export const assemblySimulationSetup = createImportedSimulationSetup({
 // In Parametric, the shared Simulation sections set up this design's assembly.
 registerLiveAssemblySimulation({
   get: () => assemblySimulationSetup.get(),
-  active: () => !!useDesignStore.getState().design.assembly,
+  active: () => currentModel().kind === 'parametric' && !!useDesignStore.getState().design.assembly,
   use: () => { useDesignStore(state => state.design); useAssemblyBuildStore(state => state.published); },
 });
 
