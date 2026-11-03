@@ -150,6 +150,40 @@ class MetalUnavailable(RuntimeError):
 logger = logging.getLogger(__name__)
 
 
+def imported_features_for(status: Mapping[str, Any]) -> tuple[str, ...]:
+    from server.platform.feature_flags import metal_exterior_transducers_enabled
+    from .metal_worker import transducer_worker_available
+
+    if status.get("available") and metal_exterior_transducers_enabled() and transducer_worker_available():
+        return (*IMPORTED_FEATURES, "exterior-transducers")
+    return IMPORTED_FEATURES
+
+
+def _require_exterior_network(request: SolveRequest | None, record: Mapping[str, Any]) -> None:
+    from server.platform.feature_flags import (
+        METAL_EXTERIOR_TRANSDUCERS_ENV, metal_exterior_transducers_enabled,
+    )
+    from .metal_worker import transducer_worker_available
+
+    if not metal_exterior_transducers_enabled():
+        raise MetalUnavailable(
+            f"Native Metal exterior networks are disabled by {METAL_EXTERIOR_TRANSDUCERS_ENV}; "
+            "select BEAT CPU or BEAT Metal, or ask the server operator to enable this experimental route."
+        )
+    if not transducer_worker_available():
+        raise MetalUnavailable(
+            "Installed Metal-BEM lacks the complete exterior network contract; "
+            "select BEAT CPU or BEAT Metal, or install a compatible Metal-BEM worker."
+        )
+    if request is None:
+        raise MetalUnavailable("Metal exterior network admission requires the full solve request; resubmit the design")
+    if record.get("fem_regions") and not request.geometry.exterior_only:
+        raise MetalUnavailable(
+            "Native Metal exterior networks cannot solve coupled FEM regions; "
+            "select BEAT CPU or BEAT Metal, or explicitly request an exterior-only solve."
+        )
+
+
 def _metal_fingerprints(results: Sequence[Any]) -> list[dict[str, str | None]]:
     """Retain each distinct source and helper actually used by native sweeps."""
     fingerprints: list[dict[str, str | None]] = []
@@ -1587,6 +1621,26 @@ def solve_imported_metal_from_msh_text(
         raise ValueError("imported Metal solve requires imported geometry")
     from server.contracts.source_contour import validate_contour_request
     validate_contour_request(geometry, record)
+    from . import beat_transducer_imported as exterior
+
+    if exterior.enabled(geometry.drive_channels):
+        _require_exterior_network(request, record)
+        status = metal_status()
+        if not status["available"]:
+            raise MetalUnavailable(status["reason"])
+        from .metal_worker import solve_transducer_worker
+
+        bem = bem_formulation(coupled_infinite_baffle=False)
+        return exterior.solve(
+            msh_text, request, record, backend="metal", compiled_solver=solve_transducer_worker,
+            stage_callback=stage_callback, cancellation_callback=cancellation_callback,
+            result_callback=result_callback,
+            solver_engine={
+                "engine": "metal", "provider": "native", "package": "hornlab-metal-bem",
+                "package_version": _version(), "device": "metal", "interface": "beat-compatible",
+                "formulation": bem.formulation, "complex_k_shift": bem.complex_k_shift,
+            },
+        )
     if request.options.ground_plane.enabled:
         raise MetalUnavailable(
             "The HornLab Metal adapter cannot apply a rigid ground plane to "
@@ -2356,10 +2410,24 @@ class MetalEngine:
         record: Mapping[str, Any],
         msh_text: str,
         drive_channels: Sequence[Any] | None = None,
+        request: SolveRequest | None = None,
     ) -> str | None:
         """Why Metal cannot solve this imported drive, asked at submission."""
 
-        del record, msh_text
+        from . import beat_transducer_imported as exterior
+
+        if request is not None:
+            drive_channels = request.geometry.drive_channels
+        if exterior.enabled(drive_channels or ()):
+            try:
+                _require_exterior_network(request, record)
+                from .metal_worker import validate_transducer_worker_request
+
+                compiled, _ = exterior.compile_request(msh_text, request, record, backend="metal")
+                validate_transducer_worker_request(compiled)
+            except (ValueError, MetalUnavailable) as exc:
+                return str(exc)
+            return None
         return imported_metal_preflight(drive_channels)
 
     async def run(

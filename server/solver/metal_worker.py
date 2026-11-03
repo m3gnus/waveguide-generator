@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import inspect
 from typing import Any
 
@@ -28,6 +28,94 @@ def validate_worker_request(compiled: Any) -> None:
     from hornlab_metal_bem import validate_compiled
 
     validate_compiled(compiled.wire)
+
+
+def transducer_worker_available() -> bool:
+    """Require the complete exterior contract, without starting a worker."""
+    if not worker_available():
+        return False
+    try:
+        from hornlab_metal_bem import compiled_capabilities
+
+        capabilities = compiled_capabilities()
+        if not isinstance(capabilities, Mapping):
+            return False
+        required = {
+            "compiled_system_versions": {3},
+            "precisions": {"float32"},
+            "components": {"ideal_velocity_source", "electrodynamic_transducer"},
+            "motion_profiles": {"uniform_normal", "rigid_translation"},
+            "outputs": {"exterior_pressure", "radiation_impedance_matrix", "diaphragm_velocity", "voice_coil_current"},
+            "symmetry": {"off", "x", "xy"},
+            "phasor_conventions": {"exp(-i omega t)", "exp(+i omega t)"},
+        }
+        return (capabilities.get("backend") == "metal"
+                and capabilities.get("request_schema_version") == 1
+                and all(values <= set(capabilities.get(key, ())) for key, values in required.items()))
+    except (ImportError, OSError, TypeError, ValueError):
+        return False
+
+
+def validate_transducer_worker_request(compiled: Any) -> None:
+    from .beat_adapter.transducers import validate_transducer_request
+
+    if not transducer_worker_available():
+        raise ValueError("Installed Metal-BEM lacks the complete exterior network contract; select BEAT CPU or BEAT Metal")
+    validate_transducer_request(compiled)
+    try:
+        validate_worker_request(compiled)
+    except (ValueError, RuntimeError) as exc:
+        raise ValueError(f"Installed Metal-BEM cannot solve this exterior network: {exc}. Select BEAT CPU or BEAT Metal") from exc
+
+
+def solve_transducer_worker(
+    compiled: Any, *, cancellation_callback=None, status_callback=None, on_frequency_result=None,
+):
+    """Submit native RMS voltage bases and decode with the existing network owner."""
+    from beat_engine.beat_contract.worker import negotiate_submission
+    from hornlab_metal_bem import MetalEngineWorker
+
+    from .beat_adapter.transducers import map_transducer_sweep
+    from .formulation import bem_formulation
+
+    validate_transducer_worker_request(compiled)
+    if cancellation_callback:
+        cancellation_callback()
+    bem = bem_formulation(coupled_infinite_baffle=False)
+    callback_error: list[BaseException] = []
+
+    def native_progress(_index, _frequency, _entry):
+        try:
+            if cancellation_callback:
+                cancellation_callback()
+        except BaseException as exc:
+            callback_error.append(exc)
+            raise InterruptedError("Metal exterior network solve cancelled") from exc
+
+    def acquired(sweep):
+        if cancellation_callback:
+            cancellation_callback()
+        if on_frequency_result:
+            on_frequency_result(sweep)
+
+    worker = MetalEngineWorker(native_formulation=bem.formulation,
+                               complex_k_shift=bem.complex_k_shift, native_progress_cb=native_progress)
+    try:
+        worker.ensure_started()
+        negotiate_submission(worker.worker_info, compiled.wire, "solve")
+        result = map_transducer_sweep(worker.submit(compiled.wire, status_callback=status_callback),
+                                      compiled, on_frequency_result=acquired)
+        if callback_error:
+            raise callback_error[0]
+        if result.cancelled and not result.rows:
+            raise RuntimeError("Metal exterior network solve cancelled before any results; retry the solve")
+        return result
+    except BaseException as exc:
+        if callback_error and exc is not callback_error[0]:
+            raise callback_error[0] from exc
+        raise
+    finally:
+        worker.terminate()
 
 
 def select_worker_request(

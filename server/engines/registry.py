@@ -313,7 +313,11 @@ def detect_engines(
                     if hasattr(adapter, "geometry_sources_for")
                     else adapter.GEOMETRY_SOURCES
                 ),
-                imported_features=tuple(adapter.IMPORTED_FEATURES),
+                imported_features=tuple(
+                    adapter.imported_features_for(status)
+                    if hasattr(adapter, "imported_features_for")
+                    else adapter.IMPORTED_FEATURES
+                ),
                 symmetry_domains=_symmetry_domains(name),
                 field_traces=True,
                 di_sphere=True,
