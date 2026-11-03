@@ -133,6 +133,52 @@ def test_save_and_reopen_keep_radiator_identities_and_ath_provenance():
     assert serialize(reopened) == written
 
 
+@pytest.mark.parametrize("key", ["A", "B"])
+@pytest.mark.parametrize("weight", [0, -0.5, 0.75])
+def test_nested_lf_members_use_the_dotted_import_and_round_trip(key, weight):
+    members = f"Radius = 70\n Spacing = 35\n DrivingWeight = {weight}\n SID = 1\n"
+    prefix = " Depth = 280\n Spacing = 25,250,25,300\n"
+    nested = parse(ath(prefix + f" LFSource.{key} = {{ ; source\n {members} }}\n"))
+    dotted = parse(ath(prefix + "\n".join(f" LFSource.{key}.{line.strip()}" for line in members.splitlines()) + "\n"))
+    actual = nested.design.root.assembly
+    expected = dotted.design.root.assembly
+    assert actual is not None and expected is not None
+    assert actual.woofers[0].model_dump(exclude={"id"}) == expected.woofers[0].model_dump(exclude={"id"})
+    assert actual.signal_groups[1].members[0].model_dump(exclude={"radiator_id"}) == expected.signal_groups[1].members[0].model_dump(exclude={"radiator_id"})
+    assert actual.woofers[0].drive == ("rigid" if weight == 0 else "prescribed")
+    assert actual.woofers[0].ath.sid == 1
+    written = serialize(nested)
+    assert parse(written).design.root.assembly == actual
+    assert serialize(parse(written)) == written
+
+
+def test_nested_sources_close_back_into_the_enclosure_and_keep_disabled_members():
+    parsed = parse(ath(" LFSource.A = {\n _Radius = 50\n}\n LFSource.B = {\n Radius = 70\n}\n Depth = 280\n Spacing = 25,250,25,300\n"))
+    assert parsed.design.root.enclosure.depth.value == 280
+    assert [w.label for w in parsed.design.root.assembly.woofers] == ["LF B"]
+    assert "no woofer imported" in {item.key: item.note for item in parsed.ignored_profile}["Mesh.Enclosure.LFSource.A.Radius"]
+    assert "no woofer imported" in notes(ath(" LFSource.B = {\n}\n"))["Mesh.Enclosure.LFSource.B.Radius"]
+    assert parse(ath(" LFSource.Below = {\n Radius = 70\n}\n")).design.root.assembly is None
+
+
+@pytest.mark.parametrize(("enclosure", "message"), [
+    (" LFSource.B = {\n Radius = 70\n}\n LFSource.B = {\n Radius = 80\n}\n", "appears more than once"),
+    (" Other = {\n Radius = 70\n}\n", "nested block"),
+    (" LFSource.B = {\n Other = {\n}\n}\n", "nested block"),
+    (" LFSource.B = {\n Radius 70\n}\n", "cannot read member"),
+    (" LFSource.B = {\n Unsupported = 1\n}\n", "unsupported"),
+])
+def test_nested_lf_support_does_not_relax_other_syntax_refusals(enclosure, message):
+    with pytest.raises(TextConfigError, match=message):
+        parse(ath(enclosure))
+
+
+@pytest.mark.parametrize("ending", ["", "}\n"])
+def test_nested_lf_and_enclosure_each_require_their_own_terminator(ending):
+    with pytest.raises(TextConfigError, match="unterminated block"):
+        parse(HORN + "Mesh.Enclosure = {\n LFSource.B = {\n Radius = 70\n" + ending)
+
+
 def test_legacy_text_without_lf_sources_is_unchanged():
     text = ath(" Depth = 200\n Spacing = 20,20,20,20\n")
     parsed = parse(text)
@@ -148,16 +194,22 @@ def test_below_is_ignored_as_ath_ignores_it_and_top_level_lf_stays_refused():
         parse(HORN + "LFSource.A = {\n Radius = 60\n}\n")
 
 
-def test_imported_woofers_compile_where_the_meshers_own_ath_import_places_them(tmp_path):
+@pytest.mark.parametrize(("nested", "b_weight"), [(False, 1), (True, 1), (True, 0)])
+def test_imported_woofers_compile_where_the_meshers_own_ath_import_places_them(tmp_path, nested, b_weight):
     """Same dependency, two routes: WG's relations and the mesher's ATH reading agree."""
     from hornlab_mesher.config_parser import parse_text_config
 
     # The design's own resolutions keep this test inside the dense-memory guard.
     text = ath(" Spacing = 20,250,20,250\n EdgeRadius = 5\n FrontResolution = 30\n BackResolution = 50\n"
                " LFSource.A.Radius = 25\n LFSource.A.Spacing = 12\n LFSource.A.Resolution = 25\n"
-               " LFSource.B.Radius = 30\n LFSource.B.Resolution = 25\n",
+               f" LFSource.B.Radius = 30\n LFSource.B.Resolution = 25\n LFSource.B.DrivingWeight = {b_weight}\n",
                "Mesh.AngularSegments = 32\nMesh.LengthSegments = 12\nMesh.ThroatResolution = 8\n"
                "Mesh.MouthResolution = 20\n")
+    if nested:
+        for key in ("A", "B"):
+            members = re.findall(rf" LFSource\.{key}\.([^\n]+)\n", text)
+            text = re.sub(rf" LFSource\.{key}\.[^\n]+\n", "", text)
+            text = text.replace("Mesh.Enclosure = {\n", "Mesh.Enclosure = {\n" + f" LFSource.{key} = {{\n" + "\n".join(members) + "\n }\n")
     parsed = parse(text)
     store = CadLinkStore.for_data_dir(tmp_path)
     store.initialize()
@@ -174,6 +226,14 @@ def test_imported_woofers_compile_where_the_meshers_own_ath_import_places_them(t
         assert compiled[f"LF {key}"]["center_mm"] == pytest.approx([native[key]["x_mm"], native[key]["y_mm"]], abs=1e-9)
         assert compiled[f"LF {key}"]["radius_mm"] == native[key]["radius_mm"]
         assert compiled[f"LF {key}"]["kind"] == "ath_cone"
-        assert [p["segment_id"] for p in compiled[f"LF {key}"]["patches"]] == ["cap", "cone"]
+        radiator = compiled[f"LF {key}"]
+        rigid = key == "B" and b_weight == 0
+        assert radiator["state"] == ("rigid" if rigid else "compiled")
+        assert (radiator["radiator_id"] in {e["id"] for e in record["excitations"]}) is not rigid
+        patches = [p for p in record["mesh"]["metadata"]["assembly"]["patches"] if p["radiator_id"] == radiator["radiator_id"]]
+        assert [p["segment_id"] for p in patches] == ["cap", "cone"]
+        if rigid:
+            assert radiator["source_ids"] == []
+            assert {p["physical_tag"] for p in patches} == {1}
     # The mesher's ATH LF compatibility box applies to these imported woofers.
     assert record["mesh"]["metadata"]["build_stats"]["triangle_count"] > 0

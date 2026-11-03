@@ -300,6 +300,8 @@ def _lex(text: str, repeats: list[tuple[str, _RawBlock]] | None = None) -> tuple
     raw_values: dict[str, str] = {}
     lines = text.splitlines()
     current: str | None = None
+    enclosure_source: str | None = None
+    enclosure_sources: set[str] = set()
     index = 0
     while index < len(lines):
         original = lines[index]
@@ -320,8 +322,22 @@ def _lex(text: str, repeats: list[tuple[str, _RawBlock]] | None = None) -> tuple
         match = _BLOCK_START.fullmatch(line)
         if match:
             if current is not None:
+                if current == "Mesh.Enclosure" and enclosure_source is None:
+                    from hornlab_mesher.config_parser import ATH_LF_BLOCKS
+
+                    name = match.group(1)
+                    if name in ATH_LF_BLOCKS:
+                        if name in enclosure_sources:
+                            raise _text_syntax_refusal(f"block 'Mesh.Enclosure.{name}' appears more than once", program_owned=bool(_PRIVATE_BLOCK_START.search(text)))
+                        enclosure_sources.add(name)
+                        enclosure_source = name
+                        # Match the mesher's nested LF reader, including an
+                        # empty block (reported as an omitted-radius source).
+                        blocks[current].items.setdefault(name, "")
+                        continue
                 raise _text_syntax_refusal(f"nested block {match.group(1)!r} inside {current!r}", program_owned=bool(_PRIVATE_BLOCK_START.search(text)))
             current = match.group(1)
+            enclosure_sources = set()
             if current in blocks and not current.startswith("_") and repeats is not None:
                 repeats.append((current, blocks[current]))
             blocks[current] = _RawBlock()
@@ -329,8 +345,20 @@ def _lex(text: str, repeats: list[tuple[str, _RawBlock]] | None = None) -> tuple
         if line == "}":
             if current is None:
                 raise _text_syntax_refusal("unexpected block terminator", program_owned=bool(_PRIVATE_BLOCK_START.search(text)))
+            if enclosure_source is not None:
+                enclosure_source = None
+                continue
             current = None
             continue
+        if enclosure_source is not None:
+            if "=" not in line:
+                raise _text_syntax_refusal(f"cannot read member of Mesh.Enclosure.{enclosure_source}: {line!r}", program_owned=bool(_PRIVATE_BLOCK_START.search(text)))
+            # Keep one enclosure-member path for nested and dotted syntax.
+            prefix = f"{enclosure_source}."
+            if line.startswith("_"):
+                prefix = "_" + prefix
+                line, stripped = line[1:], stripped[1:]
+            line, stripped = prefix + line, prefix + stripped
         if current is not None:
             blocks[current].entries.append(stripped)
         if current in {"Freeform.H.Points", "Freeform.V.Points"}:
@@ -353,6 +381,8 @@ def _lex(text: str, repeats: list[tuple[str, _RawBlock]] | None = None) -> tuple
         if current is not None:
             blocks[current].lines.append(line)
     if current is not None:
+        if enclosure_source is not None:
+            current += "." + enclosure_source
         raise _text_syntax_refusal(f"unterminated block {current!r} at end of file", program_owned=bool(_PRIVATE_BLOCK_START.search(text)))
     return flat, blocks, comments, raw_values
 
@@ -1079,8 +1109,8 @@ def _refuse_unsupported_ath_items(
                     inner = _ATH_ROSSE_BLOCK_ONLY.get(key)
                 if inner is not None and not _ath_is_noop(_ath_name(key), value) and not inactive_rollback(key):
                     add(f"{base}.{key}", varying(key, value, inner))
-        # A named in-block child (a block opened inside this one) never reaches
-        # `items`; the lexer already refuses nesting.
+        # Only enclosure LF children reach `items`, as dotted members. The
+        # lexer refuses other nesting.
     # The selected profile block's Throat.Profile wins over the top-level one.
     selected_items = blocks[block_name].items if block_name is not None else {}
     profile = selected_items.get("Throat.Profile", flat.get("Throat.Profile"))
