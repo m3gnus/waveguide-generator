@@ -9,31 +9,23 @@
  * label, and every consumer can tell whether it is the design on screen.
  */
 import { create } from 'zustand';
-import { assemblyProblemText, compileAssembly, type AssemblyCompileResult, type CompiledAssembly } from '../api/assembly';
-import type { ImportedModelSummary } from '../api/importedModels';
+import { assemblyProblemText, compileAssembly, type AssemblyCompileResult } from '../api/assembly';
 import { currentDocumentLoad, isCurrentDocumentLoad, serializeDesign, subscribeRevision, useDesignStore, type DesignDocument } from './design';
 import { designContentKey } from './designContentKey';
 import { useDocumentStore } from './document';
-import type { ImportedMeshScene } from '../viewport/importedMesh';
+import { importedMeshStore } from '../viewport/importedMeshStore';
+import { adoptDesignBuild, designPreparedRecord, resetDesignModel, useDesignModelStore, type ImportedModelState } from './importedModel';
 import { assemblyMeshScene } from '../viewport/solverMeshScene';
-
-export interface PublishedAssembly {
-  revision: number;
-  contentKey: string | null;
-  record: CompiledAssembly;
-  model: ImportedModelSummary;
-}
 
 export interface AssemblyBuildState {
   status: 'idle' | 'building' | 'published' | 'refused';
   requested: { revision: number; contentKey: string | null; load: number } | null;
-  published: PublishedAssembly | null;
   refusal: string | null;
   /** The original failure, for the developer disclosure only. */
   failureDetail: string | null;
 }
 
-const IDLE: AssemblyBuildState = { status: 'idle', requested: null, published: null, refusal: null, failureDetail: null };
+const IDLE: AssemblyBuildState = { status: 'idle', requested: null, refusal: null, failureDetail: null };
 /** This page's builds: the server orders revisions within one page and document only. */
 const PAGE_SESSION = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now()}-${Math.random()}`;
 
@@ -45,35 +37,23 @@ export function assemblyContentKey(design: DesignDocument): string | null {
 }
 
 /** Whether the last valid compile is the design on screen. */
-export function assemblyBuildCurrent(state: Pick<AssemblyBuildState, 'published'>, design: DesignDocument): boolean {
+export function designModelCurrent(design: DesignDocument, slot: ImportedModelState = useDesignModelStore.getState()): boolean {
   const key = assemblyContentKey(design);
-  return !!state.published && key !== null && state.published.contentKey === key;
+  return slot.phase === 'ready' && key !== null && slot.authoring?.contentKey === key
+    && slot.authoring.load === currentDocumentLoad();
+}
+
+/** Select the geometry producer once for every design Mesh preparation. */
+export function designMeshProducer(design: DesignDocument): 'horn' | 'wg-build' {
+  return design.assembly ? 'wg-build' : 'horn';
 }
 
 /** The preview's label for the last valid compile, or null when it is current. */
-export function assemblyPreviewLabel(state: Pick<AssemblyBuildState, 'published' | 'status'>, design: DesignDocument): string | null {
-  if (!state.published || assemblyBuildCurrent(state, design)) return null;
-  return state.status === 'building'
+export function assemblyPreviewLabel(build: Pick<AssemblyBuildState, 'status'>, slot: ImportedModelState, design: DesignDocument): string | null {
+  if (!slot.prepared || designModelCurrent(design, slot)) return null;
+  return build.status === 'building'
     ? 'Showing the last built assembly while this revision builds.'
     : 'Showing the last built assembly; it is from an earlier revision.';
-}
-
-/** A run solved from a compiled assembly is stale once the design or its compile moved on. */
-export function assemblyRunStale(preparedId: string, state: Pick<AssemblyBuildState, 'published'>, design: DesignDocument): boolean {
-  return state.published?.record.ingest_id !== preparedId || !assemblyBuildCurrent(state, design);
-}
-
-const scenes = new WeakMap<PublishedAssembly, ImportedMeshScene>();
-
-/** The viewport scene of a published compile, parsed once per build. It is the
- * design's solve artifact, so it is drawn the way its solver mesh is. */
-export function publishedAssemblyScene(published: PublishedAssembly): ImportedMeshScene {
-  let scene = scenes.get(published);
-  if (!scene) {
-    scene = assemblyMeshScene(published.model.display_name || 'Assembly', published.record, 'solver');
-    scenes.set(published, scene);
-  }
-  return scene;
 }
 
 /** The build in flight, so a second ask for the same revision waits for it instead of compiling again. */
@@ -98,11 +78,13 @@ export function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promise<Ass
 }
 
 /** The build of the design on screen: the last one when it still matches, else a new or running one. */
-export function buildCurrentAssembly(fetcher: typeof fetch = fetch): Promise<AssemblyCompileResult | null> {
+export function prepareDesignModel(fetcher: typeof fetch = fetch): Promise<AssemblyCompileResult | null> {
   const state = useAssemblyBuildStore.getState();
   const { design } = useDesignStore.getState();
-  if (state.published && state.status !== 'building' && assemblyBuildCurrent(state, design)) {
-    return Promise.resolve({ status: 'published', reused: true, model: state.published.model, prepared: state.published.record });
+  const slot = useDesignModelStore.getState();
+  const record = designPreparedRecord();
+  if (record && slot.model && state.status !== 'building' && designModelCurrent(design, slot)) {
+    return Promise.resolve({ status: 'published', reused: true, model: slot.model, prepared: record });
   }
   return requestAssemblyBuild(fetcher);
 }
@@ -123,9 +105,16 @@ async function compileRequested(design: DesignDocument, requested: NonNullable<A
     }, fetcher);
     if (!owns()) return { status: 'superseded' };
     if (result.status === 'published') {
-      useAssemblyBuildStore.setState({ status: 'published', refusal: null, published: {
-        revision: designRevision, contentKey: requested.contentKey, record: result.prepared, model: result.model,
-      } });
+      adoptDesignBuild({ record: result.prepared, model: result.model }, {
+        designUid: designUid ?? null, revision: designRevision, load, contentKey: requested.contentKey,
+      });
+      const viewport = importedMeshStore.getSnapshot();
+      if (viewport.solver?.ingestId !== result.prepared.ingest_id) {
+        const scene = { ...assemblyMeshScene(result.model.display_name || 'Assembly', result.prepared, 'solver'),
+          modelKey: `prepared:${result.prepared.ingest_id}` };
+        importedMeshStore.setSolver(scene, importedMeshStore.captureGeneration(), viewport.showing === 'solver');
+      }
+      useAssemblyBuildStore.setState({ status: 'published', refusal: null });
     }
     return result;
   } catch (error) {
@@ -147,4 +136,12 @@ export function resetAssemblyBuild(): void {
   useAssemblyBuildStore.setState({ ...IDLE });
 }
 
-subscribeRevision(event => { if (event.reason === 'load') resetAssemblyBuild(); });
+subscribeRevision(event => {
+  if (event.reason !== 'load') return;
+  const ingestId = useDesignModelStore.getState().prepared?.ingest_id;
+  resetAssemblyBuild();
+  resetDesignModel();
+  if (ingestId && importedMeshStore.getSnapshot().solver?.ingestId === ingestId) {
+    importedMeshStore.clear('solver', importedMeshStore.captureGeneration());
+  }
+});

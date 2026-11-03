@@ -3,7 +3,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addWoofer, emptyAssembly, setWooferDrive } from '../stores/assembly';
-import { resetAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
+import { adoptDesignBuild } from '../stores/importedModel';
+import { currentDocumentLoad } from '../stores/design';
+import { resetAssemblyBuild } from '../stores/assemblyBuild';
 import '../stores/assemblySimulation';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { useDriverLibraryStore } from '../stores/driverLibrary';
@@ -85,8 +87,7 @@ describe('a design assembly in the shared Drivers section', () => {
   });
 
   it('hides the unpersisted legacy picker after Build while keeping the woofer driver editable', async () => {
-    act(() => useAssemblyBuildStore.setState({ status: 'published', published: {
-      revision: useDesignStore.getState().designRevision, contentKey: null,
+    act(() => adoptDesignBuild({
       model: { model_id: 'design-assembly:test', producer: 'design-assembly', display_name: 'Assembly' },
       record: {
         ingest_id: 'wgi_test', model_id: 'design-assembly:test', producer: 'design-assembly',
@@ -102,7 +103,7 @@ describe('a design assembly in the shared Drivers section', () => {
           { id: woofer, source_ids: [`${woofer}/piston`], motion: 'axial', motion_axis: [0, 0, 1], patch_weights: { [`${woofer}/piston`]: 1 } },
         ],
       },
-    } }));
+    }, { designUid: 'test', revision: useDesignStore.getState().designRevision, contentKey: null, load: currentDocumentLoad() }));
 
     expect(host.querySelector('[data-channel-id="horn-throat"]')?.textContent).toContain("Drivers go on woofers.");
     expect(host.querySelector('[data-channel-id="horn-throat"]')?.querySelector('input, select, button')).toBeNull();

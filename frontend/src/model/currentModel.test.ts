@@ -17,7 +17,7 @@ import { resetDocumentStore } from '../stores/document';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { compiledAssemblyScene, currentModel, currentModelScene, currentModelStatus, modelForRun, runVerdict, shownResult, spatialResult } from './currentModel';
+import { currentModel, currentModelScene, currentModelStatus, modelForRun, runVerdict, shownResult, spatialResult } from './currentModel';
 import parametric from './fixtures/parametric.json';
 import fileSha from './fixtures/file-sha.json';
 import fileNoSha from './fixtures/file-no-sha.json';
@@ -25,14 +25,14 @@ import cad from './fixtures/cad.json';
 import cadNoSha from './fixtures/cad-no-sha.json';
 import unreadable from './fixtures/unreadable.json';
 import refused from '../jobs/cadRefusedJob.fixture.json';
-import { resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
+import { adoptDesignBuild, resetImportedModelStore, useDesignModelStore, useImportedModelStore } from '../stores/importedModel';
 import { json, mesh, record, workspaceFor } from '../shell/cadlink/selection.fixtures';
 import { fieldPlaneJob, femFieldJob } from '../viewport/Viewport';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
 import { designForFamily, serializeDesign } from '../stores/design';
 import type { CurrentModel } from './currentModel';
-import { assemblyContentKey, resetAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
-import { solverMeshScene } from '../viewport/solverMeshScene';
+import { assemblyContentKey, resetAssemblyBuild } from '../stores/assemblyBuild';
+import { assemblyMeshScene, solverMeshScene } from '../viewport/solverMeshScene';
 import type { CompiledAssembly } from '../api/assembly';
 
 export const oldRuns = [parametric, fileSha, fileNoSha, cad, cadNoSha, unreadable] as unknown as JobItem[];
@@ -318,9 +318,12 @@ describe('a design assembly run on its parametric design', () => {
     expect(currentModelScene(currentModel())).toBeNull();
     importedMeshStore.showParametric();
     expect(currentModelScene(currentModel())).toBeNull();
-    useAssemblyBuildStore.setState({ status: 'published', published: { revision: 1, contentKey: assemblyContentKey(model.design!),
-      record: { ingest_id: 'wgi_1', producer: 'design-assembly', sources: [], source_tags: {}, msh_text: mesh } as unknown as CompiledAssembly,
-      model: { model_id: 'design-assembly:x', display_name: 'x' } as never } });
+    const record = { ingest_id: 'wgi_1', solve_model_sha256: 'sha256:assembly', producer: 'design-assembly', sources: [], source_tags: {}, msh_text: mesh } as unknown as CompiledAssembly;
+    adoptDesignBuild({ record, model: { model_id: 'design-assembly:x', display_name: 'x', producer: 'design-assembly' } },
+      { designUid: model.designUid ?? null, revision: 1, load: currentDocumentLoad(), contentKey: assemblyContentKey(model.design!) });
+    importedMeshStore.setSolver({ ...assemblyMeshScene('x', record, 'solver'), modelKey: 'prepared:wgi_1' }, importedMeshStore.captureGeneration(), false);
+    expect(currentModel()).toMatchObject({ kind: 'parametric', key: model.key, modelId: 'design-assembly:x', ingestId: 'wgi_1',
+      prepared: { modelId: 'design-assembly:x', ingestId: 'wgi_1', key: 'sha256:assembly', current: true } });
     const built = currentModelScene(currentModel());
     expect(built).toMatchObject({ source: 'solver', ingestId: 'wgi_1', triangleCount: 1 });
     expect(currentModel().viewportShowing).toBe(true);
@@ -328,18 +331,20 @@ describe('a design assembly run on its parametric design', () => {
     expect(currentModelScene(currentModel())).toBe(built);
     useDesignStore.getState().updateValue('enclosure.depth', 321);
     // Mesh keeps the last build up, as the earlier revision it is; Geometry follows the design.
-    expect(compiledAssemblyScene(currentModel())).toBe(built);
+    expect(currentModelScene(currentModel())).toBe(built);
     expect(currentModel().viewportShowing).toBe(false);
+    expect(currentModel().prepared?.current).toBe(false);
     importedMeshStore.showParametric();
     expect(currentModelScene(currentModel())).toBeNull();
     useDesignStore.getState().undo();
     expect(currentModelScene(currentModel())).toBe(built);
     expect(currentModel().viewportShowing).toBe(true);
+    expect(currentModel().prepared?.current).toBe(true);
     useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
-    expect(useAssemblyBuildStore.getState().published).toBeNull();
+    expect(useDesignModelStore.getState().prepared).toBeNull();
     expect(currentModelScene(currentModel())).toBeNull();
     resetDesignStore();
-    expect(useAssemblyBuildStore.getState().published).toBeNull();
+    expect(useDesignModelStore.getState().prepared).toBeNull();
     expect(currentModelScene(currentModel())).toBeNull();
   });
 

@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { addWoofer, commitAssembly, emptyAssembly, setPlacement } from './assembly';
 import {
-  assemblyBuildCurrent, assemblyPreviewLabel, assemblyRunStale, buildCurrentAssembly, publishedAssemblyScene, requestAssemblyBuild, resetAssemblyBuild, useAssemblyBuildStore,
+  designModelCurrent, assemblyPreviewLabel, prepareDesignModel, requestAssemblyBuild, resetAssemblyBuild, useAssemblyBuildStore,
 } from './assemblyBuild';
 import { designForFamily, resetDesignStore, useDesignStore } from './design';
+import { useDesignModelStore } from './importedModel';
+import { importedMeshStore } from '../viewport/importedMeshStore';
 import { mesh } from '../shell/cadlink/selection.fixtures';
 
 let counter = 0;
@@ -47,8 +49,8 @@ describe('assembly background build', () => {
     expect(await first).toEqual({ status: 'superseded' });
     const state = useAssemblyBuildStore.getState();
     expect(state.status).toBe('published');
-    expect(state.published?.record.ingest_id).toBe('wgi_new');
-    expect(assemblyBuildCurrent(state, useDesignStore.getState().design)).toBe(true);
+    expect(useDesignModelStore.getState().prepared?.ingest_id).toBe('wgi_new');
+    expect(designModelCurrent(useDesignStore.getState().design)).toBe(true);
   });
 
   it('labels the last valid compile and marks runs stale after an edit or a refusal', async () => {
@@ -57,37 +59,44 @@ describe('assembly background build', () => {
     answer(0, record('wgi_one'));
     await build;
     const design = () => useDesignStore.getState().design;
-    expect(assemblyPreviewLabel(useAssemblyBuildStore.getState(), design())).toBeNull();
-    expect(assemblyRunStale('wgi_one', useAssemblyBuildStore.getState(), design())).toBe(false);
+    expect(assemblyPreviewLabel(useAssemblyBuildStore.getState(), useDesignModelStore.getState(), design())).toBeNull();
+    expect(designModelCurrent(design())).toBe(true);
     const woofer = design().assembly!.woofers![0].id;
     commitAssembly(setPlacement(design().assembly!, woofer, { anchor: 'below', gap_mm: 40 }));
-    expect(assemblyRunStale('wgi_one', useAssemblyBuildStore.getState(), design())).toBe(true);
+    expect(designModelCurrent(design())).toBe(false);
+    const previous = useDesignModelStore.getState();
     const refused = requestAssemblyBuild(fetcher);
     answer(1, null, 422);
     await expect(refused).rejects.toThrow('Set an enclosure depth.');
     const state = useAssemblyBuildStore.getState();
+    expect(useDesignModelStore.getState()).toBe(previous);
     expect(state).toMatchObject({ status: 'refused', refusal: 'Set an enclosure depth.' });
-    expect(state.published?.record.ingest_id).toBe('wgi_one');
-    expect(assemblyPreviewLabel(state, design())).toMatch(/earlier revision/);
+    expect(useDesignModelStore.getState().prepared?.ingest_id).toBe('wgi_one');
+    expect(assemblyPreviewLabel(state, useDesignModelStore.getState(), design())).toMatch(/earlier revision/);
     useDesignStore.getState().undo();
-    expect(assemblyPreviewLabel(useAssemblyBuildStore.getState(), design())).toBeNull();
+    expect(assemblyPreviewLabel(useAssemblyBuildStore.getState(), useDesignModelStore.getState(), design())).toBeNull();
   });
 
   it('shares one build per revision between Build, Mesh and Solve, and reuses a current one', async () => {
     const { fetcher, pending, answer } = deferredFetcher();
     const first = requestAssemblyBuild(fetcher);
-    expect(buildCurrentAssembly(fetcher)).toBe(first);
+    expect(prepareDesignModel(fetcher)).toBe(first);
     expect(pending).toHaveLength(1);
     answer(0, record('wgi_one'));
     await first;
-    expect(await buildCurrentAssembly(fetcher)).toMatchObject({ status: 'published', reused: true, prepared: { ingest_id: 'wgi_one' } });
+    expect(await prepareDesignModel(fetcher)).toMatchObject({ status: 'published', reused: true, prepared: { ingest_id: 'wgi_one' } });
     expect(pending).toHaveLength(1);
-    const published = useAssemblyBuildStore.getState().published!;
-    expect(publishedAssemblyScene(published)).toBe(publishedAssemblyScene(published));
+    const scene = importedMeshStore.getSnapshot().solver;
+    expect(scene).toMatchObject({ ingestId: 'wgi_one', modelKey: 'prepared:wgi_one' });
     const woofer = useDesignStore.getState().design.assembly!.woofers![0].id;
     commitAssembly(setPlacement(useDesignStore.getState().design.assembly!, woofer, { anchor: 'below', gap_mm: 30 }));
-    void buildCurrentAssembly(fetcher);
+    const reused = prepareDesignModel(fetcher);
     expect(pending).toHaveLength(2);
+    // The server can return a deep copy: identity is the prepared id.
+    answer(1, structuredClone(record('wgi_one')));
+    await reused;
+    expect(importedMeshStore.getSnapshot().solver).toBe(scene);
+    expect(designModelCurrent(useDesignStore.getState().design)).toBe(true);
   });
 
   it('drops an answer for a document that was replaced, and forgets the build on open', async () => {
@@ -96,7 +105,35 @@ describe('assembly background build', () => {
     useDesignStore.getState().replaceDocument(designForFamily('OSSE'));
     answer(0, record('wgi_gone'));
     expect(await build).toEqual({ status: 'superseded' });
-    expect(useAssemblyBuildStore.getState()).toMatchObject({ status: 'idle', published: null });
+    expect(useAssemblyBuildStore.getState()).toMatchObject({ status: 'idle' });
+    expect(useDesignModelStore.getState()).toMatchObject({ phase: 'empty', prepared: null });
     expect(await requestAssemblyBuild(fetcher)).toBeNull();
   });
+});
+
+it('clears only the reset design session scene on New/Open and fences freshness by load', async () => {
+  resetDesignStore();
+  commitAssembly(emptyAssembly(ids));
+  const { fetcher, answer } = deferredFetcher();
+  const build = requestAssemblyBuild(fetcher);
+  answer(0, record('wgi_reset'));
+  await build;
+  const slot = useDesignModelStore.getState();
+  const design = useDesignStore.getState().design;
+  expect(designModelCurrent(design)).toBe(true);
+  importedMeshStore.showSolver();
+  const generation = importedMeshStore.captureGeneration();
+  useDesignStore.getState().replaceDocument(design);
+  expect(designModelCurrent(design, slot)).toBe(false);
+  expect(useDesignModelStore.getState()).toMatchObject({ phase: 'empty', prepared: null });
+  expect(importedMeshStore.getSnapshot()).toMatchObject({ solver: null, showing: 'parametric' });
+  expect(importedMeshStore.captureGeneration()).toBe(generation);
+  const next = requestAssemblyBuild(fetcher);
+  answer(1, record('wgi_again'));
+  await next;
+  const otherScene = { ...importedMeshStore.getSnapshot().solver!, ingestId: null, modelKey: 'horn' };
+  importedMeshStore.setSolver(otherScene);
+  resetDesignStore();
+  expect(importedMeshStore.getSnapshot().solver).toBe(otherScene);
+  expect(useDesignModelStore.getState().prepared).toBeNull();
 });

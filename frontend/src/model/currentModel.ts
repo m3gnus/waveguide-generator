@@ -8,8 +8,8 @@ import { designFingerprint, jobDesignFingerprint } from '../results/runCoherence
 import { cadModelSelection, useCadModelSelection } from '../stores/cadModelState';
 import { currentDesignLoadSource, currentDocumentLoad, useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
-import { assemblyBuildCurrent, publishedAssemblyScene, useAssemblyBuildStore, type AssemblyBuildState } from '../stores/assemblyBuild';
-import { useImportedModelStore } from '../stores/importedModel';
+import { designModelCurrent } from '../stores/assemblyBuild';
+import { useDesignModelStore, useImportedModelStore } from '../stores/importedModel';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { importedMeshStore, type ImportedMeshState } from '../viewport/importedMeshStore';
 import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
@@ -29,6 +29,7 @@ export interface CurrentModel {
   design?: DesignDocument;
   /** The parametric document's uid, which a design assembly's runs name. */
   designUid?: string | null;
+  prepared?: { modelId: string | null; ingestId: string; key: string; current: boolean };
   manifestSha256?: string | null;
   /** An arrived Fusion request selected before it has a prepared mesh. */
   requestId?: string | null;
@@ -100,26 +101,16 @@ export function currentCadScenes(model: CurrentModel, viewport: ImportedMeshStat
   };
 }
 
-/**
- * The compiled assembly a parametric design's viewport draws: the one place
- * that chooses it. Mesh view shows what Solve would solve, so the last build
- * stays up, labelled, until a newer one arrives. Geometry shows a build only
- * while it is a build of the design on screen, and the live preview after
- * any edit, as it does for every other design.
- */
-export function compiledAssemblyScene(model: CurrentModel, viewport: ImportedMeshState = importedMeshStore.getSnapshot(),
-  build: Pick<AssemblyBuildState, 'published'> = useAssemblyBuildStore.getState()) {
-  if (model.kind !== 'parametric' || !model.design?.assembly || !build.published) return null;
-  if (viewport.showing !== 'solver' && !assemblyBuildCurrent(build, model.design)) return null;
-  return publishedAssemblyScene(build.published);
-}
-
 /** The scene representing the current model; null uses the parametric preview. */
 export function currentModelScene(model: CurrentModel, viewport: ImportedMeshState = importedMeshStore.getSnapshot()) {
   if (showsRetainedMesh(model.kind)) return viewport.file && (!model.ingestId || viewport.file.ingestId === model.ingestId) ? viewport.file : null;
   // An assembly is solved from its compile, never from the horn-only solver mesh.
-  if (model.kind === 'parametric') return model.design?.assembly ? compiledAssemblyScene(model, viewport)
-    : viewport.showing === 'solver' ? viewport.solver : null;
+  if (model.kind === 'parametric') {
+    if (!model.design?.assembly) return viewport.showing === 'solver' ? viewport.solver : null;
+    const slot = useDesignModelStore.getState();
+    return slot.prepared && viewport.solver?.ingestId === slot.prepared.ingest_id
+      && (viewport.showing === 'solver' || designModelCurrent(model.design, slot)) ? viewport.solver : null;
+  }
   const { cad, solver } = currentCadScenes(model, viewport);
   return viewport.showing === 'cadSolver' ? solver ?? cad : cad;
 }
@@ -147,8 +138,16 @@ export function currentModel(): CurrentModel {
       label: document.designName || 'Parametric model', design, designUid: document.designUid ?? null,
       viewportShowing: false, unloadedRunId,
     };
-    const build = useAssemblyBuildStore.getState();
-    return { ...model, viewportShowing: compiledAssemblyScene(model, viewport, build) ? assemblyBuildCurrent(build, design)
+    const slot = useDesignModelStore.getState();
+    const prepared = design.assembly ? slot.prepared : null;
+    const current = designModelCurrent(design, slot);
+    if (prepared) {
+      model.modelId = slot.modelId;
+      model.ingestId = prepared.ingest_id;
+      model.prepared = { modelId: slot.modelId, ingestId: prepared.ingest_id,
+        key: prepared.solve_model_sha256 || prepared.ingest_id, current };
+    }
+    return { ...model, viewportShowing: design.assembly && currentModelScene(model, viewport) ? current
       : !design.assembly && viewport.showing === 'solver' && viewport.solver
         ? viewport.solver.modelKey === parametricKey : previewShowing };
   }
@@ -179,7 +178,7 @@ export function useCurrentModel(): CurrentModel {
   useDesignStore(s => s.designRevision);
   useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot);
   useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot, importedMeshStore.getSnapshot);
-  useAssemblyBuildStore(s => s.published);
+  useDesignModelStore(s => s.prepared);
   return currentModel();
 }
 

@@ -11,7 +11,7 @@
 import type { CompiledAssembly } from '../api/assembly';
 import { parseWire, toWire } from '../results/crossoverSpec';
 import { HF_RADIATOR_ID, newRadiatorId, type AssemblyDriver, type AssemblySignalGroup, type DesignAssembly } from './assembly';
-import { useAssemblyBuildStore } from './assemblyBuild';
+import { designPreparedRecord, useDesignPreparedRecord } from './importedModel';
 import { currentModel } from '../model/currentModel';
 import { PASSIVE_CARDIOID_DEFAULTS, type CadDriveChannel, type RoleSource, type SimulationData } from './cadReturn';
 import { useDesignStore, type DesignDocument } from './design';
@@ -140,12 +140,8 @@ export function applyAssemblySimulation(assembly: DesignAssembly, next: Simulati
 
 let batch: SimulationData | null = null;
 
-function record(): CompiledAssembly | null {
-  return useAssemblyBuildStore.getState().published?.record ?? null;
-}
-
 function current(): SimulationData {
-  return batch ?? assemblySimulationData(useDesignStore.getState().design, record());
+  return batch ?? assemblySimulationData(useDesignStore.getState().design, designPreparedRecord());
 }
 
 function commit(next: SimulationData): void {
@@ -181,7 +177,7 @@ export const assemblySimulationSetup = createImportedSimulationSetup({
     const next = { ...state, ...patch };
     if (batch) batch = next; else commit(next);
   },
-  sources: () => assemblySources(record()),
+  sources: () => assemblySources(designPreparedRecord()),
   skippedSourceIds: () => [],
   setSweep: update => {
     const values: Record<string, number> = {};
@@ -197,7 +193,7 @@ export const assemblySimulationSetup = createImportedSimulationSetup({
 registerLiveAssemblySimulation({
   get: () => assemblySimulationSetup.get(),
   active: () => currentModel().kind === 'parametric' && !!useDesignStore.getState().design.assembly,
-  use: () => { useDesignStore(state => state.design); useAssemblyBuildStore(state => state.published); },
+  use: () => { useDesignStore(state => state.design); useDesignPreparedRecord(); },
 });
 
 export function assemblyImportedSetup(): ImportedSimulationSetup {

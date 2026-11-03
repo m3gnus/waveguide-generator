@@ -9,6 +9,51 @@
  * always allowed and is how the banner is cleared.
  */
 
+import { failureWords } from '../api/httpError';
+import { postSolverMesh, solverMeshArtifactToken, solverMeshOptions } from '../api/solverMesh';
+import { toSolveDesign } from '../jobs/actions';
+import { designFingerprint } from '../results/runCoherence';
+import { assemblyBuildFailure, designMeshProducer, prepareDesignModel, useAssemblyBuildStore } from '../stores/assemblyBuild';
+import { useDesignStore } from '../stores/design';
+import { useSolveOptionsStore } from '../stores/solveOptions';
+import { importedMeshStore } from './importedMeshStore';
+import { solverMeshScene } from './solverMeshScene';
+
+/** Prepare the design's solve artifact through its geometry producer. */
+export async function prepareDesignSolverMesh({ signal, generation, onRefusal }: {
+  signal: AbortSignal; generation: number; onRefusal: (refusal: string | null) => void;
+}): Promise<SolverMeshBuildOutcome> {
+  const started = performance.now();
+  const durationMs = () => performance.now() - started;
+  if (signal.aborted) return { ok: false, durationMs: durationMs() };
+  try {
+    const design = useDesignStore.getState().design;
+    if (designMeshProducer(design) === 'wg-build') {
+      onRefusal(null);
+      const ok = await prepareDesignModel().then(() => true, () => false);
+      const error = ok ? undefined : useAssemblyBuildStore.getState().refusal ?? assemblyBuildFailure(null);
+      return { ok: ok && !signal.aborted, durationMs: durationMs(), error };
+    }
+    const modelKey = designFingerprint(design);
+    const body = JSON.stringify({ design: toSolveDesign(design), options: solverMeshOptions(useSolveOptionsStore.getState()) });
+    const result = await postSolverMesh(body, fetch, signal);
+    if (signal.aborted) return { ok: false, durationMs: durationMs() };
+    onRefusal(result.plan?.refusal ?? null);
+    const token = solverMeshArtifactToken(result.stats.mesh_cache_key);
+    const current = importedMeshStore.getSnapshot().solver;
+    if (current?.artifactToken !== token || current.modelKey !== modelKey) {
+      importedMeshStore.setSolver(
+        current?.artifactToken === token ? { ...current, modelKey } : { ...solverMeshScene('Simulation mesh', result), modelKey },
+        generation, importedMeshStore.getSnapshot().showing === 'solver',
+      );
+    }
+    return { ok: true, durationMs: durationMs() };
+  } catch (error) {
+    if (!signal.aborted) onRefusal(null);
+    return { ok: false, durationMs: durationMs(), error: failureWords(error) };
+  }
+}
+
 export const SOLVER_MESH_DEBOUNCE_MS = 500;
 export const SOLVER_MESH_AUTO_BUDGET_MS = 1_500;
 

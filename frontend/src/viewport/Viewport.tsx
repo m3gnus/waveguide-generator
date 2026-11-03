@@ -3,8 +3,7 @@ import { Notice } from '../shell/Notice';
 import { SOURCE_ROLE_LABELS } from '../model/cadLabels';
 import { useCadModelStatusLine } from '../shell/CadModelStatusLine';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
-import { designFingerprint } from '../results/runCoherence';
-import { importedModelBlocker, useImportedModelStore } from '../stores/importedModel';
+import { importedModelBlocker, useDesignModelStore, useImportedModelStore } from '../stores/importedModel';
 import { useShallow } from 'zustand/react/shallow';
 import { LiveDimensions } from '../design/LiveDimensions';
 import { useDeveloperDetails } from '../prefs/preferences';
@@ -20,9 +19,8 @@ import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { planAdjustmentNotice } from '../jobs/planAdjustments';
 import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
 import { useOptionalSolveControl } from '../shell/JobsCoordinator';
-import { postSolverMesh, solverMeshArtifactToken, solverMeshDesignKey, solverMeshOptions } from '../api/solverMesh';
-import { solverMeshScene } from './solverMeshScene';
-import { assemblyBuildFailure, assemblyPreviewLabel, buildCurrentAssembly, useAssemblyBuildStore } from '../stores/assemblyBuild';
+import { solverMeshDesignKey, solverMeshOptions } from '../api/solverMesh';
+import { assemblyPreviewLabel, useAssemblyBuildStore } from '../stores/assemblyBuild';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { cadCameraAxes } from './cadCamera';
@@ -70,7 +68,7 @@ import type { FieldPlaneResponseId } from '../api/fieldPlane';
 import type { ImportedMeshScene } from './importedMesh';
 import { MeshReportCard, previewSurfaceNote } from './MeshReport';
 import { importedMeshStore, type ImportedMeshShowing } from './importedMeshStore';
-import { SolverMeshRefreshController, type SolverMeshRefreshState } from './solverMeshRefresh';
+import { prepareDesignSolverMesh, SolverMeshRefreshController, type SolverMeshRefreshState } from './solverMeshRefresh';
 import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
@@ -82,7 +80,6 @@ import type { DisplayMode, SourceRole, ViewportTheme } from './types';
 import { canRenderWebGL, resetWebGLProbe, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
 import { cadMeshRecoveryNotice } from '../model/cadMeshRecovery';
 import './viewport.css';
-import { failureWords } from '../api/httpError';
 
 
 const modes: Array<{ mode: DisplayMode; title: string; icon?: 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section'; glyph?: string }> = [
@@ -523,7 +520,8 @@ export function Viewport() {
     importedMeshStore.getSnapshot,
     importedMeshStore.getSnapshot,
   );
-  const assemblyBuild = useAssemblyBuildStore(useShallow(state => ({ status: state.status, published: state.published, requested: state.requested, refusal: state.refusal })));
+  const designModel = useDesignModelStore();
+  const assemblyBuild = useAssemblyBuildStore(useShallow(state => ({ status: state.status, requested: state.requested, refusal: state.refusal })));
   const cadSolverMesh = currentCadScenes(coherenceContext, importedMeshState).solver;
   const solverViewSelected = workspaceMode === 'parametric' && importedMeshState.showing === 'solver';
   const cadSolverViewSelected = workspaceMode === 'cad' && importedMeshState.showing === 'cadSolver';
@@ -580,48 +578,9 @@ export function Viewport() {
   const solverRefreshRef = useRef<SolverMeshRefreshController | null>(null);
   if (solverRefreshRef.current === null) {
     solverRefreshRef.current = new SolverMeshRefreshController({
-      runBuild: async (signal) => {
-        const generation = importedMeshStore.beginIntent();
-        const started = performance.now();
-        try {
-          const settings = useSolveOptionsStore.getState();
-          const modelDesign = useDesignStore.getState().design;
-          if (modelDesign.assembly) {
-            // Mesh shows what Solve solves: the compile, which the build store
-            // publishes and the current model selects.
-            setSolverMeshRefusal(null);
-            const ok = await buildCurrentAssembly().then(() => true, () => false);
-            const error = ok ? undefined : useAssemblyBuildStore.getState().refusal ?? assemblyBuildFailure(null);
-            return { ok: ok && !signal.aborted, durationMs: performance.now() - started, error };
-          }
-          const modelKey = designFingerprint(modelDesign);
-          const body = JSON.stringify({
-            design: toSolveDesign(modelDesign),
-            options: solverMeshOptions(settings),
-          });
-          const result = await postSolverMesh(body, fetch, signal);
-          if (signal.aborted) return { ok: false, durationMs: performance.now() - started };
-          setSolverMeshRefusal(result.plan?.refusal ?? null);
-          const token = solverMeshArtifactToken(result.stats.mesh_cache_key);
-          const current = importedMeshStore.getSnapshot().solver;
-          // Keep the scene object when the resolved artifact is unchanged.
-          if (current?.artifactToken !== token || current.modelKey !== modelKey) {
-            importedMeshStore.setSolver(
-              current?.artifactToken === token ? { ...current, modelKey } : { ...solverMeshScene('Simulation mesh', result), modelKey },
-              generation,
-              importedMeshStore.getSnapshot().showing === 'solver',
-            );
-          }
-          return { ok: true, durationMs: performance.now() - started };
-        } catch (error) {
-          if (!signal.aborted) setSolverMeshRefusal(null);
-          return {
-            ok: false,
-            durationMs: performance.now() - started,
-            error: failureWords(error),
-          };
-        }
-      },
+      runBuild: (signal) => prepareDesignSolverMesh({
+        signal, generation: importedMeshStore.captureGeneration(), onRefusal: setSolverMeshRefusal,
+      }),
       isSolveActive: () => jobsSocket.getSnapshot().jobs
         .some((job) => isActiveJobStatus(job.status)),
       onState: setSolverMeshState,
@@ -740,7 +699,7 @@ export function Viewport() {
   // A build pressed in Sources and baffle reports here, once its dialog has closed.
   const assemblyShown = workspaceMode === 'parametric' && !!design.assembly;
   const assemblyNote = !assemblyShown ? null
-    : importedMesh && assemblyPreviewLabel(assemblyBuild, design)
+    : importedMesh && assemblyPreviewLabel(assemblyBuild, designModel, design)
       || (assemblyBuild.status === 'building' ? 'Building the assembly…' : null);
   // A refusal of this revision always shows, whoever pressed Build, unless the
   // mesh banner already carries the same words.

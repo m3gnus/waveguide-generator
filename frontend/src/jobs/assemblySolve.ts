@@ -6,7 +6,8 @@
  */
 import { assemblyContextRefused, fetchAssemblyContext } from '../api/assembly';
 import { placementProblems } from '../sketch/adapters/frontView';
-import { assemblyBuildCurrent, requestAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
+import { designModelCurrent, requestAssemblyBuild } from '../stores/assemblyBuild';
+import { designPreparedRecord, useDesignModelStore } from '../stores/importedModel';
 import { assemblyImportedSetup, assemblyRadiatorLabel } from '../stores/assemblySimulation';
 import { serializeDesign, useDesignStore } from '../stores/design';
 import { useSolveOptionsStore } from '../stores/solveOptions';
@@ -29,7 +30,7 @@ export async function prepareAssemblySolve(fetcher: typeof fetch = fetch,
   // A driver that cannot be solved as set up is refused before anything is built.
   const driverProblem = assemblyDriverBlocker(assemblyImportedSetup(), optionsAtPress, label);
   if (driverProblem) throw new Error(driverProblem);
-  if (!assemblyBuildCurrent(useAssemblyBuildStore.getState(), design)) {
+  if (!designModelCurrent(design)) {
     // A woofer that does not fit never reaches the build, wherever Solve was pressed.
     // A check that cannot run leaves that to the build, which certifies the fit itself.
     const context = await fetchAssemblyContext(serializeDesign(design), fetcher).catch((reason: unknown) => {
@@ -42,14 +43,15 @@ export async function prepareAssemblySolve(fetcher: typeof fetch = fetch,
     const built = await requestAssemblyBuild(fetcher);
     if (built?.status !== 'published') throw new Error('A newer revision of this design is being built. Solve again when it is ready.');
   }
-  const published = useAssemblyBuildStore.getState().published;
-  if (!published || !sameRevision() || !assemblyBuildCurrent(useAssemblyBuildStore.getState(), design)) throw changed();
+  const record = designPreparedRecord();
+  const slot = useDesignModelStore.getState();
+  if (!record || !slot.modelId || !sameRevision() || !designModelCurrent(design)) throw changed();
   // Channels are the compiled record's excitations, so this reads the build above.
   const { setup, notice } = resolveAssemblySetup(assemblyImportedSetup(), design.assembly, optionsAtPress, design.simulation, label);
   return {
-    modelId: published.model.model_id, notice,
+    modelId: slot.modelId, notice,
     press: {
-      prepared_id: published.record.ingest_id,
+      prepared_id: record.ingest_id,
       // The run keeps the design it was pressed from, so it is this design's run.
       design: serializeDesign(design),
       client_request_id: `assembly-${newPressId()}`,

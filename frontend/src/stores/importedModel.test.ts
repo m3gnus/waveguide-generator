@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompiledAssembly } from '../api/assembly';
+import { requestAssemblyBuild } from './assemblyBuild';
 import { commitAssembly, emptyAssembly } from './assembly';
-import { currentDocumentLoad } from './design';
+import { currentDocumentLoad, resetDesignStore, useDesignStore } from './design';
 import type { JobItem } from '../api/jobsSocket';
 import type { RegisteredMesh } from '../api/meshImport';
 import { bundle, record as cadRecord } from '../shell/cadlink/selection.fixtures';
@@ -710,6 +711,43 @@ describe('design prepared session', () => {
     expect(useImportedModelStore.getState().prepared?.ingest_id).toBe(mesh.ingest_id);
     expect(importedMeshStore.getSnapshot().file?.ingestId).toBe(mesh.ingest_id);
     expect(designPreparedRecord()).toBe(built);
+  });
+
+  it('clears the design session on a document load', () => {
+    adopt();
+    useDesignStore.getState().replaceDocument(useDesignStore.getState().design);
+    expect(designPreparedRecord()).toBeNull();
+    adopt();
+    resetDesignStore();
+    expect(useDesignModelStore.getState()).toMatchObject({ phase: 'empty', prepared: null, authoring: null });
+  });
+
+  it('leaves a CAD open in flight to finish after a build publishes', async () => {
+    commitAssembly(emptyAssembly());
+    const pending = deferred<Response>();
+    const opening = openImported({ kind: 'cad-preparation', preparedId: cadRecord.ingest_id,
+      job: { id: 'cad-prepare', config_summary: {}, cad_state: { snapshot: { manifest_sha256: cadRecord.manifest_sha256 } } } as unknown as JobItem,
+      display: { enterCadWorkspace: () => workspaceModeStore.setMode('cad'),
+        showIngestedMesh: async (_record, _name, _notice, _fetcher, generation) => {
+          const { createImportedMeshScene } = await import('../viewport/importedMesh');
+          const { parseMSH } = await import('../viewport/mshParser');
+          importedMeshStore.setCad(createImportedMeshScene('CAD', parseMSH(MSH), 'cad', cadRecord.ingest_id), generation);
+        } },
+    }, vi.fn<typeof fetch>(() => pending.promise));
+    const before = useImportedModelStore.getState();
+    const workspace = workspaceModeStore.getSnapshot();
+    const generation = importedMeshStore.captureGeneration();
+    const compiled = { ...built, sources: [], source_tags: {} };
+    await requestAssemblyBuild(vi.fn<typeof fetch>(async () => json({ status: 'published', reused: false, model, prepared: compiled })));
+    expect(useImportedModelStore.getState()).toBe(before);
+    expect(workspaceModeStore.getSnapshot()).toBe(workspace);
+    expect(importedMeshStore.captureGeneration()).toBe(generation);
+    expect(importedMeshStore.getSnapshot().showing).toBe('parametric');
+    pending.resolve(json(cadRecord));
+    expect(await opening).toBe(true);
+    expect(useImportedModelStore.getState()).toMatchObject({ phase: 'ready', input: 'cad', prepared: cadRecord });
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(cadRecord.ingest_id);
+    expect(designPreparedRecord()?.ingest_id).toBe(built.ingest_id);
   });
 
   it('resets the slot independently', () => {

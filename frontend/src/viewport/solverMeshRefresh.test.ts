@@ -1,6 +1,16 @@
+import { mesh } from '../shell/cadlink/selection.fixtures';
+import { commitAssembly, emptyAssembly } from '../stores/assembly';
+import { resetAssemblyBuild } from '../stores/assemblyBuild';
+import { resetDesignStore, useDesignStore } from '../stores/design';
+import { designPreparedRecord } from '../stores/importedModel';
+import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { importedMeshStore } from './importedMeshStore';
+import { solverMeshOptions } from '../api/solverMesh';
+import { toSolveDesign } from '../jobs/actions';
+import { designFingerprint } from '../results/runCoherence';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  SolverMeshRefreshController,
+  prepareDesignSolverMesh, SolverMeshRefreshController,
   SOLVER_MESH_AUTO_BUDGET_MS,
   SOLVER_MESH_DEBOUNCE_MS,
   type SolverMeshBuildOutcome,
@@ -223,5 +233,98 @@ describe('SolverMeshRefreshController', () => {
     h.controller.documentLoaded();
     h.controller.activate(2);
     expect(h.builds).toHaveLength(3);
+  });
+});
+
+describe('design solver mesh preparation', () => {
+  beforeEach(() => {
+    resetDesignStore();
+    resetAssemblyBuild();
+    resetSolveOptionsStore();
+    importedMeshStore.clear();
+    importedMeshStore.showSolver();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const hornResult = () => ({ msh_text: mesh, cut_planes: [],
+    stats: { triangle_count: 1, mesh_cache_key: 'horn-artifact' }, plan: { refusal: 'Choose another engine.' } });
+  const assemblyResult = () => ({ status: 'published', reused: false,
+    model: { model_id: 'design-assembly:x', producer: 'design-assembly', display_name: 'x' },
+    prepared: { ingest_id: 'wgi_build', producer: 'design-assembly', sources: [], source_tags: {}, msh_text: mesh } });
+  const prepare = (controller = new AbortController(), onRefusal = vi.fn()) => prepareDesignSolverMesh({
+    signal: controller.signal, generation: importedMeshStore.captureGeneration(), onRefusal,
+  });
+
+  it('dispatches the horn producer with the same request and retains an unchanged artifact', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(hornResult())));
+    const refusal = vi.fn();
+    const generation = importedMeshStore.captureGeneration();
+    expect(await prepare(new AbortController(), refusal)).toMatchObject({ ok: true });
+    expect(fetcher).toHaveBeenCalledWith('/api/solver-mesh', expect.objectContaining({ method: 'POST' }));
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
+      design: toSolveDesign(useDesignStore.getState().design), options: solverMeshOptions(useSolveOptionsStore.getState()),
+    });
+    expect(refusal).toHaveBeenLastCalledWith('Choose another engine.');
+    const scene = importedMeshStore.getSnapshot().solver;
+    expect(scene).toMatchObject({ modelKey: designFingerprint(useDesignStore.getState().design), source: 'solver' });
+    fetcher.mockResolvedValue(new Response(JSON.stringify(hornResult())));
+    expect(await prepare()).toMatchObject({ ok: true });
+    expect(importedMeshStore.getSnapshot().solver).toBe(scene);
+    expect(importedMeshStore.captureGeneration()).toBe(generation);
+  });
+
+  it('dispatches a WG build without changing viewport intent and reuses its current session', async () => {
+    commitAssembly(emptyAssembly());
+    const generation = importedMeshStore.captureGeneration();
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(assemblyResult())));
+    expect(await prepare()).toMatchObject({ ok: true });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledWith('/api/models/assembly/compile', expect.anything());
+    expect(designPreparedRecord()?.ingest_id).toBe('wgi_build');
+    expect(importedMeshStore.getSnapshot().solver).toMatchObject({ ingestId: 'wgi_build', modelKey: 'prepared:wgi_build' });
+    expect(importedMeshStore.captureGeneration()).toBe(generation);
+    expect(await prepare()).toMatchObject({ ok: true });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each(['horn', 'wg-build'])('reports a refusal from the %s producer', async producer => {
+    if (producer === 'wg-build') commitAssembly(emptyAssembly());
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(producer === 'wg-build'
+      ? { error: { code: 'assembly_refused', message: 'Set an enclosure depth.' } }
+      : { detail: 'Set an enclosure depth.' }), { status: 422 }));
+    const refusal = vi.fn();
+    const outcome = await prepare(new AbortController(), refusal);
+    expect(outcome).toMatchObject({ ok: false, error: expect.any(String) });
+    if (producer === 'wg-build') expect(outcome.error).toBe('Set an enclosure depth.');
+    expect(refusal).toHaveBeenLastCalledWith(null);
+    expect(importedMeshStore.getSnapshot().solver).toBeNull();
+  });
+
+  it.each(['horn', 'wg-build'])('does not report success when a %s mesh view is aborted', async producer => {
+    if (producer === 'wg-build') commitAssembly(emptyAssembly());
+    let resolve!: (response: Response) => void;
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise(done => { resolve = done; }));
+    const controller = new AbortController();
+    const refusal = vi.fn();
+    const pending = prepare(controller, refusal);
+    controller.abort();
+    resolve(new Response(JSON.stringify(producer === 'wg-build' ? assemblyResult() : hornResult())));
+    expect(await pending).toMatchObject({ ok: false });
+    if (producer === 'horn') {
+      expect(fetcher.mock.calls[0][1]?.signal).toBe(controller.signal);
+      expect(importedMeshStore.getSnapshot().solver).toBeNull();
+      expect(refusal).not.toHaveBeenCalled();
+    } else {
+      // Leaving Mesh does not cancel the shared Build/Solve preparation.
+      expect(designPreparedRecord()?.ingest_id).toBe('wgi_build');
+    }
+  });
+
+  it('does not start a producer for an already aborted view', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch');
+    const controller = new AbortController();
+    controller.abort();
+    expect(await prepare(controller)).toMatchObject({ ok: false });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CompiledAssembly } from '../api/assembly';
 import { resolveAssemblySetup } from '../jobs/importedSubmission';
 import { addWoofer, commitAssembly, emptyAssembly, setMemberProcessing, setWooferEnabled } from './assembly';
-import { resetAssemblyBuild, useAssemblyBuildStore } from './assemblyBuild';
+import { resetAssemblyBuild } from './assemblyBuild';
+import { adoptDesignBuild } from './importedModel';
 import { applyAssemblySimulation, assemblyImportedSetup, assemblySimulationData } from './assemblySimulation';
-import { designForFamily, resetDesignStore, useDesignStore } from './design';
+import { currentDocumentLoad, designForFamily, resetDesignStore, useDesignStore } from './design';
 
 let counter = 0;
 const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '0')}`;
@@ -27,8 +28,9 @@ function setup(): { first: string; second: string } {
   const two = addWoofer(one.assembly, { anchor: 'above' }, ids);
   const design = { ...designForFamily('R-OSSE'), assembly: two.assembly };
   useDesignStore.getState().replaceDocument(design);
-  useAssemblyBuildStore.setState({ status: 'published', published: { revision: 1, contentKey: null,
-    record: compiledFor([one.id, two.id]), model: { model_id: 'design-assembly:wgu_x', producer: 'design-assembly', display_name: 'x' } } });
+  adoptDesignBuild({ record: compiledFor([one.id, two.id]),
+    model: { model_id: 'design-assembly:wgu_x', producer: 'design-assembly', display_name: 'x' } },
+    { designUid: 'wgu_x', revision: 1, contentKey: null, load: currentDocumentLoad() });
   return { first: one.id, second: two.id };
 }
 

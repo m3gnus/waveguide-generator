@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mesh } from '../shell/cadlink/selection.fixtures';
 import { FRONT_CONTEXT_LIMIT_MS } from '../api/assembly';
 import { addWoofer, emptyAssembly, setDriver, setWooferDrive } from '../stores/assembly';
-import { assemblyContentKey, resetAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
-import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
+import { assemblyContentKey, resetAssemblyBuild } from '../stores/assemblyBuild';
+import { currentDocumentLoad, designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
+import { adoptDesignBuild } from '../stores/importedModel';
 import { prepareAssemblySolve } from './assemblySolve';
 import { solveModel } from './actions';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -92,14 +94,15 @@ describe('assembly Solve press', () => {
     const { assembly, id } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
     useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });
     const design = useDesignStore.getState().design;
-    useAssemblyBuildStore.setState({ status: 'published', published: { revision: 1, contentKey: assemblyContentKey(design),
+    adoptDesignBuild({
       model: { model_id: 'design-assembly:wgu_x', producer: 'design-assembly', display_name: 'x' },
       record: { ingest_id: 'wgi_9', producer: 'design-assembly', model_id: 'design-assembly:wgu_x', manifest_sha256: 'm', artifact_sha256: 'a',
-        msh_text: '', design: { design_uid: 'wgu_x', name: 'x', revision: 1, content_sha256: '', assembly_sha256: '', geometry_sha256: '' },
+        msh_text: mesh, design: { design_uid: 'wgu_x', name: 'x', revision: 1, content_sha256: '', assembly_sha256: '', geometry_sha256: '' },
         radiators: [], signal_groups: [], source_tags: {},
         sources: [{ id: 'horn-throat', role: 'HF', radiator_id: 'horn-throat', segment_id: null }, { id: `${id}/piston`, role: 'LF', radiator_id: id, segment_id: 'piston' }],
         excitations: [{ id: 'horn-throat', source_ids: ['horn-throat'], motion: 'normal', patch_weights: {} },
-          { id, source_ids: [`${id}/piston`], motion: 'axial', patch_weights: {} }] } } });
+          { id, source_ids: [`${id}/piston`], motion: 'axial', patch_weights: {} }] } },
+      { designUid: 'wgu_x', revision: 1, contentKey: assemblyContentKey(design), load: currentDocumentLoad() });
     useSolveOptionsStore.getState().setAccuracy('accurate');
     useSolveOptionsStore.getState().setEngine(engine);
     const prepared = await prepareAssemblySolve(fetch, () => 'p1');
@@ -124,7 +127,7 @@ describe('assembly Solve press', () => {
   it('sends the channels of the build this press made, on a first Solve', async () => {
     const { assembly, id } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
     useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });
-    const record = { ingest_id: 'wgi_9', model_id: 'design-assembly:wgu_x', sources: [{ id: 'horn-throat', role: 'HF' }, { id: `${id}/piston`, role: 'LF' }],
+    const record = { msh_text: mesh, source_tags: {}, ingest_id: 'wgi_9', model_id: 'design-assembly:wgu_x', sources: [{ id: 'horn-throat', role: 'HF' }, { id: `${id}/piston`, role: 'LF' }],
       excitations: [{ id: 'horn-throat', source_ids: ['horn-throat'], motion: 'normal' }, { id, source_ids: [`${id}/piston`], motion: 'axial' }] };
     const fetcher = (async (url: string) => new Response(JSON.stringify(url.endsWith('/context')
       ? { minimum_clearance_mm: 0.1, clearances: {} }

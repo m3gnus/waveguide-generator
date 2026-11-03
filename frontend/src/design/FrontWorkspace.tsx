@@ -24,7 +24,8 @@ import { PlainController } from '../sketch/workspace/plainController';
 import { ProjectHistoryAuthority } from '../sketch/workspace/projectHistoryAuthority';
 import { Workspace } from '../sketch/workspace/Workspace';
 import { emptyAssembly, type DesignAssembly } from '../stores/assembly';
-import { assemblyBuildCurrent, requestAssemblyBuild, useAssemblyBuildStore, type AssemblyBuildState } from '../stores/assemblyBuild';
+import { designModelCurrent, prepareDesignModel, useAssemblyBuildStore, type AssemblyBuildState } from '../stores/assemblyBuild';
+import { useDesignModelStore } from '../stores/importedModel';
 import { serializeDesign, subscribeRevision, useDesignStore } from '../stores/design';
 import { ExperimentalBadge } from './ExperimentalBadge';
 import { frontViewProperties } from './FrontProperties';
@@ -148,6 +149,7 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
   const hasAssembly = !!design.assembly;
   const shown = hasAssembly ? state : blank;
   const build = useAssemblyBuildStore();
+  const slot = useDesignModelStore();
   const solveControl = useOptionalSolveControl();
   const [notice, setNotice] = useState('');
   const [selection, setSelection] = useState<string[]>([]);
@@ -193,9 +195,9 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
       </aside>
     </div>
     <footer className="front-footer">
-      <p role="status">{hasAssembly && !building && fit.line || buildLine(hasAssembly, build.status, !!build.published, assemblyBuildCurrent(build, design))}</p>
+      <p role="status">{hasAssembly && !building && fit.line || buildLine(hasAssembly, build.status, !!slot.prepared, designModelCurrent(design, slot))}</p>
       <div className="front-actions">
-        <button className="btn" type="button" disabled={!hasAssembly || building || fit.held} title={fit.held && fit.line || undefined} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); onClose(); }}>Build</button>
+        <button className="btn" type="button" disabled={!hasAssembly || building || fit.held} title={fit.held && fit.line || undefined} onClick={() => { void prepareDesignModel(fetcher).catch(() => {}); onClose(); }}>Build</button>
         <button className="btn-primary" type="button" disabled={!hasAssembly || building || fit.held || !solveControl?.solveAssembly || solveControl.submitting} title={fit.held && fit.line || undefined} onClick={solve}>Solve</button>
       </div>
     </footer>
