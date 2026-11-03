@@ -10426,7 +10426,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        prepared?: {
+                            /** @description Sealed solve-model identity, when retained; never recomputed for older records. */
+                            solve_model_sha256?: string | null;
+                        } & {
+                            [key: string]: unknown;
+                        };
+                    } & {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Unknown model or prepared mesh */
@@ -10510,7 +10519,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        prepared?: {
+                            /** @description Sealed solve-model identity, when retained; never recomputed for older records. */
+                            solve_model_sha256?: string | null;
+                        } & {
+                            [key: string]: unknown;
+                        };
+                    } & {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Unknown model or prepared mesh */
@@ -10594,7 +10612,22 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        latest_prepared?: ({
+                            /** @description Sealed solve-model identity, when retained; never recomputed for older records. */
+                            solve_model_sha256?: string | null;
+                        } & {
+                            [key: string]: unknown;
+                        }) | null;
+                        prepared?: {
+                            /** @description Sealed solve-model identity, when retained; never recomputed for older records. */
+                            solve_model_sha256?: string | null;
+                        } & {
+                            [key: string]: unknown;
+                        };
+                    } & {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Unknown model or prepared mesh */
@@ -10656,7 +10689,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        prepared?: {
+                            /** @description Sealed solve-model identity, when retained; never recomputed for older records. */
+                            solve_model_sha256?: string | null;
+                        } & {
+                            [key: string]: unknown;
+                        };
+                    } & {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Unknown model or prepared mesh */

@@ -13,12 +13,63 @@ import pytest
 from server.cadlink.roles import inventory_sha256, prepared_inventory_sha256
 from server.cadlink.store import CadLinkStore
 from server.jobs.imported_setup import setup_content, setup_digest, validate_setup
-from server.jobs.models_api import mount_models_api
+from server.jobs.models_api import mount_models_api, public_record
 from server.jobs.runtime import ImportedSolveRefusal, JobRuntime
 from server.jobs.store import JobStore
 from test_imported_jobs import _AlwaysRegistry
 from test_jobs_api import _request
 from test_mesh_import import register_mesh, registration, request
+
+
+@pytest.mark.parametrize("producer", [None, "cad", "native", "mesh-file", "design-assembly"])
+@pytest.mark.parametrize("identity", ["absent", None, "sha256:" + "d" * 64])
+def test_public_record_passes_through_only_the_retained_solve_identity(producer, identity):
+    record = {
+        "ingest_id": "wgi_retained", "manifest_sha256": "sha256:" + "a" * 64,
+        "artifact_sha256": "sha256:" + "b" * 64, "report_sha256": "sha256:" + "c" * 64,
+        "mesh_store_path": "/private/solve.msh",
+    }
+    if producer is not None:
+        record["producer"] = producer
+    if identity != "absent":
+        record["solve_model_sha256"] = identity
+    encoded = json.dumps(record)
+
+    public = public_record(record, "model-retained")
+
+    assert ("solve_model_sha256" in public) == (identity != "absent")
+    if identity != "absent":
+        assert public["solve_model_sha256"] == identity
+    assert public["producer"] == (producer or "cad")
+    assert public["model_id"] == "model-retained"
+    for key in ("ingest_id", "manifest_sha256", "artifact_sha256"):
+        assert public[key] == record[key]
+    assert "mesh_store_path" not in public
+    assert json.dumps(record) == encoded
+
+
+def test_model_openapi_documents_optional_retained_solve_identity(tmp_path):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    app, runtime = app_for(tmp_path, store)
+    try:
+        paths = app.openapi()["paths"]
+        for path, method in (
+            ("/api/models/files", "post"),
+            ("/api/models/assembly/compile", "post"),
+            ("/api/models/{model_id}/prepare", "post"),
+            ("/api/models/{model_id}", "get"),
+        ):
+            schema = paths[path][method]["responses"]["200"]["content"]["application/json"]["schema"]
+            prepared = schema["properties"]["prepared"]
+            assert prepared["properties"]["solve_model_sha256"]["anyOf"] == [
+                {"type": "string"}, {"type": "null"},
+            ]
+            assert "solve_model_sha256" not in prepared.get("required", [])
+        latest = schema["properties"]["latest_prepared"]["anyOf"]
+        assert latest == [prepared, {"type": "null"}]
+    finally:
+        asyncio.run(runtime.shutdown())
+        store.close()
 
 
 def test_file_inspection_and_repreparation_share_axes_roles_and_declared_domain(tmp_path):

@@ -19138,7 +19138,28 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Response Assembly Compile Api Models Assembly Compile Post"
+                  "additionalProperties": true,
+                  "properties": {
+                    "prepared": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "solve_model_sha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Sealed solve-model identity, when retained; never recomputed for older records."
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "title": "Response Assembly Compile Api Models Assembly Compile Post",
+                  "type": "object"
                 }
               }
             },
@@ -19242,7 +19263,28 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Response Register Api Models Files Post"
+                  "additionalProperties": true,
+                  "properties": {
+                    "prepared": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "solve_model_sha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Sealed solve-model identity, when retained; never recomputed for older records."
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "title": "Response Register Api Models Files Post",
+                  "type": "object"
                 }
               }
             },
@@ -19371,7 +19413,52 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Response Get Model Api Models  Model Id  Get"
+                  "additionalProperties": true,
+                  "properties": {
+                    "latest_prepared": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "solve_model_sha256": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Sealed solve-model identity, when retained; never recomputed for older records."
+                            }
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "prepared": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "solve_model_sha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Sealed solve-model identity, when retained; never recomputed for older records."
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "title": "Response Get Model Api Models  Model Id  Get",
+                  "type": "object"
                 }
               }
             },
@@ -19454,7 +19541,28 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Response Prepare Api Models  Model Id  Prepare Post"
+                  "additionalProperties": true,
+                  "properties": {
+                    "prepared": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "solve_model_sha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Sealed solve-model identity, when retained; never recomputed for older records."
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "title": "Response Prepare Api Models  Model Id  Prepare Post",
+                  "type": "object"
                 }
               }
             },

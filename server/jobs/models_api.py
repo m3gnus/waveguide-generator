@@ -500,7 +500,7 @@ def public_record(record: dict[str, Any], model_id: str | None) -> dict[str, Any
     """What a client sees of a prepared mesh. A CAD snapshot has no source file."""
 
     keys = (
-        "ingest_id", "producer", "created_at", "manifest_sha256", "artifact_sha256",
+        "ingest_id", "producer", "created_at", "manifest_sha256", "artifact_sha256", "solve_model_sha256",
         "source_file", "source_tags", "sources", "summary",
         "symmetry", "polar_grid_derivation",
         # A design assembly's captured revision and its compiled inventories.
@@ -757,6 +757,29 @@ def mount_models_api(application: FastAPI) -> None:
         **{status: refused[status] for status in (404, 409)},
         500: {"model": ErrorEnvelope, "description": "A retained record is unreadable"},
     }
+    # Document the shared identity without imposing a new encoding or response
+    # filter on the producers' existing public records.
+    prepared_schema = {
+        "type": "object",
+        "additionalProperties": True,
+        "properties": {
+            "solve_model_sha256": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "description": "Sealed solve-model identity, when retained; never recomputed for older records.",
+            },
+        },
+    }
+    prepared_response = {200: {"content": {"application/json": {"schema": {
+        "type": "object", "additionalProperties": True,
+        "properties": {"prepared": prepared_schema},
+    }}}}}
+    model_response = {200: {"content": {"application/json": {"schema": {
+        "type": "object", "additionalProperties": True,
+        "properties": {
+            "prepared": prepared_schema,
+            "latest_prepared": {"anyOf": [prepared_schema, {"type": "null"}]},
+        },
+    }}}}}
 
     # Preparing a file is in-flight work the restart would cut, exactly as a
     # CAD ingest is (UPDATE-TRANSACTION-CONTRACT.md §4.2, which refuses
@@ -814,7 +837,7 @@ def mount_models_api(application: FastAPI) -> None:
 
         return await answer(summary)
 
-    @router.post("/files", responses=refused)
+    @router.post("/files", responses={**refused, **prepared_response})
     async def register(body: MeshRegistration, http_request: Request) -> Any:
         """Import a file as a model and prepare it; the same inputs find the same mesh."""
 
@@ -857,7 +880,7 @@ def mount_models_api(application: FastAPI) -> None:
                 return _refusal(422, "assembly_refused", user_error_message(exc))
             return _refusal(500, "assembly_failed", user_error_message(exc))
 
-    @router.post("/assembly/compile", responses=refused)
+    @router.post("/assembly/compile", responses={**refused, **prepared_response})
     async def assembly_compile(body: AssemblyCompileRequest) -> Any:
         """Compile the design's assembly and publish it as its design model's prepared mesh.
 
@@ -901,7 +924,7 @@ def mount_models_api(application: FastAPI) -> None:
 
         return await read(published)
 
-    @router.post("/{model_id}/prepare", responses=refused)
+    @router.post("/{model_id}/prepare", responses={**refused, **prepared_response})
     async def prepare(model_id: str, body: FilePreparation, http_request: Request) -> Any:
         """Prepare a file model again from its retained original, however it is now set."""
 
@@ -926,7 +949,7 @@ def mount_models_api(application: FastAPI) -> None:
 
         return await read(model_of_prepared, store, prepared_id)
 
-    @router.get("/{model_id}", responses=readable)
+    @router.get("/{model_id}", responses={**readable, **model_response})
     async def get_model(model_id: str, http_request: Request, prepared_id: str | None = Query(default=None)) -> Any:
         """A model, its latest preparation, and one named preparation with its mesh."""
 

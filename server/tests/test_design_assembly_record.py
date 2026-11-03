@@ -373,6 +373,12 @@ def test_the_models_api_compiles_and_draws_an_assembly(store, tmp_path):
             compiled = await call(app, "POST", "/api/models/assembly/compile", body)
             assert compiled["status"] == "published" and compiled["model"]["producer"] == "design-assembly"
             prepared = compiled["prepared"]
+            retained = store.get_ingest(prepared["ingest_id"])["record_json"]
+            assert prepared["solve_model_sha256"] == json.loads(retained)["solve_model_sha256"]
+            reopened = await call(app, "GET", f"/api/models/{prepared['model_id']}?prepared_id={prepared['ingest_id']}")
+            for field in ("prepared", "latest_prepared"):
+                assert reopened[field]["solve_model_sha256"] == prepared["solve_model_sha256"]
+            assert store.get_ingest(prepared["ingest_id"])["record_json"] == retained
             assert prepared["msh_text"].startswith("$MeshFormat") and prepared["design"]["revision"] == 2
             assert [r["radiator_id"] for r in prepared["radiators"]] == ["horn-throat", W1]
             older = await call(app, "POST", "/api/models/assembly/compile", {**body, "design_revision": 1})
