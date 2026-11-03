@@ -1,7 +1,7 @@
 import { Box3, OrthographicCamera, PerspectiveCamera, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { clippingRange } from './cameraMath';
-import { axisColorsFromTokens, boundsAreDiscontinuous, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, installScrollPan, installWheelZoomInversion, observeCanvasVisibility, panCamera, ownCameraProjection, pickGizmoAxis, rebracketCamera, resizeCameraFrustum, shouldShowAxisGizmo, transferCameraView, type GizmoAxis } from './ViewportCanvas';
+import { axisColorsFromTokens, boundsAreDiscontinuous, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, observeCanvasVisibility, panCamera, ownCameraProjection, pickGizmoAxis, rebracketCamera, resizeCameraFrustum, shouldShowAxisGizmo, transferCameraView, type GizmoAxis } from './ViewportCanvas';
 
 describe('viewport renderer guards', () => {
   it('probes an actual WebGL2 context rather than constructor globals', () => {
@@ -338,33 +338,6 @@ describe('repaint when the canvas is shown again', () => {
 });
 
 describe('trackpad scroll pan', () => {
-  it('pans on a plain scroll and leaves a pinch to the zoom', () => {
-    const element = document.createElement('div');
-    const pan = vi.fn();
-    const zoom = vi.fn();
-    element.addEventListener('wheel', zoom);
-    const detach = installScrollPan(element, true, pan);
-    const scroll = new WheelEvent('wheel', { deltaX: 3, deltaY: -5, cancelable: true });
-    element.dispatchEvent(scroll);
-    expect(pan).toHaveBeenCalledWith(3, -5);
-    expect(scroll.defaultPrevented).toBe(true);
-    expect(zoom).not.toHaveBeenCalled();
-    element.dispatchEvent(new WheelEvent('wheel', { deltaY: 2, ctrlKey: true, cancelable: true }));
-    expect(pan).toHaveBeenCalledTimes(1);
-    expect(zoom).toHaveBeenCalledTimes(1);
-    detach();
-    element.dispatchEvent(new WheelEvent('wheel', { deltaY: 2, cancelable: true }));
-    expect(pan).toHaveBeenCalledTimes(1);
-  });
-
-  it('does nothing while scroll panning is off', () => {
-    const element = document.createElement('div');
-    const pan = vi.fn();
-    installScrollPan(element, false, pan);
-    element.dispatchEvent(new WheelEvent('wheel', { deltaY: 2, cancelable: true }));
-    expect(pan).not.toHaveBeenCalled();
-  });
-
   it('moves camera and target together, with the fingers like a scrolled page', () => {
     const camera = new OrthographicCamera(-50, 50, 50, -50, 0.1, 1000);
     camera.position.set(0, 0, 100);
@@ -377,15 +350,5 @@ describe('trackpad scroll pan', () => {
     expect(target.x).toBeCloseTo(10);
     expect(target.y).toBeCloseTo(-5);
     expect(camera.position.z).toBeCloseTo(100);
-  });
-
-  it('keeps inverted zoom for pinches only while scroll pans', () => {
-    const element = document.createElement('div');
-    const seen: number[] = [];
-    installWheelZoomInversion(element, true, true);
-    element.addEventListener('wheel', (event) => seen.push(event.deltaY));
-    element.dispatchEvent(new WheelEvent('wheel', { deltaY: 4, cancelable: true }));
-    element.dispatchEvent(new WheelEvent('wheel', { deltaY: 4, ctrlKey: true, cancelable: true }));
-    expect(seen).toEqual([4, -4]);
   });
 });

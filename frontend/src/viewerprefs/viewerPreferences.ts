@@ -12,7 +12,7 @@ export interface ViewerPreferences {
   dampingFactor: number;
   invertWheelZoom: boolean;
   /** A plain two-finger scroll pans the view, as trackpad-first apps do; a
-   * pinch still zooms. Off, a scroll zooms like a mouse wheel. */
+   * pinch and a physical mouse wheel always zoom. Off, trackpad scrolling zooms too. */
   scrollPans: boolean;
   keyboardPanEnabled: boolean;
   liveUpdate: boolean;

@@ -1,3 +1,4 @@
+import { wheelDeviceEvidence, type WheelDeviceSample } from '../input/wheelDevice';
 import type { XY } from './solver/types';
 export interface View { scale: number; offsetX: number; offsetY: number }
 export interface Bounds { minX: number; minY: number; maxX: number; maxY: number }
@@ -47,12 +48,10 @@ export function visibleAnchor(points: XY[], viewport: Viewport, near?: XY): XY |
 }
 
 /** Legacy notch data distinguishes smooth mouse wheels from trackpads; ctrl-wheel is a pinch. */
-export function wheelGesture(event: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'deltaMode' | 'ctrlKey'> & { wheelDeltaY?: number }):
+export function wheelGesture(event: WheelDeviceSample & Pick<WheelEvent, 'ctrlKey'>):
   { kind: 'pan'; dx: number; dy: number } | { kind: 'zoom'; factor: number } {
-  const { deltaX, deltaY, deltaMode, ctrlKey, wheelDeltaY } = event;
-  const trackpad = deltaX !== 0 || (wheelDeltaY !== undefined && wheelDeltaY !== 0
-    ? wheelDeltaY % 120 !== 0 : deltaMode === 0 && Math.abs(deltaY) < 40);
-  if (!ctrlKey && trackpad)
+  const { deltaX, deltaY, deltaMode, ctrlKey } = event;
+  if (!ctrlKey && wheelDeviceEvidence(event) === 'trackpad')
     return { kind: 'pan', dx: -deltaX, dy: -deltaY };
   const pixels = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? 360 : 1);
   return { kind: 'zoom', factor: Math.exp(-pixels * (ctrlKey ? .01 : .001)) };

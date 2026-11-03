@@ -16,6 +16,7 @@ import { createMaterialLibrary } from './materials';
 import { SurfaceMesh } from './SurfaceMesh';
 import { planesToMark, SymmetryPlaneMarks } from './SymmetryPlaneMarks';
 import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
+import { installViewportWheelInput } from './wheelInput';
 
 export type CameraRequest =
   | { preset: CameraPreset; direction?: never; up?: never; nonce: number }
@@ -214,58 +215,6 @@ export function installContextLossFallback(canvas: HTMLCanvasElement, onFailure:
   };
   canvas.addEventListener('webglcontextlost', onLost);
   return () => canvas.removeEventListener('webglcontextlost', onLost);
-}
-
-export function installWheelZoomInversion(element: HTMLElement, enabled: boolean, scrollPans = false): () => void {
-  if (!enabled) return () => undefined;
-  const redispatched = new WeakSet<Event>();
-  const invert = (event: WheelEvent) => {
-    if (redispatched.has(event)) return;
-    // With scroll panning only a pinch (a ctrl wheel) zooms.
-    if (scrollPans && !event.ctrlKey) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    const replacement = new WheelEvent('wheel', {
-      deltaMode: event.deltaMode,
-      deltaX: event.deltaX,
-      deltaY: -event.deltaY,
-      deltaZ: event.deltaZ,
-      ctrlKey: event.ctrlKey,
-      shiftKey: event.shiftKey,
-      altKey: event.altKey,
-      metaKey: event.metaKey,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      screenX: event.screenX,
-      screenY: event.screenY,
-      bubbles: true,
-      cancelable: true,
-    });
-    redispatched.add(replacement);
-    element.dispatchEvent(replacement);
-  };
-  element.addEventListener('wheel', invert, { capture: true, passive: false });
-  return () => element.removeEventListener('wheel', invert, { capture: true });
-}
-
-/**
- * Pan on a plain two-finger scroll, trackpad style, and leave a pinch -- which
- * browsers deliver as a wheel event with ctrlKey set -- to the controls' zoom.
- * The view moves with the fingers, the way a scrolled page does.
- */
-export function installScrollPan(element: HTMLElement, enabled: boolean, pan: (deltaX: number, deltaY: number) => void): () => void {
-  if (!enabled) return () => undefined;
-  const onWheel = (event: WheelEvent) => {
-    if (event.ctrlKey) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    // Line and page deltas come from wheels that report in steps; scale them to
-    // roughly the pixels a trackpad would have reported.
-    const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1;
-    pan(event.deltaX * scale, event.deltaY * scale);
-  };
-  element.addEventListener('wheel', onWheel, { capture: true, passive: false });
-  return () => element.removeEventListener('wheel', onWheel, { capture: true });
 }
 
 /** Move camera and target together by a screen-space offset in CSS pixels. */
@@ -531,16 +480,12 @@ function CameraRig({ bounds, unitsPerMetre, request, zoomRequest, projection, pr
     return undefined;
   }, [gl.domElement, preferences.keyboardPanEnabled]);
 
-  useEffect(
-    () => installWheelZoomInversion(gl.domElement, preferences.invertWheelZoom, preferences.scrollPans),
-    [gl.domElement, preferences.invertWheelZoom, preferences.scrollPans],
-  );
-  useEffect(() => installScrollPan(gl.domElement, preferences.scrollPans, (deltaX, deltaY) => {
+  useEffect(() => installViewportWheelInput(gl.domElement, preferences, (deltaX, deltaY) => {
     const instance = controls.current;
     if (!instance) return;
     panCamera(camera, instance.target, deltaX * preferences.panSpeed, deltaY * preferences.panSpeed, gl.domElement.clientHeight);
     instance.update();
-  }), [camera, controls, gl.domElement, preferences.panSpeed, preferences.scrollPans]);
+  }), [camera, controls, gl.domElement, preferences.invertWheelZoom, preferences.panSpeed, preferences.scrollPans]);
 
   // Fit-time planes go stale the moment the user dollies, and a fixed pair wide
   // enough for every distance wastes the whole depth buffer. Re-bracket the
