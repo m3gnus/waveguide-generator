@@ -12,8 +12,10 @@ import type { EChartsOption } from 'echarts';
  * visible one's style.
  *
  * The curve is interpolated in log frequency on a log axis and in degrees on a
- * polar chart, with finite-difference slopes, so it passes through every solved
- * sample exactly and departs from the straight segments by hundredths of a dB.
+ * polar chart. Its slopes are Fritsch-Carlson monotone: flat at a local peak
+ * or dip, and limited so that between two solved samples it never leaves their
+ * range. It passes through every solved sample exactly and invents no peak,
+ * dip or overshoot that the solve did not contain.
  * ECharts' own `smooth` is not used: its monotone mode puts a staircase ripple
  * on every curve and its plain mode flattens the tops of peaks.
  *
@@ -74,17 +76,44 @@ function isDatum(item: unknown): item is Datum {
 }
 
 /**
- * Cubic Hermite samples through `(t, v)`, `subdivisions` per interval, ending
- * on the last point. Slopes are central differences, one-sided at the ends.
+ * Fritsch-Carlson slopes: central differences, one-sided at the ends, zero
+ * where the data turn, and scaled down wherever alpha^2 + beta^2 would exceed
+ * 9. Each Hermite interval is then monotone, so it stays between its samples.
+ */
+function monotoneSlopes(t: number[], v: number[]): number[] {
+  const count = t.length;
+  const secants = t.slice(0, -1).map((param, index) => (v[index + 1] - v[index]) / (t[index + 1] - param));
+  const slopes = v.map((_value, index) => {
+    if (index === 0) return secants[0];
+    if (index === count - 1) return secants[count - 2];
+    if (secants[index - 1] * secants[index] <= 0) return 0;
+    return (v[index + 1] - v[index - 1]) / (t[index + 1] - t[index - 1]);
+  });
+  secants.forEach((secant, index) => {
+    if (secant === 0) {
+      slopes[index] = 0;
+      slopes[index + 1] = 0;
+      return;
+    }
+    // A slope against the secant (only possible at an end) would overshoot.
+    const alpha = Math.max(0, slopes[index] / secant);
+    const beta = Math.max(0, slopes[index + 1] / secant);
+    const size = alpha * alpha + beta * beta;
+    const scale = size > 9 ? 3 / Math.sqrt(size) : 1;
+    slopes[index] = scale * alpha * secant;
+    slopes[index + 1] = scale * beta * secant;
+  });
+  return slopes;
+}
+
+/**
+ * Monotone cubic Hermite samples through `(t, v)`, `subdivisions` per
+ * interval, ending on the last point.
  */
 export function hermiteSamples(t: number[], v: number[], subdivisions: number): Array<[number, number]> {
   const count = t.length;
   if (count < 3 || subdivisions < 2) return t.map((param, index) => [param, v[index]]);
-  const slopes = v.map((_value, index) => {
-    const before = Math.max(0, index - 1);
-    const after = Math.min(count - 1, index + 1);
-    return (v[after] - v[before]) / (t[after] - t[before]);
-  });
+  const slopes = monotoneSlopes(t, v);
   const samples: Array<[number, number]> = [];
   for (let index = 0; index < count - 1; index += 1) {
     const h = t[index + 1] - t[index];

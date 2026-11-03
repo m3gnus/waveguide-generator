@@ -18,6 +18,21 @@ describe('smooth display lines', () => {
     [0, 8, 16, 24].forEach((index, point) => expect(samples[index]).toEqual([point, [0, 1, 0, 1][point]]));
   });
 
+  it('never leaves the range of the two samples it joins', () => {
+    // A flat step into a rise: plain finite-difference slopes dipped to -0.52 near 141 Hz.
+    const t = [100, 200, 400].map(Math.log10);
+    const v = [0.1, 0.1, 10];
+    const samples = hermiteSamples(t, v, 8);
+    samples.forEach(([param, value]) => {
+      const interval = Math.min(1, Math.floor((param - t[0]) / (t[1] - t[0])));
+      expect(value).toBeGreaterThanOrEqual(Math.min(v[interval], v[interval + 1]) - 1e-12);
+      expect(value).toBeLessThanOrEqual(Math.max(v[interval], v[interval + 1]) + 1e-12);
+    });
+    // A peak stays a peak at its solved value, not above it.
+    const peak = hermiteSamples([0, 1, 2, 3, 4], [0, 4, 5, 4, 0], 8);
+    expect(Math.max(...peak.map(([, value]) => value))).toBe(5);
+  });
+
   it('draws a visible curve and keeps the solved series, hidden, for the tooltip', () => {
     const solved = { name: 'Run A', type: 'line', data: sweep.map((frequency, index) => [frequency, levels[index]]), lineStyle: { color: '#f00', width: 2 }, markArea: { data: [] } };
     const [curve, twin] = withDisplayLines(option([solved])).series as Series[];
