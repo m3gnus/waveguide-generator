@@ -4,6 +4,7 @@ import {
   GridComponent,
   LegendComponent,
   MarkAreaComponent,
+  MarkLineComponent,
   PolarComponent,
   TooltipComponent,
   VisualMapComponent,
@@ -24,6 +25,8 @@ echarts.use([
   LegendComponent,
   // Hatches the frequency bands whose radiated-power check failed.
   MarkAreaComponent,
+  // The zero reference on phase and group delay.
+  MarkLineComponent,
   DataZoomComponent,
   VisualMapComponent,
   // The polar response chart is the only user; without it a polar option

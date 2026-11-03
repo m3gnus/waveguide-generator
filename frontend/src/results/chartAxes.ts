@@ -6,7 +6,10 @@ export const LABEL_FONT: Record<ChartDensity, number> = { compact: 11, regular: 
 
 export function axes(tokens: ChartTokens, density: ChartDensity = 'regular') {
   return {
-    axisLine: { lineStyle: { color: tokens.spine ?? tokens.grid } },
+    // The x axis stays on the bottom edge. With ECharts' default it followed
+    // y = 0 through the middle of phase, delay and power plots, while its
+    // labels stayed at the bottom and the frame was left open there.
+    axisLine: { lineStyle: { color: tokens.spine ?? tokens.grid }, onZero: false },
     axisTick: { lineStyle: { color: tokens.muted } },
     // Log-frequency ticks crowd as soon as a card narrows; dropping the
     // colliding ones beats printing "4001,000".

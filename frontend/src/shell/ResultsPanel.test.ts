@@ -332,6 +332,14 @@ describe('phase, group delay and polar charts', () => {
     series[0].data.forEach(([, value]) => expect(Math.abs(value)).toBeLessThan(1e-6));
   });
 
+  it('draws a zero reference on phase and group delay, and keeps the x axis on the bottom edge', () => {
+    for (const option of [phaseOption([withPhase], tokens, 'full'), groupDelayOption([withPhase], tokens, 'full')]) {
+      const [first] = option.series as Array<{ markLine?: { data: unknown[]; silent: boolean } }>;
+      expect(first.markLine).toMatchObject({ silent: true, data: [{ yAxis: 0 }] });
+      expect(option.xAxis).toMatchObject({ axisLine: { onZero: false } });
+    }
+  });
+
   it('recovers the excess delay in milliseconds', () => {
     const series = groupDelayOption([withPhase], tokens, 'full').series as Array<{ data: number[][] }>;
     series[0].data.forEach(([, value]) => expect(value).toBeCloseTo(0.3, 6));

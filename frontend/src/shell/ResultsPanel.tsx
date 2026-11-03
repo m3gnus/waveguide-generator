@@ -244,6 +244,26 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
   };
 }
 
+/**
+ * A line at y = 0 on a chart whose zero means something: no phase shift, no
+ * delay beyond the time of flight. It rides on the first series, as the
+ * unqualified bands do, and is drawn a step brighter than the grid.
+ */
+export function withZeroReference(option: EChartsOption, tokens: ChartTokens): EChartsOption {
+  if (!Array.isArray(option.series) || !option.series.length) return option;
+  const [first, ...rest] = option.series;
+  const markLine = {
+    silent: true,
+    symbol: 'none',
+    animation: false,
+    label: { show: false },
+    emphasis: { disabled: true },
+    lineStyle: { color: tokens.muted, width: 1, type: 'solid' as const, opacity: .45 },
+    data: [{ yAxis: 0 }],
+  };
+  return { ...option, series: [{ ...(first as object), markLine } as typeof first, ...rest] };
+}
+
 /** What a loaded measurement is called on the chart and in its legend. */
 export function measuredSeriesName(label: string): string {
   return `${label} (measured)`;
@@ -1011,7 +1031,7 @@ export function phaseOption(items: NamedResult[], tokens: ChartTokens, density: 
       data: points,
     };
   });
-  return lineOption(series, tokens, 'Phase [°]', density);
+  return withZeroReference(lineOption(series, tokens, 'Phase [°]', density), tokens);
 }
 
 /** Decimals that keep a group delay readable in the unit it is drawn in. */
@@ -1048,7 +1068,7 @@ export function groupDelayOption(items: NamedResult[], tokens: ChartTokens, dens
       itemStyle: { color },
     };
   });
-  const option = lineOption(series, tokens, `Group delay [${unit}]`, density);
+  const option = withZeroReference(lineOption(series, tokens, `Group delay [${unit}]`, density), tokens);
   // Compact and regular cards drop the axis title, so without this the tooltip
   // is the only place the unit can be stated -- and a bare number reads as ms
   // by habit.
