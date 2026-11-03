@@ -140,6 +140,8 @@ vi.mock('../api/previewSocket', () => ({
 import { femFieldJob, fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
 import { FACT_DROP } from './ViewportFact';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
+import { addWoofer, emptyAssembly } from '../stores/assembly';
+import { resetAssemblyBuild } from '../stores/assemblyBuild';
 
 describe('CAD viewport empty-state copy', () => {
   it('names the model and points to Results, never repeating its status line', () => {
@@ -1453,6 +1455,33 @@ describe('solver-mesh refresh inputs and document loads', () => {
       }
     },
   );
+
+  it('shows an assembly design\'s compile as its Mesh, building it first instead of the horn-only mesh', async () => {
+    let counter = 0;
+    const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '0')}`;
+    resetAssemblyBuild();
+    const { assembly } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+    useDesignStore.getState().replaceDocument({ ...useDesignStore.getState().design, assembly });
+    const compiled = deferred<Response>();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => String(input).includes('/assembly/compile')
+      ? compiled.promise : new Response('not found', { status: 404 }));
+    await act(async () => root.render(<Viewport />));
+    const urls = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+    expect(urls().filter(url => url.includes('/assembly/compile'))).toHaveLength(1);
+    expect(urls()).not.toContain('/api/solver-mesh');
+    expect(host.textContent).toContain('building assembly…');
+    expect(host.querySelector('[aria-label="Assembly build"]')?.textContent).toBe('Building the assembly…');
+    await act(async () => {
+      compiled.resolve(new Response(JSON.stringify({ status: 'published', reused: false,
+        model: { model_id: 'design-assembly:x', producer: 'design-assembly', display_name: 'x' },
+        prepared: { ingest_id: 'wgi_1', producer: 'design-assembly', radiators: [], sources: [], source_tags: {}, msh_text: meshFixture } }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    });
+    await act(async () => { await vi.waitFor(() => expect(host.textContent).toContain('display triangles')); });
+    expect(host.querySelector('.solver-mesh-banner')).toBeNull();
+    expect(host.querySelector('[aria-label="Assembly build"]')).toBeNull();
+    resetAssemblyBuild();
+  });
 
   it('sends mesh-relevant solve options and rebuilds after an engine edit', async () => {
     useSolveOptionsStore.getState().updateGroundPlane({ enabled: true, axis: 'y', height_m: 1 });

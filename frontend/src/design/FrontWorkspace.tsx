@@ -195,7 +195,7 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
     <footer className="front-footer">
       <p role="status">{hasAssembly && !building && fit.line || buildLine(hasAssembly, build.status, !!build.published, assemblyBuildCurrent(build, design))}</p>
       <div className="front-actions">
-        <button className="btn" type="button" disabled={!hasAssembly || building || fit.held} title={fit.held && fit.line || undefined} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
+        <button className="btn" type="button" disabled={!hasAssembly || building || fit.held} title={fit.held && fit.line || undefined} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); onClose(); }}>Build</button>
         <button className="btn-primary" type="button" disabled={!hasAssembly || building || fit.held || !solveControl?.solveAssembly || solveControl.submitting} title={fit.held && fit.line || undefined} onClick={solve}>Solve</button>
       </div>
     </footer>

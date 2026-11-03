@@ -309,6 +309,13 @@ describe('front workspace status', () => {
     expect(button('Build').disabled).toBe(false);
   });
 
+  it('starts the build and closes on Build, so the viewport shows it', async () => {
+    const onClose = await mount();
+    await act(async () => { button('Build').click(); });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(requests.some(body => 'design_revision' in body)).toBe(true);
+  });
+
   it('offers the margin that makes room for a first woofer, and only applies it when asked', async () => {
     useDesignStore.getState().replaceDocument({ ...enclosed() });
     const context = { ...fixture.before.context, woofers: [], clearances: {}, minimum_clearance_mm: 0.1, mouth_top_mm: 140, mouth_bottom_mm: -140,

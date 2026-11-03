@@ -22,6 +22,7 @@ import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness'
 import { useOptionalSolveControl } from '../shell/JobsCoordinator';
 import { postSolverMesh, solverMeshArtifactToken, solverMeshDesignKey, solverMeshOptions } from '../api/solverMesh';
 import { solverMeshScene } from './solverMeshScene';
+import { assemblyBuildFailure, assemblyPreviewLabel, buildCurrentAssembly, useAssemblyBuildStore } from '../stores/assemblyBuild';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { cadCameraAxes } from './cadCamera';
@@ -522,6 +523,7 @@ export function Viewport() {
     importedMeshStore.getSnapshot,
     importedMeshStore.getSnapshot,
   );
+  const assemblyBuild = useAssemblyBuildStore(useShallow(state => ({ status: state.status, published: state.published, requested: state.requested, refusal: state.refusal })));
   const cadSolverMesh = currentCadScenes(coherenceContext, importedMeshState).solver;
   const solverViewSelected = workspaceMode === 'parametric' && importedMeshState.showing === 'solver';
   const cadSolverViewSelected = workspaceMode === 'cad' && importedMeshState.showing === 'cadSolver';
@@ -584,6 +586,14 @@ export function Viewport() {
         try {
           const settings = useSolveOptionsStore.getState();
           const modelDesign = useDesignStore.getState().design;
+          if (modelDesign.assembly) {
+            // Mesh shows what Solve solves: the compile, which the build store
+            // publishes and the current model selects.
+            setSolverMeshRefusal(null);
+            const ok = await buildCurrentAssembly().then(() => true, () => false);
+            const error = ok ? undefined : useAssemblyBuildStore.getState().refusal ?? assemblyBuildFailure(null);
+            return { ok: ok && !signal.aborted, durationMs: performance.now() - started, error };
+          }
           const modelKey = designFingerprint(modelDesign);
           const body = JSON.stringify({
             design: toSolveDesign(modelDesign),
@@ -719,7 +729,7 @@ export function Viewport() {
   const solveMeshState = workspaceMode === 'parametric'
     ? solverViewSelected
       ? solverMeshState.building
-        ? 'building…'
+        ? design.assembly ? 'building assembly…' : 'building…'
         : importedMesh
           ? solverMeshState.stale ? 'out of date' : 'current'
           : 'pending'
@@ -727,6 +737,12 @@ export function Viewport() {
     : cadSolverViewSelected
       ? cadSolverLoading ? 'loading…' : cadSolverMesh ? 'prepared' : 'unavailable'
       : null;
+  // A build pressed in Sources and baffle reports here, once its dialog has closed.
+  const assemblyNote = workspaceMode !== 'parametric' || !design.assembly ? null
+    : importedMesh && assemblyPreviewLabel(assemblyBuild, design)
+      || (assemblyBuild.status === 'building' ? 'Building the assembly…'
+        : assemblyBuild.status === 'refused' && !showSolverMeshNotice && assemblyBuild.requested?.revision === designRevision
+          ? `Could not build the assembly. ${assemblyBuild.refusal ?? ''}`.trim() : null);
   const refresh = () => {
     setDismissedPreviewError(null);
     setRefreshRequestedAt(performance.now());
@@ -1145,6 +1161,7 @@ export function Viewport() {
       {solverViewSelected && solverMeshRefusal && <div className="viewport-note solver-plan-adjustment-note" role="note">
         Cannot solve this yet: {solverMeshRefusal}
       </div>}
+      {assemblyNote && <div className="viewport-note" role="status" aria-label="Assembly build">{assemblyNote}</div>}
       {activeScene && previewNote && <div className="viewport-note" role="note" aria-label="Preview surface">{previewNote}</div>}
       {recoveryNotice && <div className="viewport-note" role="note">{recoveryNotice}</div>}
     </div>

@@ -17,7 +17,7 @@ import { resetDocumentStore } from '../stores/document';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { currentModel, currentModelScene, currentModelStatus, modelForRun, runVerdict, shownResult, spatialResult } from './currentModel';
+import { compiledAssemblyScene, currentModel, currentModelScene, currentModelStatus, modelForRun, runVerdict, shownResult, spatialResult } from './currentModel';
 import parametric from './fixtures/parametric.json';
 import fileSha from './fixtures/file-sha.json';
 import fileNoSha from './fixtures/file-no-sha.json';
@@ -31,6 +31,9 @@ import { fieldPlaneJob, femFieldJob } from '../viewport/Viewport';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
 import { designForFamily, serializeDesign } from '../stores/design';
 import type { CurrentModel } from './currentModel';
+import { assemblyContentKey, resetAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
+import { solverMeshScene } from '../viewport/solverMeshScene';
+import type { CompiledAssembly } from '../api/assembly';
 
 export const oldRuns = [parametric, fileSha, fileNoSha, cad, cadNoSha, unreadable] as unknown as JobItem[];
 
@@ -303,6 +306,34 @@ describe('a design assembly run on its parametric design', () => {
     expect(currentModelStatus(edited, [job]).kind).toBe('never-solved');
     expect(runVerdict(assemblyRun(before, { config_summary: { ...job.config_summary,
       design_assembly: { design: { design_uid: 'wgu_someone_else' } } } }), edited)).toBe('other-model');
+  });
+
+  it('draws the compiled assembly in Geometry only while it is current, and in Mesh until the next build', () => {
+    resetAssemblyBuild();
+    const model = onScreen();
+    const horn = solverMeshScene('Horn', { msh_text: mesh, cut_planes: [], stats: { triangle_count: 1, mesh_cache_key: 'horn' } } as never);
+    importedMeshStore.setSolver({ ...horn, modelKey: model.key! });
+    importedMeshStore.showSolver();
+    // Never the horn-only solver mesh: Solve would solve the compile.
+    expect(currentModelScene(currentModel())).toBeNull();
+    importedMeshStore.showParametric();
+    expect(currentModelScene(currentModel())).toBeNull();
+    useAssemblyBuildStore.setState({ status: 'published', published: { revision: 1, contentKey: assemblyContentKey(model.design!),
+      record: { ingest_id: 'wgi_1', producer: 'design-assembly', sources: [], source_tags: {}, msh_text: mesh } as unknown as CompiledAssembly,
+      model: { model_id: 'design-assembly:x', display_name: 'x' } as never } });
+    const built = currentModelScene(currentModel());
+    expect(built).toMatchObject({ source: 'solver', ingestId: 'wgi_1', triangleCount: 1 });
+    expect(currentModel().viewportShowing).toBe(true);
+    importedMeshStore.showSolver();
+    expect(currentModelScene(currentModel())).toBe(built);
+    useDesignStore.getState().updateValue('enclosure.depth', 321);
+    // Mesh keeps the last build up, as the earlier revision it is; Geometry follows the design.
+    expect(compiledAssemblyScene(currentModel())).toBe(built);
+    expect(currentModel().viewportShowing).toBe(false);
+    importedMeshStore.showParametric();
+    expect(currentModelScene(currentModel())).toBeNull();
+    useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
+    expect(useAssemblyBuildStore.getState().published).toBeNull();
   });
 
   it('stays another model when the run stored no design', () => {

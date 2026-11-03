@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { addWoofer, commitAssembly, emptyAssembly, setPlacement } from './assembly';
 import {
-  assemblyBuildCurrent, assemblyPreviewLabel, assemblyRunStale, requestAssemblyBuild, resetAssemblyBuild, useAssemblyBuildStore,
+  assemblyBuildCurrent, assemblyPreviewLabel, assemblyRunStale, buildCurrentAssembly, publishedAssemblyScene, requestAssemblyBuild, resetAssemblyBuild, useAssemblyBuildStore,
 } from './assemblyBuild';
 import { designForFamily, resetDesignStore, useDesignStore } from './design';
+import { mesh } from '../shell/cadlink/selection.fixtures';
 
 let counter = 0;
 const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '0')}`;
@@ -20,7 +21,7 @@ function deferredFetcher() {
   return { fetcher, pending, answer };
 }
 
-const record = (id: string) => ({ ingest_id: id, producer: 'design-assembly', radiators: [], msh_text: '$MeshFormat' });
+const record = (id: string) => ({ ingest_id: id, producer: 'design-assembly', radiators: [], sources: [], source_tags: {}, msh_text: mesh });
 
 describe('assembly background build', () => {
   beforeEach(() => {
@@ -70,6 +71,23 @@ describe('assembly background build', () => {
     expect(assemblyPreviewLabel(state, design())).toMatch(/earlier revision/);
     useDesignStore.getState().undo();
     expect(assemblyPreviewLabel(useAssemblyBuildStore.getState(), design())).toBeNull();
+  });
+
+  it('shares one build per revision between Build, Mesh and Solve, and reuses a current one', async () => {
+    const { fetcher, pending, answer } = deferredFetcher();
+    const first = requestAssemblyBuild(fetcher);
+    expect(buildCurrentAssembly(fetcher)).toBe(first);
+    expect(pending).toHaveLength(1);
+    answer(0, record('wgi_one'));
+    await first;
+    expect(await buildCurrentAssembly(fetcher)).toMatchObject({ status: 'published', reused: true, prepared: { ingest_id: 'wgi_one' } });
+    expect(pending).toHaveLength(1);
+    const published = useAssemblyBuildStore.getState().published!;
+    expect(publishedAssemblyScene(published)).toBe(publishedAssemblyScene(published));
+    const woofer = useDesignStore.getState().design.assembly!.woofers![0].id;
+    commitAssembly(setPlacement(useDesignStore.getState().design.assembly!, woofer, { anchor: 'below', gap_mm: 30 }));
+    void buildCurrentAssembly(fetcher);
+    expect(pending).toHaveLength(2);
   });
 
   it('drops an answer for a document that was replaced, and forgets the build on open', async () => {

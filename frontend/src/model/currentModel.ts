@@ -8,6 +8,7 @@ import { designFingerprint, jobDesignFingerprint } from '../results/runCoherence
 import { cadModelSelection, useCadModelSelection } from '../stores/cadModelState';
 import { currentDesignLoadSource, currentDocumentLoad, useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
+import { assemblyBuildCurrent, publishedAssemblyScene, useAssemblyBuildStore, type AssemblyBuildState } from '../stores/assemblyBuild';
 import { useImportedModelStore } from '../stores/importedModel';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { importedMeshStore, type ImportedMeshState } from '../viewport/importedMeshStore';
@@ -99,10 +100,26 @@ export function currentCadScenes(model: CurrentModel, viewport: ImportedMeshStat
   };
 }
 
+/**
+ * The compiled assembly a parametric design's viewport draws: the one place
+ * that chooses it. Mesh view shows what Solve would solve, so the last build
+ * stays up, labelled, until a newer one arrives. Geometry shows a build only
+ * while it is a build of the design on screen, and the live preview after
+ * any edit, as it does for every other design.
+ */
+export function compiledAssemblyScene(model: CurrentModel, viewport: ImportedMeshState = importedMeshStore.getSnapshot(),
+  build: Pick<AssemblyBuildState, 'published'> = useAssemblyBuildStore.getState()) {
+  if (model.kind !== 'parametric' || !model.design?.assembly || !build.published) return null;
+  if (viewport.showing !== 'solver' && !assemblyBuildCurrent(build, model.design)) return null;
+  return publishedAssemblyScene(build.published);
+}
+
 /** The scene representing the current model; null uses the parametric preview. */
 export function currentModelScene(model: CurrentModel, viewport: ImportedMeshState = importedMeshStore.getSnapshot()) {
   if (showsRetainedMesh(model.kind)) return viewport.file && (!model.ingestId || viewport.file.ingestId === model.ingestId) ? viewport.file : null;
-  if (model.kind === 'parametric') return viewport.showing === 'solver' ? viewport.solver : null;
+  // An assembly is solved from its compile, never from the horn-only solver mesh.
+  if (model.kind === 'parametric') return model.design?.assembly ? compiledAssemblyScene(model, viewport)
+    : viewport.showing === 'solver' ? viewport.solver : null;
   const { cad, solver } = currentCadScenes(model, viewport);
   return viewport.showing === 'cadSolver' ? solver ?? cad : cad;
 }
@@ -124,12 +141,17 @@ export function currentModel(): CurrentModel {
     ? (preview.frame.documentLoad === undefined || preview.frame.documentLoad === currentDocumentLoad())
       && preview.displayedRevision === useDesignStore.getState().designRevision
     : preview.connection === 'idle');
-  if (workspace.mode === 'parametric') return {
-    kind: 'parametric', key: parametricKey, lineage: document.identity?.designId ?? null,
-    label: document.designName || 'Parametric model', design, designUid: document.designUid ?? null,
-    viewportShowing: viewport.showing === 'solver' && viewport.solver
-      ? viewport.solver.modelKey === parametricKey : previewShowing, unloadedRunId,
-  };
+  if (workspace.mode === 'parametric') {
+    const model: CurrentModel = {
+      kind: 'parametric', key: parametricKey, lineage: document.identity?.designId ?? null,
+      label: document.designName || 'Parametric model', design, designUid: document.designUid ?? null,
+      viewportShowing: false, unloadedRunId,
+    };
+    const build = useAssemblyBuildStore.getState();
+    return { ...model, viewportShowing: compiledAssemblyScene(model, viewport, build) ? assemblyBuildCurrent(build, design)
+      : !design.assembly && viewport.showing === 'solver' && viewport.solver
+        ? viewport.solver.modelKey === parametricKey : previewShowing };
+  }
   const file = workspace.importedInput === 'file';
   const assembly = workspace.importedInput === 'assembly';
   const cad = cadModelSelection();
@@ -157,6 +179,7 @@ export function useCurrentModel(): CurrentModel {
   useDesignStore(s => s.designRevision);
   useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot);
   useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot, importedMeshStore.getSnapshot);
+  useAssemblyBuildStore(s => s.published);
   return currentModel();
 }
 

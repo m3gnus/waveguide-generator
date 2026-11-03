@@ -14,6 +14,8 @@ import type { ImportedModelSummary } from '../api/importedModels';
 import { currentDocumentLoad, isCurrentDocumentLoad, serializeDesign, subscribeRevision, useDesignStore, type DesignDocument } from './design';
 import { designContentKey } from './designContentKey';
 import { useDocumentStore } from './document';
+import type { ImportedMeshScene } from '../viewport/importedMesh';
+import { assemblyMeshScene } from '../viewport/solverMeshScene';
 
 export interface PublishedAssembly {
   revision: number;
@@ -61,16 +63,54 @@ export function assemblyRunStale(preparedId: string, state: Pick<AssemblyBuildSt
   return state.published?.record.ingest_id !== preparedId || !assemblyBuildCurrent(state, design);
 }
 
+const scenes = new WeakMap<PublishedAssembly, ImportedMeshScene>();
+
+/** The viewport scene of a published compile, parsed once per build. It is the
+ * design's solve artifact, so it is drawn the way its solver mesh is. */
+export function publishedAssemblyScene(published: PublishedAssembly): ImportedMeshScene {
+  let scene = scenes.get(published);
+  if (!scene) {
+    scene = assemblyMeshScene(published.model.display_name || 'Assembly', published.record, 'solver');
+    scenes.set(published, scene);
+  }
+  return scene;
+}
+
+/** The build in flight, so a second ask for the same revision waits for it instead of compiling again. */
+let inFlight: { requested: NonNullable<AssemblyBuildState['requested']>; answer: Promise<AssemblyCompileResult | null> } | null = null;
+
 /** Compile the assembly of the design on screen; resolves to what this request learned. */
-export async function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promise<AssemblyCompileResult | null> {
+export function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promise<AssemblyCompileResult | null> {
   const { design, designRevision } = useDesignStore.getState();
   if (!design.assembly) {
     useAssemblyBuildStore.setState({ ...IDLE });
-    return null;
+    return Promise.resolve(null);
   }
-  const { designUid, designName } = useDocumentStore.getState();
   const load = currentDocumentLoad();
+  const asked = useAssemblyBuildStore.getState().requested;
+  if (inFlight && inFlight.requested === asked && asked?.revision === designRevision && asked.load === load) return inFlight.answer;
   const requested = { revision: designRevision, contentKey: assemblyContentKey(design), load };
+  const answer = compileRequested(design, requested, fetcher);
+  inFlight = { requested, answer };
+  const settle = () => { if (inFlight?.answer === answer) inFlight = null; };
+  answer.then(settle, settle);
+  return answer;
+}
+
+/** The build of the design on screen: the last one when it still matches, else a new or running one. */
+export function buildCurrentAssembly(fetcher: typeof fetch = fetch): Promise<AssemblyCompileResult | null> {
+  const state = useAssemblyBuildStore.getState();
+  const { design } = useDesignStore.getState();
+  if (state.published && state.status !== 'building' && assemblyBuildCurrent(state, design)) {
+    return Promise.resolve({ status: 'published', reused: true, model: state.published.model, prepared: state.published.record });
+  }
+  return requestAssemblyBuild(fetcher);
+}
+
+async function compileRequested(design: DesignDocument, requested: NonNullable<AssemblyBuildState['requested']>,
+  fetcher: typeof fetch): Promise<AssemblyCompileResult | null> {
+  const { designUid, designName } = useDocumentStore.getState();
+  const { revision: designRevision, load } = requested;
   useAssemblyBuildStore.setState({ status: 'building', requested, refusal: null, failureDetail: null });
   const owns = () => {
     const current = useAssemblyBuildStore.getState().requested;
@@ -91,10 +131,15 @@ export async function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promi
   } catch (error) {
     if (owns()) {
       useAssemblyBuildStore.setState({ status: 'refused', failureDetail: error instanceof Error ? error.message : String(error),
-        refusal: assemblyProblemText(error, 'WG could not build this assembly and has recorded the problem.') });
+        refusal: assemblyBuildFailure(error) });
     }
     throw error;
   }
+}
+
+/** What a failed build tells the user. */
+export function assemblyBuildFailure(error: unknown): string {
+  return assemblyProblemText(error, 'WG could not build this assembly and has recorded the problem.');
 }
 
 /** New and Open start a document of their own: nothing built for the last one applies. */
