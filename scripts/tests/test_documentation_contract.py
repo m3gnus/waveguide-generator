@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import platform
 from pathlib import Path
+import re
 import subprocess
+from types import SimpleNamespace
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +46,46 @@ def test_doc_02_auto_accuracy_and_override_rules() -> None:
     assert "does not fall back to native Metal or BEMPP" in section
     assert "Changing **Accuracy** resets **Advanced backend** to **Automatic**" in section
     assert "non-BEAT override resets Accuracy to **Fast**" in section
+
+
+@pytest.mark.parametrize("accuracy", ["fast", "accurate"])
+def test_doc_02_fem_auto_preference_matches_runtime(accuracy: str) -> None:
+    from server.engines.registry import EngineInfo
+    from server.jobs.runtime.core import resolve_imported_submission
+    from server.tests.test_imported_jobs import _request
+
+    infos = [
+        EngineInfo(
+            name, True, "ready", None, label=label,
+            geometry_sources=("imported",), imported_features=("fem-regions",),
+        )
+        for name, label in (("beat-metal", "BEAT · Metal"), ("beat-cpu", "BEAT · CPU"))
+    ]
+
+    class Registry:
+        async def capabilities(self):
+            return infos
+
+        async def get_engine(self, name):
+            return SimpleNamespace(name=name)
+
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine, request.options.accuracy = "auto", accuracy
+    # Geometry admission is already complete; this exercises routing without a solve.
+    resolution = asyncio.run(resolve_imported_submission(
+        request, Registry(), request_refusal=None,
+        imported_record={"fem_regions": [{"surface_groups": [{"kind": "interface"}]}]},
+    ))
+
+    section = _words("docs/USER-GUIDE.md", "### What each backend can solve", "BEMPP prefers")
+    assert "For models without active FEM regions, AUTO uses these orders:" in section
+    exception = _between(section, "**FEM exception:**")
+    assert f"**{accuracy.capitalize()} + AUTO**" in exception
+    preference = re.search(r"prefer \*\*(BEAT · \w+) \((float\d+)\)\*\*", exception)
+    assert preference, "The FEM exception must name AUTO's preferred engine and precision"
+    documented_engine = next(info.name for info in infos if info.label == preference[1])
+    assert resolution.engine_name == documented_engine
+    assert resolution.symmetry_metadata["solver_plan"]["precision"] == preference[2]
 
 
 def test_doc_03_runtime_setup_uses_selection_and_readiness_actions() -> None:

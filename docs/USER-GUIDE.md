@@ -568,6 +568,8 @@ instead of using BEMPP. WG always uses its own Julia 1.12.7, even when another
 Julia (for example from juliaup or the Microsoft Store) is on PATH.
 `WG2_SKIP_BEAT_CPU_PROVISION=1` switches preparation off.
 
+For models without active FEM regions, AUTO uses these orders:
+
 **Fast + AUTO** walks the same order on every platform, using the first ready
 engine compatible with the model: Metal → BEAT · CUDA → BEAT · ROCm → BEAT · Metal
 → BEAT · CPU → BEMPP. On Apple Silicon this normally prefers native Metal.
@@ -577,6 +579,11 @@ and the CPU engine for infinite baffle.
 **Accurate + AUTO** walks only BEAT · Metal → BEAT · CUDA → BEAT · ROCm → BEAT · CPU.
 It does not fall back to native Metal or BEMPP; if no compatible BEAT runtime is
 ready, solve readiness explains what to prepare or wait for.
+
+**FEM exception:** With active FEM regions, **Fast + AUTO** and **Accurate + AUTO**
+both prefer **BEAT · CPU (float64)** when it is ready, even if a compatible
+BEAT GPU is also ready. Coupled FEM can use a compatible ready BEAT GPU when
+CPU is unavailable; interior-only FEM requires CPU float64.
 
 Changing **Accuracy** resets **Advanced backend** to **Automatic**, clearing any
 explicit override. Selecting a non-BEAT override resets Accuracy to **Fast**;
