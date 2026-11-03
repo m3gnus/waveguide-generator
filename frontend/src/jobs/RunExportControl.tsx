@@ -246,7 +246,9 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   const exportPreferred = () => {
     const preferred = [...preferences.exportFormats];
     return execute(job.id, preferred, async (): Promise<RunExportOutcome> => {
-      const stepAvailability = ingestId && preferred.includes('step') ? await refreshReturnedStep() : currentStepAvailability;
+      // The store owns this export through selection changes and unmounts;
+      // only menu checks use the component's cancellation controller.
+      const stepAvailability = ingestId && preferred.includes('step') ? await checkReturnedStep(job.id) : currentStepAvailability;
       const unavailable = preferred.flatMap((format) => {
         const item = CATALOG_BY_FORMAT.get(format);
         const reason = item ? formatReason(item, stepAvailability) : 'This format is not available.';
