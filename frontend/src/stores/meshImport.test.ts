@@ -1,3 +1,4 @@
+import { activityStore } from '../shell/activity';
 import { saveImportedSetup } from '../api/importedModels';
 import { solveModel } from '../jobs/actions';
 import { readFileSync } from 'node:fs';
@@ -66,6 +67,7 @@ function editSourceMotion(sourceId: string, motion: 'normal' | 'axial') {
 }
 
 beforeEach(() => {
+  activityStore.reset();
   useMeshImportStore.setState(initial, true);
   importedMeshStore.clear();
   workspaceModeStore.setMode('parametric');
@@ -77,6 +79,44 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('standalone imported mesh', () => {
+  it.each([false, true])('tracks inspection and preparation as one import (failure=%s)', async fail => {
+    const inspected = deferred<Response>();
+    const started = vi.spyOn(activityStore, 'start');
+    const fetcher: typeof fetch = async url => {
+      expect(activityStore.getSnapshot()).toHaveLength(1);
+      if (String(url).endsWith('/inspect')) return inspected.promise;
+      expect(activityStore.getSnapshot()[0].cancel).toBeTypeOf('function');
+      return prepared(record);
+    };
+    const loading = loadMeshFile('speaker.msh', MSH, fetcher);
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'mesh-import', cancel: null }]);
+    const settled = loading.catch(error => error);
+    if (fail) inspected.resolve(response({ detail: 'inspection failed' }, 422));
+    else inspected.resolve(response({ ...summary, suggested_units: 'mm', previous_roles: { 1: 'RIGID', 2: 'HF' } }));
+    await settled;
+    expect(started).toHaveBeenCalledTimes(1);
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    expect(activityStore.typicalMs('mesh-import') === null).toBe(fail);
+  });
+
+  it('Stop aborts the existing preparation controller and ends its activity', async () => {
+    await loadMeshFile('speaker.msh', MSH, async url => String(url).endsWith('/inspect')
+      ? response({ ...summary, suggested_units: 'mm', previous_roles: { 1: 'RIGID', 2: 'HF' } }) : prepared(record));
+    activityStore.reset();
+    let signal!: AbortSignal;
+    const pending = prepareMeshFile((_url, init) => {
+      signal = init!.signal!;
+      return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    });
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    activityStore.getSnapshot()[0].cancel!();
+    await pending;
+    expect(signal.aborted).toBe(true);
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    expect(activityStore.typicalMs('mesh-import')).toBeNull();
+    expect(useMeshImportStore.getState().busy).toBe(false);
+  });
+
   it('automatically prepares confident server guesses with roles and the detected domain', async () => {
     const guessed = { ...summary, suggested_units: 'mm', detected_planes: ['x0', 'y0'], kept_sides: { x0: 'negative', y0: 'positive' },
       groups: summary.groups.map(group => ({ ...group, suggested_role: group.tag === 2 ? 'MF' : 'RIGID', role_from: 'file' })) };
@@ -509,6 +549,20 @@ describe('portable mesh replay', () => {
     const { type: _t, ingest_id: _i, manifest_sha256: _m, artifact_sha256: _a, acknowledged_findings: _f, ...geometry } = request.geometry;
     return { schema_version: 1, geometry, options: request.options };
   };
+
+  it.each([false, true])('tracks replay opening through settlement (failure=%s)', async fail => {
+    const request = exactRequest();
+    const pendingResponse = deferred<Response>();
+    const started = vi.spyOn(activityStore, 'start');
+    const loading = loadMeshReplay('{}', () => pendingResponse.promise);
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'mesh-import' }]);
+    const settled = loading.catch(error => error);
+    pendingResponse.resolve(fail ? response({ detail: 'replay failed' }, 422) : response({ record: replayRecord, request }));
+    await settled;
+    expect(started).toHaveBeenCalledTimes(1);
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    expect(activityStore.typicalMs('mesh-import') === null).toBe(fail);
+  });
 
   it('solves the complete request until a setting is edited', async () => {
     const request = exactRequest();

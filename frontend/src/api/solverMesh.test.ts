@@ -40,7 +40,8 @@ describe('postSolverMesh', () => {
     expect(received.stats.mesh_cache_key).toBe('abc123');
     expect(sent?.method).toBe('POST');
     expect(sent?.body).toBe('{"design":{}}');
-    expect(sent?.signal).toBe(controller.signal);
+    expect(sent?.signal).toBeInstanceOf(AbortSignal);
+    expect(sent?.signal?.aborted).toBe(false);
   });
 
   it('rejects a malformed payload rather than rendering from it', async () => {

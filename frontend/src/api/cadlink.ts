@@ -1,3 +1,4 @@
+import { activityOperation } from '../shell/activityOperation';
 import type { components } from './generated/openapi';
 import { deadlineFetch } from './deadlineFetch';
 import { serializeDesign, type DesignDocument } from '../stores/design';
@@ -600,12 +601,14 @@ export function ingestReturn(
   fetcher: typeof fetch = fetch,
   signal?: AbortSignal,
 ): Promise<CadReturnIngestRecord> {
-  return jsonRequest('/api/cadlink/ingest', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-    signal,
-  }, fetcher);
+  return activityOperation({ kind: 'cad-import', label: 'Importing the CAD model' }, fetcher, async (fetcher) => {
+    return jsonRequest('/api/cadlink/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+      signal,
+    }, fetcher);
+  });
 }
 
 export function getIngest(id: string, fetcher: typeof fetch = fetch): Promise<CadReturnIngestRecord> {

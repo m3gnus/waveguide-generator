@@ -1,3 +1,5 @@
+import type { SourceAssemblyDocument } from './sourceEditor';
+import { activityStore } from '../shell/activity';
 import { afterEach, expect, it, vi } from 'vitest';
 import { sourceEditorApi } from './sourceEditor';
 import { INITIAL_SOURCE } from '../design/sourceContourEditing';
@@ -31,4 +33,21 @@ it('sends authoring beside the unchanged preset document and omits it from valid
   const attachment = { kind: 'horn' as const, dimensions: { length_mm: 24, mouth_radius_mm: 10, housing_radius_mm: 12, backing_depth_mm: 4 } };
   await sourceEditorApi.export(preset.document, attachment, 2);
   expect(calls.at(-1)!.body).toBe(JSON.stringify({ document: INITIAL_SOURCE, attachment, mesh_size_mm: 2 }));
+});
+
+it.each(['source', 'assembly'] as const)('tracks %s STEP export through success and failure', async kind => {
+  for (const fail of [false, true]) {
+    activityStore.reset();
+    let resolve!: (value: Response) => void;
+    vi.stubGlobal('fetch', () => new Promise<Response>(done => { resolve = done; }));
+    const pending = kind === 'source'
+      ? sourceEditorApi.export(INITIAL_SOURCE, { kind: 'baffle', dimensions: {} }, 2)
+      : sourceEditorApi.exportAssembly({ horn: INITIAL_SOURCE } as SourceAssemblyDocument);
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'export' }]);
+    const settled = pending.catch(error => error);
+    resolve(new Response(fail ? JSON.stringify({ detail: 'export failed' }) : 'STEP', { status: fail ? 422 : 200 }));
+    await settled;
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    expect(activityStore.typicalMs('export') === null).toBe(fail);
+  }
 });

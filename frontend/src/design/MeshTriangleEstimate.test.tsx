@@ -1,7 +1,8 @@
+import { activityStore } from '../shell/activity';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { designForFamily, type DesignDocument } from '../stores/design';
 import { expectNoJargon } from '../testing/expectNoJargon';
 import { MeshTriangleEstimate, roughCount } from './MeshTriangleEstimate';
@@ -24,6 +25,7 @@ const answer = (off: number, on: number) => vi.fn<typeof fetch>(async (_url, ini
   return json({ triangle_count: design.mesh.surface_deviation_mm == null ? off : on });
 });
 
+beforeEach(() => activityStore.reset());
 afterEach(() => { unmount.splice(0).forEach((stop) => stop()); vi.unstubAllGlobals(); });
 
 it('gives two figures, because the build pass is an estimate', () => {
@@ -96,4 +98,29 @@ it('shows a plain sentence the server worded', async () => {
   const { host, render } = mount();
   render(designForFamily('OSSE'));
   await vi.waitFor(() => expect(host.textContent).toContain('Throat mesh resolution must be above 0 mm.'));
+});
+
+it.each([false, true])('tracks a shared background triangle count and ends on failure=%s', async fail => {
+  let resolve!: (response: Response) => void;
+  vi.stubGlobal('fetch', () => new Promise<Response>(done => { resolve = done; }));
+  const { render } = mount();
+  render(designForFamily('OSSE'));
+  expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'mesh-count', background: true, cancel: expect.any(Function) }]);
+  await act(async () => resolve(fail ? json({ detail: 'count failed' }, 422) : json({ triangle_count: 100 })));
+  await vi.waitFor(() => expect(activityStore.getSnapshot()).toHaveLength(0));
+  expect(activityStore.typicalMs('mesh-count') === null).toBe(fail);
+});
+
+it('Stop aborts the real triangle count query and removes the activity', async () => {
+  let signal!: AbortSignal;
+  vi.stubGlobal('fetch', (_url: unknown, init?: RequestInit) => {
+    signal = init!.signal!;
+    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  });
+  const { render } = mount();
+  render(designForFamily('OSSE'));
+  await act(async () => activityStore.getSnapshot()[0].cancel!());
+  expect(signal.aborted).toBe(true);
+  await vi.waitFor(() => expect(activityStore.getSnapshot()).toHaveLength(0));
+  expect(activityStore.typicalMs('mesh-count')).toBeNull();
 });

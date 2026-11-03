@@ -1,3 +1,4 @@
+import { activityOperation } from './activityOperation';
 import { Notice } from './Notice';
 import { deadlineFetch } from '../api/deadlineFetch';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -12,12 +13,14 @@ import {
 } from '../viewport/solverFrame';
 import { failureWords } from '../api/httpError';
 
-async function loadModel(ingestId: string, fetcher: typeof fetch): Promise<ParsedMSH> {
-  // This thumbnail draws every triangle twice on a 220×150 canvas. The exact
-  // solve mesh is already available and preserves the same source tags.
-  const response = await deadlineFetch(fetcher, `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
-  if (response.ok) return parseMSH(await response.text());
-  throw new Error('the prepared model’s mesh is not available to preview');
+export async function loadCadFrameModel(ingestId: string, fetcher: typeof fetch): Promise<ParsedMSH> {
+  return activityOperation({ kind: 'cad-import', label: 'Importing the CAD model' }, fetcher, async (fetcher) => {
+    // This thumbnail draws every triangle twice on a 220×150 canvas. The exact
+    // solve mesh is already available and preserves the same source tags.
+    const response = await deadlineFetch(fetcher, `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
+    if (response.ok) return parseMSH(await response.text());
+    throw new Error('the prepared model’s mesh is not available to preview');
+  });
 }
 
 const VIEW_SIZE = { width: 220, height: 150 };
@@ -105,7 +108,7 @@ function useFrameMesh(ingestId: string | null, fetcher: typeof fetch): { mesh: P
   useEffect(() => {
     if (!ingestId || state?.ingestId === ingestId) return undefined;
     let current = true;
-    void loadModel(ingestId, fetcher)
+    void loadCadFrameModel(ingestId, fetcher)
       .then((mesh) => { if (current) setState({ ingestId, mesh, error: null }); })
       .catch((reason: unknown) => {
         if (current) setState({ ingestId, mesh: null, error: failureWords(reason) });

@@ -1,3 +1,5 @@
+import type { ActivityHandle } from '../shell/activity';
+import { activityOperation } from '../shell/activityOperation';
 import { fetchMeshReplay, MeshReplayRefusal } from '../api/meshReplay';
 import { deadlineFetch } from '../api/deadlineFetch';
 import { samplingComments, samplingProvenance } from './sampling';
@@ -19,7 +21,7 @@ import { serializeDesign, type DesignDocument } from '../stores/design';
 import { designFileExtension } from '../stores/designName';
 import { designWireWithSolveSettings } from '../stores/designWire';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
-import { resolveChartTheme, runDisplayName, type ExportFormat, type Preferences } from '../prefs/preferences';
+import { EXPORT_FORMATS, resolveChartTheme, runDisplayName, type ExportFormat, type Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { buildDerivedAcousticsCsv, buildDerivedAcousticsJson } from './derivedAcoustics';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
@@ -33,6 +35,9 @@ import { reportCaughtError } from '../shell/clientErrors';
 import { failureWords, ProgramFault } from '../api/httpError';
 
 export interface ExportContext {
+  /** Shared by this bundle’s counted format builds and final publication. */
+  activity?: ActivityHandle;
+  activityTotal?: number;
   result?: ResultPayload;
   /** Present for a run-scoped export; validated by the same selection owner as Results. */
   selectedRun?: JobItem;
@@ -672,158 +677,173 @@ async function writeManualPolarFrd(
   return written.files;
 }
 
+function exportActivityLabel(format: ExportFormat): string {
+  const name = format === 'stl' ? 'STL' : format === 'step' ? 'STEP'
+    : format === 'mwg_config' ? 'design file' : format === 'fusion_csv' ? 'profile CSV'
+      : EXPORT_FORMATS.find(item => item.id === format)!.label;
+  return `Exporting ${name}`;
+}
+
 export async function runExportFormat(format: ExportFormat, context: ExportContext): Promise<string[]> {
-  if (context.selectedRun) {
-    const reason = parameterExportReason({ kind: modelKindForRun(context.selectedRun) }, format);
-    if (reason) throw new Error(reason);
-  }
-  const baseName = exportContextBaseName(context);
-  const saveText = context.saveText ?? downloadText;
-  const now = context.now ?? new Date();
-  if (format === 'mwg_config') {
-    if (!context.design) throw new Error('This run did not keep its design, so WG cannot export it. Open the design, solve it, then export.');
-    const configName = `${baseName}_config.${designFileExtension(context.design.formula)}`;
-    const response = await (context.fetcher ?? fetch)('/api/design/serialize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        design: designWireWithSolveSettings(
-          serializeDesign(context.design),
-          context.polarConfig,
-          context.solveSettings ?? null,
-          // A config exported from run #42 is titled for run #42, not for
-          // whatever design happens to be on screen now.
-          context.designName ?? context.jobStem,
-        ),
-        filename: configName,
-      }),
-    });
-    if (!response.ok) throw await responseError(response);
-    const body = await response.json() as { text: string; suggestedFilename?: string };
-    const filename = body.suggestedFilename ?? configName;
-    saveText(body.text, filename);
-    return [filename];
-  }
-  if (format === 'step') return [await postGeometry(context, 'step', `${baseName}.step`)];
-  if (format === 'stl') return [await postGeometry(context, 'stl', `${baseName}.stl`)];
-  if (format === 'fusion_csv') {
-    // Fetch both halves before triggering either browser download. Otherwise a
-    // failed slices request leaves an untracked profiles file that is duplicated
-    // when the format is retried in a later app session.
-    const outputs = await Promise.all([
-      fetchGeometry(context, 'profiles', `${baseName}_profiles.csv`, 'profiles'),
-      fetchGeometry(context, 'profiles', `${baseName}_slices.csv`, 'slices'),
-    ]);
-    const saveBlob = context.saveBlob ?? downloadBlob;
-    outputs.forEach((output) => saveBlob(output.blob, output.filename));
-    return outputs.map((output) => output.filename);
-  }
-  if (format === 'png') return chartPng(context);
-  if (format === 'pressure_basis') {
-    requireResult(context);
-    const retained = context.channelId
-      ? context.archiveSnapshot?.pressureBases[context.channelId]
-      : Object.values(context.archiveSnapshot?.pressureBases ?? {}).length === 1
-        ? Object.values(context.archiveSnapshot?.pressureBases ?? {})[0]
-        : undefined;
-    if (retained) {
-      (context.saveBlob ?? downloadBlob)(retained.blob, retained.filename);
-      return [retained.filename];
+  return activityOperation({ kind: 'export', label: exportActivityLabel(format) }, context.fetcher ?? fetch, async (fetcher, activity) => {
+    context = { ...context, fetcher };
+    if (context.selectedRun) {
+      const reason = parameterExportReason({ kind: modelKindForRun(context.selectedRun) }, format);
+      if (reason) throw new Error(reason);
     }
-    if (context.archiveSnapshot) {
-      throw new Error('This run did not keep the pressure for the selected channel. Solve it again to export this.');
+    const baseName = exportContextBaseName(context);
+    const saveText = context.saveText ?? downloadText;
+    const now = context.now ?? new Date();
+    if (format === 'mwg_config') {
+      if (!context.design) throw new Error('This run did not keep its design, so WG cannot export it. Open the design, solve it, then export.');
+      const configName = `${baseName}_config.${designFileExtension(context.design.formula)}`;
+      const response = await (context.fetcher ?? fetch)('/api/design/serialize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          design: designWireWithSolveSettings(
+            serializeDesign(context.design),
+            context.polarConfig,
+            context.solveSettings ?? null,
+            // A config exported from run #42 is titled for run #42, not for
+            // whatever design happens to be on screen now.
+            context.designName ?? context.jobStem,
+          ),
+          filename: configName,
+        }),
+      });
+      if (!response.ok) throw await responseError(response);
+      const body = await response.json() as { text: string; suggestedFilename?: string };
+      const filename = body.suggestedFilename ?? configName;
+      saveText(body.text, filename);
+      return [filename];
     }
-    if (!context.jobId) throw new Error('This run has no saved results yet. Wait for it to finish, or choose a completed run.');
-    const query = context.channelId
-      ? `?channel_id=${encodeURIComponent(context.channelId)}`
-      : '';
-    const response = await (context.fetcher ?? fetch)(
-      `/api/pressure-basis/${encodeURIComponent(context.jobId)}${query}`,
-    );
-    if (!response.ok) throw await responseError(response);
-    const filename = filenameFromResponse(
-      response, `${baseName}_pressure_basis.npz`,
-    );
-    (context.saveBlob ?? downloadBlob)(await response.blob(), filename);
-    return [filename];
-  }
-  if (format === 'radiation_impedance_npz') return radiationImpedanceNpz(context);
-  if (format === 'radiation_impedance_csv') {
-    const filename = `${context.jobStem}_radiation_impedance.csv`;
-    saveText(
-      buildRadiationImpedanceCsv(await radiationImpedancePresentation(context)),
-      filename,
-      'text/csv;charset=utf-8',
-    );
-    return [filename];
-  }
-  if (format === 'derived_acoustics') {
+    if (format === 'step') return [await postGeometry(context, 'step', `${baseName}.step`)];
+    if (format === 'stl') return [await postGeometry(context, 'stl', `${baseName}.stl`)];
+    if (format === 'fusion_csv') {
+      // Fetch both halves before triggering either browser download. Otherwise a
+      // failed slices request leaves an untracked profiles file that is duplicated
+      // when the format is retried in a later app session.
+      let done = 0;
+      if (!context.activity) activity.progress(0, 2);
+      const outputs = await Promise.all([
+        fetchGeometry(context, 'profiles', `${baseName}_profiles.csv`, 'profiles'),
+        fetchGeometry(context, 'profiles', `${baseName}_slices.csv`, 'slices'),
+      ].map(async output => {
+        try { return await output; }
+        finally { if (!context.activity) activity.progress(++done, 2); }
+      }));
+      const saveBlob = context.saveBlob ?? downloadBlob;
+      outputs.forEach((output) => saveBlob(output.blob, output.filename));
+      return outputs.map((output) => output.filename);
+    }
+    if (format === 'png') return chartPng(context);
+    if (format === 'pressure_basis') {
+      requireResult(context);
+      const retained = context.channelId
+        ? context.archiveSnapshot?.pressureBases[context.channelId]
+        : Object.values(context.archiveSnapshot?.pressureBases ?? {}).length === 1
+          ? Object.values(context.archiveSnapshot?.pressureBases ?? {})[0]
+          : undefined;
+      if (retained) {
+        (context.saveBlob ?? downloadBlob)(retained.blob, retained.filename);
+        return [retained.filename];
+      }
+      if (context.archiveSnapshot) {
+        throw new Error('This run did not keep the pressure for the selected channel. Solve it again to export this.');
+      }
+      if (!context.jobId) throw new Error('This run has no saved results yet. Wait for it to finish, or choose a completed run.');
+      const query = context.channelId
+        ? `?channel_id=${encodeURIComponent(context.channelId)}`
+        : '';
+      const response = await (context.fetcher ?? fetch)(
+        `/api/pressure-basis/${encodeURIComponent(context.jobId)}${query}`,
+      );
+      if (!response.ok) throw await responseError(response);
+      const filename = filenameFromResponse(
+        response, `${baseName}_pressure_basis.npz`,
+      );
+      (context.saveBlob ?? downloadBlob)(await response.blob(), filename);
+      return [filename];
+    }
+    if (format === 'radiation_impedance_npz') return radiationImpedanceNpz(context);
+    if (format === 'radiation_impedance_csv') {
+      const filename = `${context.jobStem}_radiation_impedance.csv`;
+      saveText(
+        buildRadiationImpedanceCsv(await radiationImpedancePresentation(context)),
+        filename,
+        'text/csv;charset=utf-8',
+      );
+      return [filename];
+    }
+    if (format === 'derived_acoustics') {
+      const result = requireResult(context);
+      const files = [
+        {
+          content: buildDerivedAcousticsCsv(result),
+          filename: `${baseName}_derived_acoustics.csv`,
+          type: 'text/csv;charset=utf-8',
+        },
+        {
+          content: buildDerivedAcousticsJson(result),
+          filename: `${baseName}_derived_acoustics.json`,
+          type: 'application/json;charset=utf-8',
+        },
+      ];
+      files.forEach(({ content, filename, type }) => saveText(content, filename, type));
+      return files.map(({ filename }) => filename);
+    }
+    if (format === 'html_report') {
+      if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
+      const filename = `${context.jobStem}_report.html`;
+      saveText(buildRunReportHtml(context.result, {
+        title: context.designName ?? context.jobStem,
+        generatedAt: now,
+        groupDelayUnit: context.preferences.groupDelayUnit,
+      }), filename, 'text/html;charset=utf-8');
+      return [filename];
+    }
+    if (format === 'on_axis_frd') {
+      const result = requireResult(context);
+      const filename = `${baseName}.frd`;
+      saveText(buildOnAxisFrd(result, context.preferences), filename, 'text/plain;charset=utf-8');
+      return [filename];
+    }
+    if (format === 'polar_frd') {
+      if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
+      const channels = resultChannels(context.result);
+      const channelIds = context.channelId
+        ? [context.channelId]
+        : channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
+      const files = channelIds.flatMap((channelId) => (
+        buildPolarFrdSet(context.result!, context.preferences, context.jobStem, channelId)
+      ));
+      if (!files.length) throw new Error('This run has no directivity data for a polar FRD set.');
+      if (context.destination !== 'workspace') return writeManualPolarFrd(context, files);
+      files.forEach(({ text, filename }) => saveText(text, filename, 'text/plain;charset=utf-8'));
+      return files.map(({ filename }) => filename);
+    }
+    if (format === 'vxp') {
+      if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
+      // Build every member before saving the first. A malformed project must not
+      // leave orphaned support files in Downloads or in the automatic staging set.
+      const files = buildVituixCadProjectFiles(context.result, context.preferences, context.jobStem);
+      files.forEach(({ text, filename, type }) => saveText(text, filename, type));
+      return files.map(({ filename }) => filename);
+    }
     const result = requireResult(context);
-    const files = [
-      {
-        content: buildDerivedAcousticsCsv(result),
-        filename: `${baseName}_derived_acoustics.csv`,
-        type: 'text/csv;charset=utf-8',
-      },
-      {
-        content: buildDerivedAcousticsJson(result),
-        filename: `${baseName}_derived_acoustics.json`,
-        type: 'application/json;charset=utf-8',
-      },
-    ];
-    files.forEach(({ content, filename, type }) => saveText(content, filename, type));
-    return files.map(({ filename }) => filename);
-  }
-  if (format === 'html_report') {
-    if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
-    const filename = `${context.jobStem}_report.html`;
-    saveText(buildRunReportHtml(context.result, {
-      title: context.designName ?? context.jobStem,
-      generatedAt: now,
-      groupDelayUnit: context.preferences.groupDelayUnit,
-    }), filename, 'text/html;charset=utf-8');
+    const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'pressure_basis' | 'derived_acoustics' | 'html_report' | 'radiation_impedance_npz' | 'radiation_impedance_csv' | 'on_axis_frd' | 'polar_frd' | 'vxp'>, () => [string, string, string]> = {
+      csv: () => [buildFrequencyCsv(result, context.preferences), `${baseName}.csv`, 'text/csv;charset=utf-8'],
+      json: () => [buildFullResultsJson(result, context.preferences, now), `${baseName}.json`, 'application/json;charset=utf-8'],
+      txt: () => [buildSummaryText(result, context.preferences, now), `${baseName}_summary.txt`, 'text/plain;charset=utf-8'],
+      polar_csv: () => [buildPolarCsv(result), `${baseName}_polar.csv`, 'text/csv;charset=utf-8'],
+      impedance_csv: () => [buildImpedanceCsv(result), `${baseName}_impedance.csv`, 'text/csv;charset=utf-8'],
+      zma: () => [buildZma(result), `${baseName}.zma`, 'text/plain;charset=utf-8'],
+    };
+    const [content, filename, type] = builders[format]();
+    saveText(content, filename, type);
     return [filename];
-  }
-  if (format === 'on_axis_frd') {
-    const result = requireResult(context);
-    const filename = `${baseName}.frd`;
-    saveText(buildOnAxisFrd(result, context.preferences), filename, 'text/plain;charset=utf-8');
-    return [filename];
-  }
-  if (format === 'polar_frd') {
-    if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
-    const channels = resultChannels(context.result);
-    const channelIds = context.channelId
-      ? [context.channelId]
-      : channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
-    const files = channelIds.flatMap((channelId) => (
-      buildPolarFrdSet(context.result!, context.preferences, context.jobStem, channelId)
-    ));
-    if (!files.length) throw new Error('This run has no directivity data for a polar FRD set.');
-    if (context.destination !== 'workspace') return writeManualPolarFrd(context, files);
-    files.forEach(({ text, filename }) => saveText(text, filename, 'text/plain;charset=utf-8'));
-    return files.map(({ filename }) => filename);
-  }
-  if (format === 'vxp') {
-    if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
-    // Build every member before saving the first. A malformed project must not
-    // leave orphaned support files in Downloads or in the automatic staging set.
-    const files = buildVituixCadProjectFiles(context.result, context.preferences, context.jobStem);
-    files.forEach(({ text, filename, type }) => saveText(text, filename, type));
-    return files.map(({ filename }) => filename);
-  }
-  const result = requireResult(context);
-  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'pressure_basis' | 'derived_acoustics' | 'html_report' | 'radiation_impedance_npz' | 'radiation_impedance_csv' | 'on_axis_frd' | 'polar_frd' | 'vxp'>, () => [string, string, string]> = {
-    csv: () => [buildFrequencyCsv(result, context.preferences), `${baseName}.csv`, 'text/csv;charset=utf-8'],
-    json: () => [buildFullResultsJson(result, context.preferences, now), `${baseName}.json`, 'application/json;charset=utf-8'],
-    txt: () => [buildSummaryText(result, context.preferences, now), `${baseName}_summary.txt`, 'text/plain;charset=utf-8'],
-    polar_csv: () => [buildPolarCsv(result), `${baseName}_polar.csv`, 'text/csv;charset=utf-8'],
-    impedance_csv: () => [buildImpedanceCsv(result), `${baseName}_impedance.csv`, 'text/csv;charset=utf-8'],
-    zma: () => [buildZma(result), `${baseName}.zma`, 'text/plain;charset=utf-8'],
-  };
-  const [content, filename, type] = builders[format]();
-  saveText(content, filename, type);
-  return [filename];
+  });
 }
 
 /** A bundle with each file attributed to the format that produced it. */
@@ -835,8 +855,13 @@ interface FormatAttributedBundle extends ExportBundleResult {
 }
 
 export async function runExportBundle(inputContext: ExportContext, formats = inputContext.preferences.exportFormats): Promise<ExportBundleResult> {
-  const { files, failures } = await runAttributedExportBundle(inputContext, formats);
-  return { files, failures };
+  return activityOperation({ kind: 'export', label: 'Exporting files' }, inputContext.fetcher ?? fetch, async (fetcher, activity) => {
+    inputContext = { ...inputContext, fetcher, activity, activityTotal: formats.length };
+    activity.progress(0, formats.length);
+    const { files, failures } = await runAttributedExportBundle(inputContext, formats);
+    if (failures.length) activity.end(false);
+    return { files, failures };
+  });
 }
 
 async function runAttributedExportBundle(inputContext: ExportContext, formats: readonly ExportFormat[]): Promise<FormatAttributedBundle> {
@@ -857,7 +882,9 @@ async function runAttributedExportBundle(inputContext: ExportContext, formats: r
   // Polar FRD owns every channel as one set so its manual Workspace write stays
   // one request. The other result formats dispatch independently per channel.
   const resultFormats = new Set<ExportFormat>(['png', 'pressure_basis', 'derived_acoustics', 'on_axis_frd', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'zma']);
+  let formatsDone = 0;
   for (const format of formats) {
+    context.activity?.label(exportActivityLabel(format));
     const allChannels = context.result && !context.channelId && resultFormats.has(format)
       ? resultChannels(context.result) : [];
     let channels = allChannels;
@@ -908,6 +935,8 @@ async function runAttributedExportBundle(inputContext: ExportContext, formats: r
         failures.push({ format, reason: failureWords(error, 'WG could not write this file. Try again.') });
       }
     }
+    formatsDone += 1;
+    context.activity?.progress(formatsDone, context.activityTotal ?? formats.length);
   }
   if (context.cadIdentity && files.length) {
     const filename = `${context.jobStem}_cad_identity.json`;
@@ -952,23 +981,33 @@ export async function runWorkspaceExportBundle(
   formats = context.preferences.autoExportFormats,
   existing: ExistingFilePolicy = 'merge_identical',
 ): Promise<ExportBundleResult> {
-  const { bundle: { failures }, prepared } = await prepareWorkspaceBundle(context, formats);
-  if (!prepared.size) return { files: [], failures };
-  const written = await writeWorkspaceFiles(
-    workspaceSubdirectory(context),
-    [...prepared.values()],
-    context.fetcher ?? fetch,
-    existing,
-    context.destinationToken,
-    context.confirmReplacements,
-    context.jobId,
-  );
-  return {
-    files: written.files,
-    failures,
-    directory: written.directory,
-    replaced: written.replaced ?? [],
-  };
+  return activityOperation({ kind: 'export', label: 'Exporting files' }, context.fetcher ?? fetch, async (fetcher, activity) => {
+    context = { ...context, fetcher, activity, activityTotal: formats.length + 1 };
+    activity.progress(0, formats.length + 1);
+    const { bundle: { failures }, prepared } = await prepareWorkspaceBundle(context, formats);
+    if (!prepared.size) {
+      if (failures.length) activity.end(false);
+      return { files: [], failures };
+    }
+    activity.label('Writing exported files');
+    const written = await writeWorkspaceFiles(
+      workspaceSubdirectory(context),
+      [...prepared.values()],
+      context.fetcher ?? fetch,
+      existing,
+      context.destinationToken,
+      context.confirmReplacements,
+      context.jobId,
+    );
+    activity.progress(formats.length + 1, formats.length + 1);
+    if (failures.length) activity.end(false);
+    return {
+      files: written.files,
+      failures,
+      directory: written.directory,
+      replaced: written.replaced ?? [],
+    };
+  });
 }
 
 /**
@@ -987,39 +1026,46 @@ export async function runAutomaticWorkspaceExport(
   context: ExportContext,
   formats: readonly ExportFormat[] = context.preferences.autoExportFormats,
 ): Promise<ExportBundleResult> {
-  const { bundle, prepared } = await prepareWorkspaceBundle(context, formats);
-  const files: string[] = [];
-  const failures = [...bundle.failures];
-  let directory: string | undefined;
-  for (const format of formats) {
-    const names = bundle.formatFiles.get(format) ?? [];
-    // Nothing built means its failure is already recorded above.
-    if (!names.length) continue;
-    const members = [...new Set([...names, ...bundle.sharedFiles])]
-      .map((name) => prepared.get(name))
-      .filter((member): member is WorkspaceFile => member !== undefined);
-    try {
-      const written = await writeWorkspaceFiles(
-        workspaceSubdirectory(context), members, context.fetcher ?? fetch, 'merge_identical',
-        undefined, undefined, context.jobId,
-      );
-      directory = written.directory;
-      written.files.forEach((file) => { if (!files.includes(file)) files.push(file); });
-    } catch (error) {
-      const flags = error as { destinationConflict?: boolean; publicationUncertain?: boolean };
-      // A file of the user's already in the way is their folder, not WG's
-      // failure: it is shown, never reported to the developers.
-      if (flags.destinationConflict !== true) reportCaughtError('export-write', error, { job_id: context.jobId ?? null, format });
-      failures.push({
-        format,
-        reason: failureWords(error),
-        // A refused or unanswered write is not regenerated automatically;
-        // anything else failed before publication and stays retryable.
-        blocked: flags.destinationConflict === true || flags.publicationUncertain === true,
-      });
+  return activityOperation({ kind: 'export', label: 'Exporting files', background: true }, context.fetcher ?? fetch, async (fetcher, activity) => {
+    context = { ...context, fetcher, activity, activityTotal: formats.length + 1 };
+    activity.progress(0, formats.length + 1);
+    const { bundle, prepared } = await prepareWorkspaceBundle(context, formats);
+    const files: string[] = [];
+    const failures = [...bundle.failures];
+    let directory: string | undefined;
+    activity.label('Writing exported files');
+    for (const format of formats) {
+      const names = bundle.formatFiles.get(format) ?? [];
+      // Nothing built means its failure is already recorded above.
+      if (!names.length) continue;
+      const members = [...new Set([...names, ...bundle.sharedFiles])]
+        .map((name) => prepared.get(name))
+        .filter((member): member is WorkspaceFile => member !== undefined);
+      try {
+        const written = await writeWorkspaceFiles(
+          workspaceSubdirectory(context), members, context.fetcher ?? fetch, 'merge_identical',
+          undefined, undefined, context.jobId,
+        );
+        directory = written.directory;
+        written.files.forEach((file) => { if (!files.includes(file)) files.push(file); });
+      } catch (error) {
+        const flags = error as { destinationConflict?: boolean; publicationUncertain?: boolean };
+        // A file of the user's already in the way is their folder, not WG's
+        // failure: it is shown, never reported to the developers.
+        if (flags.destinationConflict !== true) reportCaughtError('export-write', error, { job_id: context.jobId ?? null, format });
+        failures.push({
+          format,
+          reason: failureWords(error),
+          // A refused or unanswered write is not regenerated automatically;
+          // anything else failed before publication and stays retryable.
+          blocked: flags.destinationConflict === true || flags.publicationUncertain === true,
+        });
+      }
     }
-  }
-  return directory === undefined ? { files, failures } : { files, failures, directory };
+    activity.progress(formats.length + 1, formats.length + 1);
+    if (failures.length) activity.end(false);
+    return directory === undefined ? { files, failures } : { files, failures, directory };
+  });
 }
 
 export async function downloadMeshArtifact(
@@ -1028,16 +1074,18 @@ export async function downloadMeshArtifact(
   fetcher: typeof fetch = fetch,
   saveBlob: (blob: Blob, filename: string) => void = downloadBlob,
 ): Promise<string> {
-  const response = await deadlineFetch(fetcher, `/api/mesh-artifact/${encodeURIComponent(job.id)}`);
-  if (!response.ok) throw await responseError(response);
-  const regenerated = response.headers.get('X-WG2-Mesh-Regenerated') === '1';
-  const filename = `${exportStemForJob(job)}${regenerated ? '-regenerated' : ''}.msh`;
-  saveBlob(await response.blob(), filename);
-  if (regenerated) {
-    const version = response.headers.get('X-WG2-Mesher-Version');
-    reportNotice(`${runDisplayName(job)}: the original mesh is gone, so WG rebuilt it with the current version${version ? ` (${version})` : ''} and may differ from the mesh that was solved.`);
-  }
-  return filename;
+  return activityOperation({ kind: 'export', label: 'Exporting MSH' }, fetcher, async (fetcher) => {
+    const response = await deadlineFetch(fetcher, `/api/mesh-artifact/${encodeURIComponent(job.id)}`);
+    if (!response.ok) throw await responseError(response);
+    const regenerated = response.headers.get('X-WG2-Mesh-Regenerated') === '1';
+    const filename = `${exportStemForJob(job)}${regenerated ? '-regenerated' : ''}.msh`;
+    saveBlob(await response.blob(), filename);
+    if (regenerated) {
+      const version = response.headers.get('X-WG2-Mesher-Version');
+      reportNotice(`${runDisplayName(job)}: the original mesh is gone, so WG rebuilt it with the current version${version ? ` (${version})` : ''} and may differ from the mesh that was solved.`);
+    }
+    return filename;
+  });
 }
 
 export async function saveMeshArtifactToWorkspace(
@@ -1045,14 +1093,16 @@ export async function saveMeshArtifactToWorkspace(
   reportNotice: (message: string) => void,
   fetcher: typeof fetch = fetch,
 ): Promise<string> {
-  let prepared: WorkspaceFile | null = null;
-  let notice: string | undefined;
-  await downloadMeshArtifact(job, (message) => { notice = message; }, fetcher, (blob, filename) => { prepared = { blob, filename }; });
-  if (!prepared) throw new ProgramFault('Mesh artifact returned no file.');
-  const written = await writeWorkspaceFiles(exportSubdirectoryForJob(job), [prepared], fetcher, 'merge_identical', undefined, undefined, job.id);
-  if (!written.files[0]) throw new ProgramFault('Workspace returned no saved mesh path.');
-  if (notice) reportNotice(notice);
-  return written.files[0];
+  return activityOperation({ kind: 'export', label: 'Exporting MSH' }, fetcher, async (fetcher) => {
+    let prepared: WorkspaceFile | null = null;
+    let notice: string | undefined;
+    await downloadMeshArtifact(job, (message) => { notice = message; }, fetcher, (blob, filename) => { prepared = { blob, filename }; });
+    if (!prepared) throw new ProgramFault('Mesh artifact returned no file.');
+    const written = await writeWorkspaceFiles(exportSubdirectoryForJob(job), [prepared], fetcher, 'merge_identical', undefined, undefined, job.id);
+    if (!written.files[0]) throw new ProgramFault('Workspace returned no saved mesh path.');
+    if (notice) reportNotice(notice);
+    return written.files[0];
+  });
 }
 
 
@@ -1149,100 +1199,102 @@ export async function archiveRunToWorkspace(
   preferences: Preferences,
   fetcher: typeof fetch = fetch,
 ): Promise<string[]> {
-  const snapshot = await fetchJobArchiveSnapshot(job.id, fetcher);
-  const radiationImpedance = snapshot.radiation_impedance
-    ? blobFromBase64(snapshot.radiation_impedance.content_base64)
-    : undefined;
-  // Availability in the archive record must describe the transaction snapshot,
-  // not a jobs-socket item that may predate a retention event.
-  const archiveJob: JobItem = {
-    ...job,
-    has_mesh_artifact: Boolean(snapshot.mesh_artifact),
-    has_pressure_basis_artifact: snapshot.pressure_bases.length > 0,
-    has_radiation_impedance_artifact: Boolean(radiationImpedance),
-    radiation_impedance_artifact_bytes: radiationImpedance?.size,
-  };
-  const subdirectory = exportSubdirectoryForJob(archiveJob);
-  const pressureBases = Object.fromEntries(snapshot.pressure_bases.map(({ channel_id, content_base64 }) => {
-    const stem = channel_id.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+|[.-]+$/g, '') || 'channel';
-    return [channel_id, {
-      filename: `${stem}_pressure_basis.npz`,
-      blob: blobFromBase64(content_base64),
-    }];
-  }));
-  const formats: ExportFormat[] = [
-    ...ARCHIVE_FORMATS,
-    ...(snapshot.pressure_bases.length ? ['pressure_basis' as const] : []),
-    ...(snapshot.radiation_impedance
-      ? RADIATION_IMPEDANCE_ARCHIVE_FORMATS
-      : []),
-  ];
-  const { bundle, prepared } = await prepareWorkspaceBundle({
-    result: snapshot.results as ResultPayload,
-    ...resultExportSnapshot(archiveJob),
-    jobId: archiveJob.id,
-    jobStem: exportStemForJob(archiveJob),
-    hasRadiationImpedanceArtifact: Boolean(snapshot.radiation_impedance),
-    archiveSnapshot: {
-      pressureBases,
-      radiationImpedance,
-      radiationPresentation: snapshot.radiation_impedance?.presentation,
-    },
-    workspaceSubdirectory: subdirectory,
-    designName: archiveJob.label ?? undefined,
-    preferences,
-    fetcher,
-    // Archive retries must reproduce identical JSON/report bytes. A wall-clock
-    // timestamp makes a completed run differ every time the metadata write is
-    // retried after an app restart; the run's completion time is its timestamp.
-    now: new Date(job.completed_at ?? job.created_at),
-  }, formats);
-  if (bundle.failures.length) {
-    throw new Error([...new Set(bundle.failures.map(({ reason }) => reason))].join(' '));
-  }
-  let replay: { filename: string | null; reason?: string } | undefined;
-  if (job.config_summary.import_origin === 'mesh-file') {
-    const filename = `${exportStemForJob(archiveJob)}.wgreplay`;
-    try {
-      const blob = await fetchMeshReplay(job.id, fetcher);
-      prepared.set(filename, { filename, blob });
-      replay = { filename };
-    } catch (error) {
-      // An unavailable old input must not discard the run's result archive.
-      // Transient failures retry the archive instead of becoming durable facts.
-      if (!(error instanceof MeshReplayRefusal) || ![404, 409, 410, 422].includes(error.status)) throw error;
-      replay = { filename: null, reason: error.message };
+  return activityOperation({ kind: 'export', label: 'Archiving the run' }, fetcher, async (fetcher) => {
+    const snapshot = await fetchJobArchiveSnapshot(job.id, fetcher);
+    const radiationImpedance = snapshot.radiation_impedance
+      ? blobFromBase64(snapshot.radiation_impedance.content_base64)
+      : undefined;
+    // Availability in the archive record must describe the transaction snapshot,
+    // not a jobs-socket item that may predate a retention event.
+    const archiveJob: JobItem = {
+      ...job,
+      has_mesh_artifact: Boolean(snapshot.mesh_artifact),
+      has_pressure_basis_artifact: snapshot.pressure_bases.length > 0,
+      has_radiation_impedance_artifact: Boolean(radiationImpedance),
+      radiation_impedance_artifact_bytes: radiationImpedance?.size,
+    };
+    const subdirectory = exportSubdirectoryForJob(archiveJob);
+    const pressureBases = Object.fromEntries(snapshot.pressure_bases.map(({ channel_id, content_base64 }) => {
+      const stem = channel_id.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+|[.-]+$/g, '') || 'channel';
+      return [channel_id, {
+        filename: `${stem}_pressure_basis.npz`,
+        blob: blobFromBase64(content_base64),
+      }];
+    }));
+    const formats: ExportFormat[] = [
+      ...ARCHIVE_FORMATS,
+      ...(snapshot.pressure_bases.length ? ['pressure_basis' as const] : []),
+      ...(snapshot.radiation_impedance
+        ? RADIATION_IMPEDANCE_ARCHIVE_FORMATS
+        : []),
+    ];
+    const { bundle, prepared } = await prepareWorkspaceBundle({
+      result: snapshot.results as ResultPayload,
+      ...resultExportSnapshot(archiveJob),
+      jobId: archiveJob.id,
+      jobStem: exportStemForJob(archiveJob),
+      hasRadiationImpedanceArtifact: Boolean(snapshot.radiation_impedance),
+      archiveSnapshot: {
+        pressureBases,
+        radiationImpedance,
+        radiationPresentation: snapshot.radiation_impedance?.presentation,
+      },
+      workspaceSubdirectory: subdirectory,
+      designName: archiveJob.label ?? undefined,
+      preferences,
+      fetcher,
+      // Archive retries must reproduce identical JSON/report bytes. A wall-clock
+      // timestamp makes a completed run differ every time the metadata write is
+      // retried after an app restart; the run's completion time is its timestamp.
+      now: new Date(job.completed_at ?? job.created_at),
+    }, formats);
+    if (bundle.failures.length) {
+      throw new Error([...new Set(bundle.failures.map(({ reason }) => reason))].join(' '));
     }
-  }
-  const results = prepared.size
-    ? await writeArchiveMembers(subdirectory, [...prepared.values()], fetcher, job.id)
-    : { files: [], moved: new Map<string, string>() };
-  const mesh = snapshot.mesh_artifact
-    ? await writeArchiveMembers(subdirectory, [{
-      filename: `${exportStemForJob(archiveJob)}.msh`,
-      blob: new Blob([snapshot.mesh_artifact], { type: 'text/plain;charset=utf-8' }),
-    }], fetcher, job.id)
-    : { files: [], moved: new Map<string, string>() };
-  // The record names the artifacts it sits beside, wherever they landed.
-  const moved = new Map([...results.moved, ...mesh.moved]);
-  const written = [
-    ...[...prepared.values()].map(({ filename }) => filename),
-    ...(snapshot.mesh_artifact ? [`${exportStemForJob(archiveJob)}.msh`] : []),
-  ];
-  // Pin before publishing run.json so every successful reference is permanent.
-  let modelFile: string | undefined;
-  const pin = await pinRunCadDocument(archiveJob, fetcher);
-  if (pin.requested && !pin.placed) {
-    const reason = pin.reason ?? 'the server did not say why';
-    if (pin.retryable) throw new Error(reason);
-    console.warn(`Could not keep the run’s CAD document for ${exportStemForJob(archiveJob)}: ${reason}`);
-  }
-  modelFile = pin.modelFile === undefined ? pin.relativePath ?? undefined : pin.modelFile ?? undefined;
-  const record = await writeArchiveMembers(
-    subdirectory,
-    [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename, written, replay, modelFile))],
-    fetcher,
-    job.id,
-  );
-  return [...results.files, ...mesh.files, ...record.files];
+    let replay: { filename: string | null; reason?: string } | undefined;
+    if (job.config_summary.import_origin === 'mesh-file') {
+      const filename = `${exportStemForJob(archiveJob)}.wgreplay`;
+      try {
+        const blob = await fetchMeshReplay(job.id, fetcher);
+        prepared.set(filename, { filename, blob });
+        replay = { filename };
+      } catch (error) {
+        // An unavailable old input must not discard the run's result archive.
+        // Transient failures retry the archive instead of becoming durable facts.
+        if (!(error instanceof MeshReplayRefusal) || ![404, 409, 410, 422].includes(error.status)) throw error;
+        replay = { filename: null, reason: error.message };
+      }
+    }
+    const results = prepared.size
+      ? await writeArchiveMembers(subdirectory, [...prepared.values()], fetcher, job.id)
+      : { files: [], moved: new Map<string, string>() };
+    const mesh = snapshot.mesh_artifact
+      ? await writeArchiveMembers(subdirectory, [{
+        filename: `${exportStemForJob(archiveJob)}.msh`,
+        blob: new Blob([snapshot.mesh_artifact], { type: 'text/plain;charset=utf-8' }),
+      }], fetcher, job.id)
+      : { files: [], moved: new Map<string, string>() };
+    // The record names the artifacts it sits beside, wherever they landed.
+    const moved = new Map([...results.moved, ...mesh.moved]);
+    const written = [
+      ...[...prepared.values()].map(({ filename }) => filename),
+      ...(snapshot.mesh_artifact ? [`${exportStemForJob(archiveJob)}.msh`] : []),
+    ];
+    // Pin before publishing run.json so every successful reference is permanent.
+    let modelFile: string | undefined;
+    const pin = await pinRunCadDocument(archiveJob, fetcher);
+    if (pin.requested && !pin.placed) {
+      const reason = pin.reason ?? 'the server did not say why';
+      if (pin.retryable) throw new Error(reason);
+      console.warn(`Could not keep the run’s CAD document for ${exportStemForJob(archiveJob)}: ${reason}`);
+    }
+    modelFile = pin.modelFile === undefined ? pin.relativePath ?? undefined : pin.modelFile ?? undefined;
+    const record = await writeArchiveMembers(
+      subdirectory,
+      [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename, written, replay, modelFile))],
+      fetcher,
+      job.id,
+    );
+    return [...results.files, ...mesh.files, ...record.files];
+  });
 }

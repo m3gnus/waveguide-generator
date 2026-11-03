@@ -1,3 +1,4 @@
+import { activityStore } from '../shell/activity';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
@@ -24,9 +25,23 @@ const record = {
 } as unknown as CadReturnIngestRecord;
 
 describe('native assembly imported workspace handoff', () => {
-  beforeEach(() => { resetCadReturnStore(); resetSolveOptionsStore(); importedMeshStore.clear(); workspaceModeStore.setMode('parametric'); });
+  beforeEach(() => { activityStore.reset(); resetCadReturnStore(); resetSolveOptionsStore(); importedMeshStore.clear(); workspaceModeStore.setMode('parametric'); });
   const prepare = () => Promise.resolve({ ingestion:structuredClone(record) });
   const fetcher = vi.fn<typeof fetch>(async () => new Response(fixture));
+
+  it.each([false, true])('tracks preparation and mesh read together (failure=%s)', async fail => {
+    let resolve!: (value: { ingestion: CadReturnIngestRecord }) => void;
+    const pending = prepareNativeAssembly(() => new Promise(done => { resolve = done; }), async () => {
+      expect(activityStore.getSnapshot()).toHaveLength(1);
+      return new Response(fixture, { status: fail ? 409 : 200 });
+    });
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'cad-import' }]);
+    const settled = pending.catch(error => error);
+    resolve({ ingestion: structuredClone(record) });
+    await settled;
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    expect(activityStore.typicalMs('cad-import') === null).toBe(fail);
+  });
 
   it('uses the real imported submission builder with exact weights, identities and features', async () => {
     await prepareNativeAssembly(prepare, fetcher);

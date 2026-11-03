@@ -1,3 +1,6 @@
+import { buildGeometryExport } from '../api/designIo';
+import { designForFamily } from '../stores/design';
+import { activityStore } from '../shell/activity';
 import { describe, expect, it, vi } from 'vitest';
 import { exportProfileArtifacts, openedMessage, reportText } from './DesignFileMenu';
 import type { GeometryExportFile, ImportReport } from '../api/designIo';
@@ -149,4 +152,26 @@ describe('opened-file report line', () => {
     expect(text).toContain('First thing changed. Second thing changed.');
     expect(text).toContain('migrations: 2');
   });
+});
+
+it.each([false, true])('tracks both profile builds and publication once (failure=%s)', async fail => {
+  activityStore.reset();
+  const started = vi.spyOn(activityStore, 'start');
+  const fetcher: typeof fetch = async () => {
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    return new Response('CSV');
+  };
+  const pending = exportProfileArtifacts(
+    (kind, scoped) => buildGeometryExport('profiles', designForFamily('OSSE'), 0, 'horn', kind, 'solid', scoped),
+    async () => {
+      expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'export', progress: { done: 2, total: 3 } }]);
+      if (fail) throw new Error('write failed');
+      return { directory: 'out' };
+    }, 0, fetcher,
+  );
+  await pending.catch(error => error);
+  expect(started).toHaveBeenCalledTimes(1);
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+  expect(activityStore.typicalMs('export') === null).toBe(fail);
+  vi.restoreAllMocks();
 });

@@ -45,6 +45,8 @@ export interface Activity {
 }
 
 export interface ActivityHandle {
+  /** A composed operation can become stoppable only during its cancellable step. */
+  setCancel(cancel: (() => void) | null): void;
   progress(done: number, total: number): void;
   label(text: string): void;
   /** `completed` false (cancelled, failed) keeps the duration out of the
@@ -117,6 +119,7 @@ class ActivityStore {
       this.set(this.activities.map((item) => item.id === activity.id ? { ...item, ...change } : item));
     };
     return {
+      setCancel: (cancel) => patch({ cancel }),
       progress: (done, total) => {
         const current = this.activities.find((item) => item.id === activity.id);
         const gained = !current?.progress || done > current.progress.done;

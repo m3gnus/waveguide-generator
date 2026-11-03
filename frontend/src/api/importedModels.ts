@@ -1,3 +1,4 @@
+import { activityOperation } from '../shell/activityOperation';
 import type { CadSourceInventoryEntry } from './cadOperations';
 import { refusalText } from './httpError';
 import type { ImportedSetup } from '../jobs/importedSetup';
@@ -86,13 +87,15 @@ export async function requestImportedModel<T>(path: string, fetcher: typeof fetc
 
 /** The one read a run is reopened from: its model, prepared mesh, original and setup. */
 export const readRunWorkspace = (jobId: string, fetcher: typeof fetch = fetch): Promise<RunWorkspace> =>
-  requestImportedModel(`/api/runs/${encodeURIComponent(jobId)}/workspace`, fetcher, 'This run’s workspace');
+  activityOperation({ kind: 'cad-import', label: 'Opening the saved model' }, fetcher, (fetcher) =>
+    requestImportedModel(`/api/runs/${encodeURIComponent(jobId)}/workspace`, fetcher, 'This run’s workspace'));
 
 /** A model, its latest preparation and, when named, one preparation with its mesh. */
 export const readImportedModel = (modelId: string, preparedId: string | null, fetcher: typeof fetch = fetch):
   Promise<{ model: ImportedModelSummary; latest_prepared: PreparedSummary | null; prepared?: PreparedSummary; original_available: boolean }> =>
-  requestImportedModel(`/api/models/${encodeURIComponent(modelId)}${preparedId ? `?prepared_id=${encodeURIComponent(preparedId)}` : ''}`,
-    fetcher, 'This model', modelId.startsWith('mesh-file:') ? { headers: importedPreparationHeaders() } : undefined);
+  activityOperation({ kind: modelId.startsWith('mesh-file:') ? 'mesh-import' : 'cad-import', label: 'Opening the saved model' }, fetcher, (fetcher) =>
+    requestImportedModel(`/api/models/${encodeURIComponent(modelId)}${preparedId ? `?prepared_id=${encodeURIComponent(preparedId)}` : ''}`,
+      fetcher, 'This model', modelId.startsWith('mesh-file:') ? { headers: importedPreparationHeaders() } : undefined));
 
 /** A CAD return can read its setup before its mesh is prepared. Same inventory key as reopen. */
 export const readCadInventorySetup = (modelId: string, inventory: CadSourceInventoryEntry[], fetcher: typeof fetch = fetch):

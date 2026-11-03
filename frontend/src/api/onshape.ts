@@ -1,3 +1,4 @@
+import { activityOperation } from '../shell/activityOperation';
 import { deadlineFetch } from './deadlineFetch';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import { currentDesignWire, designWireWithSolveSettings, wgSolveSettingsFromStore } from '../stores/designWire';
@@ -133,30 +134,32 @@ export async function sendDesignToOnshape(
   idempotencyKey: string = globalThis.crypto?.randomUUID?.()
     ?? `onshape-${Date.now()}-${Math.random().toString(16).slice(2)}`,
 ): Promise<OnshapeSendResult> {
-  // Unlike the Fusion leg there is no workspace folder to choose: the bundle
-  // is written under WG's own data directory and uploaded from there.
-  const response = await fetcher('/api/cadlink/onshape/send', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Idempotency-Key': idempotencyKey,
-    },
-    body: JSON.stringify({
-      design: designWireWithSolveSettings(
-        serializeDesign(design),
-        options.polarConfig,
-        options.solveSettings === undefined ? wgSolveSettingsFromStore() : options.solveSettings,
-      ),
-      designRevision,
-      baseName,
-      identity,
-      instanceId: options.instanceId ?? null,
-      allowPublic: options.allowPublic === true,
-    }),
+  return activityOperation({ kind: 'send-to-cad', label: 'Sending to CAD' }, fetcher, async (fetcher) => {
+    // Unlike the Fusion leg there is no workspace folder to choose: the bundle
+    // is written under WG's own data directory and uploaded from there.
+    const response = await fetcher('/api/cadlink/onshape/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({
+        design: designWireWithSolveSettings(
+          serializeDesign(design),
+          options.polarConfig,
+          options.solveSettings === undefined ? wgSolveSettingsFromStore() : options.solveSettings,
+        ),
+        designRevision,
+        baseName,
+        identity,
+        instanceId: options.instanceId ?? null,
+        allowPublic: options.allowPublic === true,
+      }),
+    });
+    if (response.status === 428) throw new OnshapePublicConsentRequired(await errorMessage(response));
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json() as Promise<OnshapeSendResult>;
   });
-  if (response.status === 428) throw new OnshapePublicConsentRequired(await errorMessage(response));
-  if (!response.ok) throw new Error(await errorMessage(response));
-  return response.json() as Promise<OnshapeSendResult>;
 }
 
 export async function returnOnshapeToWg(
@@ -164,13 +167,15 @@ export async function returnOnshapeToWg(
   fetcher: typeof fetch = fetch,
   instanceId: string | null = null,
 ): Promise<OnshapeReturnResult> {
-  const response = await fetcher('/api/cadlink/onshape/return', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ designId, instanceId }),
+  return activityOperation({ kind: 'cad-import', label: 'Importing the CAD model' }, fetcher, async (fetcher) => {
+    const response = await fetcher('/api/cadlink/onshape/return', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ designId, instanceId }),
+    });
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json() as Promise<OnshapeReturnResult>;
   });
-  if (!response.ok) throw new Error(await errorMessage(response));
-  return response.json() as Promise<OnshapeReturnResult>;
 }
 
 /** Forget one link. The Onshape document itself is left exactly as it is. */

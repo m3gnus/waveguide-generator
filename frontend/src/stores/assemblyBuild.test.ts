@@ -1,3 +1,4 @@
+import { activityStore } from '../shell/activity';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { addWoofer, commitAssembly, emptyAssembly, setPlacement } from './assembly';
 import {
@@ -27,11 +28,24 @@ const record = (id: string) => ({ ingest_id: id, producer: 'design-assembly', ra
 
 describe('assembly background build', () => {
   beforeEach(() => {
+    activityStore.reset();
     counter = 0;
     resetDesignStore();
     useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), enclosure: { ...designForFamily('R-OSSE').enclosure, depth: 200 } });
     resetAssemblyBuild();
     commitAssembly(addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids).assembly);
+  });
+
+  it.each([200, 422])('registers one shared build through success or failure (%s)', async status => {
+    const { fetcher, answer } = deferredFetcher();
+    const build = requestAssemblyBuild(fetcher);
+    expect(buildCurrentAssembly(fetcher)).toBe(build);
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'assembly-build', label: 'Building the mesh', cancel: null }]);
+    const settled = status === 200 ? build : expect(build).rejects.toThrow('Set an enclosure depth.');
+    answer(0, status === 200 ? record('activity') : null, status);
+    await settled;
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    expect(activityStore.typicalMs('assembly-build') === null).toBe(status !== 200);
   });
 
   it('publishes only the newest captured revision, whatever order answers arrive in', async () => {

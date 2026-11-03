@@ -1,3 +1,4 @@
+import { activityOperation } from '../activityOperation';
 import { deadlineFetch } from '../../api/deadlineFetch';
 import { currentDocumentLoad, isCurrentDocumentLoad } from '../../stores/design';
 import type { CadReturnIngestRecord } from '../../api/cadlink';
@@ -111,7 +112,8 @@ function upgradeToDisplayMesh(
   const documentLoad = currentDocumentLoad();
   if (displayUpgradesInFlight.has(ingestId)) return;
   displayUpgradesInFlight.add(ingestId);
-  void (async () => {
+  void activityOperation({ kind: 'cad-import', label: 'Loading the CAD display mesh', background: true }, (input, init) => fetcher(input, init), async (fetcher, activity) => {
+    let upgraded = false;
     let signalled = false;
     let wake: (() => void) | null = null;
     const unsubscribe = jobsSocket.subscribeCadViewportReady((readyIngestId) => {
@@ -163,16 +165,18 @@ function upgradeToDisplayMesh(
             workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad'
               && importedMeshStore.getSnapshot().showing === 'cad',
           );
+          upgraded = true;
         } catch {
           // The solve mesh already on screen is the same geometry.
         }
         return;
       }
     } finally {
+      if (!upgraded) activity.end(false);
       unsubscribe();
       displayUpgradesInFlight.delete(ingestId);
     }
-  })();
+  });
 }
 
 /** Prefer the independently tessellated full CAD display artifact. Older
@@ -191,74 +195,77 @@ export async function showIngestedMeshInViewport(
   fetcher: typeof fetch = fetch,
   generation = importedMeshStore.beginIntent(),
 ): Promise<void> {
-  const selection = useCadReturnStore.getState().captureSelectionIntent();
-  const documentLoad = currentDocumentLoad();
-  const current = () => importedMeshStore.isCurrentGeneration(generation)
-    && useCadReturnStore.getState().isCurrentSelectionIntent(selection)
-    && !anotherSelectionInFlight(record.ingest_id)
-    && isCurrentDocumentLoad(documentLoad);
-  if (!current()) return;
-  const ingestId = record.ingest_id;
-  const available = importedMeshStore.getSnapshot().cad;
-  if (available?.ingestId === ingestId) {
-    if (workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad') importedMeshStore.showCad(generation);
-    return;
-  }
-  let displayPending = false;
-  try {
-    const result = await fetchMeshOnce(viewportMeshUrl(ingestId), fetcher);
+  return activityOperation({ kind: 'cad-import', label: 'Importing the CAD model' }, fetcher, async (fetcher, activity) => {
+    const selection = useCadReturnStore.getState().captureSelectionIntent();
+    const documentLoad = currentDocumentLoad();
+    const current = () => importedMeshStore.isCurrentGeneration(generation)
+      && useCadReturnStore.getState().isCurrentSelectionIntent(selection)
+      && !anotherSelectionInFlight(record.ingest_id)
+      && isCurrentDocumentLoad(documentLoad);
     if (!current()) return;
-    if (result.status === 202) {
-      displayPending = true;
-    } else if (result.ok) {
-      importedMeshStore.setCad(
-        cadDisplayScene(record, name, result.text),
-        generation,
-        workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad',
+    const ingestId = record.ingest_id;
+    const available = importedMeshStore.getSnapshot().cad;
+    if (available?.ingestId === ingestId) {
+      if (workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad') importedMeshStore.showCad(generation);
+      return;
+    }
+    let displayPending = false;
+    try {
+      const result = await fetchMeshOnce(viewportMeshUrl(ingestId), fetcher);
+      if (!current()) return;
+      if (result.status === 202) {
+        displayPending = true;
+      } else if (result.ok) {
+        importedMeshStore.setCad(
+          cadDisplayScene(record, name, result.text),
+          generation,
+          workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad',
+        );
+        return;
+      } else if (result.status === 409) {
+        onNotice?.('WG could not load the smoother view of this model, so it is showing the solve mesh.');
+      }
+    } catch {
+      // The independent display artifact is advisory; try the solver artifact.
+    }
+    if (!current()) return;
+    try {
+      const result = await fetchMeshOnce(
+        `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`,
+        fetcher,
       );
-      return;
-    } else if (result.status === 409) {
-      onNotice?.('WG could not load the smoother view of this model, so it is showing the solve mesh.');
+      if (result.ok && current()) {
+        importedMeshStore.setCad(createImportedMeshScene(
+          name,
+          parseMSH(result.text),
+          'cad',
+          ingestId,
+          // Every plane the solver mirrors -- WG's own cuts and CAD cuts alike.
+          displaySymmetry(record).solvedPlanes,
+          {
+            domainKnown: !recordDomainDecision(record)?.refusal,
+            solvedTriangleCount: record.mesh?.stats.triangle_count,
+            artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
+            tessellation: cadTessellation(record),
+          },
+        ), generation, workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad');
+        if (displayPending) upgradeToDisplayMesh(record, name, fetcher);
+        return;
+      }
+    } catch {
+      // Neither artifact could be displayed; fall through to drop the old one.
     }
-  } catch {
-    // The independent display artifact is advisory; try the solver artifact.
-  }
-  if (!current()) return;
-  try {
-    const result = await fetchMeshOnce(
-      `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`,
-      fetcher,
-    );
-    if (result.ok && current()) {
-      importedMeshStore.setCad(createImportedMeshScene(
-        name,
-        parseMSH(result.text),
-        'cad',
-        ingestId,
-        // Every plane the solver mirrors -- WG's own cuts and CAD cuts alike.
-        displaySymmetry(record).solvedPlanes,
-        {
-          domainKnown: !recordDomainDecision(record)?.refusal,
-          solvedTriangleCount: record.mesh?.stats.triangle_count,
-          artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
-          tessellation: cadTessellation(record),
-        },
-      ), generation, workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad');
-      if (displayPending) upgradeToDisplayMesh(record, name, fetcher);
-      return;
+    activity.end(false);
+    // A scene left over from an earlier ingestion would keep claiming to be the
+    // geometry on screen — misleading on its own, and enough to refuse every
+    // later solve at the viewport-mismatch gate. An empty slot is honest.
+    if (current()
+      && importedMeshStore.getSnapshot().cad !== null
+      && importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) {
+      // Failure cleanup belongs to this load; it must not supersede its owner.
+      importedMeshStore.clear('cad', generation);
     }
-  } catch {
-    // Neither artifact could be displayed; fall through to drop the old one.
-  }
-  // A scene left over from an earlier ingestion would keep claiming to be the
-  // geometry on screen — misleading on its own, and enough to refuse every
-  // later solve at the viewport-mismatch gate. An empty slot is honest.
-  if (current()
-    && importedMeshStore.getSnapshot().cad !== null
-    && importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) {
-    // Failure cleanup belongs to this load; it must not supersede its owner.
-    importedMeshStore.clear('cad', generation);
-  }
+  }, `cad-display:${record.ingest_id}`);
 }
 
 /** Load the exact ingested solve mesh a CAD return will be solved on.
@@ -275,51 +282,56 @@ export async function showIngestedSolverMeshInViewport(
   fetcher: typeof fetch = fetch,
   generation = importedMeshStore.beginIntent(),
 ): Promise<string | null> {
-  const selection = useCadReturnStore.getState().captureSelectionIntent();
-  const documentLoad = currentDocumentLoad();
-  const current = () => importedMeshStore.isCurrentGeneration(generation)
-    && useCadReturnStore.getState().isCurrentSelectionIntent(selection)
-    && !anotherSelectionInFlight(record.ingest_id)
-    && isCurrentDocumentLoad(documentLoad);
-  if (!current()) return null;
-  const ingestId = record.ingest_id;
-  const available = importedMeshStore.getSnapshot().cadSolver;
-  if (available?.ingestId === ingestId) {
-    if (workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad') importedMeshStore.showCadSolver(generation);
-    return null;
-  }
-  let response: Response;
-  try {
-    response = await deadlineFetch(fetcher, `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
-  } catch (error) {
-    reportCadAutomationError('solver-mesh-read', error, { ingest_id: ingestId });
-    return current() ? (failureWords(error)) : null;
-  }
-  if (!current()) return null;
-  if (!response.ok) {
-    return response.status === 409
-      ? 'This model’s saved mesh changed, so WG cannot show it. Prepare the model again.'
-      : 'WG could not load this model’s mesh. Prepare the model again.';
-  }
-  try {
-    const meshText = await response.text();
+  return activityOperation({ kind: 'cad-import', label: 'Importing the CAD model' }, fetcher, async (fetcher, activity) => {
+    const selection = useCadReturnStore.getState().captureSelectionIntent();
+    const documentLoad = currentDocumentLoad();
+    const current = () => importedMeshStore.isCurrentGeneration(generation)
+      && useCadReturnStore.getState().isCurrentSelectionIntent(selection)
+      && !anotherSelectionInFlight(record.ingest_id)
+      && isCurrentDocumentLoad(documentLoad);
     if (!current()) return null;
-    importedMeshStore.setCadSolver(createImportedMeshScene(
-      name,
-      parseMSH(meshText),
-      'cad',
-      ingestId,
-      displaySymmetry(record).solvedPlanes,
-      {
-        domainKnown: !recordDomainDecision(record)?.refusal,
-        solvedTriangleCount: record.mesh?.stats.triangle_count,
-        artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
-          tessellation: cadTessellation(record),
-      },
-    ), generation, importedMeshStore.getSnapshot().showing === 'cadSolver');
-    return null;
-  } catch (error) {
-    reportCadAutomationError('solver-mesh-display', error, { ingest_id: ingestId });
-    return current() ? (failureWords(error)) : null;
-  }
+    const ingestId = record.ingest_id;
+    const available = importedMeshStore.getSnapshot().cadSolver;
+    if (available?.ingestId === ingestId) {
+      if (workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad') importedMeshStore.showCadSolver(generation);
+      return null;
+    }
+    let response: Response;
+    try {
+      response = await deadlineFetch(fetcher, `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
+    } catch (error) {
+      activity.end(false);
+      reportCadAutomationError('solver-mesh-read', error, { ingest_id: ingestId });
+      return current() ? (failureWords(error)) : null;
+    }
+    if (!current()) return null;
+    if (!response.ok) {
+      activity.end(false);
+      return response.status === 409
+        ? 'This model’s saved mesh changed, so WG cannot show it. Prepare the model again.'
+        : 'WG could not load this model’s mesh. Prepare the model again.';
+    }
+    try {
+      const meshText = await response.text();
+      if (!current()) return null;
+      importedMeshStore.setCadSolver(createImportedMeshScene(
+        name,
+        parseMSH(meshText),
+        'cad',
+        ingestId,
+        displaySymmetry(record).solvedPlanes,
+        {
+          domainKnown: !recordDomainDecision(record)?.refusal,
+          solvedTriangleCount: record.mesh?.stats.triangle_count,
+          artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
+            tessellation: cadTessellation(record),
+        },
+      ), generation, importedMeshStore.getSnapshot().showing === 'cadSolver');
+      return null;
+    } catch (error) {
+      activity.end(false);
+      reportCadAutomationError('solver-mesh-display', error, { ingest_id: ingestId });
+      return current() ? (failureWords(error)) : null;
+    }
+  }, `cad-solver:${record.ingest_id}`);
 }

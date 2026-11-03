@@ -1,3 +1,4 @@
+import { useEngineActivity } from './engineActivity';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { replaceEqualDeep, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { jobsSocket } from '../api/jobsSocket';
@@ -135,6 +136,9 @@ export function useCapabilities(): CapabilitiesSnapshot {
   });
   const pending = data?.engines?.some(qualificationPending) ?? false;
   const ceiling = pollCeiling(data?.opencl_qualification_max_seconds);
+  useEngineActivity(client, !isError && (isPending || (!backendLost
+    && (data?.cpuPreparationInFlight === true || (pending && !ceilingReached)))),
+  isError || (pending && (ceilingReached || backendLost)));
   useEffect(() => {
     setCeilingReached(false);
     if (!pending) return;

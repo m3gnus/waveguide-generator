@@ -1,3 +1,4 @@
+import { abortableActivity } from '../shell/activityOperation';
 import { refusalText, ProgramFault } from './httpError';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import type { SolveOptionsStore } from '../stores/solveOptions';
@@ -69,35 +70,37 @@ export async function postSolverMesh(
   fetcher: typeof fetch = fetch,
   signal?: AbortSignal,
 ): Promise<SolverMeshResult> {
-  const response = await fetcher('/api/solver-mesh', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
-    signal,
-  });
-  if (!response.ok) {
-    if (response.status === 409) {
-      const payload = await response.clone().json().catch(() => null) as { detail?: unknown } | null;
-      const value = payload?.detail;
-      if (value && typeof value === 'object' && 'code' in value && value.code === 'mesh_too_large'
-        && 'triangles' in value && typeof value.triangles === 'number'
-        && 'limit' in value && typeof value.limit === 'number'
-        && 'mesh_cache_key' in value && typeof value.mesh_cache_key === 'string') {
-        throw new SolverMeshTooLarge(`This mesh has ${value.triangles.toLocaleString()} triangles, above the limit of ${value.limit.toLocaleString()} for the part WG solves. Raise Max surface deviation or a mesh resolution in Simulation › Mesh, or press Solve to choose.`, value.triangles, value.limit, value.mesh_cache_key);
+  return abortableActivity({ kind: 'solver-mesh', label: 'Building the solver mesh' }, fetcher, signal, async (fetcher, signal) => {
+    const response = await fetcher('/api/solver-mesh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      signal,
+    });
+    if (!response.ok) {
+      if (response.status === 409) {
+        const payload = await response.clone().json().catch(() => null) as { detail?: unknown } | null;
+        const value = payload?.detail;
+        if (value && typeof value === 'object' && 'code' in value && value.code === 'mesh_too_large'
+          && 'triangles' in value && typeof value.triangles === 'number'
+          && 'limit' in value && typeof value.limit === 'number'
+          && 'mesh_cache_key' in value && typeof value.mesh_cache_key === 'string') {
+          throw new SolverMeshTooLarge(`This mesh has ${value.triangles.toLocaleString()} triangles, above the limit of ${value.limit.toLocaleString()} for the part WG solves. Raise Max surface deviation or a mesh resolution in Simulation › Mesh, or press Solve to choose.`, value.triangles, value.limit, value.mesh_cache_key);
+        }
       }
+      throw new Error(await detail(response));
     }
-    throw new Error(await detail(response));
-  }
-  const result = await response.json() as Partial<SolverMeshResult> & { stats?: Partial<SolverMeshStats> };
-  if (
-    typeof result.msh_text !== 'string'
-    || typeof result.stats?.mesh_cache_key !== 'string'
-    || typeof result.stats.triangle_count !== 'number'
-    || !Array.isArray(result.cut_planes)
-  ) {
-    throw new ProgramFault('Solver mesh response is invalid');
-  }
-  return result as SolverMeshResult;
+    const result = await response.json() as Partial<SolverMeshResult> & { stats?: Partial<SolverMeshStats> };
+    if (
+      typeof result.msh_text !== 'string'
+      || typeof result.stats?.mesh_cache_key !== 'string'
+      || typeof result.stats.triangle_count !== 'number'
+      || !Array.isArray(result.cut_planes)
+    ) {
+      throw new ProgramFault('Solver mesh response is invalid');
+    }
+    return result as SolverMeshResult;
+  });
 }
 
 /** The store token a solver-mesh artifact would carry, derived from the cache

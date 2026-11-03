@@ -1,3 +1,4 @@
+import { activityStore } from '../activity';
 import { rememberLastModel } from '../../stores/lastModel';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../../prefs/preferences';
@@ -12,7 +13,7 @@ import { bundle, deferred, json, mesh, record } from './selection.fixtures';
 const newer = { ...bundle, name: 'new.wgreturn', bundlePath: 'wgreturn/new.wgreturn' };
 
 beforeEach(() => {
-  localStorage.clear(); resetDesignStore(); resetDocumentStore(); resetCadReturnStore();
+  activityStore.reset(); localStorage.clear(); resetDesignStore(); resetDocumentStore(); resetCadReturnStore();
   importedMeshStore.clear(); workspaceModeStore.setMode('parametric');
   preferencesStore.resetForTests();
 });
@@ -445,4 +446,60 @@ it('lets an explicit project open replace the remembered startup model', async (
   expect(useCadReturnStore.getState().selectedBundle).toEqual(matching);
   expect(projectOpenPending.current).toBe(false);
   expect(prepare).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])('tracks CAD preparation and its mesh as one activity (failure=%s)', async fail => {
+  vi.useFakeTimers();
+  const ingest = deferred<Response>(); const artifact = deferred<Response>();
+  const started = vi.spyOn(activityStore, 'start');
+  const fetcher: typeof fetch = url => String(url).endsWith('/ingest') ? ingest.promise : artifact.promise;
+  const actions = createCadArrivalActions({}, fetcher);
+  actions.selectBundleAs(bundle);
+  const pending = actions.ingestSelected();
+  const joined = actions.ingestSelected();
+  expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'cad-import', cancel: expect.any(Function) }]);
+  const settled = Promise.all([pending, joined]).catch(error => error);
+  ingest.resolve(fail ? json({ detail: 'prepare failed' }, 422) : json(record));
+  await vi.advanceTimersByTimeAsync(0);
+  if (!fail) {
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    artifact.resolve(new Response(mesh));
+  }
+  await settled;
+  expect(started).toHaveBeenCalledTimes(1);
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+  expect(activityStore.typicalMs('cad-import') === null).toBe(fail);
+});
+
+it('Stop aborts the existing CAD request and removes its activity', async () => {
+  vi.useFakeTimers();
+  let signal!: AbortSignal;
+  const actions = createCadArrivalActions({}, (_url, init) => {
+    signal = init!.signal!;
+    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  });
+  actions.selectBundleAs(bundle);
+  const pending = actions.ingestSelected();
+  const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  activityStore.getSnapshot()[0].cancel!();
+  await rejected;
+  expect(signal.aborted).toBe(true);
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+  expect(activityStore.typicalMs('cad-import')).toBeNull();
+});
+
+it.each([false, true])('tracks the full Onshape return and mesh load (failure=%s)', async fail => {
+  vi.useFakeTimers();
+  useDocumentStore.setState({ identity: { designId: 'wgd_onshape', lineageId: 'wgl_onshape', baseEditVersion: 1 } });
+  const waiting = deferred<Response>();
+  const started = vi.spyOn(activityStore, 'start');
+  const actions = createCadArrivalActions({}, async url => String(url).endsWith('/return') ? waiting.promise : new Response(mesh));
+  const pending = actions.returnFromOnshape();
+  expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'cad-import', cancel: null }]);
+  const settled = pending.catch(error => error);
+  waiting.resolve(fail ? json({ detail: 'return failed' }, 422) : json({ bundle: { ...bundle, bundleOrigin: 'onshape' }, ingest: record }));
+  await settled;
+  expect(started).toHaveBeenCalledTimes(1);
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+  expect(activityStore.typicalMs('cad-import') === null).toBe(fail);
 });

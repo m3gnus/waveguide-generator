@@ -1,3 +1,4 @@
+import { activityStore } from '../shell/activity';
 /**
  * The design assembly's background build: one captured revision at a time.
  *
@@ -100,10 +101,10 @@ async function compileRequested(design: DesignDocument, requested: NonNullable<A
     return isCurrentDocumentLoad(load) && current?.revision === requested.revision && current.load === load;
   };
   try {
-    const result = await compileAssembly({
+    const result = await activityStore.track({ kind: 'assembly-build', label: 'Building the mesh' }, () => compileAssembly({
       design: serializeDesign(design), design_uid: designUid ?? '', design_name: designName, design_revision: designRevision,
       build_session: `${PAGE_SESSION}:${load}`,
-    }, fetcher);
+    }, fetcher));
     if (!owns()) return { status: 'superseded' };
     if (result.status === 'published') {
       adoptDesignBuild({ record: result.prepared, model: result.model }, {

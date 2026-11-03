@@ -1,5 +1,6 @@
 import type { CompiledAssembly } from '../api/assembly';
 import { useDesignStore } from './design';
+import { activityOperation } from '../shell/activityOperation';
 import { seedFileSimulation } from './importedSimulationSetup';
 import type { SimulationData } from './cadReturn';
 import type { RegisteredMesh } from '../api/meshImport';
@@ -350,71 +351,74 @@ async function openImportedWithRead(source: ImportedSource, fetcher: typeof fetc
     : (source.modelId.startsWith('design-assembly:') ? 'assembly' : source.modelId.startsWith('mesh-file:') ? 'file' : 'cad');
   const view = views[input];
   if (!view) throw new Error('WG cannot show this model here. Open it from the run list.');
-  const display = source.display ?? {};
-  const generation = importedMeshStore.beginIntent();
-  // Choosing the input first parks the other input's model and options.
-  workspaceModeStore.setImportedInput(input);
-  const previous = useImportedModelStore.getState();
-  const preparedId = source.kind === 'run' ? source.job.cad_source?.ingest_id
-    : source.preparedId;
-  const retained = input === 'cad' && previous.input === input && previous.phase === 'ready'
-    && previous.prepared?.ingest_id === preparedId && importedMeshStore.getSnapshot().cad?.ingestId === preparedId;
-  useImportedModelStore.setState({ ...(retained ? previous : emptyState(input)), generation, phase: 'loading' });
-  const rail = view.begin({ generation, source, display, fetcher });
-  const current = () => {
-    const state = useImportedModelStore.getState();
-    return state.generation === generation && state.phase === 'loading' && state.input === input
-      && importedMeshStore.isCurrentGeneration(generation) && rail.current() && display.isCurrent?.() !== false;
-  };
-  // Not current any more: a newer choice took over, or an edit failed this
-  // open (the rail then shows why, and stops waiting).
-  const stopped = () => {
-    const state = useImportedModelStore.getState();
-    if (state.generation !== generation || state.input !== input) return false;
-    if (state.phase === 'failed' && rail.current()) rail.fail(state.error ?? '');
-    // A cancelled setup read of the mesh still on screen leaves its prior
-    // model usable. Never replace a newer model or revive a failed open.
-    if (state.phase === 'loading') {
-      if (retained && state.prepared?.ingest_id === preparedId
-        && importedMeshStore.getSnapshot().cad?.ingestId === preparedId) {
-        useImportedModelStore.setState({ phase: 'ready' });
-      } else {
-        const message = 'Opening this model was canceled. Select the run again.';
-        useImportedModelStore.setState({ phase: 'failed', error: message });
-        // Each rail fences its own feedback; settling this read must never
-        // take a newer viewport intent or leave the file rail busy.
-        rail.fail(message);
+  return activityOperation({ kind: input === 'file' ? 'mesh-import' : 'cad-import', label: 'Opening the saved model' }, fetcher, async (fetcher, activity) => {
+    const display = source.display ?? {};
+    const generation = importedMeshStore.beginIntent();
+    // Choosing the input first parks the other input's model and options.
+    workspaceModeStore.setImportedInput(input);
+    const previous = useImportedModelStore.getState();
+    const preparedId = source.kind === 'run' ? source.job.cad_source?.ingest_id
+      : source.preparedId;
+    const retained = input === 'cad' && previous.input === input && previous.phase === 'ready'
+      && previous.prepared?.ingest_id === preparedId && importedMeshStore.getSnapshot().cad?.ingestId === preparedId;
+    useImportedModelStore.setState({ ...(retained ? previous : emptyState(input)), generation, phase: 'loading' });
+    const rail = view.begin({ generation, source, display, fetcher });
+    const current = () => {
+      const state = useImportedModelStore.getState();
+      return state.generation === generation && state.phase === 'loading' && state.input === input
+        && importedMeshStore.isCurrentGeneration(generation) && rail.current() && display.isCurrent?.() !== false;
+    };
+    // Not current any more: a newer choice took over, or an edit failed this
+    // open (the rail then shows why, and stops waiting).
+    const stopped = () => {
+      const state = useImportedModelStore.getState();
+      if (state.generation !== generation || state.input !== input) return false;
+      if (state.phase === 'failed' && rail.current()) rail.fail(state.error ?? '');
+      // A cancelled setup read of the mesh still on screen leaves its prior
+      // model usable. Never replace a newer model or revive a failed open.
+      if (state.phase === 'loading') {
+        if (retained && state.prepared?.ingest_id === preparedId
+          && importedMeshStore.getSnapshot().cad?.ingestId === preparedId) {
+          useImportedModelStore.setState({ phase: 'ready' });
+        } else {
+          const message = 'Opening this model was canceled. Select the run again.';
+          useImportedModelStore.setState({ phase: 'failed', error: message });
+          // Each rail fences its own feedback; settling this read must never
+          // take a newer viewport intent or leave the file rail busy.
+          rail.fail(message);
+        }
       }
+      return false;
+    };
+    try {
+      const opened = await readOpened(source, input, fetcher, initial);
+      if (!current()) return stopped();
+      const prepared = await rail.fill(opened);
+      if (!current()) return stopped();
+      if (!prepared) throw new Error('This run’s mesh is gone. Import the model again.');
+      useImportedModelStore.setState({
+        input, model: opened.model, modelId: opened.modelId, prepared, originalAvailable: opened.originalAvailable,
+        // A setup that may not be the run's exactly fills the rail, but is not replayed.
+        setup: opened.setup && opened.exact ? structuredClone(opened.setup) : null,
+        restoredRevisionId: opened.setup && opened.exact ? opened.revisionId : null,
+        setupEditBase: null,
+        fileSimulation: input !== 'cad' ? seedFileSimulation(prepared as RegisteredMesh, opened.setup) : null,
+        fileDraft: input === 'file' ? fileDraftOf(opened.prepared) : useImportedModelStore.getState().fileDraft,
+        phase: 'ready', error: null, followEnginePreference: source.kind === 'model' && source.useEnginePreference === true,
+      });
+      if (source.kind === 'model' && source.useEnginePreference) restoreEnginePreference();
+      captureSetupControls();
+      return true;
+    } catch (error) {
+      activity.end(false);
+      if (!current()) return stopped();
+      const message = display.failureMessage?.(error) ?? (error instanceof Error ? error.message : String(error));
+      useImportedModelStore.setState({ phase: 'failed', error: message });
+      rail.fail(message);
+      if (display.failureMessage) throw new Error(message, { cause: error });
+      throw error;
     }
-    return false;
-  };
-  try {
-    const opened = await readOpened(source, input, fetcher, initial);
-    if (!current()) return stopped();
-    const prepared = await rail.fill(opened);
-    if (!current()) return stopped();
-    if (!prepared) throw new Error('This run’s mesh is gone. Import the model again.');
-    useImportedModelStore.setState({
-      input, model: opened.model, modelId: opened.modelId, prepared, originalAvailable: opened.originalAvailable,
-      // A setup that may not be the run's exactly fills the rail, but is not replayed.
-      setup: opened.setup && opened.exact ? structuredClone(opened.setup) : null,
-      restoredRevisionId: opened.setup && opened.exact ? opened.revisionId : null,
-      setupEditBase: null,
-      fileSimulation: input !== 'cad' ? seedFileSimulation(prepared as RegisteredMesh, opened.setup) : null,
-      fileDraft: input === 'file' ? fileDraftOf(opened.prepared) : useImportedModelStore.getState().fileDraft,
-      phase: 'ready', error: null, followEnginePreference: source.kind === 'model' && source.useEnginePreference === true,
-    });
-    if (source.kind === 'model' && source.useEnginePreference) restoreEnginePreference();
-    captureSetupControls();
-    return true;
-  } catch (error) {
-    if (!current()) return stopped();
-    const message = display.failureMessage?.(error) ?? (error instanceof Error ? error.message : String(error));
-    useImportedModelStore.setState({ phase: 'failed', error: message });
-    rail.fail(message);
-    if (display.failureMessage) throw new Error(message, { cause: error });
-    throw error;
-  }
+  });
 }
 
 // The model on screen is the one Imported mode reopens next start. A mesh filed
@@ -474,41 +478,44 @@ export async function reopenLastModel(fetcher: typeof fetch = fetch, options: Re
   const reachable: typeof fetch = async (...args) => {
     try { return await fetcher(...args); } catch (error) { throw new NetworkFailure(error); }
   };
-  try {
-    const read = await readImportedModel(pointer.model_id, null, reachable);
-    if (!read.latest_prepared) { clearLastModel(pointer); return false; }
-    // The CAD view shows a model by its stored setup; one never solved has none.
-    const saved = pointer.input === 'cad'
-      ? await readImportedSetup(pointer.model_id, read.latest_prepared.ingest_id, reachable) : undefined;
-    if (pointer.input === 'cad' && !saved?.setup
-      && !await views.cad?.hasDraft?.(pointer.model_id, reachable)) {
-      if (!stillEmpty() || !options.openUnsolved) return false;
-      const shown = await options.openUnsolved(pointer, read.latest_prepared);
-      if (shown) { restoreEnginePreference(); rememberLastModel(pointer); }
-      return shown;
+  return activityOperation({ kind: pointer.input === 'file' ? 'mesh-import' : 'cad-import', label: 'Opening the saved model', background: true }, reachable, async (reachable, activity) => {
+    try {
+      const read = await readImportedModel(pointer.model_id, null, reachable);
+      if (!read.latest_prepared) { clearLastModel(pointer); return false; }
+      // The CAD view shows a model by its stored setup; one never solved has none.
+      const saved = pointer.input === 'cad'
+        ? await readImportedSetup(pointer.model_id, read.latest_prepared.ingest_id, reachable) : undefined;
+      if (pointer.input === 'cad' && !saved?.setup
+        && !await views.cad?.hasDraft?.(pointer.model_id, reachable)) {
+        if (!stillEmpty() || !options.openUnsolved) return false;
+        const shown = await options.openUnsolved(pointer, read.latest_prepared);
+        if (shown) { restoreEnginePreference(); rememberLastModel(pointer); }
+        return shown;
+      }
+      if (!stillEmpty()) return false;
+      restoreEnginePreference();
+      // Apply the remembered choice before the rail projects the retained setup.
+      // Explicit run opens use their recorded revision without this override.
+      const opened = await openImportedWithRead({ kind: 'model', modelId: pointer.model_id,
+        // Bind the setup and retained record to the preparation discovery actually read.
+        ...(pointer.input === 'cad' ? { preparedId: read.latest_prepared.ingest_id } : {}),
+        useEnginePreference: true }, reachable, { model: read, setup: saved });
+      return opened;
+    } catch (error) {
+      activity.end(false);
+      if (isDefinitiveRefusal(error)) { clearLastModel(pointer); return false; }
+      if (error instanceof NetworkFailure) throw error.original;
+      noteLastModelFailure(pointer);
+      throw error;
+    } finally {
+      const state = useImportedModelStore.getState();
+      // A refusal or superseded discovery leaves no opened model. A newer open
+      // owns a different store generation and must keep its loading state.
+      if (state.generation === generation && state.phase === 'loading') {
+        useImportedModelStore.setState({ phase: 'empty' });
+      }
     }
-    if (!stillEmpty()) return false;
-    restoreEnginePreference();
-    // Apply the remembered choice before the rail projects the retained setup.
-    // Explicit run opens use their recorded revision without this override.
-    const opened = await openImportedWithRead({ kind: 'model', modelId: pointer.model_id,
-      // Bind the setup and retained record to the preparation discovery actually read.
-      ...(pointer.input === 'cad' ? { preparedId: read.latest_prepared.ingest_id } : {}),
-      useEnginePreference: true }, reachable, { model: read, setup: saved });
-    return opened;
-  } catch (error) {
-    if (isDefinitiveRefusal(error)) { clearLastModel(pointer); return false; }
-    if (error instanceof NetworkFailure) throw error.original;
-    noteLastModelFailure(pointer);
-    throw error;
-  } finally {
-    const state = useImportedModelStore.getState();
-    // A refusal or superseded discovery leaves no opened model. A newer open
-    // owns a different store generation and must keep its loading state.
-    if (state.generation === generation && state.phase === 'loading') {
-      useImportedModelStore.setState({ phase: 'empty' });
-    }
-  }
+  });
 }
 
 /** Keep the active setup and its option projection on one engine during late hydration. */

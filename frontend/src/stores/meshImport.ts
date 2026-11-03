@@ -1,3 +1,4 @@
+import { activityOperation } from '../shell/activityOperation';
 import { fileSimulationSetup, retainedAssemblySimulationSetup, importedDriverLabel, reconcileFileChannels, seedFileSimulation } from './importedSimulationSetup';
 import type { CompiledAssembly } from '../api/assembly';
 import { driverGroupsFromWire, driverGroupsToWire } from './importedDriverGroups';
@@ -109,66 +110,68 @@ export function meshImportChoice(draft: FileDraft): string | null {
 }
 
 export async function loadMeshFile(filename: string, text: string, fetcher: typeof fetch = fetch, generation = importedMeshStore.beginIntent()): Promise<void> {
-  if (!importedMeshStore.isCurrentGeneration(generation)) return;
-  beginMeshFileImport(filename);
-  const request = ++requestNumber;
-  useMeshImportStore.setState({ ...initial, filename, original: text, busy: true, request });
-  try {
-    await flushImportedSetupWrites();
+  return activityOperation({ kind: 'mesh-import', label: 'Importing the mesh file' }, fetcher, async (fetcher) => {
     if (!importedMeshStore.isCurrentGeneration(generation)) return;
-    let summary = await inspectMesh(filename, text, fetcher);
-    if (!importedMeshStore.isCurrentGeneration(generation)) return;
-    if (summary.known_model) {
-      const known = summary.known_model;
-      try {
-        if (await openImported({ kind: 'model', modelId: known.model_id, preparedId: known.latest_prepared_id }, fetcher)) {
-          useMeshImportStore.setState(state => ({ notice: [state.notice, 'Settings from your last import'].filter(Boolean).join(' · ') }));
-        }
-        return;
-      } catch (error) {
-        // The user already supplied the remedy for missing retained artifacts:
-        // rebuild from these bytes through the normal registration below.
-        if (!(error instanceof ImportedModelApiError) || error.code !== 'prepared_unavailable') throw error;
-        generation = importedMeshStore.beginIntent();
-        beginMeshFileImport(filename);
-        useMeshImportStore.setState({ original: text, summary, busy: false });
-      }
-    }
-    const previous = summary.previous_setup;
-    if (previous && (previous.preparation.forward !== '+z' || previous.preparation.up !== '+y')) {
-      const { units, forward, up } = previous.preparation;
-      summary = await inspectMesh(filename, text, fetcher, { units, forward, up });
+    beginMeshFileImport(filename);
+    const request = ++requestNumber;
+    useMeshImportStore.setState({ ...initial, filename, original: text, busy: true, request });
+    try {
+      await flushImportedSetupWrites();
       if (!importedMeshStore.isCurrentGeneration(generation)) return;
+      let summary = await inspectMesh(filename, text, fetcher);
+      if (!importedMeshStore.isCurrentGeneration(generation)) return;
+      if (summary.known_model) {
+        const known = summary.known_model;
+        try {
+          if (await openImported({ kind: 'model', modelId: known.model_id, preparedId: known.latest_prepared_id }, fetcher)) {
+            useMeshImportStore.setState(state => ({ notice: [state.notice, 'Settings from your last import'].filter(Boolean).join(' · ') }));
+          }
+          return;
+        } catch (error) {
+          // The user already supplied the remedy for missing retained artifacts:
+          // rebuild from these bytes through the normal registration below.
+          if (!(error instanceof ImportedModelApiError) || error.code !== 'prepared_unavailable') throw error;
+          generation = importedMeshStore.beginIntent();
+          beginMeshFileImport(filename);
+          useMeshImportStore.setState({ original: text, summary, busy: false });
+        }
+      }
+      const previous = summary.previous_setup;
+      if (previous && (previous.preparation.forward !== '+z' || previous.preparation.up !== '+y')) {
+        const { units, forward, up } = previous.preparation;
+        summary = await inspectMesh(filename, text, fetcher, { units, forward, up });
+        if (!importedMeshStore.isCurrentGeneration(generation)) return;
+      }
+      const roles = Object.fromEntries(summary.groups.map(group => [group.tag,
+        previous?.preparation.roles?.[group.tag] ?? summary.previous_roles?.[group.tag]
+        ?? (group.needs_role_choice ? null : group.suggested_role ?? 'RIGID')]));
+      const scene = createImportedMeshScene(filename, parseMSH(text), 'file', null, [], { rolesByTag: roles });
+      if (!importedMeshStore.setFile(scene, generation)) return;
+      useMeshImportStore.setState({ summary, busy: false });
+      const preparation = previous?.preparation;
+      editFileDraft({ roles, units: preparation?.units ?? summary.suggested_units ?? '',
+        forward: preparation?.forward ?? '+z', up: preparation?.up ?? '+y',
+        domainPlanes: preparation?.domain_planes ?? summary.detected_planes ?? [],
+        autoCut: preparation ? preparation.auto_cut ?? false : !(summary.detected_planes?.length),
+        reflectPlanes: preparation?.reflect_planes ?? null, removeLidPlanes: preparation?.remove_lid_planes ?? [] });
+      if (previous?.setup) {
+        seedFileOptions(previous.setup);
+        useImportedModelStore.setState({ setup: structuredClone(previous.setup) });
+      }
+      if (previous) {
+        const time = fullTime(previous.updated_at);
+        useMeshImportStore.setState({ notice: `Using the settings from ${previous.filename} (${time})` });
+      }
+      await prepareMeshFile(fetcher);
+    } catch (error) {
+      if (importedMeshStore.isCurrentGeneration(generation)) {
+        useMeshImportStore.setState({ busy: false, error: failureWords(error) });
+      }
+      throw error;
+    } finally {
+      if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
     }
-    const roles = Object.fromEntries(summary.groups.map(group => [group.tag,
-      previous?.preparation.roles?.[group.tag] ?? summary.previous_roles?.[group.tag]
-      ?? (group.needs_role_choice ? null : group.suggested_role ?? 'RIGID')]));
-    const scene = createImportedMeshScene(filename, parseMSH(text), 'file', null, [], { rolesByTag: roles });
-    if (!importedMeshStore.setFile(scene, generation)) return;
-    useMeshImportStore.setState({ summary, busy: false });
-    const preparation = previous?.preparation;
-    editFileDraft({ roles, units: preparation?.units ?? summary.suggested_units ?? '',
-      forward: preparation?.forward ?? '+z', up: preparation?.up ?? '+y',
-      domainPlanes: preparation?.domain_planes ?? summary.detected_planes ?? [],
-      autoCut: preparation ? preparation.auto_cut ?? false : !(summary.detected_planes?.length),
-      reflectPlanes: preparation?.reflect_planes ?? null, removeLidPlanes: preparation?.remove_lid_planes ?? [] });
-    if (previous?.setup) {
-      seedFileOptions(previous.setup);
-      useImportedModelStore.setState({ setup: structuredClone(previous.setup) });
-    }
-    if (previous) {
-      const time = fullTime(previous.updated_at);
-      useMeshImportStore.setState({ notice: `Using the settings from ${previous.filename} (${time})` });
-    }
-    await prepareMeshFile(fetcher);
-  } catch (error) {
-    if (importedMeshStore.isCurrentGeneration(generation)) {
-      useMeshImportStore.setState({ busy: false, error: failureWords(error) });
-    }
-    throw error;
-  } finally {
-    if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
-  }
+  });
 }
 
 type PreparedFileSetup = { modelId: string; preparedId: string; setup: ImportedSetup };
@@ -202,75 +205,79 @@ async function prepareMeshFileIntent(fetcher: typeof fetch, inspectFrame: boolea
   if (model.input !== 'file' || meshImportChoice(draft) || (!state.original && !(modelId && model.originalAvailable))) return;
   const controller = new AbortController();
   preparationController = controller;
-  const generation = importedMeshStore.beginIntent();
-  const request = ++requestNumber;
-  useMeshImportStore.setState({ busy: true, error: null, request });
-  let retained: ImportedSetup | null = null;
-  let simulation: SimulationData | null = null;
-  const capture = () => {
-    if (useMeshImportStore.getState().request !== request || useImportedModelStore.getState().input !== 'file') return;
-    const latest = useImportedModelStore.getState();
-    try {
-      const controls = fileSetupControls();
-      retained = structuredClone(latest.setup ?? latest.setupEditBase?.retained ?? controls);
-      simulation = latest.fileSimulation ? structuredClone(latest.fileSimulation) : null;
-    } catch { retained = null; } // Incomplete edits never fall back to an older valid setup.
-  };
-  capture();
-  const unsubscribe = subscribeSolveSettingsEdits(edit => {
-    if (edit?.source === 'meshImport' || edit?.source === 'importedSolveOptions') capture();
-  });
-  try {
-    // Detection follows the chosen axes; registration still owns all verification.
-    if (inspectFrame || state.frameDirty || (!state.original && draft.domainPlanes?.length && !state.summary?.lids)) {
-      const frame = { units: draft.units, forward: draft.forward, up: draft.up };
-      const summary = state.original ? await inspectMesh(state.filename, state.original, fetcher, frame)
-        : await inspectMeshModel(modelId!, frame, fetcher);
-      if (!importedMeshStore.isCurrentGeneration(generation)
-        || JSON.stringify(useImportedModelStore.getState().fileDraft) !== JSON.stringify(draft)) return;
-      useMeshImportStore.setState({ summary, frameDirty: false });
-      if (inspectFrame || state.frameDirty) editFileDraft({ domainPlanes: summary.detected_planes ?? [], autoCut: draft.autoCut ?? !(summary.detected_planes?.length), reflectPlanes: null, removeLidPlanes: [] });
-      draft = useImportedModelStore.getState().fileDraft;
-    }
-    const preparation = { units: draft.units, forward: draft.forward, up: draft.up,
-      roles: Object.fromEntries(Object.entries(draft.roles ?? Object.fromEntries(draft.selected.map(tag => [tag, 'HF'])))
-        .map(([tag, role]) => [tag, role ?? 'RIGID'])),
-      ...(draft.autoCut ? { auto_cut: true } : {}),
-      domain_planes: draft.domainPlanes ?? [], reflect_planes: draft.reflectPlanes ?? null,
-      remove_lid_planes: draft.removeLidPlanes ?? [] };
-
-    // The same file prepared the same way is the same retained mesh. Without
-    // the original in hand (a restored file), the server prepares its own copy.
-    const record = state.original
-      ? await registerMesh({ filename: state.filename, msh_text: state.original, ...preparation }, fetcher, controller.signal)
-      : await prepareMeshModel(modelId!, preparation, fetcher, controller.signal);
-    if (!importedMeshStore.isCurrentGeneration(generation)) {
-      if (intent === preparationIntent && retained) {
-        const setup = setupForPreparedFile(retained, record, simulation);
-        preparationSaves.forEach(save => save({ modelId: record.model_id, preparedId: record.ingest_id, setup }));
-      }
-      return;
-    }
-    // Form edits during the request invalidate its result even when the viewport
-    // has not changed. A submitted snapshot cannot acquire newer assignments.
-    const current = useImportedModelStore.getState().fileDraft;
-    if (useMeshImportStore.getState().original !== state.original || JSON.stringify(current) !== JSON.stringify(draft)) return;
-    if (importedMeshStore.setFile(preparedFileScene(record), generation)) {
-      useMeshImportStore.setState({ summary: useMeshImportStore.getState().summary ?? record.summary });
+  return activityOperation({ kind: 'mesh-import', label: 'Importing the mesh file' }, fetcher, async (fetcher, activity) => {
+    const generation = importedMeshStore.beginIntent();
+    const request = ++requestNumber;
+    useMeshImportStore.setState({ busy: true, error: null, request });
+    let retained: ImportedSetup | null = null;
+    let simulation: SimulationData | null = null;
+    const capture = () => {
+      if (useMeshImportStore.getState().request !== request || useImportedModelStore.getState().input !== 'file') return;
       const latest = useImportedModelStore.getState();
-      const retained = latest.setup ?? latest.setupEditBase?.retained;
-      await openImported({ kind: 'file', prepared: record, setup: retained ? setupForPreparedFile(retained, record, latest.fileSimulation) : null });
+      try {
+        const controls = fileSetupControls();
+        retained = structuredClone(latest.setup ?? latest.setupEditBase?.retained ?? controls);
+        simulation = latest.fileSimulation ? structuredClone(latest.fileSimulation) : null;
+      } catch { retained = null; } // Incomplete edits never fall back to an older valid setup.
+    };
+    capture();
+    const unsubscribe = subscribeSolveSettingsEdits(edit => {
+      if (edit?.source === 'meshImport' || edit?.source === 'importedSolveOptions') capture();
+    });
+    try {
+      // Detection follows the chosen axes; registration still owns all verification.
+      if (inspectFrame || state.frameDirty || (!state.original && draft.domainPlanes?.length && !state.summary?.lids)) {
+        const frame = { units: draft.units, forward: draft.forward, up: draft.up };
+        const summary = state.original ? await inspectMesh(state.filename, state.original, fetcher, frame)
+          : await inspectMeshModel(modelId!, frame, fetcher);
+        if (!importedMeshStore.isCurrentGeneration(generation)
+          || JSON.stringify(useImportedModelStore.getState().fileDraft) !== JSON.stringify(draft)) return;
+        useMeshImportStore.setState({ summary, frameDirty: false });
+        if (inspectFrame || state.frameDirty) editFileDraft({ domainPlanes: summary.detected_planes ?? [], autoCut: draft.autoCut ?? !(summary.detected_planes?.length), reflectPlanes: null, removeLidPlanes: [] });
+        draft = useImportedModelStore.getState().fileDraft;
+      }
+      const preparation = { units: draft.units, forward: draft.forward, up: draft.up,
+        roles: Object.fromEntries(Object.entries(draft.roles ?? Object.fromEntries(draft.selected.map(tag => [tag, 'HF'])))
+          .map(([tag, role]) => [tag, role ?? 'RIGID'])),
+        ...(draft.autoCut ? { auto_cut: true } : {}),
+        domain_planes: draft.domainPlanes ?? [], reflect_planes: draft.reflectPlanes ?? null,
+        remove_lid_planes: draft.removeLidPlanes ?? [] };
+
+      // The same file prepared the same way is the same retained mesh. Without
+      // the original in hand (a restored file), the server prepares its own copy.
+      const record = await activityOperation({ kind: 'mesh-import', label: 'Importing the mesh file', cancel: () => controller.abort() }, fetcher,
+        fetcher => state.original
+          ? registerMesh({ filename: state.filename, msh_text: state.original, ...preparation }, fetcher, controller.signal)
+          : prepareMeshModel(modelId!, preparation, fetcher, controller.signal));
+      if (!importedMeshStore.isCurrentGeneration(generation)) {
+        if (intent === preparationIntent && retained) {
+          const setup = setupForPreparedFile(retained, record, simulation);
+          preparationSaves.forEach(save => save({ modelId: record.model_id, preparedId: record.ingest_id, setup }));
+        }
+        return;
+      }
+      // Form edits during the request invalidate its result even when the viewport
+      // has not changed. A submitted snapshot cannot acquire newer assignments.
+      const current = useImportedModelStore.getState().fileDraft;
+      if (useMeshImportStore.getState().original !== state.original || JSON.stringify(current) !== JSON.stringify(draft)) return;
+      if (importedMeshStore.setFile(preparedFileScene(record), generation)) {
+        useMeshImportStore.setState({ summary: useMeshImportStore.getState().summary ?? record.summary });
+        const latest = useImportedModelStore.getState();
+        const retained = latest.setup ?? latest.setupEditBase?.retained;
+        await openImported({ kind: 'file', prepared: record, setup: retained ? setupForPreparedFile(retained, record, latest.fileSimulation) : null });
+      }
+    } catch (error) {
+      activity.end(false);
+      if (importedMeshStore.isCurrentGeneration(generation)
+        && JSON.stringify(useImportedModelStore.getState().fileDraft) === JSON.stringify(draft)) {
+        useMeshImportStore.setState({ error: failureWords(error) });
+      }
+    } finally {
+      unsubscribe();
+      if (preparationController === controller) preparationController = null;
+      if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
     }
-  } catch (error) {
-    if (importedMeshStore.isCurrentGeneration(generation)
-      && JSON.stringify(useImportedModelStore.getState().fileDraft) === JSON.stringify(draft)) {
-      useMeshImportStore.setState({ error: failureWords(error) });
-    }
-  } finally {
-    unsubscribe();
-    if (preparationController === controller) preparationController = null;
-    if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
-  }
+  });
 }
 
 /** Preparation edits only the source assignments that no longer exist. */
@@ -521,27 +528,29 @@ registerImportedView('assembly', {
 /** A replay's exact setup is what an unedited Solve sends, until a setup control changes. */
 export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch,
   generation = importedMeshStore.beginIntent()): Promise<boolean> {
-  if (!importedMeshStore.isCurrentGeneration(generation)) return false;
-  beginMeshFileImport('Opening solve setup…');
-  const requestNumberAtStart = ++requestNumber;
-  useMeshImportStore.setState({ busy: true, error: null, request: requestNumberAtStart });
-  try {
-    const opened = await openMeshReplay(text, fetcher);
+  return activityOperation({ kind: 'mesh-import', label: 'Importing the mesh replay' }, fetcher, async (fetcher) => {
     if (!importedMeshStore.isCurrentGeneration(generation)) return false;
-    const setup = importedSetupOf(opened.request);
-    assertFileRecord(opened.record, setup, opened.request.geometry.ingest_id);
-    if (opened.request.geometry.manifest_sha256 !== opened.record.manifest_sha256
-      || opened.request.geometry.artifact_sha256 !== opened.record.artifact_sha256) {
-      throw new Error('WG could not open this mesh again. Select the run again.');
+    beginMeshFileImport('Opening solve setup…');
+    const requestNumberAtStart = ++requestNumber;
+    useMeshImportStore.setState({ busy: true, error: null, request: requestNumberAtStart });
+    try {
+      const opened = await openMeshReplay(text, fetcher);
+      if (!importedMeshStore.isCurrentGeneration(generation)) return false;
+      const setup = importedSetupOf(opened.request);
+      assertFileRecord(opened.record, setup, opened.request.geometry.ingest_id);
+      if (opened.request.geometry.manifest_sha256 !== opened.record.manifest_sha256
+        || opened.request.geometry.artifact_sha256 !== opened.record.artifact_sha256) {
+        throw new Error('WG could not open this mesh again. Select the run again.');
+      }
+      if (!fillFileRail(opened.record, setup, generation)) return false;
+      await openImported({ kind: 'file', prepared: opened.record, setup });
+      useMeshImportStore.setState({ notice: 'Solve setup opened. Solve keeps its settings. Edits keep the other settings.' });
+      return true;
+    } catch (error) {
+      if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: failureWords(error) });
+      throw error;
+    } finally {
+      if (useMeshImportStore.getState().request === requestNumberAtStart) useMeshImportStore.setState({ busy: false });
     }
-    if (!fillFileRail(opened.record, setup, generation)) return false;
-    await openImported({ kind: 'file', prepared: opened.record, setup });
-    useMeshImportStore.setState({ notice: 'Solve setup opened. Solve keeps its settings. Edits keep the other settings.' });
-    return true;
-  } catch (error) {
-    if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: failureWords(error) });
-    throw error;
-  } finally {
-    if (useMeshImportStore.getState().request === requestNumberAtStart) useMeshImportStore.setState({ busy: false });
-  }
+  });
 }

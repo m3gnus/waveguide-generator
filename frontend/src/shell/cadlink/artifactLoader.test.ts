@@ -1,3 +1,4 @@
+import { activityStore } from '../activity';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket } from '../../api/jobsSocket';
 import { resetCadReturnStore, useCadReturnStore } from '../../stores/cadReturn';
@@ -9,7 +10,7 @@ import { bundle, deferred, mesh, record } from './selection.fixtures';
 let ready: (ingestId: string) => void;
 let unsubscribe = vi.fn<() => void>();
 beforeEach(() => {
-  vi.useFakeTimers(); localStorage.clear(); resetCadReturnStore(); importedMeshStore.clear();
+  vi.useFakeTimers(); activityStore.reset(); localStorage.clear(); resetCadReturnStore(); importedMeshStore.clear();
   workspaceModeStore.setMode('cad');
   const state = useCadReturnStore.getState(); state.selectBundle(bundle);
   state.applyIngest(record, state.beginIngestIntent());
@@ -190,4 +191,36 @@ it('drops an earlier model mesh when neither artifact for the current ingest can
   state.applyIngest(next, state.beginIngestIntent());
   await showIngestedMeshInViewport(next, 'New', undefined, async () => new Response('missing', { status: 404 }));
   expect(importedMeshStore.getSnapshot().cad).toBeNull();
+});
+
+it.each(['model', 'solver'] as const)('shares one %s load activity and ends on success or refusal', async slot => {
+  for (const fail of [false, true]) {
+    activityStore.reset(); importedMeshStore.clear();
+    const pending = deferred<Response>();
+    const started = vi.spyOn(activityStore, 'start');
+    const fetcher: typeof fetch = () => pending.promise;
+    const load = () => slot === 'model'
+      ? showIngestedMeshInViewport(record, 'Speaker', undefined, fetcher)
+      : showIngestedSolverMeshInViewport(record, 'Speaker', fetcher);
+    const first = load(); const second = load();
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'cad-import' }]);
+    expect(started).toHaveBeenCalledTimes(1);
+    pending.resolve(new Response(mesh, { status: fail ? 500 : 200 }));
+    await Promise.all([first, second]);
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    expect(activityStore.typicalMs('cad-import') === null).toBe(fail);
+    started.mockRestore();
+  }
+});
+
+it.each([false, true])('tracks the detached display upgrade until it settles (failure=%s)', async fail => {
+  let reads = 0;
+  const fetcher: typeof fetch = async url => String(url).endsWith('/viewport-mesh')
+    ? ++reads === 1 ? new Response('', { status: 202 }) : new Response(mesh, { status: fail ? 500 : 200 })
+    : new Response(mesh);
+  const started = vi.spyOn(activityStore, 'start');
+  await showIngestedMeshInViewport(record, 'Speaker', undefined, fetcher);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(started.mock.calls.some(([start]) => start.background && start.label === 'Loading the CAD display mesh')).toBe(true);
+  expect(activityStore.getSnapshot()).toHaveLength(0);
 });

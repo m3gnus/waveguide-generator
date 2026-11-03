@@ -1,3 +1,4 @@
+import { activityStore } from '../shell/activity';
 import { deadlineFetch } from './deadlineFetch';
 import type { CadReturnIngestRecord } from './cadlink';
 import { httpErrorMessage } from './httpError';
@@ -55,7 +56,8 @@ export const sourceEditorApi = {
   hornProfile: async (design: Record<string, unknown>): Promise<{ horn_config: Record<string, unknown>; throat_radius_mm: number; horn_length_mm: number; mouth_radius_mm: number; wall_max_radius_mm?: number }> => (await response('/assembly/horn-profile', 'POST', design)).json(),
   validateAssembly: async (document: SourceAssemblyDocument): Promise<AssemblyValidation> => (await response('/assembly/validate', 'POST', assemblyPayload(document))).json(),
   ingestAssembly: async (document: SourceAssemblyDocument): Promise<AssemblyIngestion> => (await response('/assembly/ingest', 'POST', assemblyPayload(document))).json(),
-  exportAssembly: async (document: SourceAssemblyDocument): Promise<Blob> => (await response('/assembly/export', 'POST', assemblyPayload(document))).blob(),
+  exportAssembly: async (document: SourceAssemblyDocument): Promise<Blob> => activityStore.track({ kind: 'export', label: 'Exporting assembly STEP' }, async () =>
+    (await response('/assembly/export', 'POST', assemblyPayload(document))).blob()),
   validate: async (document: SourceDocument): Promise<SourceValidation> => (await response('/validate', 'POST', document)).json(),
   expand: async (kind: 'flat' | 'dome' | 'cone', dimensions: Record<string, number>, document: SourceDocument): Promise<SourceValidation> => (await response('/expand', 'POST', {
     kind, dimensions, physical_source_id: document.contour.physical_source_id, rim_id: document.contour.rim_id, channel_id: document.drive.channel_id, motion: document.drive.motion,
@@ -66,5 +68,6 @@ export const sourceEditorApi = {
     name, document, ...(authoring === undefined ? {} : { authoring }), expected_revision: previous?.revision ?? null,
   })).json(),
   delete: async (preset: SourcePreset): Promise<void> => { await response(`/presets/${encodeURIComponent(preset.id)}?revision=${encodeURIComponent(preset.revision)}`, 'DELETE'); },
-  export: async (document: SourceDocument, attachment: SourceAttachment, mesh_size_mm: number): Promise<Blob> => (await response('/export', 'POST', { document, attachment, mesh_size_mm })).blob(),
+  export: async (document: SourceDocument, attachment: SourceAttachment, mesh_size_mm: number): Promise<Blob> => activityStore.track({ kind: 'export', label: 'Exporting source STEP' }, async () =>
+    (await response('/export', 'POST', { document, attachment, mesh_size_mm })).blob()),
 };

@@ -1,3 +1,4 @@
+import { activityOperation } from '../shell/activityOperation';
 import { MoveRunsDialog } from '../shell/MoveRunsDialog';
 import { mintDesignUid } from '../stores/designUid';
 import { inspectDesignFile, rememberDesignFile, designFileSource } from './designFiles';
@@ -133,32 +134,41 @@ export function openedMessage(filename: string, report: ImportReport, developer:
  * is still written -- that part is unchanged.
  */
 export async function exportProfileArtifacts(
-  build: (kind: 'profiles' | 'slices') => Promise<GeometryExportFile>,
-  write: (files: GeometryExportFile[]) => Promise<{ directory: string }>,
+  build: (kind: 'profiles' | 'slices', fetcher: typeof fetch) => Promise<GeometryExportFile>,
+  write: (files: GeometryExportFile[], fetcher: typeof fetch) => Promise<{ directory: string }>,
   revision: number,
+  fetcher: typeof fetch = fetch,
 ): Promise<string> {
-  const kinds = ['profiles', 'slices'] as const;
-  const results = await Promise.allSettled(kinds.map((kind) => build(kind)));
-  const built = results.flatMap((result) => (
-    result.status === 'fulfilled' ? [result.value] : []
-  ));
-  const completed = kinds.filter((_kind, index) => results[index].status === 'fulfilled');
-  const failed = kinds.flatMap((kind, index) => {
-    const result = results[index];
-    return result.status === 'rejected'
-      ? [`${kind}: ${failureWords(result.reason)}`]
-      : [];
+  return activityOperation({ kind: 'export', label: 'Exporting profile CSV' }, fetcher, async (fetcher, activity) => {
+    let done = 0;
+    activity.progress(0, 3);
+    const kinds = ['profiles', 'slices'] as const;
+    const results = await Promise.allSettled(kinds.map(async (kind) => {
+      try { return await build(kind, fetcher); }
+      finally { activity.progress(++done, 3); }
+    }));
+    const built = results.flatMap((result) => (
+      result.status === 'fulfilled' ? [result.value] : []
+    ));
+    const completed = kinds.filter((_kind, index) => results[index].status === 'fulfilled');
+    const failed = kinds.flatMap((kind, index) => {
+      const result = results[index];
+      return result.status === 'rejected'
+        ? [`${kind}: ${failureWords(result.reason)}`]
+        : [];
+    });
+    // Whatever built is written first, so a reported failure never also loses the
+    // half that worked.
+    const written = built.length ? await write(built, fetcher) : null;
+    activity.progress(3, 3);
+    if (failed.length) {
+      const partial = completed.length
+        ? `Exported ${completed.join(' and ')} CSV${written ? ` to ${written.directory}` : ''}; `
+        : '';
+      throw new Error(`${partial}failed ${failed.join('; ')}`);
+    }
+    return `Exported profiles and slices CSV from revision ${revision}${written ? ` to ${written.directory}` : ''}`;
   });
-  // Whatever built is written first, so a reported failure never also loses the
-  // half that worked.
-  const written = built.length ? await write(built) : null;
-  if (failed.length) {
-    const partial = completed.length
-      ? `Exported ${completed.join(' and ')} CSV${written ? ` to ${written.directory}` : ''}; `
-      : '';
-    throw new Error(`${partial}failed ${failed.join('; ')}`);
-  }
-  return `Exported profiles and slices CSV from revision ${revision}${written ? ` to ${written.directory}` : ''}`;
 }
 
 /** Stable, so the rename field is focused and selected once, as it opens. */
@@ -440,13 +450,16 @@ export function DesignFileMenu() {
       // Taken before the awaits, so it describes exactly what is written.
       const writtenKey = keptContentKeyOf(design);
       const writtenUid = designUid;
-      const response = await serializeDesignDocument(
-        design, designName, fetch, polarConfig, wgSolveSettingsFromStore(solveState), writtenUid,
-      );
-      const written = await writeToOutputFolder(designNameSlug(designName), [{
-        filename: response.suggestedFilename,
-        blob: new Blob([response.text], { type: 'text/plain;charset=utf-8' }),
-      }], fetch, 'confirm', destination.token, askToReplaceExports);
+      const { written, response } = await activityOperation({ kind: 'export', label: 'Exporting design file' }, fetch, async (fetcher) => {
+        const response = await serializeDesignDocument(
+          design, designName, fetcher, polarConfig, wgSolveSettingsFromStore(solveState), writtenUid,
+        );
+        const written = await writeToOutputFolder(designNameSlug(designName), [{
+          filename: response.suggestedFilename,
+          blob: new Blob([response.text], { type: 'text/plain;charset=utf-8' }),
+        }], fetcher, 'confirm', destination.token, askToReplaceExports);
+        return { written, response };
+      });
       // A file now holds this design, so replacing it later loses nothing.
       rememberWrittenCopy(writtenKey);
       if (writtenUid) {
@@ -518,11 +531,11 @@ export function DesignFileMenu() {
       if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
       assertCurrentModelExport(model, 'fusion_csv');
       const result = await exportProfileArtifacts(
-        (kind) => buildGeometryExport(
-          'profiles', design, revision, designNameSlug(designName), kind, 'solid', fetch,
+        (kind, fetcher) => buildGeometryExport(
+          'profiles', design, revision, designNameSlug(designName), kind, 'solid', fetcher,
         ),
-        (files) => writeToOutputFolder(
-          designNameSlug(designName), files, fetch, 'confirm',
+        (files, fetcher) => writeToOutputFolder(
+          designNameSlug(designName), files, fetcher, 'confirm',
           destination.token, askToReplaceExports,
         ),
         revision,

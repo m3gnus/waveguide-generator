@@ -1,3 +1,4 @@
+import { activityOperation } from '../shell/activityOperation';
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import { refusalText } from './httpError';
 import type { RegisteredMesh } from './meshImport';
@@ -22,14 +23,18 @@ async function checked(response: Response): Promise<Response> {
 
 /** The server owns the versioned package and validates it before registering. */
 export async function openMeshReplay(text: string, fetcher: typeof fetch = fetch): Promise<OpenedMeshReplay> {
-  if (new TextEncoder().encode(text).byteLength > MAX_MESH_REPLAY_BYTES) throw new Error('This file is larger than the 64 MiB WG can open. Choose a smaller file.');
-  const response = await checked(await fetcher('/api/mesh-replay', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text,
-  }));
-  return response.json() as Promise<OpenedMeshReplay>;
+  return activityOperation({ kind: 'mesh-import', label: 'Importing the mesh replay' }, fetcher, async (fetcher) => {
+    if (new TextEncoder().encode(text).byteLength > MAX_MESH_REPLAY_BYTES) throw new Error('This file is larger than the 64 MiB WG can open. Choose a smaller file.');
+    const response = await checked(await fetcher('/api/mesh-replay', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text,
+    }));
+    return response.json() as Promise<OpenedMeshReplay>;
+  });
 }
 
 export async function fetchMeshReplay(jobId: string, fetcher: typeof fetch = fetch): Promise<Blob> {
-  const response = await checked(await fetcher(`/api/jobs/${encodeURIComponent(jobId)}/mesh-replay`));
-  return response.blob();
+  return activityOperation({ kind: 'export', label: 'Exporting mesh replay' }, fetcher, async (fetcher) => {
+    const response = await checked(await fetcher(`/api/jobs/${encodeURIComponent(jobId)}/mesh-replay`));
+    return response.blob();
+  });
 }

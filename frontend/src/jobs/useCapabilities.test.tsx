@@ -1,3 +1,4 @@
+import { activityStore } from '../shell/activity';
 import { jobsSocket } from '../api/jobsSocket';
 import { getCapabilities } from './actions';
 import { act } from 'react';
@@ -38,6 +39,7 @@ describe('useCapabilities', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    activityStore.reset();
     vi.useFakeTimers();
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     fetchMock = vi.fn(async () => new Response(JSON.stringify(CAPABILITIES), {
@@ -68,6 +70,31 @@ describe('useCapabilities', () => {
   };
 
   const textOf = (tag: string) => host.querySelector(`[data-tag="${tag}"]`)?.textContent ?? '';
+
+  it('shares one activity through detection, pending engine answers and readiness', async () => {
+    let resolve!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(done => { resolve = done; }));
+    await render(<><Consumer tag="one"/><Consumer tag="two"/></>);
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'engine-check', background: true, cancel: null }]);
+    const id = activityStore.getSnapshot()[0].id;
+    resolve(new Response(JSON.stringify({ ...CAPABILITIES, cpuPreparationInFlight: true })));
+    await flushReact();
+    expect(activityStore.getSnapshot()).toMatchObject([{ id }]);
+    await act(async () => client.setQueryData(CAPABILITIES_QUERY_KEY, { ...CAPABILITIES, capabilityGeneration: 2 }));
+    await flushReact();
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    expect(activityStore.typicalMs('engine-check')).not.toBeNull();
+  });
+
+  it('ends engine checking without remembering a failed detection', async () => {
+    fetchMock.mockRejectedValue(new Error('probe failed'));
+    await render(<><Consumer tag="one"/><Consumer tag="two"/></>);
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    await flushReact();
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    expect(activityStore.typicalMs('engine-check')).toBeNull();
+  });
 
   it('versions requests even when an unchanged result shares its cached data', async () => {
     let snapshot!: ReturnType<typeof useCapabilities>;

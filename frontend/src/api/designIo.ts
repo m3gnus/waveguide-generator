@@ -1,3 +1,4 @@
+import { activityOperation } from '../shell/activityOperation';
 import { usesCurrentAthImport, isAthImportVersion } from '../design/athImportVersion';
 import { httpErrorMessage, refusalText, ProgramFault } from './httpError';
 import { profileSamples, profileSections, type ProfileSample } from './profileSamples';
@@ -155,17 +156,19 @@ export async function serializeDesignDocument(
   solveSettings: WgSolveSettings | null = wgSolveSettingsFromStore(),
   designUid = useDocumentStore.getState().designUid,
 ): Promise<SerializeDesignResponse> {
-  const response = await fetcher('/api/design/serialize', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      design: designWireWithSolveSettings(serializeDesign(design), polarConfig, solveSettings, designName),
-      filename: designFilename(designName, design.formula),
-      designUid,
-    }),
+  return activityOperation({ kind: 'export', label: 'Exporting design file' }, fetcher, async (fetcher) => {
+    const response = await fetcher('/api/design/serialize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        design: designWireWithSolveSettings(serializeDesign(design), polarConfig, solveSettings, designName),
+        filename: designFilename(designName, design.formula),
+        designUid,
+      }),
+    });
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json() as Promise<SerializeDesignResponse>;
   });
-  if (!response.ok) throw new Error(await errorMessage(response));
-  return response.json() as Promise<SerializeDesignResponse>;
 }
 
 export async function sendDesignToCad(
@@ -186,47 +189,49 @@ export async function sendDesignToCad(
   designUid?: string,
   assertCurrent?: () => void,
 ): Promise<WgLinkExportResponse> {
-  const bindAttention = solveAttention.captureOperationArm();
-  // No save gate here. The server commits the design on screen into the
-  // CAD-link registry as part of the export, so an unsaved or edited design
-  // sends like any other; `identity` is the optimistic-concurrency token when
-  // there is one, not a precondition.
-  const pathResponse = await deadlineFetch(fetcher, '/api/cad-workspace/path');
-  assertCurrent?.();
-  if (!pathResponse.ok) throw new Error(await errorMessage(pathResponse));
-  const workspace = await pathResponse.json() as { selected?: boolean; path?: string };
-  assertCurrent?.();
-  if (!workspace.selected) {
-    throw new Error('No WGLink folder is selected. Choose one in Settings → CAD Link, then send again.');
-  }
+  return activityOperation({ kind: 'send-to-cad', label: 'Sending to CAD' }, fetcher, async (fetcher) => {
+    const bindAttention = solveAttention.captureOperationArm();
+    // No save gate here. The server commits the design on screen into the
+    // CAD-link registry as part of the export, so an unsaved or edited design
+    // sends like any other; `identity` is the optimistic-concurrency token when
+    // there is one, not a precondition.
+    const pathResponse = await deadlineFetch(fetcher, '/api/cad-workspace/path');
+    assertCurrent?.();
+    if (!pathResponse.ok) throw new Error(await errorMessage(pathResponse));
+    const workspace = await pathResponse.json() as { selected?: boolean; path?: string };
+    assertCurrent?.();
+    if (!workspace.selected) {
+      throw new Error('No WGLink folder is selected. Choose one in Settings → CAD Link, then send again.');
+    }
 
-  const response = await fetcher('/api/export/wglink', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Idempotency-Key': idempotencyKey,
-    },
-    body: JSON.stringify({
-      // `baseName` is the slug the bundle's files are named with; the Title
-      // written into the config keeps the name's own spelling, which the
-      // wire builder reads from the document.
-      design: designWireWithSolveSettings(serializeDesign(design), polarConfig, solveSettings),
-      designRevision,
-      baseName,
-      identity,
-      designUid,
-      expectedFusionDocumentId: fusionTarget?.documentId ?? null,
-      expectedFusionInstanceId: fusionTarget?.instanceId ?? null,
-      expectedFusionReturnStateHash: fusionTarget?.returnStateHash ?? null,
-    }),
+    const response = await fetcher('/api/export/wglink', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({
+        // `baseName` is the slug the bundle's files are named with; the Title
+        // written into the config keeps the name's own spelling, which the
+        // wire builder reads from the document.
+        design: designWireWithSolveSettings(serializeDesign(design), polarConfig, solveSettings),
+        designRevision,
+        baseName,
+        identity,
+        designUid,
+        expectedFusionDocumentId: fusionTarget?.documentId ?? null,
+        expectedFusionInstanceId: fusionTarget?.instanceId ?? null,
+        expectedFusionReturnStateHash: fusionTarget?.returnStateHash ?? null,
+      }),
+    });
+    if (!response.ok) throw new Error(await errorMessage(response));
+    const result = await response.json() as WgLinkExportResponse;
+    if (result.cadHandoffRequestId) bindAttention(result.cadHandoffRequestId);
+    if (result.cadHandoff === 'failed') {
+      throw new Error(`WG saved the model in ${result.bundlePath}, but could not notify Fusion. Open waveguide.step from that folder in Fusion.`);
+    }
+    return result;
   });
-  if (!response.ok) throw new Error(await errorMessage(response));
-  const result = await response.json() as WgLinkExportResponse;
-  if (result.cadHandoffRequestId) bindAttention(result.cadHandoffRequestId);
-  if (result.cadHandoff === 'failed') {
-    throw new Error(`WG saved the model in ${result.bundlePath}, but could not notify Fusion. Open waveguide.step from that folder in Fusion.`);
-  }
-  return result;
 }
 
 function unwrapExpressions(value: unknown, path = '', expressions: Record<string, ExprNumber> = {}, absent: string[] = []): unknown {
@@ -324,36 +329,38 @@ export async function convertDesignToFreeform(
   design: DesignDocument,
   fetcher: typeof fetch = fetch,
 ): Promise<FreeformConversion> {
-  const profileText = await exportProfileCsv(design, 0, undefined, 'freeform-conversion', fetcher).catch((error: unknown) => {
-    if (error instanceof ProfileExportError) return null;
-    throw error;
-  });
-  if (profileText !== null) {
-    let converted: FreeformConversion | null = null;
-    try { converted = freeformFromProfileCsv(profileText, design); } catch { /* use endpoint fallback */ }
-    if (converted) {
-      const stations = await morphStations(design, converted.design, profileText, fetcher);
-      if (stations) converted.design.cross_sections = stations;
-      return converted;
+  return activityOperation({ kind: 'export', label: 'Converting the profile to Freeform' }, fetcher, async (fetcher) => {
+    const profileText = await exportProfileCsv(design, 0, undefined, 'freeform-conversion', fetcher).catch((error: unknown) => {
+      if (error instanceof ProfileExportError) return null;
+      throw error;
+    });
+    if (profileText !== null) {
+      let converted: FreeformConversion | null = null;
+      try { converted = freeformFromProfileCsv(profileText, design); } catch { /* use endpoint fallback */ }
+      if (converted) {
+        const stations = await morphStations(design, converted.design, profileText, fetcher);
+        if (stations) converted.design.cross_sections = stations;
+        return converted;
+      }
     }
-  }
 
-  const fallback = preserveSharedForFreeform(designForFamily('FREEFORM'), design);
-  // LOOKUP has no L, R or r0: the table's ends are the horn's ends.
-  const table = design.formula === 'LOOKUP' ? design.lookup_profile : undefined;
-  const first = table?.[0];
-  const last = table?.at(-1);
-  const length = first && last ? last[0] - first[0] : design.L ?? design.depth ?? 120;
-  const mouth = last ? last[1] : design.R ?? 140;
-  const throat = first ? first[1] : design.r0 ?? 12.7;
-  fallback.length = length;
-  fallback.profile_h!.points = [{ t: 0, r: throat }, { t: 1, r: mouth }];
-  fallback.profile_v!.points = structuredClone(fallback.profile_h!.points);
-  fallback.profile_h!.throat_angle_deg = design.a0 ?? 15.5;
-  fallback.profile_v!.throat_angle_deg = design.a0 ?? 15.5;
-  fallback.profile_h!.mouth_angle_deg = design.a ?? 60;
-  fallback.profile_v!.mouth_angle_deg = design.a ?? 60;
-  return { design: fallback, notice: athFreeformNotice(design) };
+    const fallback = preserveSharedForFreeform(designForFamily('FREEFORM'), design);
+    // LOOKUP has no L, R or r0: the table's ends are the horn's ends.
+    const table = design.formula === 'LOOKUP' ? design.lookup_profile : undefined;
+    const first = table?.[0];
+    const last = table?.at(-1);
+    const length = first && last ? last[0] - first[0] : design.L ?? design.depth ?? 120;
+    const mouth = last ? last[1] : design.R ?? 140;
+    const throat = first ? first[1] : design.r0 ?? 12.7;
+    fallback.length = length;
+    fallback.profile_h!.points = [{ t: 0, r: throat }, { t: 1, r: mouth }];
+    fallback.profile_v!.points = structuredClone(fallback.profile_h!.points);
+    fallback.profile_h!.throat_angle_deg = design.a0 ?? 15.5;
+    fallback.profile_v!.throat_angle_deg = design.a0 ?? 15.5;
+    fallback.profile_h!.mouth_angle_deg = design.a ?? 60;
+    fallback.profile_v!.mouth_angle_deg = design.a ?? 60;
+    return { design: fallback, notice: athFreeformNotice(design) };
+  });
 }
 
 /** An HTTP refusal of the profile export, distinct from a failed request. */
@@ -366,12 +373,14 @@ export async function exportProfileCsv(
   design: DesignDocument, designRevision: number, signal?: AbortSignal,
   baseName = 'waveguide', fetcher: typeof fetch = fetch,
 ): Promise<string> {
-  const response = await fetcher('/api/export/profiles?kind=profiles', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
-    body: JSON.stringify({ design: serializeDesign(design), designRevision, baseName }),
+  return activityOperation({ kind: 'export', label: 'Exporting profile CSV' }, fetcher, async (fetcher) => {
+    const response = await fetcher('/api/export/profiles?kind=profiles', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+      body: JSON.stringify({ design: serializeDesign(design), designRevision, baseName }),
+    });
+    if (!response.ok) throw new ProfileExportError(await httpErrorMessage(response, 'WG could not export this profile. Try again.'));
+    return response.text();
   });
-  if (!response.ok) throw new ProfileExportError(await httpErrorMessage(response, 'WG could not export this profile. Try again.'));
-  return response.text();
 }
 
 type MorphMouth =
@@ -783,24 +792,26 @@ export async function buildGeometryExport(
   stepBody: StepBody = 'solid',
   fetcher: typeof fetch = fetch,
 ): Promise<GeometryExportFile> {
-  const query = kind === 'profiles'
-    ? `?kind=${profileKind ?? 'profiles'}`
-    : kind === 'step' ? `?body=${stepBody}` : '';
-  const response = await fetcher(`/api/export/${kind}${query}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      design: serializeDesign(design),
-      designRevision,
-      baseName,
-    }),
+  return activityOperation({ kind: 'export', label: `Exporting ${kind === 'profiles' ? 'profile CSV' : kind.toUpperCase()}` }, fetcher, async (fetcher) => {
+    const query = kind === 'profiles'
+      ? `?kind=${profileKind ?? 'profiles'}`
+      : kind === 'step' ? `?body=${stepBody}` : '';
+    const response = await fetcher(`/api/export/${kind}${query}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        design: serializeDesign(design),
+        designRevision,
+        baseName,
+      }),
+    });
+    if (!response.ok) throw new Error(await errorMessage(response));
+    const warning = response.headers.get('X-Export-Warning')?.trim() || undefined;
+    const suffix = kind === 'profiles' ? `_${profileKind ?? 'profiles'}.csv` : `.${kind}`;
+    const filename = responseFilename(response, `${baseName}${suffix}`);
+    const built: GeometryExportFile = { filename, blob: await response.blob() };
+    return warning ? { ...built, warning } : built;
   });
-  if (!response.ok) throw new Error(await errorMessage(response));
-  const warning = response.headers.get('X-Export-Warning')?.trim() || undefined;
-  const suffix = kind === 'profiles' ? `_${profileKind ?? 'profiles'}.csv` : `.${kind}`;
-  const filename = responseFilename(response, `${baseName}${suffix}`);
-  const built: GeometryExportFile = { filename, blob: await response.blob() };
-  return warning ? { ...built, warning } : built;
 }
 
 /**
@@ -823,18 +834,20 @@ export async function exportGeometryToOutputFolder(
   destination?: string,
   confirmReplacements?: ConfirmReplacements,
 ): Promise<GeometryExportWrite> {
-  const { filename, blob, warning } = await buildGeometryExport(
-    kind, design, designRevision, baseName, profileKind, stepBody, fetcher,
-  );
-  // Overwrite: re-exporting after an edit is the ordinary case, and a stale
-  // file of the same name is exactly what the user is replacing.
-  const written = await writeToOutputFolder(
-    // `confirm` only when there is a folder to collide in: a workspace export
-    // keeps replacing its own last output without asking.
-    baseName, [{ filename, blob }], fetcher,
-    destination ? 'confirm' : 'overwrite', destination, confirmReplacements,
-  );
-  return warning ? { ...written, warning } : written;
+  return activityOperation({ kind: 'export', label: `Exporting ${kind === 'profiles' ? 'profile CSV' : kind.toUpperCase()}` }, fetcher, async (fetcher) => {
+    const { filename, blob, warning } = await buildGeometryExport(
+      kind, design, designRevision, baseName, profileKind, stepBody, fetcher,
+    );
+    // Overwrite: re-exporting after an edit is the ordinary case, and a stale
+    // file of the same name is exactly what the user is replacing.
+    const written = await writeToOutputFolder(
+      // `confirm` only when there is a folder to collide in: a workspace export
+      // keeps replacing its own last output without asking.
+      baseName, [{ filename, blob }], fetcher,
+      destination ? 'confirm' : 'overwrite', destination, confirmReplacements,
+    );
+    return warning ? { ...written, warning } : written;
+  });
 }
 
 /** Read the same generated bore samples as the profile file export, without writing a file. */

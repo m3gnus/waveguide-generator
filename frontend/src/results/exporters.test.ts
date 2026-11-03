@@ -1,10 +1,12 @@
+import { deferred } from '../shell/cadlink/selection.fixtures';
+import { activityStore } from '../shell/activity';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { designForFamily } from '../stores/design';
 import { resultExportSnapshot } from './exportContext';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
 import type { RadiationImpedancePresentation } from '../api/results';
-import { archiveRunToWorkspace, buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
+import { runAutomaticWorkspaceExport, archiveRunToWorkspace, buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 import {
   ExportCancelledError,
@@ -97,7 +99,7 @@ function workspacePayload(init?: RequestInit) {
 }
 
 describe('result exporters', () => {
-  beforeEach(() => { preferencesStore.resetForTests(); });
+  beforeEach(() => { activityStore.reset(); preferencesStore.resetForTests(); });
   it.each(['step', 'stl', 'fusion_csv', 'mwg_config'] as const)('refuses %s generation even if an imported run carries a parametric anchor', async format => {
     const selectedRun = {
       id: 'cad-anchor', config_summary: { geometry_type: 'imported' },
@@ -1068,6 +1070,7 @@ describe('result exporters', () => {
     };
     const writes: Array<{ subdirectory: string; jobId: FormDataEntryValue | null; members: Array<{ relative_path: string }> }> = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'export', label: 'Archiving the run' }]);
       const path = String(input);
       if (path === '/api/jobs/archive-cardioid/archive-snapshot') return new Response(JSON.stringify({
         schema_version: 1,
@@ -1088,7 +1091,11 @@ describe('result exporters', () => {
       return new Response('not found', { status: 404 });
     });
 
+    const started = vi.spyOn(activityStore, 'start');
     await archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher);
+    expect(started).toHaveBeenCalledTimes(1);
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    started.mockRestore();
     expect(writes.every(({ jobId }) => jobId === job.id)).toBe(true);
     expect(writes.flatMap(({ members }) => members.map(({ relative_path }) => relative_path))).not.toContain('design.json');
     expect(writes[0].members.map(({ relative_path }) => relative_path)).toEqual([
@@ -1286,4 +1293,74 @@ it('marks lost Workspace publication response bodies as indeterminate', async ()
 it('marks lost Workspace publication requests as indeterminate but preserves destination conflict classification', async () => {
   await expect(writeWorkspaceFiles('run', [{ filename: 'one.csv', blob: new Blob(['saved']) }], vi.fn().mockRejectedValue(new TypeError('Network lost')))).rejects.toMatchObject({ publicationUncertain: true });
   await expect(writeWorkspaceFiles('run', [{ filename: 'one.csv', blob: new Blob(['saved']) }], vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: 'Existing file' }), { status: 409 })))).rejects.toMatchObject({ destinationConflict: true });
+});
+
+it.each(['format', 'download bundle', 'workspace', 'automatic', 'mesh download', 'mesh save'] as const)(
+  '%s registers one export through success or failure', async style => {
+    for (const fail of [false, true]) {
+      activityStore.reset();
+      const first = deferred<Response>(); let calls = 0;
+      const started = vi.spyOn(activityStore, 'start');
+      const fetcher: typeof fetch = async () => {
+        expect(activityStore.getSnapshot()).toHaveLength(1);
+        if (++calls === 1) return first.promise;
+        return new Response(JSON.stringify({ directory: 'out', files: ['out/horn.stl'] }));
+      };
+      const context = { jobStem: 'horn', preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), fetcher, saveBlob: vi.fn() };
+      const job = { id: 'job', archive_folder: 'horn', archive_run: '1_horn', run_number: 1, label: 'horn', config_summary: {} };
+      const pending = style === 'format' ? runExportFormat('stl', context)
+        : style === 'download bundle' ? runExportBundle(context, ['stl'])
+          : style === 'workspace' ? runWorkspaceExportBundle(context, ['stl'])
+            : style === 'automatic' ? runAutomaticWorkspaceExport(context, ['stl'])
+              : style === 'mesh download' ? downloadMeshArtifact(job, vi.fn(), fetcher, vi.fn())
+                : saveMeshArtifactToWorkspace(job, vi.fn(), fetcher);
+      expect(activityStore.getSnapshot()).toHaveLength(1);
+      const settled = pending.catch(error => error);
+      if (fail) first.reject(new Error('request failed')); else first.resolve(new Response('geometry'));
+      const outcome = await settled;
+      if (!fail) expect(outcome).not.toBeInstanceOf(Error);
+      expect(started).toHaveBeenCalledTimes(1);
+      expect(activityStore.getSnapshot()).toHaveLength(0);
+      expect(activityStore.typicalMs('export') === null).toBe(fail);
+      started.mockRestore();
+    }
+  },
+);
+
+it('ends an archive activity on a failed snapshot read', async () => {
+  activityStore.reset();
+  const waiting = deferred<Response>();
+  const pending = archiveRunToWorkspace({ id: 'job' } as JobItem, preferencesStore.getSnapshot(), () => waiting.promise);
+  expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'export', label: 'Archiving the run' }]);
+  const rejected = expect(pending).rejects.toThrow('snapshot failed');
+  waiting.reject(new Error('snapshot failed'));
+  await rejected;
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+  expect(activityStore.typicalMs('export')).toBeNull();
+});
+
+it('counts completed formats and keeps the activity through the final workspace write', async () => {
+  activityStore.reset();
+  const written = deferred<Response>();
+  const pending = runWorkspaceExportBundle({ jobStem: 'horn', preferences: preferencesStore.getSnapshot(),
+    design: designForFamily('OSSE'), fetcher: async url => String(url).endsWith('/write-export') ? written.promise : new Response('geometry'),
+  }, ['step', 'stl']);
+  await vi.waitFor(() => expect(activityStore.getSnapshot()[0].progress).toEqual({ done: 2, total: 3 }));
+  written.resolve(new Response(JSON.stringify({ directory: 'out', files: ['horn.step', 'horn.stl'] })));
+  await pending;
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+});
+
+it('counts the two files of a standalone Fusion CSV export', async () => {
+  activityStore.reset();
+  const profiles = deferred<Response>(); const slices = deferred<Response>();
+  const pending = runExportFormat('fusion_csv', { jobStem: 'horn', preferences: preferencesStore.getSnapshot(),
+    design: designForFamily('OSSE'), saveBlob: vi.fn(), fetcher: url => String(url).includes('kind=slices') ? slices.promise : profiles.promise,
+  });
+  expect(activityStore.getSnapshot()[0].progress).toEqual({ done: 0, total: 2 });
+  profiles.resolve(new Response('profiles'));
+  await vi.waitFor(() => expect(activityStore.getSnapshot()[0].progress).toEqual({ done: 1, total: 2 }));
+  slices.resolve(new Response('slices'));
+  await pending;
+  expect(activityStore.getSnapshot()).toHaveLength(0);
 });

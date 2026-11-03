@@ -1,3 +1,4 @@
+import { activityStore } from '../shell/activity';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompiledAssembly } from '../api/assembly';
@@ -46,6 +47,7 @@ const workspace = (overrides: Record<string, unknown> = {}) => ({
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 
 beforeEach(() => {
+  activityStore.reset();
   localStorage.clear();
   importedMeshStore.clear();
   useMeshImportStore.setState({ filename: '', original: null, summary: null, busy: false, error: null, notice: null });
@@ -58,6 +60,28 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('openImported', () => {
+  it.each([false, true])('keeps one activity through all model discovery reads (failure=%s)', async fail => {
+    const first = deferred<Response>(); let calls = 0;
+    const started = vi.spyOn(activityStore, 'start');
+    const fetcher: typeof fetch = async url => {
+      expect(activityStore.getSnapshot()).toHaveLength(1);
+      if (++calls === 1) return first.promise;
+      if (String(url).includes('/setup')) return json({ setup, revision_id: 'revision' });
+      return json({ model: { model_id: mesh.model_id, producer: 'mesh-file', display_name: 'speaker.msh' },
+        latest_prepared: mesh, prepared: mesh, original_available: true });
+    };
+    const pending = openImported({ kind: 'model', modelId: mesh.model_id }, fetcher);
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'mesh-import' }]);
+    const settled = pending.catch(error => error);
+    first.resolve(fail ? json({ detail: 'model failed' }, 422) : json({ model: { model_id: mesh.model_id, producer: 'mesh-file', display_name: 'speaker.msh' },
+      latest_prepared: mesh, original_available: true }));
+    const outcome = await settled;
+    if (!fail) expect(outcome).toBe(true);
+    expect(started).toHaveBeenCalledTimes(1);
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    expect(activityStore.typicalMs('mesh-import') === null).toBe(fail);
+  });
+
   it('reopens an assembly run through the third shared adapter, with its exact setup and no CAD sizing', async () => {
     const id = '00000000-0000-4000-8000-0000000000aa';
     const modelId = 'design-assembly:wgu_saved';
@@ -307,6 +331,29 @@ describe('the last model', () => {
   const fileFetcher = () => vi.fn<typeof fetch>(async (url) => String(url).includes('/setup')
     ? json({ setup, revision_id: 'wgs_saved' }) : json(modelRead()));
   beforeEach(() => workspaceModeStore.setImportedInput('file'));
+  it.each([false, true])('shares the startup discovery scope with its model open (failure=%s)', async fail => {
+    workspaceModeStore.setMode('cad');
+    rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+    const waiting = deferred<Response>();
+    let calls = 0;
+    const started = vi.spyOn(activityStore, 'start');
+    const fetcher: typeof fetch = async url => {
+      expect(activityStore.getSnapshot()).toHaveLength(1);
+      if (++calls === 1) return waiting.promise;
+      return String(url).includes('/setup') ? json({ setup, revision_id: 'revision' })
+        : json({ model: { model_id: mesh.model_id, producer: 'mesh-file', display_name: 'speaker.msh' }, latest_prepared: mesh, prepared: mesh, original_available: true });
+    };
+    const pending = reopenLastModel(fetcher);
+    const settled = pending.catch(error => error);
+    await vi.waitFor(() => expect(activityStore.getSnapshot()).toHaveLength(1));
+    waiting.resolve(fail ? json({ detail: 'model failed' }, 500) : json({ model: { model_id: mesh.model_id, producer: 'mesh-file', display_name: 'speaker.msh' }, latest_prepared: mesh, original_available: true }));
+    const outcome = await settled;
+    if (!fail) expect(outcome).toBe(true);
+    expect(started).toHaveBeenCalledTimes(1);
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+    expect(activityStore.typicalMs('mesh-import') === null).toBe(fail);
+  });
+
   const gone = () => vi.fn<typeof fetch>(async () => json({ error: { code: 'model_not_found', message: 'Imported model not found.' } }, 404));
 
   it('points at the model on screen once it is ready, and at no unfiled mesh', async () => {

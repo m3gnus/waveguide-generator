@@ -1,3 +1,4 @@
+import { abortableActivity } from '../shell/activityOperation';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { failureWords, httpErrorMessage, ProgramFault } from '../api/httpError';
@@ -22,7 +23,7 @@ function withoutTarget(key: string): string {
 function useEstimate(key: string, enabled: boolean) {
   return useQuery({
     queryKey: ['mesh-estimate', key],
-    queryFn: async ({ signal }) => {
+    queryFn: ({ signal }) => abortableActivity({ kind: 'mesh-count', label: 'Counting mesh triangles', background: true }, fetch, signal, async (fetch, signal) => {
       const response = await fetch('/api/mesh-estimate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ design: JSON.parse(key) }), signal,
@@ -31,7 +32,7 @@ function useEstimate(key: string, enabled: boolean) {
       const result = await response.json() as { triangle_count?: number };
       if (typeof result.triangle_count !== 'number' || !Number.isFinite(result.triangle_count)) throw new ProgramFault('Mesh estimate response is invalid');
       return result.triangle_count;
-    },
+    }),
     staleTime: 60_000, gcTime: 60_000, retry: false,
     enabled,
   });

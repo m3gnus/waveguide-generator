@@ -1,3 +1,4 @@
+import { activityOperation } from '../activityOperation';
 import { cadModelLabel } from '../../model/cadLabels';
 import { waitForCadProjectSettings } from '../../stores/cadProjectSettings';
 import { currentDocumentLoad, isCurrentDocumentLoad } from '../../stores/design';
@@ -375,106 +376,111 @@ export function createCadArrivalActions(
     options.onStarted?.(ingestGeneration, viewportGeneration);
     setIngesting(true); setIngestError(null); setError(null); setStatus(null); setViewportNotice(null);
     meshCeilingChoice.clear();
-    try {
-      const skipped = new Set(current.skippedSourceIds);
-      const record = await ingestReturn({
-        bundlePath: current.selectedBundle.bundlePath,
-        // A workspace listing item has no origin and is a WGLink return; an
-        // Onshape return carries its own. The server resolves each against
-        // its own root, so this is the only thing that has to be dispatched.
-        bundleOrigin: current.selectedBundle.bundleOrigin ?? 'wglink',
-        mesh: {
-          rigidSizeMm: current.meshSizes.rigid_size_mm,
-          transitionMm: current.meshSizes.transition_mm,
-          sourceSizeMm: Object.fromEntries(Object.entries(current.meshSizes.source_size_mm).filter(([id]) => !skipped.has(id))),
-        },
-        skippedSourceIds: current.skippedSourceIds,
-        areaDriftOverrides: current.areaDriftOverrides,
-        ...(current.surfaceDeviationMm != null ? { surfaceDeviationMm: current.surfaceDeviationMm } : {}),
-        expectedDesignId: useDocumentStore.getState().identity?.designId ?? null,
-        expectedInstanceId: resolvePreparationTarget(current.selectedBundle),
-        symmetryMode: useCadReturnStore.getState().symmetryMode,
-        // The user chose Solve anyway over the triangle ceiling for this model.
-        ...(options.meshLimitOverride ? { meshLimitOverride: true } : {}),
-      }, options.fetcher ?? fetcher, abortController.signal);
-      if (options.isCurrent?.() === false) throw new SupersededError('A newer model selection superseded preparation.');
-      options.validate?.(record);
-      if (!isCurrentDocumentLoad(documentLoad)
-        || !useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
-        const superseded = 'The model or design changed while its mesh was being prepared. Rebuild the mesh for the current model.';
-        if (request === ingestRequest.current && mounted.current) setStatus(superseded);
-        throw new SupersededError(superseded);
-      }
-      options.onPrepared?.();
-      if (request === ingestRequest.current && mounted.current) {
-        const origin = current.selectedBundle.bundleOrigin === 'onshape' ? 'Onshape' : 'Fusion';
-        setStatus(`Received ${cadModelLabel(current.selectedBundle)} from ${origin}.`);
-        // Before the display, so the viewport adopts the CAD slot rather than
-        // loading it invisibly behind the parametric design.
-        activateWorkspace();
-        // Awaited rather than fired and forgotten: the solve gate refuses an
-        // ingestion whose mesh is not the one on screen, so a composed
-        // pull/ingest/solve that raced this fetch failed on every return after
-        // the first with a viewport-mismatch the user could not act on.
-        await showIngestedMesh(
-          record,
-          cadModelLabel(current.selectedBundle),
-          reportViewportNotice,
-          options.fetcher ?? fetcher,
-          viewportGeneration,
-        );
-      }
-      return record;
-    } catch (reason) {
-      if (reason instanceof SupersededError) {
-        if (useCadReturnStore.getState().attemptedPreparationKey === attempt) useCadReturnStore.setState({ attemptedPreparationKey: null });
-        throw reason;
-      }
-      if (!isCurrentDocumentLoad(documentLoad)
-        || !useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
-        if (useCadReturnStore.getState().attemptedPreparationKey === attempt) useCadReturnStore.setState({ attemptedPreparationKey: null });
-        const superseded = 'The model or design changed while its mesh was being prepared. Rebuild the mesh for the current model.';
-        if (request === ingestRequest.current && mounted.current) setStatus(superseded);
-        throw new SupersededError(superseded);
-      }
-      const message = failureWords(reason);
-      reportCadAutomationError('prepare', reason);
-      if (reason instanceof CadLinkApiError && reason.code === 'mesh_too_large' && request === ingestRequest.current) {
-        // A choice, not a failure: the same pop-up as a held Fusion request.
-        meshCeilingChoice.ask({
-          name: cadModelLabel(current.selectedBundle),
-          nextStep: reason.nextStep ?? message,
-          meshLimit: reason.meshLimit,
-          bundlePath: current.selectedBundle.bundlePath,
-        });
-        throw reason;
-      }
-      if (reason instanceof CadLinkApiError && reason.failure) {
-        // A failure the server classified: WG's sentence for it is the
-        // model's status line (never a red notice); the raw text of WG's own
-        // failure is for developer details only.
+    const selectedBundle = current.selectedBundle;
+    const operationFetch: typeof fetch = (input, init) => (options.fetcher ?? fetcher)(input,
+      { ...init, signal: init?.signal ?? abortController.signal });
+    return activityOperation({ kind: 'cad-import', label: 'Importing the CAD model', cancel: () => abortController.abort() }, operationFetch, async (fetcher) => {
+      try {
+        const skipped = new Set(current.skippedSourceIds);
+        const record = await ingestReturn({
+          bundlePath: selectedBundle.bundlePath,
+          // A workspace listing item has no origin and is a WGLink return; an
+          // Onshape return carries its own. The server resolves each against
+          // its own root, so this is the only thing that has to be dispatched.
+          bundleOrigin: selectedBundle.bundleOrigin ?? 'wglink',
+          mesh: {
+            rigidSizeMm: current.meshSizes.rigid_size_mm,
+            transitionMm: current.meshSizes.transition_mm,
+            sourceSizeMm: Object.fromEntries(Object.entries(current.meshSizes.source_size_mm).filter(([id]) => !skipped.has(id))),
+          },
+          skippedSourceIds: current.skippedSourceIds,
+          areaDriftOverrides: current.areaDriftOverrides,
+          ...(current.surfaceDeviationMm != null ? { surfaceDeviationMm: current.surfaceDeviationMm } : {}),
+          expectedDesignId: useDocumentStore.getState().identity?.designId ?? null,
+          expectedInstanceId: resolvePreparationTarget(selectedBundle),
+          symmetryMode: useCadReturnStore.getState().symmetryMode,
+          // The user chose Solve anyway over the triangle ceiling for this model.
+          ...(options.meshLimitOverride ? { meshLimitOverride: true } : {}),
+        }, fetcher, abortController.signal);
+        if (options.isCurrent?.() === false) throw new SupersededError('A newer model selection superseded preparation.');
+        options.validate?.(record);
+        if (!isCurrentDocumentLoad(documentLoad)
+          || !useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
+          const superseded = 'The model or design changed while its mesh was being prepared. Rebuild the mesh for the current model.';
+          if (request === ingestRequest.current && mounted.current) setStatus(superseded);
+          throw new SupersededError(superseded);
+        }
+        options.onPrepared?.();
         if (request === ingestRequest.current && mounted.current) {
-          setIngestError([message, reason.nextStep].filter(Boolean).join(' '), {
-            recorded: reason.failure === 'internal', retry: reason.retry ?? true, diagnostic: reason.diagnostic,
+          const origin = selectedBundle.bundleOrigin === 'onshape' ? 'Onshape' : 'Fusion';
+          setStatus(`Received ${cadModelLabel(selectedBundle)} from ${origin}.`);
+          // Before the display, so the viewport adopts the CAD slot rather than
+          // loading it invisibly behind the parametric design.
+          activateWorkspace();
+          // Awaited rather than fired and forgotten: the solve gate refuses an
+          // ingestion whose mesh is not the one on screen, so a composed
+          // pull/ingest/solve that raced this fetch failed on every return after
+          // the first with a viewport-mismatch the user could not act on.
+          await showIngestedMesh(
+            record,
+            cadModelLabel(selectedBundle),
+            reportViewportNotice,
+            fetcher,
+            viewportGeneration,
+          );
+        }
+        return record;
+      } catch (reason) {
+        if (reason instanceof SupersededError) {
+          if (useCadReturnStore.getState().attemptedPreparationKey === attempt) useCadReturnStore.setState({ attemptedPreparationKey: null });
+          throw reason;
+        }
+        if (!isCurrentDocumentLoad(documentLoad)
+          || !useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
+          if (useCadReturnStore.getState().attemptedPreparationKey === attempt) useCadReturnStore.setState({ attemptedPreparationKey: null });
+          const superseded = 'The model or design changed while its mesh was being prepared. Rebuild the mesh for the current model.';
+          if (request === ingestRequest.current && mounted.current) setStatus(superseded);
+          throw new SupersededError(superseded);
+        }
+        const message = failureWords(reason);
+        reportCadAutomationError('prepare', reason);
+        if (reason instanceof CadLinkApiError && reason.code === 'mesh_too_large' && request === ingestRequest.current) {
+          // A choice, not a failure: the same pop-up as a held Fusion request.
+          meshCeilingChoice.ask({
+            name: cadModelLabel(selectedBundle),
+            nextStep: reason.nextStep ?? message,
+            meshLimit: reason.meshLimit,
+            bundlePath: selectedBundle.bundlePath,
           });
+          throw reason;
         }
-        throw reason;
-      }
-      if (request === ingestRequest.current && mounted.current) {
-        const structured = reason instanceof CadLinkApiError ? reason.areaDriftSources : [];
-        structured.forEach(current.flagAreaDrift);
-        if (!structured.length) {
-          const drift = /source ['"]([^'"]+)['"] area drift/i.exec(message);
-          if (drift) current.flagAreaDrift(drift[1]);
+        if (reason instanceof CadLinkApiError && reason.failure) {
+          // A failure the server classified: WG's sentence for it is the
+          // model's status line (never a red notice); the raw text of WG's own
+          // failure is for developer details only.
+          if (request === ingestRequest.current && mounted.current) {
+            setIngestError([message, reason.nextStep].filter(Boolean).join(' '), {
+              recorded: reason.failure === 'internal', retry: reason.retry ?? true, diagnostic: reason.diagnostic,
+            });
+          }
+          throw reason;
         }
-        setError(message);
-        setIngestError(message);
+        if (request === ingestRequest.current && mounted.current) {
+          const structured = reason instanceof CadLinkApiError ? reason.areaDriftSources : [];
+          structured.forEach(current.flagAreaDrift);
+          if (!structured.length) {
+            const drift = /source ['"]([^'"]+)['"] area drift/i.exec(message);
+            if (drift) current.flagAreaDrift(drift[1]);
+          }
+          setError(message);
+          setIngestError(message);
+        }
+        throw reason instanceof Error ? reason : new Error(message);
+      } finally {
+        if (ingestAbortController.current === abortController) ingestAbortController.current = null;
+        if (request === ingestRequest.current && mounted.current) setIngesting(false);
       }
-      throw reason instanceof Error ? reason : new Error(message);
-    } finally {
-      if (ingestAbortController.current === abortController) ingestAbortController.current = null;
-      if (request === ingestRequest.current && mounted.current) setIngesting(false);
-    }
+    });
   };
 
   // Automatic work and explicit retries both use ingestSelected above. The
@@ -634,84 +640,86 @@ export function createCadArrivalActions(
   };
 
   const returnFromOnshape = async () => {
-    workspaceModeStore.setImportedInput('cad');
-    const identity = useDocumentStore.getState().identity;
-    if (!identity?.designId) throw new Error('Send this design to Onshape before returning it.');
-    useCadReturnStore.getState().beginSelectionIntent();
-    let ingestGeneration = useCadReturnStore.getState().beginIngestIntent();
-    const documentLoad = currentDocumentLoad();
-    const instanceId = onshapeInstanceId();
-    const request = ++ingestRequest.current;
-    ingestAbortController.current?.abort();
-    const viewportGeneration = importedMeshStore.beginIntent();
-    setIngesting(true); setError(null); setStatus(null); setViewportNotice(null);
-    try {
-      const result = await returnOnshapeToWg(
-        identity.designId, fetcher, instanceId,
-      );
-      // Translation may finish after a project/model change or a newer return.
-      // Check the original intent before selection creates a fresh generation.
-      if (!mounted.current || request !== ingestRequest.current || !isCurrentDocumentLoad(documentLoad)
-        || onshapeInstanceId() !== instanceId
-        || useDocumentStore.getState().identity?.designId !== identity.designId
-        || !useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) return;
-      const sources = result.ingest.sources.map((source) => ({
-        id: source.id,
-        role: source.role,
-        required: source.required,
-        suggestedResolutionMm: source.suggested_resolution_mm,
-        defaultDriveChannelId: source.default_drive_channel_id,
-      }));
-      const bundle: CadReturnBundle = {
-        name: result.bundle.name,
-        // Both halves travel together, and neither is a filesystem location:
-        // the path is relative and the origin says which permitted area it is
-        // relative to. Keeping the origin here is what lets Rebuild mesh
-        // re-ingest this return -- the local mesh controls are displayed for
-        // it, and without the origin the request is refused as a WGLink path.
-        bundlePath: result.bundle.bundlePath,
-        bundleOrigin: result.bundle.bundleOrigin ?? 'onshape',
-        modifiedAt: result.ingest.created_at,
-        readable: true,
-        documentName: result.bundle.documentName,
-        requestId: null,
-        sourceCount: result.bundle.sourceCount,
-        instanceCount: result.bundle.instanceCount,
-        designIds: [identity.designId],
-        sources,
-      };
-      const state = useCadReturnStore.getState();
-      // Same-inventory Onshape iterations keep the user's solve setup too.
-      state.selectArrivedBundle(bundle, result.ingest.project?.lineage_id, fetcher);
-      ingestGeneration = state.beginIngestIntent();
-      if (!useCadReturnStore.getState().applyIngest(result.ingest, ingestGeneration)) {
-        setStatus('The incoming Onshape model was not applied because the selected design changed while Onshape was sending it.');
-        return;
+    return activityOperation({ kind: 'cad-import', label: 'Importing the CAD model' }, fetcher, async (fetcher) => {
+      workspaceModeStore.setImportedInput('cad');
+      const identity = useDocumentStore.getState().identity;
+      if (!identity?.designId) throw new Error('Send this design to Onshape before returning it.');
+      useCadReturnStore.getState().beginSelectionIntent();
+      let ingestGeneration = useCadReturnStore.getState().beginIngestIntent();
+      const documentLoad = currentDocumentLoad();
+      const instanceId = onshapeInstanceId();
+      const request = ++ingestRequest.current;
+      ingestAbortController.current?.abort();
+      const viewportGeneration = importedMeshStore.beginIntent();
+      setIngesting(true); setError(null); setStatus(null); setViewportNotice(null);
+      try {
+        const result = await returnOnshapeToWg(
+          identity.designId, fetcher, instanceId,
+        );
+        // Translation may finish after a project/model change or a newer return.
+        // Check the original intent before selection creates a fresh generation.
+        if (!mounted.current || request !== ingestRequest.current || !isCurrentDocumentLoad(documentLoad)
+          || onshapeInstanceId() !== instanceId
+          || useDocumentStore.getState().identity?.designId !== identity.designId
+          || !useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) return;
+        const sources = result.ingest.sources.map((source) => ({
+          id: source.id,
+          role: source.role,
+          required: source.required,
+          suggestedResolutionMm: source.suggested_resolution_mm,
+          defaultDriveChannelId: source.default_drive_channel_id,
+        }));
+        const bundle: CadReturnBundle = {
+          name: result.bundle.name,
+          // Both halves travel together, and neither is a filesystem location:
+          // the path is relative and the origin says which permitted area it is
+          // relative to. Keeping the origin here is what lets Rebuild mesh
+          // re-ingest this return -- the local mesh controls are displayed for
+          // it, and without the origin the request is refused as a WGLink path.
+          bundlePath: result.bundle.bundlePath,
+          bundleOrigin: result.bundle.bundleOrigin ?? 'onshape',
+          modifiedAt: result.ingest.created_at,
+          readable: true,
+          documentName: result.bundle.documentName,
+          requestId: null,
+          sourceCount: result.bundle.sourceCount,
+          instanceCount: result.bundle.instanceCount,
+          designIds: [identity.designId],
+          sources,
+        };
+        const state = useCadReturnStore.getState();
+        // Same-inventory Onshape iterations keep the user's solve setup too.
+        state.selectArrivedBundle(bundle, result.ingest.project?.lineage_id, fetcher);
+        ingestGeneration = state.beginIngestIntent();
+        if (!useCadReturnStore.getState().applyIngest(result.ingest, ingestGeneration)) {
+          setStatus('The incoming Onshape model was not applied because the selected design changed while Onshape was sending it.');
+          return;
+        }
+        setBundles([bundle]);
+        setStatus(`Received and prepared ${cadModelLabel(result.bundle)} from Onshape.`);
+        // The CAD Link panel only exists inside the CAD workspace, and the
+        // ingested return is now the solve truth — enter the mode that owns it.
+        activateWorkspace();
+        await showIngestedMesh(
+          result.ingest,
+          cadModelLabel(result.bundle),
+          reportViewportNotice,
+          fetcher,
+          viewportGeneration,
+        );
+      } catch (reason) {
+        reportCadAutomationError('onshape-return', reason);
+        if (mounted.current && request === ingestRequest.current && isCurrentDocumentLoad(documentLoad)
+          && onshapeInstanceId() === instanceId
+          && useDocumentStore.getState().identity?.designId === identity.designId
+          && useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
+          setError(failureWords(reason));
+        }
+        throw reason;
+      } finally {
+        if (request === ingestRequest.current && mounted.current) setIngesting(false);
       }
-      setBundles([bundle]);
-      setStatus(`Received and prepared ${cadModelLabel(result.bundle)} from Onshape.`);
-      // The CAD Link panel only exists inside the CAD workspace, and the
-      // ingested return is now the solve truth — enter the mode that owns it.
-      activateWorkspace();
-      await showIngestedMesh(
-        result.ingest,
-        cadModelLabel(result.bundle),
-        reportViewportNotice,
-        fetcher,
-        viewportGeneration,
-      );
-    } catch (reason) {
-      reportCadAutomationError('onshape-return', reason);
-      if (mounted.current && request === ingestRequest.current && isCurrentDocumentLoad(documentLoad)
-        && onshapeInstanceId() === instanceId
-        && useDocumentStore.getState().identity?.designId === identity.designId
-        && useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
-        setError(failureWords(reason));
-      }
-      throw reason;
-    } finally {
-      if (request === ingestRequest.current && mounted.current) setIngesting(false);
-    }
+    });
   };
 
   return { ingestSelected, selectBundleAs, returnFromOnshape, supersedePreparation, requestAutomaticPreparation, cancelAutomaticPreparation };
