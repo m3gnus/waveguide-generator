@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from server.cadlink.interpretation.domain_interpretation import source_completion_factors
+from server.mesh.source_completion import source_completion_factors
 from server.cadlink.interpretation.domain_decision import (
     CONTRACT, decision_problem, decision_sha256, source_map_sha256,
 )

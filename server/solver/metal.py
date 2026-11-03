@@ -23,7 +23,7 @@ import numpy as np
 
 from hornlab_sim.methods import driver_coupling, radiation_impedance
 
-from server.cadlink.interpretation.domain_interpretation import source_completion_factors
+from server.mesh.source_completion import source_completion_factors
 from server.jobs.models import (
     ImportedGeometrySource,
     passive_cardioid_apertures as _passive_cardioid_apertures,

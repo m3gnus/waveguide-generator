@@ -83,8 +83,8 @@ from server.cadlink.interpretation.domain_interpretation import (
     oblique_cut_refusal_message,
     off_centre_cut_refusal_message,
     open_half_refusal_message,
-    source_completion_factors,
 )
+from server.mesh.source_completion import source_completion_factors
 
 
 CONTRACT = "cad-domain-decision-v1"
