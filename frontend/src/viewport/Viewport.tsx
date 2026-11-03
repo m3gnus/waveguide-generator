@@ -31,6 +31,7 @@ import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { showIngestedMeshInViewport, showIngestedSolverMeshInViewport } from '../shell/cadlink/artifactLoader';
+import { reportCadAutomationError } from '../shell/cadlink/caughtErrors';
 import { Icon } from '../shell/icons';
 import { readChartTokens } from '../results/EChart';
 import { useViewerPreferences, viewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
@@ -826,7 +827,7 @@ export function Viewport() {
       (notice) => cadWorkspace.getSnapshot().reportViewportNotice(notice),
       fetch,
       generation,
-    );
+    ).catch(error => { reportCadAutomationError('display', error); });
   }, [cadName, cadRecord, workspaceMode, fileInputActive, opening.input, opening.phase, opening.generation]);
 
   // The mesh may be set from outside this component (CAD Link after an

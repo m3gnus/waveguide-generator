@@ -437,6 +437,11 @@ export function createCadArrivalActions(
             viewportGeneration,
           );
           abortController.signal.throwIfAborted();
+          if (!isCurrentDocumentLoad(documentLoad)
+            || !useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)
+            || request !== ingestRequest.current || !mounted.current || options.isCurrent?.() === false) {
+            throw new SupersededError('A newer model selection superseded preparation.');
+          }
           const origin = selectedBundle.bundleOrigin === 'onshape' ? 'Onshape' : 'Fusion';
           setStatus(`Received ${cadModelLabel(selectedBundle)} from ${origin}.`);
         }

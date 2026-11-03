@@ -1,7 +1,9 @@
 import { expectNoJargon } from '../testing/expectNoJargon';
 import '../shell/cadlink/restores';
 import { adoptDesignBuild, openImported, type ImportedDisplay } from '../stores/importedModel';
-import { deferred, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord, workspaceFor } from '../shell/cadlink/selection.fixtures';
+import { bundle as cadBundle, deferred, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord, workspaceFor } from '../shell/cadlink/selection.fixtures';
+import { createCadArrivalActions } from '../shell/cadlink/arrivals';
+import { activityStore } from '../shell/activity';
 /** Reopen a CAD run as history does: `openImported` of the run, shown by the CAD rail. */
 const restoreCadJobModel = (run: JobItem, display: ImportedDisplay = {}, fetcher: typeof fetch = fetch) =>
   openImported({ kind: 'run', job: run, display }, fetcher).catch(() => false);
@@ -958,6 +960,48 @@ describe('Viewport preview errors', () => {
     expect(legend()).toBeNull();
 
     act(() => workspaceModeStore.setMode('parametric'));
+  });
+
+  it('handles Stop in the concurrent viewport caller while the preparation owner still rejects', async () => {
+    const reached = deferred<void>();
+    const status = vi.fn();
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path.endsWith('/ingest')) return json(archivedRecord);
+      if (path.endsWith('/viewport-mesh')) {
+        const signal = init!.signal!;
+        reached.resolve();
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      }
+      return new Response(null, { status: 404 });
+    });
+    const actions = createCadArrivalActions({ setStatus: status });
+    act(() => actions.selectBundleAs(cadBundle));
+    let outcome!: Promise<unknown>;
+    let preparationGeneration!: number;
+    await act(async () => {
+      outcome = actions.ingestSelected({
+        onStarted: (_intent, viewport) => { preparationGeneration = viewport; },
+      }).catch(error => error);
+      await reached.promise;
+    });
+    // The mounted viewport started its own load after preparation applied the record.
+    expect(importedMeshStore.captureGeneration()).toBeGreaterThan(preparationGeneration);
+    expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('/viewport-mesh'))).toHaveLength(1);
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+
+    await act(async () => {
+      activityStore.getSnapshot()[0].cancel!();
+      expect(await outcome).toMatchObject({ name: 'AbortError' });
+      // Allow an uncaught background rejection to reach Vitest's global handler.
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(useCadReturnStore.getState().ingestRecord).toEqual(archivedRecord);
+    expect(status).toHaveBeenLastCalledWith('Display loading stopped. The prepared mesh is retained. Try again to display it.');
+    expect(status.mock.calls.some(([message]) => message?.startsWith('Received'))).toBe(false);
+    expect(activityStore.getSnapshot()).toHaveLength(0);
   });
 
   it.each(['request', 'record', 'viewport'] as const)('lets shared CAD restoration own a mounted viewport during the %s read', async stage => {

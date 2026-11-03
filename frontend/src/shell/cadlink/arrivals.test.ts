@@ -573,6 +573,80 @@ it.each(['viewport-mesh', 'mesh'] as const)('keeps the prepared record and previ
   expect(status).toHaveBeenLastCalledWith(expect.stringContaining('Received'));
 });
 
+it('drops a superseded display while the next selection is waiting for settings', async () => {
+  vi.useFakeTimers();
+  const artifact = deferred<Response>();
+  const settings = deferred<Response>();
+  const status = vi.fn();
+  let displaySignal!: AbortSignal;
+  let ingests = 0;
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    if (String(url).endsWith('/ingest')) {
+      ingests += 1;
+      return json(ingests === 1 ? record : { ...record, ingest_id: 'wgi_new' });
+    }
+    if (String(url).includes(`/ingest/${record.ingest_id}/`)) {
+      displaySignal = init!.signal!;
+      return artifact.promise;
+    }
+    if (String(url).endsWith('/viewport-mesh')) return new Response(mesh);
+    return settings.promise;
+  });
+  const actions = createCadArrivalActions({ setStatus: status }, fetcher);
+  actions.selectBundleAs(bundle);
+  const first = actions.ingestSelected().catch(error => error);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(displaySignal).toBeDefined();
+
+  actions.selectBundleAs(newer, 'wgl_new');
+  const second = actions.ingestSelected();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(useCadReturnStore.getState().setupLoading).toBe(true);
+  expect(ingests).toBe(1);
+  expect(displaySignal.aborted).toBe(false);
+  const feedback = status.mock.calls.length;
+  artifact.resolve(new Response(mesh));
+  const superseded = await first;
+  const staleFeedback = status.mock.calls.slice(feedback);
+  const staleScene = importedMeshStore.getSnapshot().cad;
+
+  settings.resolve(json({ setup: null }));
+  await second;
+  expect(superseded).toBeInstanceOf(SupersededError);
+  expect(staleFeedback).toEqual([]);
+  expect(staleScene).toBeNull();
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(newer.bundlePath);
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_new');
+});
+
+it.each(['document', 'ingest intent', 'request', 'unmount', 'receipt'] as const)(
+  'drops display success after its %s owner changes', async change => {
+    vi.useFakeTimers();
+    const display = deferred<void>();
+    const show = vi.fn(() => display.promise);
+    const status = vi.fn();
+    const ingestRequest = { current: 0 };
+    const mounted = { current: true };
+    let current = true;
+    const actions = createCadArrivalActions({ showIngestedMesh: show, setStatus: status, ingestRequest, mounted },
+      async () => json(record));
+    actions.selectBundleAs(bundle);
+    const outcome = actions.ingestSelected({ isCurrent: () => current }).catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(show).toHaveBeenCalledOnce();
+
+    if (change === 'document') useDesignStore.getState().replaceDocument(designForFamily('ICW'));
+    else if (change === 'ingest intent') useCadReturnStore.getState().beginIngestIntent();
+    else if (change === 'request') ingestRequest.current += 1;
+    else if (change === 'unmount') mounted.current = false;
+    else current = false;
+    const feedback = status.mock.calls.length;
+    display.resolve();
+    expect(await outcome).toBeInstanceOf(SupersededError);
+    expect(status).toHaveBeenCalledTimes(feedback);
+  },
+);
+
 it('checks Stop before reporting success even when a display adapter ignores cancellation', async () => {
   vi.useFakeTimers();
   const display = deferred<void>();
