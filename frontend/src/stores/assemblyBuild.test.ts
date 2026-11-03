@@ -16,8 +16,9 @@ const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '
 
 function deferredFetcher() {
   const pending: Array<{ body: Record<string, unknown>; resolve: (value: Response) => void }> = [];
-  const fetcher = ((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>(resolve => {
+  const fetcher = ((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
     pending.push({ body: JSON.parse(String(init?.body)), resolve });
+    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
   })) as typeof fetch;
   const answer = (index: number, prepared: Record<string, unknown> | null, status = 200) => pending[index].resolve(new Response(
     JSON.stringify(status !== 200 ? { error: { code: 'assembly_refused', message: 'Set an enclosure depth.' } }
@@ -94,6 +95,52 @@ describe('assembly background build', () => {
     expect(useDesignModelStore.getState()).toBe(model);
     expect(activityStore.getSnapshot()).toEqual([]);
     expect(activityStore.typicalMs('assembly-build')).toBeNull();
+  });
+
+  it.each([true, false])('Stop on an overlapping build never restores a busy snapshot (older settled=%s)', async olderSettled => {
+    const { fetcher, answer } = deferredFetcher();
+    const initial = requestAssemblyBuild(fetcher);
+    answer(0, record('retained'));
+    await initial;
+    const model = useDesignModelStore.getState();
+    const edit = (gap_mm: number) => {
+      const assembly = useDesignStore.getState().design.assembly!;
+      commitAssembly(setPlacement(assembly, assembly.woofers![0].id, { anchor: 'below', gap_mm }));
+    };
+    edit(20);
+    const first = requestAssemblyBuild(fetcher);
+    edit(30);
+    const second = requestAssemblyBuild(fetcher);
+    const stopSecond = activityStore.getSnapshot().at(-1)!.cancel!;
+    if (olderSettled) {
+      answer(1, record('discarded'));
+      await expect(first).resolves.toEqual({ status: 'superseded' });
+    }
+    stopSecond();
+    await expect(second).resolves.toEqual({ status: 'superseded' });
+    expect(useAssemblyBuildStore.getState()).toEqual({ status: 'idle', requested: null, refusal: null, failureDetail: null });
+    expect(useDesignModelStore.getState()).toBe(model);
+    if (!olderSettled) {
+      answer(1, record('discarded'));
+      await expect(first).resolves.toEqual({ status: 'superseded' });
+    }
+    expect(activityStore.getSnapshot()).toEqual([]);
+    const retry = requestAssemblyBuild(fetcher);
+    answer(3, record('retry'));
+    await expect(retry).resolves.toMatchObject({ status: 'published' });
+    expect(useAssemblyBuildStore.getState().status).toBe('published');
+  });
+
+  it('Stop after document replacement cannot restore the old build state', async () => {
+    const { fetcher } = deferredFetcher();
+    const build = requestAssemblyBuild(fetcher);
+    const stop = activityStore.getSnapshot()[0].cancel!;
+    useDesignStore.getState().replaceDocument(designForFamily('OSSE'));
+    const replaced = useAssemblyBuildStore.getState();
+    stop();
+    await expect(build).resolves.toEqual({ status: 'superseded' });
+    expect(useAssemblyBuildStore.getState()).toEqual(replaced);
+    expect(activityStore.getSnapshot()).toEqual([]);
   });
 
   it('publishes only the newest captured revision, whatever order answers arrive in', async () => {

@@ -110,7 +110,9 @@ async function compileRequested(design: DesignDocument, requested: NonNullable<A
       }, fetcher, signal);
     }).catch(error => {
       if (!isAbortError(error)) throw error;
-      if (owns()) useAssemblyBuildStore.setState(before);
+      // An older build can settle while this one runs; its busy snapshot is
+      // never a valid state to restore. The prepared preview lives separately.
+      if (owns()) useAssemblyBuildStore.setState(before.status === 'building' ? { ...IDLE } : before);
       return { status: 'superseded' as const };
     });
     if (!owns()) return { status: 'superseded' };

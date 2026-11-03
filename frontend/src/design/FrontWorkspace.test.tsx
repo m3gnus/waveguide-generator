@@ -4,7 +4,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FRONT_CONTEXT_LIMIT_MS } from '../api/assembly';
 import fixture from '../sketch/adapters/frontView.fixture.json';
-import { addWoofer, emptyAssembly, type DesignAssembly } from '../stores/assembly';
+import { addWoofer, commitAssembly, emptyAssembly, setPlacement, type DesignAssembly } from '../stores/assembly';
+import { requestAssemblyBuild } from '../stores/assemblyBuild';
+import { activityStore } from '../shell/activity';
+import { deferred } from '../shell/cadlink/selection.fixtures';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { FRONT_CONTEXT_DELAY_MS, FrontWorkspace, FrontWorkspaceLauncher, openFrontWorkspace, closeFrontWorkspace } from './FrontWorkspace';
 
@@ -64,6 +67,28 @@ async function mount(onClose = vi.fn()) {
 }
 
 describe('front workspace', () => {
+  it('enables Build after Stop on a newer overlapping build whose predecessor has settled', async () => {
+    const older = deferred<Response>();
+    let calls = 0;
+    const compile: typeof fetch = (_url, init) => {
+      if (++calls === 1) return older.promise;
+      return new Promise((_resolve, reject) => {
+        const signal = init!.signal!;
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    };
+    const first = requestAssemblyBuild(compile);
+    commitAssembly(setPlacement(assembly(), W1, { anchor: 'below', gap_mm: 30 }));
+    const second = requestAssemblyBuild(compile);
+    older.resolve(new Response(JSON.stringify({ status: 'superseded' })));
+    await first;
+    activityStore.getSnapshot().at(-1)!.cancel!();
+    await second;
+    await mount();
+    expect(button('Build').disabled).toBe(false);
+    expect(activityStore.getSnapshot()).toEqual([]);
+  });
+
   it('submits through the shared solve control and shows the submitted words', async () => {
     const solve = vi.fn().mockResolvedValue('submitted');
     solveControl.current = { solve, disabled: false, title: 'Solve the prepared imported mesh', actionError: null };
