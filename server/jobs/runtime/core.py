@@ -4626,12 +4626,8 @@ class JobRuntime:
     async def _fail_job(self, job_id: str, message: str) -> None:
         if not message.strip():
             message = FAILED_WITHOUT_DETAIL_MESSAGE
-        self._partial_results.pop(job_id, None)
-        await self._discard_channel_bases(job_id)
-        await self._discard_radiation_impedance(job_id)
-        await self._discard_fem_field(job_id)
         try:
-            event = self._transition(
+            changed, event = self.store.update_job_with_event(
                 job_id,
                 {
                     "status": "error",
@@ -4642,11 +4638,17 @@ class JobRuntime:
                 },
                 "failed",
                 {"message": message},
+                allowed_statuses=ACTIVE_STATUSES,
             )
         except Exception:
             logger.exception("Could not persist failure state for job %s", job_id)
         else:
-            self.events.publish(event)
+            if changed and event is not None:
+                self._partial_results.pop(job_id, None)
+                await self._discard_channel_bases(job_id)
+                await self._discard_radiation_impedance(job_id)
+                await self._discard_fem_field(job_id)
+                self.events.publish(event)
 
         try:
             await self._flush_runtime_update(job_id, forget=True)

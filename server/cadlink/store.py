@@ -2751,6 +2751,7 @@ class CadLinkStore:
         requested: SaveIdentity | None,
         design_uid: str | None,
         prepare: Callable[[], tuple[SaveIdentity, str]],
+        *, cancel_cb: Callable[[], None] | None = None,
     ) -> Iterator[tuple[SaveIdentity, str]]:
         """Undo this Send's unpublished save on Stop, preserving newer writers.
 
@@ -2764,10 +2765,12 @@ class CadLinkStore:
         # its save, rather than capturing a head that Stop can still rewind.
         with ExitStack() as locks:
             if requested is not None:
-                locks.enter_context(self._export_build_lock(requested.lineage_id))
-                locks.enter_context(self._export_build_lock(requested.design_id))
+                locks.enter_context(self._cancellable_export_lock(requested.lineage_id, cancel_cb))
+                locks.enter_context(self._cancellable_export_lock(requested.design_id, cancel_cb))
             self.initialize()
             with self._lock, self._transaction():
+                if cancel_cb is not None:
+                    cancel_cb()
                 before = self.get_design(requested.design_id) if requested else None
                 lineage = requested.lineage_id if requested else None
                 names_before = self.get_lineage_cad_names(lineage) if lineage else None
@@ -2780,8 +2783,8 @@ class CadLinkStore:
                 }
                 identity, slug = prepare()
                 if requested is None:
-                    locks.enter_context(self._export_build_lock(identity.lineage_id))
-                    locks.enter_context(self._export_build_lock(identity.design_id))
+                    locks.enter_context(self._cancellable_export_lock(identity.lineage_id, cancel_cb))
+                    locks.enter_context(self._cancellable_export_lock(identity.design_id, cancel_cb))
                 committed = self.get_design(identity.design_id)
                 names_committed = self.get_lineage_cad_names(identity.lineage_id)
                 keys = list(dict.fromkeys([*keys, f"lineage:{identity.lineage_id}"]))
@@ -2868,8 +2871,7 @@ class CadLinkStore:
                 "provide exactly one of manifest_json, manifest_builder, or export_builder"
             )
         self.initialize()
-        build_lock = self._export_build_lock(design_id)
-        with build_lock:
+        with self._cancellable_export_lock(design_id, cancel_cb):
             if cancel_cb is not None:
                 cancel_cb()
             now = created_at or utc_now()
@@ -3031,6 +3033,23 @@ class CadLinkStore:
         key = (database, design_id)
         with _EXPORT_BUILD_LOCKS_GUARD:
             return _EXPORT_BUILD_LOCKS.setdefault(key, threading.RLock())
+
+    @contextmanager
+    def _cancellable_export_lock(
+        self, identity: str, cancel_cb: Callable[[], None] | None,
+    ) -> Iterator[None]:
+        lock = self._export_build_lock(identity)
+        while True:
+            if cancel_cb is not None:
+                cancel_cb()
+            if lock.acquire(timeout=0.05):
+                break
+        try:
+            if cancel_cb is not None:
+                cancel_cb()
+            yield
+        finally:
+            lock.release()
 
     def get_onshape_link(
         self, design_id: str, account_id: str | None = None

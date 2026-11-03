@@ -33,15 +33,50 @@ const PAGE_SESSION = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now()}-${
 
 export const useAssemblyBuildStore = create<AssemblyBuildState>(() => ({ ...IDLE }));
 
-/** What a build is keyed by: the portable design, without directivity or solve settings. */
+/** The full captured document, used by run freshness independently of mesh reuse. */
 export function assemblyContentKey(design: DesignDocument): string | null {
   return designContentKey(design, '', { polar: { config: null }, solve: null });
+}
+
+/** Prepared-geometry eligibility, separate from the full document/run content key.
+ * Only known setup fields are removed. The backend's compile_spec remains the
+ * geometry identity owner; shared edit cases test this conservative classification.
+ */
+export function assemblyGeometryKey(design: DesignDocument): string | null {
+  const geometry = structuredClone(design);
+  if (geometry.assembly) {
+    delete geometry.assembly.drivers;
+    delete geometry.assembly.drive_voltage_v;
+    delete geometry.assembly.crossover;
+    geometry.assembly.woofers?.forEach(woofer => { woofer.label = ''; });
+    geometry.assembly.signal_groups?.forEach(group => {
+      group.label = '';
+      group.members.forEach(member => {
+        delete member.weight;
+        delete member.delay_ms;
+        delete member.invert;
+      });
+    });
+  }
+  const sweep = ['simulation.f1', 'simulation.f2', 'simulation.num_frequencies'];
+  geometry.simulation = { ...geometry.simulation, f1: 0, f2: 0, num_frequencies: 0 };
+  geometry._absent = geometry._absent?.filter(path => !sweep.includes(path));
+  if (geometry._expressions) sweep.forEach(path => { delete geometry._expressions![path]; });
+  return designContentKey(geometry, '', { polar: { config: null }, solve: null });
 }
 
 /** Whether the last valid compile is the design on screen. */
 export function designModelCurrent(design: DesignDocument, slot: ImportedModelState = useDesignModelStore.getState()): boolean {
   const key = assemblyContentKey(design);
   return slot.phase === 'ready' && key !== null && slot.authoring?.contentKey === key
+    && slot.authoring.load === currentDocumentLoad();
+}
+
+/** Whether the prepared geometry can be reused for this document's current setup. */
+export function designModelGeometryCurrent(design: DesignDocument, slot: ImportedModelState = useDesignModelStore.getState()): boolean {
+  if (slot.authoring?.geometryKey === undefined) return designModelCurrent(design, slot);
+  const key = assemblyGeometryKey(design);
+  return slot.phase === 'ready' && key !== null && slot.authoring.geometryKey === key
     && slot.authoring.load === currentDocumentLoad();
 }
 
@@ -83,10 +118,16 @@ export function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promise<Ass
 /** The build of the design on screen: the last one when it still matches, else a new or running one. */
 export function prepareDesignModel(fetcher: typeof fetch = fetch): Promise<AssemblyBuildResult | null> {
   const state = useAssemblyBuildStore.getState();
-  const { design } = useDesignStore.getState();
+  const { design, designRevision } = useDesignStore.getState();
   const slot = useDesignModelStore.getState();
   const record = designPreparedRecord();
-  if (record && slot.model && state.status !== 'building' && designModelCurrent(design, slot)) {
+  if (record && slot.model && state.status !== 'building' && designModelGeometryCurrent(design, slot)) {
+    if (!designModelCurrent(design, slot)) {
+      adoptDesignBuild({ record, model: slot.model }, {
+        designUid: useDocumentStore.getState().designUid ?? null, revision: designRevision,
+        load: currentDocumentLoad(), contentKey: assemblyContentKey(design), geometryKey: assemblyGeometryKey(design),
+      });
+    }
     installAssemblyScene(slot.model.display_name || 'Assembly', record);
     return Promise.resolve({ status: 'published', reused: true, model: slot.model, prepared: record });
   }
@@ -122,6 +163,7 @@ async function compileRequested(design: DesignDocument, requested: NonNullable<A
     if (result.status === 'published') {
       adoptDesignBuild({ record: result.prepared, model: result.model }, {
         designUid: designUid ?? null, revision: designRevision, load, contentKey: requested.contentKey,
+        geometryKey: assemblyGeometryKey(design),
       });
       installAssemblyScene(result.model.display_name || 'Assembly', result.prepared);
       useAssemblyBuildStore.setState({ status: 'published', refusal: null });

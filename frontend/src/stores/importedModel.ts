@@ -63,6 +63,7 @@ export interface AuthoringLink {
   revision: number;
   load: number;
   contentKey: string | null;
+  geometryKey?: string | null;
 }
 
 export interface ImportedModelState {

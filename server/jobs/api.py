@@ -1226,6 +1226,7 @@ def mount_jobs(
     from server.jobs.auto_export import AutoExportMiddleware, AutoExportOwner, router_for
 
     export_owner = AutoExportOwner(runtime)
+    application.router.add_event_handler("shutdown", export_owner.shutdown)
     application.add_middleware(AutoExportMiddleware, owner=export_owner)
     application.include_router(router_for(export_owner))
     application.state.jobs_runtime = runtime

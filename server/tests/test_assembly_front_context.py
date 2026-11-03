@@ -78,6 +78,24 @@ def resolve(dump):
     return {key: context[key] for key in ("mouth_bottom_mm", "mouth_top_mm", "woofers")}
 
 
+@pytest.mark.parametrize(("name", "resolutions"), [("ordinary", 1), ("ath-envelope", 2)])
+def test_front_context_reuses_resolved_geometry_without_changing_its_answer(name, resolutions, monkeypatch):
+    from hornlab_mesher import config_builder
+
+    cases = json.loads((Path(__file__).parent / "fixtures/assembly_front_context_resolved.json").read_text())
+    case = cases[name]
+    calls = []
+    original = config_builder.resolve_geometry
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(config_builder, "resolve_geometry", counted)
+    assert _assembly_front_context_sync(case["design"]) == case["context"]
+    assert len(calls) == resolutions
+
+
 def fixture():
     return {
         "before": {"assembly": BEFORE, "context": resolve(BEFORE)},
