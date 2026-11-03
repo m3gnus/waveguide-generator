@@ -59,6 +59,7 @@ export async function prepareDesignAssembly(fetcher: typeof fetch = fetch): Prom
     const [problem] = context ? [...placementProblems(design.assembly, { context, assembly: design.assembly }).values()].flat() : [];
     if (problem) throw new Error(`${problem} Open Sources and baffle to fix it.`);
     const built = await requestAssemblyBuild(fetcher);
+    if (built?.status === 'cancelled') throw new DOMException('Stopped', 'AbortError');
     assertCurrent();
     if (built?.status !== 'published') throw new Error('A newer revision of this design is being built. Solve again when it is ready.');
   }

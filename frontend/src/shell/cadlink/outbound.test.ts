@@ -15,6 +15,7 @@ import projectSource from '../CadProjectPanel.tsx?raw';
 import runSource from '../../jobs/RunExportControl.tsx?raw';
 import { activityStore } from '../activity';
 import * as caughtErrors from './caughtErrors';
+import * as replacementCheck from '../../design/replacementCheck';
 
 const controllers: ReturnType<typeof createCadOutboundController>[] = [];
 const connections: ReturnType<typeof createCadConnectionStore>[] = [];
@@ -347,17 +348,24 @@ describe.each(['file', 'cad'] as const)('send guard begun on imported %s', (kind
 });
 
 
-it('Stop on Send ends with Stopped and records no CAD error or identity', async () => {
+it.each(['ack first', 'POST first'] as const)('Stop on Send ends with Stopped and keeps sent-copy evidence (%s)', async order => {
   activityStore.reset();
   const report = vi.spyOn(caughtErrors, 'reportCadAutomationError');
+  const remember = vi.spyOn(replacementCheck, 'rememberSentCopy');
+  const post = deferred<Response>();
   let signal: AbortSignal | undefined;
   const fetcher = vi.fn<typeof fetch>((url, init) => {
     if (String(url).endsWith('/wglink')) {
       signal = init!.signal!;
-      return new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }));
+      signal.addEventListener('abort', () => post.reject(signal!.reason), { once: true });
+      return post.promise;
     }
     // The server accepts a Stop that arrives before the bundle's point of no return.
-    if (String(url).includes('/api/operation-progress/') && init?.method === 'DELETE') return Promise.resolve(new Response(null, { status: 204 }));
+    if (String(url).includes('/api/operation-progress/') && init?.method === 'DELETE') {
+      if (order === 'ack first') return Promise.resolve(new Response(null, { status: 204 }));
+      post.resolve(json({ detail: 'Operation was cancelled.' }, 499));
+      return new Promise((_resolve, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true }));
+    }
     return Promise.resolve(json({ selected: true }));
   });
   const { controller } = setup(undefined, fetcher);
@@ -371,5 +379,28 @@ it('Stop on Send ends with Stopped and records no CAD error or identity', async 
   expect(useDocumentStore.getState().identity).toEqual(before);
   expect(useCadSendOutcome.getState().outcome).toMatchObject({ tone: 'status', text: 'Stopped' });
   expect(report).not.toHaveBeenCalled();
+  expect(remember).not.toHaveBeenCalled();
+  expect(activityStore.getSnapshot()).toEqual([]);
+});
+
+it('adopts the committed Send outcome when Stop returns 409', async () => {
+  activityStore.reset();
+  const post = deferred<Response>();
+  let signal: AbortSignal | undefined;
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    if (String(url).endsWith('/wglink')) { signal = init!.signal!; return post.promise; }
+    if (init?.method === 'DELETE') return new Response(null, { status: 409 });
+    return json({ selected: true });
+  });
+  const { controller } = setup(undefined, fetcher);
+  const pending = controller.sendWgToFusion();
+  await vi.waitFor(() => expect(signal).toBeDefined());
+  activityStore.getSnapshot()[0].cancel!();
+  await vi.waitFor(() => expect(activityStore.getSnapshot()[0].cancel).toBeNull());
+  expect(signal?.aborted).toBe(false);
+  post.resolve(json(exported));
+  await expect(pending).resolves.toEqual(exported);
+  expect(useDocumentStore.getState().identity).toEqual(exported.identity);
+  expect(useCadSendOutcome.getState().outcome).toMatchObject({ tone: 'status', text: expect.stringContaining('The model is ready') });
   expect(activityStore.getSnapshot()).toEqual([]);
 });

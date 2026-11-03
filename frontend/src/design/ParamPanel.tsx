@@ -1,6 +1,7 @@
 import { usesCurrentAthImport } from './athImportVersion';
 import { Notice } from '../shell/Notice';
 import { importedDriverLabel, liveAssemblySimulationActive, useImportedSimulationSetup } from '../stores/importedSimulationSetup';
+import { assemblyRadiatorLabel } from '../stores/assemblySimulation';
 import { sourceRoleLabel } from '../model/cadLabels';
 import { useDeveloperDetails } from '../prefs/preferences';
 import { osseFeatures, OSSE_SWITCH_NOTICE } from './osseFeatures';
@@ -919,7 +920,7 @@ function CadFrequencySweep() {
 /**
  * Per-channel driver setup.
  *
- * One card per driver group, carrying motion and the shared driver picker.
+ * One card per shared driver choice, or per physical assembly radiator.
  * There is no driver on/off switch and no source-to-channel assignment UI any
  * more: every source drives its own default channel, and a channel is
  * voltage-driven exactly when a driver is present on it — picked from the
@@ -931,7 +932,8 @@ function CadDriveChannels() {
   // radiator's motion (the horn's classic source, woofers axial along +Z), and
   // only woofers can carry a driver. Everything else is the imported setup.
   const designAssembly = state.input === 'assembly' && liveAssemblySimulationActive();
-  const label = (id: string) => state.input === 'cad' ? id : importedDriverLabel(state, id);
+  const label = (id: string) => designAssembly ? assemblyRadiatorLabel(useDesignStore.getState().design, id)
+    : state.input === 'cad' ? id : importedDriverLabel(state, id);
   const sources = state.sources;
   const activeSources = sources.filter((source) => !state.skippedSourceIds.includes(source.id));
   // The coupled campaign writes its derived output to a reserved channel id.
@@ -959,18 +961,20 @@ function CadDriveChannels() {
         </select></label>;
     })}
     <div className="cad-channel-list">
-      {state.driverGroups.map((group) => {
-        const channel = state.driveChannels.find(channel => channel.id === group.channelIds[0])!;
+      {state.driverGroups.flatMap(group => (designAssembly ? group.channelIds : group.channelIds.slice(0, 1)).map(channelId => {
+        const channel = state.driveChannels.find(channel => channel.id === channelId)!;
+        // Assembly signal membership does not share its independent drivers.
+        const sharedDrivers = !designAssembly && group.channelIds.length > 1;
         const driverForm = state.channelDrivers[channel.id];
         // Live assemblies persist only woofer exterior transducers, not the
         // legacy channelDrivers edited by ChannelDriverPicker.
         const driverEligible = !designAssembly && channelAcceptsDriver(channel);
         const channelName = label(channel.id);
         const hornSource = designAssembly && channel.id === HF_RADIATOR_ID;
-        return <div className="cad-channel" data-channel-id={channel.id} data-driver-group-id={group.id} key={group.id}>
+        return <div className="cad-channel" data-channel-id={channel.id} data-driver-group-id={group.id} key={channel.id}>
           <div className="cad-channel-summary"><span>{state.input !== 'cad' ? channelName
             : group.channelIds.length > 1 ? sourceRoleLabel(activeSources.find(source => source.id === channel.source_ids[0])?.role ?? '', { driver: true }) : cadChannelLabel(state, channel.id)}</span></div>
-          {group.channelIds.length > 1 && <p className="cad-driver-hint">{group.channelIds.length} surfaces · identical drivers. Each surface gets its own driver, wired to one amplifier channel.</p>}
+          {sharedDrivers && <p className="cad-driver-hint">{group.channelIds.length} surfaces · identical drivers. Each surface gets its own driver, wired to one amplifier channel.</p>}
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
             .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} disabled={!!channel.exterior_transducer} value={channel.id} onChange={(event) => state.setSourceChannel?.(sourceId, event.target.value)}><option value={channel.id} disabled>{channel.id} (unavailable)</option>{channelIds.map((id) => <option value={id} key={id} disabled={state.driveChannels.some(target => target.id === id && !!target.exterior_transducer)}>{id}</option>)}</select></div>)}
@@ -979,10 +983,10 @@ function CadDriveChannels() {
           {!hornSource && <details className="cad-channel-more" open={channel.exterior_transducer ? true : undefined}><summary>More</summary>
           {!designAssembly && <><div data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channelName}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
           <div className="cad-channel-hint">Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.</div></>}
-          <label className="cad-driver-hint"><input type="checkbox" aria-label={`Solve driver in BEAT for ${channelName}`} checked={!!channel.exterior_transducer} disabled={group.channelIds.length > 1}
+          <label className="cad-driver-hint"><input type="checkbox" aria-label={`Solve driver in BEAT for ${channelName}`} checked={!!channel.exterior_transducer} disabled={sharedDrivers}
             onChange={(event) => state.setExteriorTransducer(channel.id, event.target.checked ? { version: 1, motion_axis: [0, 0, 1] } : undefined)}/>
             Solve driver in BEAT</label>
-          {group.channelIds.length > 1 && <p className="cad-driver-hint">Drive the surfaces separately to model each driver in BEAT.</p>}
+          {sharedDrivers && <p className="cad-driver-hint">Drive the surfaces separately to model each driver in BEAT.</p>}
           {channel.exterior_transducer && <>
             <p className="cad-driver-hint">Complete outward solids only. Enter bare Mmd, excluding air load; datasheet Mms is not Mmd. Other drivers are shorted for each excitation.</p>
             <ExteriorDriverLibraryPicker channel={channel} displayName={channelName}
@@ -1006,7 +1010,7 @@ function CadDriveChannels() {
             roleHint={activeSources.find((source) => source.id === channel.source_ids[0])?.role}
           />}
         </div>;
-      })}
+      }))}
     </div>
     {state.driveChannels.some((channel) => channel.exterior_transducer || (channelAcceptsDriver(channel) && channelDriverPresent(state.channelDrivers[channel.id])))
       && <>

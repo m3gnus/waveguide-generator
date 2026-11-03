@@ -527,6 +527,7 @@ it.each(['Stop', 'deadline'] as const)('aborts the running viewport download via
   const actions = createCadArrivalActions({}, fetcher);
   actions.selectBundleAs(bundle);
   const pending = actions.ingestSelected();
+  const outcome = pending.catch(error => error);
   await vi.advanceTimersByTimeAsync(0);
   expect(signal.aborted).toBe(false);
   const viewportSignal = signal;
@@ -535,10 +536,58 @@ it.each(['Stop', 'deadline'] as const)('aborts the running viewport download via
   else await vi.advanceTimersByTimeAsync(REST_READ_TIMEOUT_MS);
   expect(viewportSignal.aborted).toBe(true);
   expect(viewportSignal.reason.name).toBe(via === 'Stop' ? 'AbortError' : 'TimeoutError');
-  // Artifact display failures are advisory; the existing loader settles them.
-  await pending;
+  if (via === 'Stop') expect(await outcome).toMatchObject({ name: 'AbortError' });
+  else expect(await outcome).toEqual(record); // Ordinary display failures stay advisory.
   expect(activityStore.getSnapshot()).toHaveLength(0);
   expect(activityStore.typicalMs('cad-import')).toBeNull();
+});
+
+it.each(['viewport-mesh', 'mesh'] as const)('keeps the prepared record and previous scene after stopping %s, and permits retry', async target => {
+  vi.useFakeTimers();
+  const status = vi.fn(); const failure = vi.fn();
+  let attempts = 0;
+  let signal!: AbortSignal;
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    if (String(url).endsWith('/ingest')) { attempts += 1; return json(record); }
+    if (attempts > 1) return new Response(mesh);
+    if (!String(url).endsWith(`/${target}`)) return new Response(null, { status: 202 });
+    signal = init!.signal!;
+    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  });
+  const actions = createCadArrivalActions({ setStatus: status, setIngestError: failure }, fetcher);
+  actions.selectBundleAs(bundle);
+  const previous = { source: 'cad', ingestId: 'previous', name: 'Previous model' } as never;
+  importedMeshStore.setCad(previous);
+  const outcome = actions.ingestSelected().catch(error => error);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(signal).toBeDefined();
+  activityStore.getSnapshot()[0].cancel!();
+  expect(await outcome).toMatchObject({ name: 'AbortError' });
+  expect(useCadReturnStore.getState().ingestRecord).toEqual(record);
+  expect(importedMeshStore.getSnapshot().cad).toBe(previous);
+  expect(status).toHaveBeenLastCalledWith('Display loading stopped. The prepared mesh is retained. Try again to display it.');
+  expect(failure).toHaveBeenLastCalledWith('Display loading stopped. The prepared mesh is retained. Try again to display it.', { recorded: false, retry: true, diagnostic: null });
+  expect(fetcher).toHaveBeenCalledTimes(target === 'mesh' ? 3 : 2);
+  await expect(actions.ingestSelected()).resolves.toEqual(record);
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+  expect(status).toHaveBeenLastCalledWith(expect.stringContaining('Received'));
+});
+
+it('checks Stop before reporting success even when a display adapter ignores cancellation', async () => {
+  vi.useFakeTimers();
+  const display = deferred<void>();
+  const show = vi.fn(() => display.promise);
+  const status = vi.fn();
+  const actions = createCadArrivalActions({ showIngestedMesh: show, setStatus: status }, async () => json(record));
+  actions.selectBundleAs(bundle);
+  const outcome = actions.ingestSelected().catch(error => error);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(show).toHaveBeenCalledOnce();
+  activityStore.getSnapshot()[0].cancel!();
+  display.resolve();
+  expect(await outcome).toMatchObject({ name: 'AbortError' });
+  expect(status).toHaveBeenLastCalledWith(expect.stringContaining('Display loading stopped'));
+  expect(status.mock.calls.some(([message]) => message?.startsWith('Received'))).toBe(false);
 });
 
 it.each([false, true])('tracks the full Onshape return and mesh load (failure=%s)', async fail => {

@@ -50,7 +50,7 @@ import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crosso
 import { solveAttention, useJobAttention, useRecoveryNoticeAttention } from './solveAttention';
 import { navigationGeneration, workspaceNavigation } from './workspaceNavigation';
 import { solvedCadModels } from './cadlink/solvedModel';
-import { failureWords, ProgramFault, refusalText } from '../api/httpError';
+import { failureWords, isAbortError, ProgramFault, refusalText } from '../api/httpError';
 
 /** Reveal an action failure only while the user's click still owns attention.
  * Editing, a drag, or later navigation suppresses this reveal permanently;
@@ -275,6 +275,7 @@ const RESTORED_INPUT_HINTS: Readonly<Record<string, string>> = {
 /** A refused Solve, in the words the user acts on; "no engine here" stays its own kind.
  * The envelope's code stays on the error (`code`), never at the front of its words. */
 export function importedSolveError(error: unknown, restored = false): unknown {
+  if (isAbortError(error)) return error;
   if (error instanceof SolveSubmissionRefused && error.code !== null) {
     const prefix = `${error.code}: `;
     const words = error.message.startsWith(prefix) ? error.message.slice(prefix.length) : error.message;

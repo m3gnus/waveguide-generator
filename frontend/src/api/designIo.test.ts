@@ -606,14 +606,20 @@ describe('Send to CAD requests', () => {
     baseEditVersion: 8,
   };
 
-  it('Stop aborts the Send request before any delivery result is adopted', async () => {
+  it.each(['ack first', 'POST first'] as const)('Stop aborts the Send before any delivery result is adopted (%s)', async order => {
     activityStore.reset();
     let signal: AbortSignal | null | undefined;
+    let finishPost!: (response: Response) => void;
     const fetcher: typeof fetch = async (url, init) => {
       if (url === '/api/cad-workspace/path') return new Response(JSON.stringify({ selected: true }));
-      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+      if (init?.method === 'DELETE') {
+        if (order === 'ack first') return new Response(null, { status: 204 });
+        finishPost(new Response(JSON.stringify({ detail: 'Operation was cancelled.' }), { status: 499 }));
+        return new Promise((_resolve, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true }));
+      }
       signal = init?.signal;
-      return new Promise((_resolve, reject) => {
+      return new Promise((resolve, reject) => {
+        finishPost = resolve;
         signal?.addEventListener('abort', () => reject(signal?.reason), { once: true });
       });
     };

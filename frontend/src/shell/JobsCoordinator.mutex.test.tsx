@@ -66,6 +66,7 @@ import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
 import { SolverMeshTooLarge } from '../api/solverMesh';
 import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
+import { activityStore } from './activity';
 
 // Exercise the toolbar alongside the same solve status that Results owns.
 function SolveActions() {
@@ -665,6 +666,28 @@ describe('solve invocation mutex', () => {
     expect(bodies).toEqual([JSON.stringify(planSubmission(designAssemblySnapshot()))]);
     expect(mocks.prepareDesignAssembly).not.toHaveBeenCalled();
     client.clear();
+  });
+
+  it('reports Stopped when Solve’s assembly build is stopped without submitting', async () => {
+    activityStore.reset();
+    const actual = await vi.importActual<typeof import('../jobs/assemblySolve')>('../jobs/assemblySolve');
+    mocks.prepareDesignAssembly.mockImplementation(() => actual.prepareDesignAssembly());
+    const fetcher = vi.fn<typeof fetch>(async (url, init) => String(url).endsWith('/context')
+      ? json({ minimum_clearance_mm: 0.1, clearances: {} })
+      : new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })));
+    vi.stubGlobal('fetch', fetcher);
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: emptyAssembly() }, 'step');
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    let pending!: Promise<unknown>;
+    await act(async () => { pending = solveControlStore.getSnapshot()!.solve(); });
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    await act(async () => { activityStore.getSnapshot()[0].cancel!(); await pending; });
+    expect(solveControlStore.getSnapshot()!.actionError).toBe('Stopped');
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual(['/api/models/assembly/context', '/api/models/assembly/compile']);
+    expect(activityStore.getSnapshot()).toEqual([]);
   });
 
   it('keeps the build under the press lock and checks its fresh plan before submitting', async () => {

@@ -1,5 +1,30 @@
 import { describe, expect, it, vi } from 'vitest';
-import { deadlineFetch, deadlineSignal } from './deadlineFetch';
+import { deadlineFetch, deadlineSignal, scopedAbortSignals } from './deadlineFetch';
+
+describe('operation-scoped signal composition', () => {
+  it.each([false, true])('forwards the source reason (already aborted=%s)', already => {
+    const source = new AbortController();
+    const reason = new DOMException('Stopped', 'AbortError');
+    if (already) source.abort(reason);
+    const composed = scopedAbortSignals([source.signal]);
+    if (!already) source.abort(reason);
+    expect(composed.signal.reason).toBe(reason);
+    composed.dispose();
+  });
+
+  it('keeps listeners through response bodies and releases them at operation completion', async () => {
+    const source = new AbortController();
+    const removed = vi.spyOn(source.signal, 'removeEventListener');
+    const composed = scopedAbortSignals([source.signal, source.signal]);
+    const response = new Response('body');
+    expect(removed).not.toHaveBeenCalled();
+    expect(await response.text()).toBe('body');
+    composed.dispose();
+    expect(removed).toHaveBeenCalledTimes(1);
+    source.abort();
+    expect(composed.signal.aborted).toBe(false);
+  });
+});
 
 describe('REST read deadlines', () => {
   it('preserves lifetime cancellation and request options', async () => {

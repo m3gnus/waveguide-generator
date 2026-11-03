@@ -3,7 +3,7 @@ import { activityStore } from './activity';
 import { stagedActivity } from './stagedActivity';
 import { deferred } from './cadlink/selection.fixtures';
 
-afterEach(() => { activityStore.reset(); vi.useRealTimers(); });
+afterEach(() => { activityStore.reset(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 it.each(['assembly-build', 'export', 'send-to-cad'] as const)('%s receives every server stage in order and stops polling', async kind => {
   vi.useFakeTimers();
@@ -130,4 +130,40 @@ it('Stop waits for a queued Send to register before aborting its transport', asy
   registered = true;
   await vi.advanceTimersByTimeAsync(200);
   expect(await outcome).toMatchObject({ name: 'AbortError' });
+});
+
+it('bounds a hanging Stop acknowledgement and permits retry without deciding the Send outcome', async () => {
+  vi.useFakeTimers();
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+    const deadline = new AbortController();
+    setTimeout(() => deadline.abort(new DOMException('Deadline expired', 'TimeoutError')), ms);
+    return deadline.signal;
+  });
+  const post = deferred<Response>();
+  let postSignal!: AbortSignal;
+  let deleteSignal!: AbortSignal;
+  let stops = 0;
+  const fetcher: typeof fetch = async (_url, init) => {
+    if (init?.method === 'DELETE') {
+      if (++stops === 2) return new Response(null, { status: 204 });
+      deleteSignal = init.signal!;
+      return new Promise((_resolve, reject) => deleteSignal.addEventListener('abort', () => reject(deleteSignal.reason), { once: true }));
+    }
+    if (init?.method !== 'POST') return new Response(null, { status: 404 });
+    postSignal = init.signal!;
+    postSignal.addEventListener('abort', () => post.reject(postSignal.reason), { once: true });
+    return post.promise;
+  };
+  const pending = stagedActivity({ kind: 'send-to-cad', label: 'Sending' }, fetcher, undefined,
+    async (fetcher, signal) => (await fetcher('/send', { method: 'POST', signal })).text());
+  const outcome = pending.catch(reason => reason);
+  activityStore.getSnapshot()[0].cancel!();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(deleteSignal.aborted).toBe(true);
+  expect(deleteSignal.reason.name).toBe('TimeoutError');
+  expect(postSignal.aborted).toBe(false);
+  expect(activityStore.getSnapshot()).toHaveLength(1);
+  activityStore.getSnapshot()[0].cancel!();
+  expect(await outcome).toMatchObject({ name: 'AbortError' });
+  expect(stops).toBe(2);
 });

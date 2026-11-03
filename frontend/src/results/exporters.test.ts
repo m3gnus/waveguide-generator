@@ -1428,13 +1428,21 @@ it('ends an archive activity on a failed snapshot read', async () => {
 
 it('counts completed formats and keeps the activity through the final workspace write', async () => {
   activityStore.reset();
+  const counts: Array<{ done: number; total: number }> = [];
+  const unsubscribe = activityStore.subscribe(() => {
+    const count = activityStore.getSnapshot()[0]?.progress;
+    if (count && JSON.stringify(counts.at(-1)) !== JSON.stringify(count)) counts.push(count);
+  });
   const written = deferred<Response>();
   const pending = runWorkspaceExportBundle({ jobStem: 'horn', preferences: preferencesStore.getSnapshot(),
-    design: designForFamily('OSSE'), fetcher: async url => String(url).endsWith('/write-export') ? written.promise : new Response('geometry'),
+    design: designForFamily('OSSE'), fetcher: async url => String(url).endsWith('/write-export') ? written.promise
+      : new Response('geometry', { headers: { 'X-WG-Operation-Stages': JSON.stringify({ stages: ['resolve', 'mesh', 'check', 'write'], total: 4 }) } }),
   }, ['step', 'stl']);
   await vi.waitFor(() => expect(activityStore.getSnapshot()[0].progress).toEqual({ done: 2, total: 3 }));
   written.resolve(new Response(JSON.stringify({ directory: 'out', files: ['horn.step', 'horn.stl'] })));
   await pending;
+  unsubscribe();
+  expect(counts).toEqual([0, 1, 2, 3].map(done => ({ done, total: 3 })));
   expect(activityStore.getSnapshot()).toHaveLength(0);
 });
 

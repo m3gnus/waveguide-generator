@@ -5,22 +5,26 @@
 export const REST_READ_TIMEOUT_MS = 30_000;
 export const PLAN_TIMEOUT_MS = 15_000;
 
-/** Compose lifetimes without requiring the newer WebView static helpers. */
-function fallbackAbortSignals(signals: AbortSignal[]): AbortSignal {
+/** Compose lifetimes with explicit disposal after response bodies are consumed. */
+export function scopedAbortSignals(inputs: AbortSignal[]): { signal: AbortSignal; dispose: () => void } {
+  const signals = [...new Set(inputs)];
   const controller = new AbortController();
+  const dispose = () => {
+    for (const signal of signals) signal.removeEventListener('abort', abort);
+  };
   const abort = () => {
     const source = signals.find(signal => signal.aborted);
     if (!source) return;
-    for (const signal of signals) signal.removeEventListener('abort', abort);
+    dispose();
     controller.abort(source.reason);
   };
   if (signals.some(signal => signal.aborted)) abort();
   else for (const signal of signals) signal.addEventListener('abort', abort, { once: true });
-  return controller.signal;
+  return { signal: controller.signal, dispose };
 }
 
 export function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
-  return typeof AbortSignal.any === 'function' ? AbortSignal.any(signals) : fallbackAbortSignals(signals);
+  return typeof AbortSignal.any === 'function' ? AbortSignal.any(signals) : scopedAbortSignals(signals).signal;
 }
 
 export function deadlineSignal(signal?: AbortSignal | null, timeoutMs = REST_READ_TIMEOUT_MS): AbortSignal {
@@ -36,7 +40,7 @@ export function deadlineSignal(signal?: AbortSignal | null, timeoutMs = REST_REA
     () => controller.abort(new DOMException('The request deadline expired', 'TimeoutError')),
     timeoutMs,
   );
-  const composed = signal ? fallbackAbortSignals([signal, controller.signal]) : controller.signal;
+  const composed = signal ? scopedAbortSignals([signal, controller.signal]).signal : controller.signal;
   composed.addEventListener('abort', () => clearTimeout(timer), { once: true });
   return composed;
 }

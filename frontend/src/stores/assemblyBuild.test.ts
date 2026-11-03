@@ -63,7 +63,7 @@ describe('assembly background build', () => {
     const build = requestAssemblyBuild(fetcher);
     expect(useAssemblyBuildStore.getState().status).toBe('building');
     activityStore.getSnapshot()[0].cancel!();
-    await expect(build).resolves.toEqual({ status: 'superseded' });
+    await expect(build).resolves.toEqual({ status: 'cancelled' });
     expect(signal?.aborted).toBe(true);
     expect(classify).toHaveBeenCalledWith(expect.objectContaining({ name: 'AbortError' }));
     classify.mockRestore();
@@ -90,7 +90,7 @@ describe('assembly background build', () => {
     const build = requestAssemblyBuild(fetcher);
     await vi.waitFor(() => expect(reading).toHaveBeenCalledOnce());
     activityStore.getSnapshot()[0].cancel!();
-    await expect(build).resolves.toEqual({ status: 'superseded' });
+    await expect(build).resolves.toEqual({ status: 'cancelled' });
     expect(useAssemblyBuildStore.getState()).toEqual(before);
     expect(useDesignModelStore.getState()).toBe(model);
     expect(activityStore.getSnapshot()).toEqual([]);
@@ -117,7 +117,7 @@ describe('assembly background build', () => {
       await expect(first).resolves.toEqual({ status: 'superseded' });
     }
     stopSecond();
-    await expect(second).resolves.toEqual({ status: 'superseded' });
+    await expect(second).resolves.toEqual({ status: 'cancelled' });
     expect(useAssemblyBuildStore.getState()).toEqual({ status: 'idle', requested: null, refusal: null, failureDetail: null });
     expect(useDesignModelStore.getState()).toBe(model);
     if (!olderSettled) {
@@ -129,6 +129,28 @@ describe('assembly background build', () => {
     answer(3, record('retry'));
     await expect(retry).resolves.toMatchObject({ status: 'published' });
     expect(useAssemblyBuildStore.getState().status).toBe('published');
+  });
+
+  it('Stop on a superseded build leaves the newer build running', async () => {
+    const { fetcher, answer } = deferredFetcher();
+    const first = requestAssemblyBuild(fetcher);
+    const stopFirst = activityStore.getSnapshot()[0].cancel!;
+    const assembly = useDesignStore.getState().design.assembly!;
+    commitAssembly(setPlacement(assembly, assembly.woofers![0].id, { anchor: 'below', gap_mm: 30 }));
+    const second = requestAssemblyBuild(fetcher);
+    const building = useAssemblyBuildStore.getState();
+    const model = useDesignModelStore.getState();
+    stopFirst();
+    await expect(first).resolves.toEqual({ status: 'superseded' });
+    expect(useAssemblyBuildStore.getState()).toBe(building);
+    expect(building.status).toBe('building');
+    expect(useDesignModelStore.getState()).toBe(model);
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    answer(1, record('newer'));
+    await expect(second).resolves.toMatchObject({ status: 'published' });
+    expect(useAssemblyBuildStore.getState().status).toBe('published');
+    expect(useDesignModelStore.getState().prepared?.ingest_id).toBe('newer');
+    expect(activityStore.getSnapshot()).toEqual([]);
   });
 
   it('Stop after document replacement cannot restore the old build state', async () => {

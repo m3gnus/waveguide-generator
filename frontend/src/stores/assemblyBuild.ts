@@ -59,10 +59,11 @@ export function assemblyPreviewLabel(build: Pick<AssemblyBuildState, 'status'>, 
 }
 
 /** The build in flight, so a second ask for the same revision waits for it instead of compiling again. */
-let inFlight: { requested: NonNullable<AssemblyBuildState['requested']>; answer: Promise<AssemblyCompileResult | null> } | null = null;
+type AssemblyBuildResult = AssemblyCompileResult | { status: 'cancelled' };
+let inFlight: { requested: NonNullable<AssemblyBuildState['requested']>; answer: Promise<AssemblyBuildResult | null> } | null = null;
 
 /** Compile the assembly of the design on screen; resolves to what this request learned. */
-export function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promise<AssemblyCompileResult | null> {
+export function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promise<AssemblyBuildResult | null> {
   const { design, designRevision } = useDesignStore.getState();
   if (!design.assembly) {
     useAssemblyBuildStore.setState({ ...IDLE });
@@ -80,7 +81,7 @@ export function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promise<Ass
 }
 
 /** The build of the design on screen: the last one when it still matches, else a new or running one. */
-export function prepareDesignModel(fetcher: typeof fetch = fetch): Promise<AssemblyCompileResult | null> {
+export function prepareDesignModel(fetcher: typeof fetch = fetch): Promise<AssemblyBuildResult | null> {
   const state = useAssemblyBuildStore.getState();
   const { design } = useDesignStore.getState();
   const slot = useDesignModelStore.getState();
@@ -93,7 +94,7 @@ export function prepareDesignModel(fetcher: typeof fetch = fetch): Promise<Assem
 }
 
 async function compileRequested(design: DesignDocument, requested: NonNullable<AssemblyBuildState['requested']>,
-  fetcher: typeof fetch): Promise<AssemblyCompileResult | null> {
+  fetcher: typeof fetch): Promise<AssemblyBuildResult | null> {
   const { designUid, designName } = useDocumentStore.getState();
   const { revision: designRevision, load } = requested;
   const owns = () => {
@@ -110,11 +111,13 @@ async function compileRequested(design: DesignDocument, requested: NonNullable<A
       }, fetcher, signal);
     }).catch(error => {
       if (!isAbortError(error)) throw error;
+      if (!owns()) return { status: 'superseded' as const };
       // An older build can settle while this one runs; its busy snapshot is
       // never a valid state to restore. The prepared preview lives separately.
-      if (owns()) useAssemblyBuildStore.setState(before.status === 'building' ? { ...IDLE } : before);
-      return { status: 'superseded' as const };
+      useAssemblyBuildStore.setState(before.status === 'building' ? { ...IDLE } : before);
+      return { status: 'cancelled' as const };
     });
+    if (result.status === 'cancelled') return result;
     if (!owns()) return { status: 'superseded' };
     if (result.status === 'published') {
       adoptDesignBuild({ record: result.prepared, model: result.model }, {

@@ -7,6 +7,13 @@ const start = { kind: 'export' as const, label: 'Exporting STL' };
 const fetcher = vi.fn<typeof fetch>();
 afterEach(() => { activityStore.reset(); vi.restoreAllMocks(); });
 
+it('lets a standalone nested stage own progress when its parent has no counter', async () => {
+  await activityOperation(start, fetcher, scoped => activityOperation(start, scoped, async (_fetcher, activity) => {
+    activity.progress(2, 4);
+    expect(activityStore.getSnapshot()[0].progress).toEqual({ done: 2, total: 4 });
+  }));
+});
+
 it.each([false, true])('shares a composed operation through settlement (failure=%s)', async fail => {
   const waiting = deferred<void>();
   const started = vi.spyOn(activityStore, 'start');

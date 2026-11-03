@@ -7,6 +7,7 @@ interface Scope {
   completed: boolean;
   cancels: Set<() => void>;
   keys: Set<string>;
+  progressOwner: typeof fetch | null;
 }
 const scopes = new WeakMap<typeof fetch, Scope>();
 const sharedScopes = new Map<string, Scope>();
@@ -23,7 +24,7 @@ export async function activityOperation<T>(
   const parent = scopes.get(fetcher);
   const shared = parent?.active ? parent : key ? sharedScopes.get(key) : undefined;
   const scope = shared ?? {
-    handle: activityStore.start(start), active: true, pending: 0, completed: true, cancels: new Set<() => void>(), keys: new Set<string>(),
+    handle: activityStore.start(start), active: true, pending: 0, completed: true, cancels: new Set<() => void>(), keys: new Set<string>(), progressOwner: null,
   };
   if (key) { sharedScopes.set(key, scope); scope.keys.add(key); }
   const updateCancel = () => scope.handle.setCancel(scope.cancels.size ? () => {
@@ -35,7 +36,12 @@ export async function activityOperation<T>(
   scopes.set(scopedFetch, scope);
   // Steps can fail without throwing (or their caller can recover). Only the
   // last settled step owns ending the shared activity and recording its time.
-  const activity: ActivityHandle = { ...scope.handle, end: (completed = true) => {
+  // The first counter owns progress units for this operation. A bundle claims
+  // them before its children; standalone geometry can still count its stages.
+  const activity: ActivityHandle = { ...scope.handle, progress: (done, total) => {
+    scope.progressOwner ??= scopedFetch;
+    if (scope.progressOwner === scopedFetch) scope.handle.progress(done, total);
+  }, end: (completed = true) => {
     if (!completed) scope.completed = false;
   } };
   try { return await work(scopedFetch, activity); }

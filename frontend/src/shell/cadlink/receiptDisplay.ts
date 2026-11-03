@@ -8,7 +8,7 @@ import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { createCadArrivalActions, SupersededError, returnBelongsToAnotherProject } from './arrivals';
 import type { SolvedModelDisplay } from './solvedModel';
 import { reportCadAutomationError } from './caughtErrors';
-import { failureWords } from '../../api/httpError';
+import { failureWords, isAbortError } from '../../api/httpError';
 
 /** The existing artifact display path is supplied by the shell's display owner.
  * This action owns no parametric-document writes and never submits a solve.
@@ -166,8 +166,14 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       report(receipt, 'accepted', `Received ${name} from Fusion 360.`);
       return true;
     } catch (error) {
-      reportCadAutomationError(`receipt-${progress.phase}`, error, { receipt_id: receipt.receipt_id, ingest_id: receipt.ingest_id });
       if (error instanceof SupersededError || !current()) return superseded();
+      if (isAbortError(error)) {
+        report(receipt, 'display_failed', progress.phase === 'display'
+          ? `Display loading stopped for ${name}. The prepared mesh is retained. Choose Try again to display it.`
+          : `Opening ${name} stopped. Choose Try again to prepare it.`);
+        return true;
+      }
+      reportCadAutomationError(`receipt-${progress.phase}`, error, { receipt_id: receipt.receipt_id, ingest_id: receipt.ingest_id });
       // The shared preparation owner already opened the one ceiling question.
       if (error instanceof CadLinkApiError && error.code === 'mesh_too_large') return true;
       const classifiedFailure = error instanceof CadLinkApiError && !!error.failure;

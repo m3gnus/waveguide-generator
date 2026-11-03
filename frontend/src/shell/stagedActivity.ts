@@ -1,4 +1,4 @@
-import { combineAbortSignals, deadlineFetch } from '../api/deadlineFetch';
+import { combineAbortSignals, deadlineFetch, deadlineSignal } from '../api/deadlineFetch';
 import type { StartActivity } from './activity';
 import { abortableActivity } from './activityOperation';
 
@@ -26,8 +26,8 @@ export function stagedActivity<T>(
       cancelPending = true;
       try {
         while (active) {
-          const response = await deadlineFetch(scoped, `/api/operation-progress/${id}`,
-            { method: 'DELETE', signal: polling.signal }, 1000);
+          const response = await scoped(`/api/operation-progress/${id}`,
+            { method: 'DELETE', signal: deadlineSignal(polling.signal, 1000) });
           if (!active) return;
           if (response.status === 204) { abort(); return; }
           if (response.status === 409) { activity.setCancel(null); return; }
@@ -74,6 +74,9 @@ export function stagedActivity<T>(
       if (start.kind === 'send-to-cad') activity.setCancel(() => { void cancelSend(); });
       activity.progress(0, 4);
       const response = scoped(input, { ...init, headers, signal: requestSignal }).then(response => {
+        // The operation POST can confirm rollback before DELETE's 204 arrives.
+        // Treat that server cancellation as Stop regardless of response order.
+        if (response.status === 499) { abort(); signal.throwIfAborted(); }
         // A fast operation can finish between polls. Its final header carries
         // the very same history, without delaying the result for another GET.
         const completed = response.headers.get('X-WG-Operation-Stages');

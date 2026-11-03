@@ -10,7 +10,7 @@ import { createImportedMeshScene, type ImportedMeshScene } from '../../viewport/
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { parseMSH } from '../../viewport/mshParser';
 import { reportCadAutomationError } from './caughtErrors';
-import { failureWords } from '../../api/httpError';
+import { failureWords, isAbortError } from '../../api/httpError';
 
 function cadTessellation(record: CadReturnIngestRecord): ImportedMeshScene['tessellation'] {
   const metadata = record.mesh?.metadata;
@@ -225,7 +225,8 @@ export async function showIngestedMeshInViewport(
       } else if (result.status === 409) {
         onNotice?.('WG could not load the smoother view of this model, so it is showing the solve mesh.');
       }
-    } catch {
+    } catch (error) {
+      if (isAbortError(error)) throw error;
       // The independent display artifact is advisory; try the solver artifact.
     }
     if (!current()) return;
@@ -252,7 +253,8 @@ export async function showIngestedMeshInViewport(
         if (displayPending) upgradeToDisplayMesh(record, name, fetcher);
         return;
       }
-    } catch {
+    } catch (error) {
+      if (isAbortError(error)) throw error;
       // Neither artifact could be displayed; fall through to drop the old one.
     }
     activity.end(false);

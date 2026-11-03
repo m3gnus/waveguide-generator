@@ -1,4 +1,5 @@
 import { activityOperation } from '../activityOperation';
+import { scopedAbortSignals } from '../../api/deadlineFetch';
 import { cadModelLabel } from '../../model/cadLabels';
 import { waitForCadProjectSettings } from '../../stores/cadProjectSettings';
 import { currentDocumentLoad, isCurrentDocumentLoad } from '../../stores/design';
@@ -23,7 +24,7 @@ import { resolvePreparationTarget } from './preparationTarget';
 import { meshCeilingChoice } from '../../stores/meshCeilingChoice';
 import type { CadIngestFailure } from '../../stores/cadWorkspace';
 import { reportCadAutomationError } from './caughtErrors';
-import { failureWords } from '../../api/httpError';
+import { failureWords, isAbortError } from '../../api/httpError';
 
 export interface RefreshOptions {
   background?: boolean;
@@ -381,19 +382,12 @@ export function createCadArrivalActions(
     const operationFetch: typeof fetch = (input, init) => {
       // Keep Stop connected even when a read supplies its own deadline signal.
       // Retain the connection through body consumption, until the operation ends.
-      const controller = new AbortController();
-      for (const signal of new Set([abortController.signal, init?.signal])) {
-        if (!signal) continue;
-        const abort = () => controller.abort(signal.reason);
-        if (signal.aborted) abort();
-        else {
-          signal.addEventListener('abort', abort, { once: true });
-          signalCleanups.push(() => signal.removeEventListener('abort', abort));
-        }
-      }
-      return (options.fetcher ?? fetcher)(input, { ...init, signal: controller.signal });
+      const composed = scopedAbortSignals([abortController.signal, ...(init?.signal ? [init.signal] : [])]);
+      signalCleanups.push(composed.dispose);
+      return (options.fetcher ?? fetcher)(input, { ...init, signal: composed.signal });
     };
     return activityOperation({ kind: 'cad-import', label: 'Importing the CAD model', cancel: () => abortController.abort() }, operationFetch, async (fetcher) => {
+      let prepared = false;
       try {
         const skipped = new Set(current.skippedSourceIds);
         const record = await ingestReturn({
@@ -416,6 +410,7 @@ export function createCadArrivalActions(
           // The user chose Solve anyway over the triangle ceiling for this model.
           ...(options.meshLimitOverride ? { meshLimitOverride: true } : {}),
         }, fetcher, abortController.signal);
+        abortController.signal.throwIfAborted();
         if (options.isCurrent?.() === false) throw new SupersededError('A newer model selection superseded preparation.');
         options.validate?.(record);
         if (!isCurrentDocumentLoad(documentLoad)
@@ -424,10 +419,9 @@ export function createCadArrivalActions(
           if (request === ingestRequest.current && mounted.current) setStatus(superseded);
           throw new SupersededError(superseded);
         }
+        prepared = true;
         options.onPrepared?.();
         if (request === ingestRequest.current && mounted.current) {
-          const origin = selectedBundle.bundleOrigin === 'onshape' ? 'Onshape' : 'Fusion';
-          setStatus(`Received ${cadModelLabel(selectedBundle)} from ${origin}.`);
           // Before the display, so the viewport adopts the CAD slot rather than
           // loading it invisibly behind the parametric design.
           activateWorkspace();
@@ -442,7 +436,11 @@ export function createCadArrivalActions(
             fetcher,
             viewportGeneration,
           );
+          abortController.signal.throwIfAborted();
+          const origin = selectedBundle.bundleOrigin === 'onshape' ? 'Onshape' : 'Fusion';
+          setStatus(`Received ${cadModelLabel(selectedBundle)} from ${origin}.`);
         }
+        abortController.signal.throwIfAborted();
         return record;
       } catch (reason) {
         if (reason instanceof SupersededError) {
@@ -455,6 +453,16 @@ export function createCadArrivalActions(
           const superseded = 'The model or design changed while its mesh was being prepared. Rebuild the mesh for the current model.';
           if (request === ingestRequest.current && mounted.current) setStatus(superseded);
           throw new SupersededError(superseded);
+        }
+        if (isAbortError(reason)) {
+          if (request === ingestRequest.current && mounted.current) {
+            const message = prepared
+              ? 'Display loading stopped. The prepared mesh is retained. Try again to display it.'
+              : 'Mesh preparation stopped. Try again to prepare it.';
+            setStatus(message);
+            setIngestError(message, { recorded: false, retry: true, diagnostic: null });
+          }
+          throw reason;
         }
         const message = failureWords(reason);
         reportCadAutomationError('prepare', reason);

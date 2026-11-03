@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { addWoofer, emptyAssembly, setWooferDrive } from '../stores/assembly';
+import { addWoofer, emptyAssembly, moveToGroup, setDriver, setWooferDrive } from '../stores/assembly';
 import { adoptDesignBuild } from '../stores/importedModel';
 import { currentDocumentLoad } from '../stores/design';
 import { resetAssemblyBuild } from '../stores/assemblyBuild';
@@ -68,6 +68,33 @@ describe('a design assembly in the shared Drivers section', () => {
     expect(section().textContent).toContain('Woofer 1');
     expect(solveDriver().checked).toBe(false);
     expect(host.querySelector('select[aria-label^="Motion for"], [aria-label^="Motion axis"], [aria-label^="Max drive"]')).toBeNull();
+  });
+
+  it.each([false, true])('edits each physical driver in one signal group (second unfinished=%s)', unfinished => {
+    const added = addWoofer(useDesignStore.getState().design.assembly!, { anchor: 'above' }, ids);
+    const group = added.assembly.signal_groups!.find(group => group.members.some(member => member.radiator_id === woofer))!;
+    let assembly = moveToGroup(added.assembly, added.id, group.id, ids);
+    const driver = { version: 1 as const, re_ohm: 6, le_h: 0.0005, bl_n_per_a: 7, mmd_kg: 0.02, cms_m_per_n: 0.001, rms_n_s_per_m: 1.5 };
+    assembly = setDriver(assembly, woofer, { exterior_transducer: driver });
+    assembly = setDriver(assembly, added.id, { exterior_transducer: unfinished ? { version: 1, re_ohm: 7 } : { ...driver, re_ohm: 7 } });
+    act(() => useDesignStore.getState().commitEmbedded({ assembly }, 'step'));
+    expect(useDesignStore.getState().design.assembly).toEqual(assembly);
+    const cards = host.querySelectorAll(`[data-driver-group-id="${group.id}"]`);
+    expect(cards).toHaveLength(2);
+    expect(host.textContent).not.toContain('identical drivers');
+    const second = host.querySelector<HTMLInputElement>('[aria-label="Resistance for Woofer 2"]')!;
+    expect(second).not.toBeNull();
+    expect(second.value).toBe('7');
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for Woofer 2"]')!.disabled).toBe(false);
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(second, '8');
+      second.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(drivers()?.[woofer].exterior_transducer).toEqual(driver);
+    expect(drivers()?.[added.id].exterior_transducer.re_ohm).toBe(8);
+    expect(useDesignStore.getState().design.assembly?.signal_groups).toEqual(assembly.signal_groups);
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design.assembly).toEqual(assembly);
   });
 
   it('binds a library driver to the woofer through the design, one Undo step per action', async () => {

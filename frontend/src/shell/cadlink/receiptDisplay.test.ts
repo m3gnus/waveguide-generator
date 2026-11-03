@@ -17,6 +17,13 @@ const restoreCadJobModel = (run: JobItem, display: ImportedDisplay = {}, fetcher
   openImported({ kind: 'run', job: run, display }, fetcher).catch(() => false);
 
 import { createReceiptDisplay, type ReceiptDisplay } from './receiptDisplay';
+import { createCadArrivalActions } from './arrivals';
+import { showIngestedMeshInViewport } from './artifactLoader';
+import { activityStore } from '../activity';
+import { selectCadModelState } from '../../stores/cadModelState';
+import { cadModelStatusLine } from '../../stores/cadModelStatusLine';
+import type { CadIngestFailure } from '../../stores/cadWorkspace';
+import { mesh } from './selection.fixtures';
 
 const NOW = Date.parse('2026-10-11T12:00:00Z');
 const bundle: CadReturnBundle = {
@@ -100,6 +107,45 @@ beforeEach(() => {
 });
 
 describe('receipt-keyed Send display', () => {
+  it('reports a stopped display truthfully and offers Try again for its retained preparation', async () => {
+    activityStore.reset();
+    const store = createCadReceiptsStore(null, () => NOW);
+    const serve = serving();
+    let downloading: AbortSignal | undefined;
+    let retry = false;
+    const fetcher: typeof fetch = async (url, init) => {
+      if (!String(url).endsWith('/viewport-mesh')) return serve(url, init);
+      if (retry) return new Response(mesh);
+      downloading = init!.signal!;
+      return new Promise((_resolve, reject) => downloading!.addEventListener('abort', () => reject(downloading!.reason), { once: true }));
+    };
+    const preparation = { ingesting: false, ingestError: null as string | null, ingestFailure: null as CadIngestFailure | null };
+    const actions = createCadArrivalActions({
+      showIngestedMesh: showIngestedMeshInViewport,
+      setIngesting: value => { preparation.ingesting = value; },
+      setIngestError: (value, failure) => { preparation.ingestError = value; preparation.ingestFailure = failure ?? null; },
+    }, fetcher);
+    const display = renderer();
+    display.prepareSelected = actions.ingestSelected;
+    const pending = createReceiptDisplay(display, store, fetcher)(receipt());
+    await vi.waitFor(() => expect(downloading).toBeDefined());
+    activityStore.getSnapshot()[0].cancel!();
+    await expect(pending).resolves.toBe(true);
+    expect(store.getState().feedback['send:1']).toEqual({
+      outcome: 'display_failed',
+      message: 'Display loading stopped for Speaker. The prepared mesh is retained. Choose Try again to display it.',
+    });
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_one');
+    const line = cadModelStatusLine(selectCadModelState(useCadReturnStore.getState(), preparation), null);
+    expect(line).toMatchObject({ text: expect.stringContaining('Display loading stopped'), action: 'try-again', actionLabel: 'Try again' });
+    expect(importedMeshStore.getSnapshot().cad).toBeNull();
+    retry = true;
+    await actions.ingestSelected();
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_one');
+    expect(preparation.ingestError).toBeNull();
+    expect(activityStore.getSnapshot()).toEqual([]);
+  });
+
   it('ingests and fronts a receipt with no job once across reload; a new Send fronts the same model again', async () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     const display = renderer();
