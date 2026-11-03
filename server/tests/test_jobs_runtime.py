@@ -1307,6 +1307,76 @@ def test_failure_transition_survives_log_flush_error(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("status", ["running", "complete"])
+@pytest.mark.parametrize("persistence_fails", [False, True])
+def test_failure_releases_partials_and_cleans_artifacts_unless_complete(
+    tmp_path, monkeypatch, status, persistence_fails
+):
+    async def scenario():
+        store = JobStore(tmp_path / "failure-cleanup.db")
+        store.initialize()
+        store.create_job(_running_job("failed"))
+        store.update_job("failed", status=status)
+        runtime = JobRuntime(store)
+        runtime._partial_results["failed"] = {"large": "transient result"}
+        cleaned = []
+
+        def discard(kind):
+            def remove(job_id):
+                assert job_id == "failed"
+                cleaned.append(kind)
+                # One failed cleanup must not prevent the others.
+                raise OSError("artifact device unavailable")
+            return remove
+
+        for kind in ("channel_bases", "radiation_impedance", "fem_field"):
+            monkeypatch.setattr(store, f"delete_{kind}", discard(kind))
+        if persistence_fails:
+            def fail_write(*_args, **_kwargs):
+                raise sqlite3.OperationalError("database or disk is full")
+            monkeypatch.setattr(store, "update_job_with_event", fail_write)
+        try:
+            await runtime._fail_job("failed", "solver exploded")
+            assert "failed" not in runtime._partial_results
+            assert cleaned == ([] if status == "complete" else [
+                "channel_bases", "radiation_impedance", "fem_field",
+            ])
+            row = store.get_job_row("failed")
+            assert row["status"] == (status if persistence_fails or status == "complete" else "error")
+            assert [event["type"] for event in store.replay_events(0)] == (
+                ["failed"] if status == "running" and not persistence_fails else []
+            )
+        finally:
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_failure_releases_partials_when_completion_cannot_be_read(tmp_path, monkeypatch):
+    async def scenario():
+        store = JobStore(tmp_path / "unavailable.db")
+        store.initialize()
+        store.create_job(_running_job("failed"))
+        runtime = JobRuntime(store)
+        runtime._partial_results["failed"] = {"large": "transient result"}
+
+        def unavailable(*_args, **_kwargs):
+            raise sqlite3.OperationalError("database unavailable")
+
+        monkeypatch.setattr(store, "update_job_with_event", unavailable)
+        monkeypatch.setattr(store, "cancellation_state", unavailable)
+        for kind in ("channel_bases", "radiation_impedance", "fem_field"):
+            monkeypatch.setattr(store, f"delete_{kind}", lambda *_: pytest.fail("Completion is unknown"))
+        try:
+            await runtime._fail_job("failed", "solver exploded")
+            assert "failed" not in runtime._partial_results
+            assert store.replay_events(0) == []
+        finally:
+            store.close()
+
+    asyncio.run(scenario())
+
+
 def test_cancellation_transition_survives_log_flush_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

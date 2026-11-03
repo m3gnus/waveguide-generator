@@ -10,9 +10,6 @@ import { useDesignModelStore } from './importedModel';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { mesh } from '../shell/cadlink/selection.fixtures';
 import { currentModel, currentModelScene } from '../model/currentModel';
-import preparationEdits from '../../../server/tests/fixtures/assembly_preparation_edits.json';
-import { assemblyGeometryKey } from './assemblyBuild';
-import { designContentKey } from './designContentKey';
 
 let counter = 0;
 const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '0')}`;
@@ -40,18 +37,6 @@ describe('assembly background build', () => {
     useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), enclosure: { ...designForFamily('R-OSSE').enclosure, depth: 200 } });
     resetAssemblyBuild();
     commitAssembly(addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids).assembly);
-  });
-
-  it.each(preparationEdits)('classifies $path against the backend compile contract', edit => {
-    const base = useDesignStore.getState().design;
-    const changed = structuredClone(base);
-    const parts = edit.path.split('.');
-    let target = changed as unknown as Record<string, unknown>;
-    for (const part of parts.slice(0, -1)) target = target[part] as Record<string, unknown>;
-    target[parts.at(-1)!] = edit.value;
-    expect(assemblyGeometryKey(changed) === assemblyGeometryKey(base)).toBe(edit.reuses);
-    const fileKey = (design: typeof base) => designContentKey(design, '', { polar: { config: null }, solve: null });
-    expect(fileKey(changed)).not.toBe(fileKey(base));
   });
 
   it.each([200, 422])('registers one shared build through success or failure (%s)', async status => {
@@ -224,6 +209,46 @@ describe('assembly background build', () => {
     await reused;
     expect(importedMeshStore.getSnapshot().solver).toBe(scene);
     expect(designModelCurrent(useDesignStore.getState().design)).toBe(true);
+  });
+
+  it('asks the backend about export placement and retains an unchanged mesh without retransmission', async () => {
+    const prepared = record('wgi_offset');
+    const model = { model_id: 'design-assembly:x', producer: 'design-assembly', display_name: 'x' };
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.design_revision === useDesignStore.getState().designRevision && body.design.mesh.vertical_offset === 80) {
+        expect(body.known_prepared_id).toBe(prepared.ingest_id);
+        const { msh_text: _mesh, ...metadata } = prepared;
+        return Response.json({ status: 'published', reused: true, model, prepared: metadata });
+      }
+      return Response.json({ status: 'published', reused: false, model, prepared });
+    });
+    const first = await prepareDesignModel(fetcher);
+    const scene = importedMeshStore.getSnapshot().solver;
+    useDesignStore.getState().updateValue('mesh.vertical_offset', 80);
+    expect(designModelCurrent(useDesignStore.getState().design)).toBe(false);
+    const next = await prepareDesignModel(fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(next).toEqual({ ...first, reused: true });
+    expect(designModelCurrent(useDesignStore.getState().design)).toBe(true);
+    expect(importedMeshStore.getSnapshot().solver).toBe(scene);
+    expect(await prepareDesignModel(fetcher)).toEqual(next);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a meshless answer for a different prepared record', async () => {
+    const { fetcher, answer } = deferredFetcher();
+    const first = requestAssemblyBuild(fetcher);
+    answer(0, record('wgi_held'));
+    await first;
+    const previous = useDesignModelStore.getState();
+    useDesignStore.getState().updateValue('mesh.vertical_offset', 80);
+    const next = prepareDesignModel(fetcher);
+    const { msh_text: _mesh, ...wrong } = record('wgi_not_held');
+    answer(1, wrong);
+    await expect(next).rejects.toThrow('The assembly mesh was not returned. Build the assembly again, then press Solve.');
+    expect(useDesignModelStore.getState()).toBe(previous);
+    expect(designModelCurrent(useDesignStore.getState().design)).toBe(false);
   });
 
   it('drops an answer for a document that was replaced, and forgets the build on open', async () => {

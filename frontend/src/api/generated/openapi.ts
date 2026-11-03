@@ -1648,7 +1648,10 @@ export interface paths {
          * @description Compile the design's assembly and publish it as its design model's prepared mesh.
          *
          *     ``superseded``: a newer revision of the design was asked for meanwhile,
-         *     and this one was not published.
+         *     and this one was not published. If compilation selects
+         *     ``known_prepared_id``, the prepared metadata omits ``msh_text``: the
+         *     client already holds that immutable mesh. Eligibility still comes
+         *     exclusively from the compiler's backend-owned identity contract.
          */
         post: operations["assembly_compile_api_models_assembly_compile_post"];
         delete?: never;
@@ -2791,6 +2794,8 @@ export interface components {
             design_revision: number;
             /** Design Uid */
             design_uid: string;
+            /** Known Prepared Id */
+            known_prepared_id?: string | null;
         };
         /**
          * AssemblyConfig

@@ -314,7 +314,7 @@ def test_identical_geometry_reuses_and_processing_changes_never_rebuild(store, t
 
 @pytest.mark.parametrize("edit", json.loads((Path(__file__).parent / "fixtures/assembly_preparation_edits.json").read_text()),
                          ids=lambda edit: edit["path"])
-def test_client_setup_edit_classification_matches_compile_identity(edit):
+def test_compile_identity_reuses_only_backend_equivalent_edits(edit):
     base = design(assembly=assembly(woofer(shape="ath_cone")))
     changed = copy.deepcopy(base)
     parts = edit["path"].split(".")
