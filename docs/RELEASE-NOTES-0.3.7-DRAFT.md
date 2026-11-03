@@ -102,6 +102,15 @@ This is not a release announcement or a statement of platform qualification.
 
 ## Fixed
 
+- Results notices, warnings and errors now share one compact message area at
+  the top of the Results panel instead of boxes that pushed the charts down.
+  Errors stay visible until resolved; each message keeps its fix action.
+- Moving a field plane while its first results are loading no longer shows the
+  previous plane's data on the new plane.
+- Changing a run's crossover while the run is being archived no longer lets the
+  older archive reply replace the new crossover.
+- Send to CAD no longer fails when macOS refuses WG access to the WGLink folder
+  itself for the final disk flush; the bundle is published as before.
 - Preserve imported surface roles and solve settings when reopening a file,
   including matching groups when a refreshed file has some changed group names.
 - Keep the OSSE design intact when a requested feature combination is
