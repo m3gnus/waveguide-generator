@@ -11,7 +11,10 @@ export function axes(tokens: ChartTokens, density: ChartDensity = 'regular') {
     // Log-frequency ticks crowd as soon as a card narrows; dropping the
     // colliding ones beats printing "4001,000".
     axisLabel: { color: tokens.muted, fontSize: LABEL_FONT[density], margin: density === 'compact' ? 5 : 8, hideOverlap: true },
-    splitLine: { lineStyle: { color: tokens.grid, width: .7 } },
-    minorSplitLine: { show: true, lineStyle: { color: tokens.gridMinor, width: .5 } },
+    // Whole-pixel lines: at .7 and .5 they fell between device pixels and drew
+    // as two soft rows each. Minor lines are off: five sub-lines per division
+    // read as noise on a card-sized plot. The log axis keeps its minor ticks.
+    splitLine: { lineStyle: { color: tokens.grid, width: 1 } },
+    minorSplitLine: { show: false },
   };
 }

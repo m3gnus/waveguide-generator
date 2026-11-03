@@ -35,7 +35,7 @@ describe('generated bore profile coordinates', () => {
         axisTick: { lineStyle: { color: tokens.muted } },
         axisLabel: { color: tokens.muted },
         splitLine: { lineStyle: { color: tokens.grid } },
-        minorSplitLine: { lineStyle: { color: tokens.gridMinor } },
+        minorSplitLine: { show: false },
       });
     }
     const traces = series(option);

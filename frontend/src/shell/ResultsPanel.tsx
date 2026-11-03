@@ -236,7 +236,7 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
         // Rotated along the right edge rather than sitting at the top of the
         // axis, which is where ECharts puts an axis name by default and where
         // this chart's legend already is -- the two overprinted each other.
-        { type: 'value' as const, ...(density === 'full' ? { name: secondaryName, nameLocation: 'middle' as const, nameRotate: -90, nameGap: 38, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), ...axes(tokens, density), splitLine: { show: false }, minorSplitLine: { show: false } },
+        { type: 'value' as const, ...(density === 'full' ? { name: secondaryName, nameLocation: 'middle' as const, nameRotate: -90, nameGap: 38, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), ...axes(tokens, density), splitLine: { show: false } },
       ]
       : { type: 'value', ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'left' as const } } : {}), ...axes(tokens, density) },
     dataZoom: [{ type: 'inside', xAxisIndex: 0, filterMode: 'none', zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: true }],
@@ -727,7 +727,7 @@ export function heatmapOption(
       const upper = grid.angles.at(-1)!;
       const fraction = (angleGuides[params.dataIndex] - lower) / (upper - lower);
       const y = params.coordSys.y + params.coordSys.height * (1 - fraction);
-      return { type: 'line', shape: { x1: params.coordSys.x, y1: y, x2: params.coordSys.x + params.coordSys.width, y2: y }, style: { stroke: tokens.grid, lineWidth: .8, opacity: .9 } };
+      return { type: 'line', shape: { x1: params.coordSys.x, y1: y, x2: params.coordSys.x + params.coordSys.width, y2: y }, style: { stroke: tokens.grid, lineWidth: 1, opacity: .9 } };
     },
   }] : [];
   // Grey band over the rear hemisphere of a zero-radiation result: the cells
@@ -1256,7 +1256,7 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
       interval: 30,
       axisLine: { lineStyle: { color: tokens.spine ?? tokens.grid } },
       axisLabel: { color: tokens.muted, fontSize: labelSize, formatter: (value: number) => `${value}°` },
-      splitLine: { lineStyle: { color: tokens.grid, width: .7 } },
+      splitLine: { lineStyle: { color: tokens.grid, width: 1 } },
     },
     radiusAxis: {
       type: 'value' as const,
@@ -1267,7 +1267,7 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
       // drop the outermost 0 dB, which the curve itself already marks.
       axisLabel: { color: tokens.muted, fontSize: labelSize, showMinLabel: false, showMaxLabel: false, formatter: (value: number) => `${value} dB` },
       axisLine: { show: false },
-      splitLine: { lineStyle: { color: tokens.grid, width: .7 } },
+      splitLine: { lineStyle: { color: tokens.grid, width: 1 } },
     },
     series: shadeRear ? [rearWedge(90, 180), rearWedge(-180, -90), ...series] : series,
   };
