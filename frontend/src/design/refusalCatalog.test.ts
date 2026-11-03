@@ -2,7 +2,7 @@ import { presetLabels } from '../sketch/adapters/sourcePreset';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
-import { refusalControlCatalog } from './parameterRegistry';
+import { PARAMETER_SECTION_DEFINITIONS, refusalControlCatalog } from './parameterRegistry';
 
 // Editor controls keep their labels in their existing JSX owner. Extract the
 // literal labels for the backend catalog without adding a runtime UI dependency.
@@ -20,4 +20,13 @@ it('exports the UI-owned names for the installed-mesher contract test', () => {
   if (filename) writeFileSync(filename, JSON.stringify(catalog, null, 2) + '\n');
   expect(Object.values(catalog).every(control => control.label.trim().length > 0)).toBe(true);
   expect(catalog['options.engine'].label).toBe('Solver');
+});
+
+it('keeps the pinned Drive catalog identity while displaying Drivers', () => {
+  expect(PARAMETER_SECTION_DEFINITIONS.some(section => section.title === 'Drivers')).toBe(true);
+  expect(catalog['editor.Drive']).toEqual({ legacyKey: 'Drive', label: 'Drive' });
+  expect(catalog).not.toHaveProperty('section.Drivers');
+  expect(PARAMETER_SECTION_DEFINITIONS.some(section => section.title === 'Crossover')).toBe(true);
+  expect(catalog).not.toHaveProperty('editor.Crossover');
+  expect(catalog).not.toHaveProperty('section.Crossover');
 });

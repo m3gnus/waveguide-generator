@@ -772,7 +772,11 @@ export function throatStretchError(key: 's1' | 's2', value: number): string | un
 export function refusalControlCatalog(presetLabels: Record<string, string> = {}, editorLabels: readonly string[] = []) {
   return {
     ...Object.fromEntries(PARAMETER_REGISTRY.map(({ id, path, legacyKey, label }) => [id, { path, legacyKey, label }])),
-    ...Object.fromEntries(PARAMETER_SECTION_DEFINITIONS.map(({ title }) => [`section.${title}`, { legacyKey: title, label: title }])),
+    // 0.3.7 keeps the pinned mesher's Drive identity and omits the new Crossover
+    // section. Add section.Drivers/Crossover to both catalog owners in 0.3.8.
+    ...Object.fromEntries(PARAMETER_SECTION_DEFINITIONS.filter(({ title }) => title !== 'Crossover').map(({ title }) => title === 'Drivers'
+      ? ['editor.Drive', { legacyKey: 'Drive', label: 'Drive' }]
+      : [`section.${title}`, { legacyKey: title, label: title }])),
     ...Object.fromEntries(editorLabels.map(label => [`editor.${label}`, { legacyKey: label, label }])),
     ...Object.fromEntries(Object.entries(SOLVE_CONTROLS).map(([key, control]) => [`options.${key}`, { legacyKey: key, label: control.label }])),
     ...Object.fromEntries(Object.entries(presetLabels).map(([key, label]) => [`source.preset.${key}`, { legacyKey: key, label }])),
