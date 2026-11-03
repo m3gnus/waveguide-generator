@@ -25,7 +25,7 @@ from server.engines.registry import EngineRegistry
 from server.jobs.request_cancellation import ClientDisconnected, RequestCancellation
 from server.jobs.models import SolveOptions, SolveRequest
 from server.jobs.plans import SolvePlanResponse, solve_plan_response
-from server.jobs.runtime.core import SubmissionResolution, _execution_request, resolve_submission
+from server.jobs.runtime.core import _execution_request, resolve_submission
 from server.mesh.child import MesherShuttingDownError
 from server.mesh.errors import MesherEstimateUnavailable, MeshTooLarge, SolverMemoryTooLarge
 
@@ -86,19 +86,6 @@ class SolverMeshResponse(BaseModel):
     plan: SolvePlanResponse
 
 
-async def _resolve_mesh_execution(
-    design: DesignConfig, options: SolveOptions, engine_registry: EngineRegistry,
-) -> tuple[SubmissionResolution, SolveRequest]:
-    """Use the same effective mesh inputs for an estimate and its solver view."""
-    resolved = await resolve_submission(
-        SolveRequest.model_validate({"design": design, "options": options}),
-        engine_registry,
-        preview=True,
-    )
-    quadrants = int(resolved.symmetry_metadata["resolved_quadrants"])
-    return resolved, _execution_request(resolved.request, resolved_quadrants=quadrants)
-
-
 async def solver_mesh_response(
     design: DesignConfig,
     symmetry: SymmetryMode | None,
@@ -125,8 +112,13 @@ async def solver_mesh_response(
     if symmetry is not None:
         options.symmetry = symmetry
     try:
-        resolved, execution = await _resolve_mesh_execution(design, options, engine_registry)
+        resolved = await resolve_submission(
+            SolveRequest.model_validate({"design": design, "options": options}),
+            engine_registry,
+            preview=True,
+        )
         quadrants = int(resolved.symmetry_metadata["resolved_quadrants"])
+        execution = _execution_request(resolved.request, resolved_quadrants=quadrants)
     except (ValueError, MesherError) as exc:
         raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
 
@@ -187,19 +179,9 @@ def mount_solver_mesh(application: FastAPI, engine_registry: EngineRegistry) -> 
 
         cancellation = RequestCancellation(request.is_disconnected)
         try:
-            design = body.design
-            if design.root.assembly is None:
-                _resolved, execution = await _resolve_mesh_execution(design, SolveOptions(), engine_registry)
-                design = execution.design
-            return await estimate_solver_mesh(design, cancel_cb=cancellation.check)
+            return await estimate_solver_mesh(body.design, cancel_cb=cancellation.check)
         except ClientDisconnected as exc:
             raise HTTPException(status_code=499, detail="Mesh preparation was cancelled.") from exc
-        except SolverMemoryTooLarge as exc:
-            logger.warning("Solver memory admission refused a mesh estimate: %s", exc)
-            raise HTTPException(status_code=422, detail=SolverMemoryTooLarge.USER_MESSAGE) from exc
-        except MesherEstimateUnavailable as exc:
-            logger.exception("Cannot check mesh memory before generation")
-            raise HTTPException(status_code=422, detail=MesherEstimateUnavailable.USER_MESSAGE) from exc
         except (RuntimeError, ValueError, MesherError) as exc:
             raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
         finally:

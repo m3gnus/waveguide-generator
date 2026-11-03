@@ -936,7 +936,7 @@ def _distribution_version(name: str) -> str:
         return "not-installed"
 
 
-def _solver_mesh_cache_key(design: DesignConfig, *, assembly: bool = False) -> str:
+def _solver_mesh_cache_key(design: DesignConfig) -> str:
     """Hash only inputs that can change the authoritative MSH artifact.
 
     Solve frequencies, polar sampling, and validation policy are intentionally
@@ -959,17 +959,6 @@ def _solver_mesh_cache_key(design: DesignConfig, *, assembly: bool = False) -> s
         "mesher_identity": mesher_identity(),
         "mesher_config": _solver_mesher_config(design),
     }
-    if assembly:
-        # Placement is resolved later in the child. Include its complete raw
-        # inputs here so a lookup never needs to sample geometry in the server.
-        # Separate artifact kinds even for a horn-only assembly: assembly
-        # inspection/tag policy differs from the ordinary solver artifact.
-        payload["assembly"] = {
-            "present": design.root.assembly is not None,
-            "woofers": assembly_woofer_rows(design),
-            "ath_lf_envelope": assembly_ath_envelope(design),
-            "quadrants": FULL_DOMAIN_QUADRANTS,
-        }
     canonical = canonical_ascii_strict_json(payload).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
 
@@ -1200,15 +1189,25 @@ async def assembly_front_context(design: DesignConfig) -> dict[str, Any]:
     return await asyncio.to_thread(_assembly_front_context_sync, design.model_dump(mode="json"))
 
 
+def _estimate_design_sync(design_dump: dict[str, Any], cancel_cb: CancelCallback | None = None) -> dict[str, Any]:
+    from hornlab_mesher.config_builder import estimate_from_config
+
+    _check_cancel(cancel_cb)
+    design = DesignConfig.model_validate(design_dump)
+    config = assembly_mesher_config(design)[0] if design.root.assembly is not None else _solver_mesher_config(design)
+    metadata = estimate_from_config(config)
+    _check_cancel(cancel_cb)
+    count = metadata.get("meshTriangleEstimateFullDomain")
+    if count is None:
+        count = (metadata.get("sourceBody") or {}).get("triangleEstimate")
+    if count is None:
+        raise MesherEstimateUnavailable("Mesher did not supply its pre-mesh triangle estimate")
+    return {"triangle_count": int(math.ceil(count)), "surface_deviation_mm": design.root.mesh.surface_deviation_mm}
+
+
 async def estimate_solver_mesh(design: DesignConfig, cancel_cb: CancelCallback | None = None) -> dict[str, Any]:
-    """Count the exact artifact and retain it for the following Build or solve."""
-    _key, result, _hit = await _cached_design_artifact(
-        design, cancel_cb, assembly=design.root.assembly is not None,
-    )
-    return {
-        "triangle_count": int(result["stats"]["triangle_count"]),
-        "surface_deviation_mm": design.root.mesh.surface_deviation_mm,
-    }
+    """Use the ordinary density pass in the same isolated mesher child."""
+    return await run_mesh_build(_estimate_design_sync, design.model_dump(mode="json"), cancel_cb=cancel_cb)
 
 
 def _build_assembly_sync(
@@ -1227,32 +1226,13 @@ def _build_assembly_sync(
 async def build_assembly_mesh(
     design: DesignConfig, cancel_cb: CancelCallback | None = None,
 ) -> dict[str, Any]:
-    """Build or reuse an assembly artifact without changing published records."""
-    _key, result, _hit = await _cached_design_artifact(design, cancel_cb, assembly=True)
-    return result
+    """Build a design assembly's solver artifact in the killable mesher child.
 
+    Unlike ``build_solver_mesh`` nothing is cached here: the compiled record
+    is content-addressed by its producer, which reuses a published artifact.
+    """
 
-async def _cached_design_artifact(
-    design: DesignConfig,
-    cancel_cb: CancelCallback | None,
-    *,
-    assembly: bool = False,
-    force_rebuild: bool = False,
-) -> tuple[str, dict[str, Any], bool]:
-    """One bounded artifact owner for estimates, assembly builds and solvers."""
-    _check_cancel(cancel_cb)
-    key = _solver_mesh_cache_key(design, assembly=assembly)
-    result = None if force_rebuild else _solver_mesh_cache.get(key)
-    hit = result is not None
-    if result is None:
-        result = await run_mesh_build(
-            _build_assembly_sync if assembly else _build_sync,
-            design.model_dump(mode="json"), cancel_cb=cancel_cb,
-        )
-        _check_cancel(cancel_cb)
-        _solver_mesh_cache.put(key, result)
-    _check_cancel(cancel_cb)
-    return key, result, hit
+    return await run_mesh_build(_build_assembly_sync, design.model_dump(mode="json"), cancel_cb=cancel_cb)
 
 
 def _build_design_artifact(
@@ -1611,9 +1591,19 @@ async def build_solver_mesh(
     _, quadrants_warning = _resolve_quadrants(validated)
     _check_cancel(cancel_cb)
     _progress(progress_cb, "mesh_prepare", 0.0, "Preparing HornLab solver mesh")
-    cache_key, result, cache_hit = await _cached_design_artifact(
-        validated, cancel_cb, force_rebuild=force_rebuild,
-    )
+    cache_key = _solver_mesh_cache_key(validated)
+    result = None if force_rebuild else _solver_mesh_cache.get(cache_key)
+    cache_hit = result is not None
+    if result is None:
+        # In a killable child: a mesher abort or hang on this geometry must not
+        # take the server down (server/mesh/child.py). The child cannot see
+        # ``cancel_cb``; the parent polls it and kills the child instead.
+        result = await run_mesh_build(
+            _build_sync,
+            validated.model_dump(mode="json"),
+            cancel_cb=cancel_cb,
+        )
+        _solver_mesh_cache.put(cache_key, result)
     try:
         _enforce_artifact_triangle_ceiling(
             int(result["stats"]["triangle_count"]),
