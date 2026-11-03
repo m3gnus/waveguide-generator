@@ -1,7 +1,8 @@
 import { deferred } from '../shell/cadlink/selection.fixtures';
 import { activityStore } from '../shell/activity';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { designForFamily } from '../stores/design';
+import { addWoofer, emptyAssembly } from '../stores/assembly';
+import { designForFamily, serializeDesign } from '../stores/design';
 import { resultExportSnapshot } from './exportContext';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
@@ -112,6 +113,56 @@ describe('result exporters', () => {
       selectedRun, design: designForFamily('OSSE'), designRevision: 3,
       jobStem: 'cad-run', preferences: preferencesStore.getSnapshot(), fetcher,
     })).rejects.toThrow(/imported models/i);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(['parametric', 'assembly'] as const)('exports %s run config from its captured design even if passed a draft', async kind => {
+    const captured = { ...designForFamily('R-OSSE'), L: 123,
+      ...(kind === 'assembly' ? { assembly: addWoofer(emptyAssembly(), { anchor: 'below' }).assembly } : {}) };
+    const selectedRun = { id: `captured-${kind}`, config_summary: kind === 'assembly'
+      ? { geometry_type: 'imported', import_origin: 'design-assembly' } : {},
+      script_snapshot: { version: 1, design: serializeDesign(captured) }, design_revision: 7, solve_options: {} } as unknown as JobItem;
+    expect(resultExportSnapshot(selectedRun).design).toEqual(captured);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ text: 'captured config' })));
+    const saveText = vi.fn();
+    await runExportFormat('mwg_config', { selectedRun, design: designForFamily('OSSE'), designRevision: 99,
+      jobStem: 'saved-run', preferences: preferencesStore.getSnapshot(), fetcher, saveText });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0][0]).toBe('/api/design/serialize');
+    const body = JSON.parse(String(fetcher.mock.calls[0][1]?.body));
+    expect(body.design).toMatchObject(serializeDesign(captured));
+    expect(saveText).toHaveBeenCalledWith('captured config', 'saved-run_config.cfg');
+  });
+
+  it('uses the parametric run snapshot for historical geometry, never a supplied draft', async () => {
+    const captured = { ...designForFamily('OSSE'), L: 123 };
+    const selectedRun = { id: 'captured-geometry', config_summary: {},
+      script_snapshot: { version: 1, design: serializeDesign(captured) }, design_revision: 7 } as unknown as JobItem;
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('stored geometry'));
+    await runExportFormat('step', { selectedRun, design: designForFamily('OSSE'), designRevision: 99,
+      jobStem: 'saved-run', preferences: preferencesStore.getSnapshot(), fetcher, saveBlob: vi.fn() });
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({ design: serializeDesign(captured), designRevision: 7 });
+    fetcher.mockClear();
+    await expect(runExportFormat('step', { selectedRun: { ...selectedRun, script_snapshot: null }, design: captured,
+      jobStem: 'saved-run', preferences: preferencesStore.getSnapshot(), fetcher })).rejects.toThrow('did not keep its design');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(['step', 'stl', 'fusion_csv'] as const)('refuses %s geometry generation for a captured assembly run', async format => {
+    const selectedRun = { id: 'assembly-geometry', config_summary: { geometry_type: 'imported', import_origin: 'design-assembly' },
+      script_snapshot: { version: 1, design: serializeDesign(designForFamily('R-OSSE')) } } as unknown as JobItem;
+    const fetcher = vi.fn<typeof fetch>();
+    await expect(runExportFormat(format, { selectedRun, ...resultExportSnapshot(selectedRun),
+      jobStem: 'saved-run', preferences: preferencesStore.getSnapshot(), fetcher })).rejects.toThrow(/imported models/i);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(['parametric', 'assembly'] as const)('never exports a draft for a %s run without a readable snapshot', async kind => {
+    const selectedRun = { id: `missing-${kind}`, config_summary: kind === 'assembly'
+      ? { geometry_type: 'imported', import_origin: 'design-assembly' } : {}, script_snapshot: null } as unknown as JobItem;
+    const fetcher = vi.fn<typeof fetch>();
+    await expect(runExportFormat('mwg_config', { selectedRun, design: designForFamily('OSSE'),
+      jobStem: 'saved-run', preferences: preferencesStore.getSnapshot(), fetcher })).rejects.toThrow('did not keep its design');
     expect(fetcher).not.toHaveBeenCalled();
   });
 

@@ -15,8 +15,7 @@ import { pinRunCadDocument } from '../api/cadProjects';
 import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildRunRecord } from '../jobs/runArchive';
-import { modelKindForRun } from '../model/currentModel';
-import { parameterExportReason, resultExportSelection, resultExportSnapshot } from './exportContext';
+import { MISSING_RUN_DESIGN_EXPORT_REASON, runExportReason, resultExportSelection, resultExportSnapshot } from './exportContext';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import { designFileExtension } from '../stores/designName';
 import { designWireWithSolveSettings } from '../stores/designWire';
@@ -449,7 +448,7 @@ export async function writeWorkspaceFiles(
 }
 
 async function fetchGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<GeometryDownload> {
-  if (!context.design) throw new Error('This run did not keep its design, so WG cannot export it. Open the design, solve it, then export.');
+  if (!context.design) throw new Error(MISSING_RUN_DESIGN_EXPORT_REASON);
   const fetcher = context.fetcher ?? fetch;
   const baseName = context.jobStem;
   const query = kind === 'profiles' ? `?kind=${profileKind ?? 'profiles'}` : '';
@@ -688,14 +687,15 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   return activityOperation({ kind: 'export', label: exportActivityLabel(format) }, context.fetcher ?? fetch, async (fetcher, activity) => {
     context = { ...context, fetcher };
     if (context.selectedRun) {
-      const reason = parameterExportReason({ kind: modelKindForRun(context.selectedRun) }, format);
+      const reason = runExportReason(context.selectedRun, format);
       if (reason) throw new Error(reason);
+      context = { ...context, ...resultExportSnapshot(context.selectedRun) };
     }
     const baseName = exportContextBaseName(context);
     const saveText = context.saveText ?? downloadText;
     const now = context.now ?? new Date();
     if (format === 'mwg_config') {
-      if (!context.design) throw new Error('This run did not keep its design, so WG cannot export it. Open the design, solve it, then export.');
+      if (!context.design) throw new Error(MISSING_RUN_DESIGN_EXPORT_REASON);
       const configName = `${baseName}_config.${designFileExtension(context.design.formula)}`;
       const response = await (context.fetcher ?? fetch)('/api/design/serialize', {
         method: 'POST',

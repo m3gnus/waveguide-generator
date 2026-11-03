@@ -185,6 +185,39 @@ describe('RunExportControl', () => {
     expect(document.body.textContent).not.toContain('Solved from a Fusion return');
   });
 
+  it('exports an assembly run config from its snapshot while refusing whole-assembly geometry', async () => {
+    const job = completeJob({ config_summary: { geometry_type: 'imported', import_origin: 'design-assembly' },
+      design_availability: { reopenable: false, source: 'cad-import', reason_code: 'imported_geometry', reason: 'Retained assembly mesh.', note: null } });
+    render(job);
+    openMenu();
+    expect(menuItem('Parameter config').getAttribute('aria-disabled')).toBeNull();
+    expect(menuItem('STEP solid').getAttribute('aria-disabled')).toBe('true');
+    expect(menuItem('STEP solid').textContent).toContain('STEP export is not available for imported models.');
+    expect(menuItem('STL mesh').getAttribute('aria-disabled')).toBe('true');
+    expect(menuItem('STL mesh').textContent).toContain('STL export is not available for imported models.');
+    expect(document.querySelector('[role="menu"]')?.textContent).not.toContain('Send to CAD');
+    await act(async () => { menuItem('Parameter config').click(); await settle(); });
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.objectContaining({ selectedRun: job,
+      design: hydrateJobDesign(job), designRevision: 42 }), ['mwg_config'], 'confirm');
+    expect(mocks.fetchJobResults).not.toHaveBeenCalled();
+  });
+
+  it('refuses an assembly config without a saved design, including preferred exports', async () => {
+    preferencesStore.update({ exportFormats: ['mwg_config', 'step', 'stl', 'fusion_csv'] });
+    render(completeJob({ config_summary: { geometry_type: 'imported', import_origin: 'design-assembly' }, script_snapshot: null }));
+    openMenu();
+    expect(menuItem('Parameter config').getAttribute('aria-disabled')).toBe('true');
+    expect(menuItem('Parameter config').textContent).toContain('did not keep its design');
+    act(() => host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click());
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
+    const alert = host.querySelector('[role="alert"]')?.textContent;
+    expect(alert).toContain('did not keep its design');
+    expect(alert).toContain('STEP export is not available');
+    expect(alert).toContain('STL export is not available');
+    expect(alert).toContain('no WG profiles');
+    expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
+  });
+
   it('distinguishes an imported mesh run and explains unavailable geometry formats', async () => {
     preferencesStore.update({ exportFormats: ['csv', 'stl'] });
     render(completeJob({ config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' }, script_snapshot: null }));

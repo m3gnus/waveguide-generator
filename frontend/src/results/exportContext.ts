@@ -18,8 +18,9 @@ export function resultExportSnapshot(
   cadIdentity?: CadIdentityProvenance;
 } {
   const polarConfig = job?.solve_options?.polar_config;
+  const kind = job && modelKindForRun(job);
   return {
-    design: job && modelKindForRun(job) === 'parametric' ? hydrateJobDesign(job) ?? undefined : undefined,
+    design: job && (kind === 'parametric' || kind === 'assembly') ? hydrateJobDesign(job) ?? undefined : undefined,
     designRevision: job?.design_revision ?? 0,
     ...(polarConfig && typeof polarConfig === 'object' ? { polarConfig } : {}),
     // The config exported for a run must describe that run, so its recorded
@@ -51,6 +52,17 @@ export function parameterExportReason(model: Pick<CurrentModel, 'kind'>, format:
     fusion_csv: 'Imported models have no WG profiles to export.',
   };
   return reasons[format];
+}
+
+export const MISSING_RUN_DESIGN_EXPORT_REASON = 'This run did not keep its design, so WG cannot export it. Open the design, solve it, then export.';
+
+/** A retained assembly may export its captured design, but not whole-assembly geometry. */
+export function runExportReason(job: JobItem, format: ExportFormat): string | undefined {
+  const kind = modelKindForRun(job);
+  if (kind === 'assembly' && format === 'mwg_config') {
+    return hydrateJobDesign(job) ? undefined : MISSING_RUN_DESIGN_EXPORT_REASON;
+  }
+  return parameterExportReason({ kind }, format);
 }
 
 /** Refuse stale File commands, including a model arrival during a destination dialog. */

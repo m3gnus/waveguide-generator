@@ -11,7 +11,7 @@ import { sendDesignToCad } from '../api/designIo';
 import { ActionMenu, type ActionMenuItem } from '../design/ActionMenu';
 import { followCadSend, fusionSendOf, sentToCadMessage, showCadSendOutcome } from '../design/useSendToCad';
 import { usePreferences, type ExportFormat } from '../prefs/preferences';
-import { parameterExportReason, resultExportSelection, resultExportSnapshot } from '../results/exportContext';
+import { runExportReason, resultExportSelection, resultExportSnapshot } from '../results/exportContext';
 import {
   runWorkspaceExportBundle,
   type ExportBundleResult,
@@ -103,7 +103,7 @@ function unavailableFormatReason(
   designUnavailableReason: string,
 ): string | undefined {
   const modelKind = modelKindForRun(job);
-  const provenanceReason = parameterExportReason({ kind: modelKind }, item.format);
+  const provenanceReason = runExportReason(job, item.format);
   if (provenanceReason) return modelKind === 'file' && item.format === 'stl'
     ? `${provenanceReason} Use Solve setup to save the solve mesh and settings.` : provenanceReason;
   if (item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0) {
@@ -158,11 +158,11 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   const execute = useRunExportStore((state) => state.execute);
   // Another export's own outcome replaces the earlier send's line.
   const designState = jobRerunState(job);
-  const designExportable = canLoadJobDesign(job);
+  const modelKind = modelKindForRun(job);
+  const designExportable = modelKind === 'assembly' ? !!resultExportSnapshot(job).design : canLoadJobDesign(job);
   const family = hydrateJobDesign(job)?.formula ?? '';
   const cadLimitation = nativeCadLimitation(family);
   const designAvailability = jobDesignAvailability(job);
-  const modelKind = modelKindForRun(job);
   const importedRun = modelKind !== 'parametric';
   const designUnavailableReason = designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.';
   const formatReason = (item: CatalogItem) => unavailableFormatReason(item, job, designExportable, designUnavailableReason);
@@ -306,7 +306,9 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
       error: operation.lastErrorFormats.length === 0 ? operation.lastError ?? undefined : undefined,
       onSelect: async () => { await sendRunToCad(); },
     }] : []),
-    ...FORMAT_CATALOG.filter((item) => !importedRun || !item.needsDesign || item.id === 'step' || (modelKind === 'file' && item.id === 'stl')).map((item): ActionMenuItem => {
+    ...FORMAT_CATALOG.filter((item) => !importedRun || !item.needsDesign || item.id === 'step'
+      || ((modelKind === 'file' || modelKind === 'assembly') && item.id === 'stl')
+      || (modelKind === 'assembly' && item.id === 'mwg_config')).map((item): ActionMenuItem => {
       const disabledReason = formatReason(item);
       return {
         id: item.id,
