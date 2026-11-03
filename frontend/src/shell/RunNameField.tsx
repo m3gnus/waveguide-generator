@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react';
 import { nextRunLabel } from '../jobs/runNaming';
 import { useRunNameSource } from '../jobs/runNameSource';
 import { usePreferences } from '../prefs/preferences';
-import { useDocumentStore } from '../stores/document';
+import { useDesignNameDraft } from '../design/designNameDraft';
 
 /**
  * The design's name, and the label the next solve will be stored under.
@@ -14,26 +13,15 @@ import { useDocumentStore } from '../stores/document';
  */
 export function RunNameField({ now = new Date() }: { now?: Date }) {
   const preferences = usePreferences();
-  const setDesignName = useDocumentStore((state) => state.setDesignName);
   const { name } = useRunNameSource();
   const displayedLabel = nextRunLabel(name, preferences, now);
-  const [draft, setDraft] = useState(name);
-  const [editing, setEditing] = useState(false);
-  useEffect(() => { if (!editing) setDraft(name); }, [name, editing]);
-  const commit = (value: string) => {
-    setDesignName(value);
-    setEditing(false);
-  };
+  const draft = useDesignNameDraft(name);
   return <div className="run-name-field">
     <label className="ui-field">Design name<input
       aria-label="Design name"
-      value={draft}
       placeholder="Untitled"
       title="Names the design, its design file, and every run and export made from it"
-      onChange={(event) => setDraft(event.target.value)}
-      onFocus={() => { setEditing(true); }}
-      onBlur={(event) => { commit(event.target.value); }}
-      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+      {...draft}
     /></label>
     <span className="run-name-preview" title="The name the next solve is stored under">next · <b>{displayedLabel}</b></span>
   </div>;

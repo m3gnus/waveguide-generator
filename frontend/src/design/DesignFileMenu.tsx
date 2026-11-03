@@ -2,6 +2,7 @@ import { MoveRunsDialog } from '../shell/MoveRunsDialog';
 import { mintDesignUid } from '../stores/designUid';
 import { inspectDesignFile, rememberDesignFile, designFileSource } from './designFiles';
 import { SharedDesignIdDialog, type SharedDesignQuestion } from './SharedDesignIdDialog';
+import { useDesignNameDraft } from './designNameDraft';
 import { useCurrentModel } from '../model/currentModel';
 import { assertCurrentModelExport, parameterExportReason } from '../results/exportContext';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
@@ -37,7 +38,7 @@ import {
   rememberWrittenCopy,
   replacingWouldLose,
 } from './replacementCheck';
-import { designNameSlug, designNameFromFilename, UNTITLED_DESIGN } from '../stores/designName';
+import { designFilename, designNameSlug, designNameFromFilename, UNTITLED_DESIGN } from '../stores/designName';
 import { usePreferences } from '../prefs/preferences';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { MAX_MESH_REPLAY_BYTES } from '../api/meshReplay';
@@ -160,6 +161,12 @@ export async function exportProfileArtifacts(
   return `Exported profiles and slices CSV from revision ${revision}${written ? ` to ${written.directory}` : ''}`;
 }
 
+/** Stable, so the rename field is focused and selected once, as it opens. */
+function focusAndSelect(input: HTMLInputElement | null) {
+  input?.focus();
+  input?.select();
+}
+
 export function DesignFileMenu() {
   const model = useCurrentModel();
   const copyReason = parameterExportReason(model, 'mwg_config');
@@ -179,6 +186,8 @@ export function DesignFileMenu() {
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [projects, setProjects] = useState<CadLinkedDesignSummary[]>([]);
   const [moveRunsOpen, setMoveRunsOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const nameDraft = useDesignNameDraft(designName, () => setRenaming(false));
   const [message, setMessage] = useState<string | null>(null);
   const { outcome: sendOutcome, requestId: sentRequest } = useCadSendOutcome();
   /** What a send from this menu left out, said only with that send's outcome. */
@@ -548,9 +557,18 @@ export function DesignFileMenu() {
     <button className="file-chip" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
       <span>File</span><span className="chev">⌄</span>
     </button>
-    {/* The document's name is a label, not a control: the design is renamed in Geometry. */}
-    <span className="document-name" title={model.kind !== 'parametric' ? documentName : designName ? `${designName}${fileExtension}` : UNTITLED_DESIGN}>
-      <span>{model.kind !== 'parametric' ? documentName : designName ? <>{designName}<em>{fileExtension}</em></> : <em>{UNTITLED_DESIGN}</em>}</span>
+    {/* A parametric design is renamed here as well as in Geometry, through the
+        same draft; an imported model's name is its file's, and only shown. */}
+    <span className="document-name" title={model.kind !== 'parametric' ? documentName : undefined}>
+      {model.kind !== 'parametric'
+        ? <span>{documentName}</span>
+        : renaming
+          ? <input ref={focusAndSelect} className="document-name-input" aria-label="Rename design" placeholder={UNTITLED_DESIGN}
+            style={{ width: `${Math.max(nameDraft.value.length, UNTITLED_DESIGN.length) + 2}ch` }} {...nameDraft}/>
+          : <button type="button" className="document-name-edit" onClick={() => setRenaming(true)}
+            title={`Design file ${designFilename(designName, design.formula)}. Click to rename the design, its file and its runs.`}>
+            {designName ? <>{designName}<em>{fileExtension}</em></> : <em>{UNTITLED_DESIGN}</em>}
+          </button>}
       {cadLink && <small className="cadlink-badge" aria-label={`CAD link: ${cadLink.label}`} title={cadLink.detail}>{cadLink.label}</small>}
     </span>
     <input ref={openInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>

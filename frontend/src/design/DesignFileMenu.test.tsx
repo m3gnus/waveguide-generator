@@ -22,6 +22,7 @@ import { CadWorkspaceOwners } from '../shell/CadWorkspaceOwners';
 import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
 import { ExportDestinationDialog } from '../shell/ExportDestinationDialog';
 import { DesignFileMenu } from './DesignFileMenu';
+import { RunNameField } from '../shell/RunNameField';
 import { applyOpenedDesign as applyOpenedDocument, takeDesignOpenTicket } from './openCadProject';
 import { discardConfirmation } from './replacementCheck';
 
@@ -898,6 +899,46 @@ describe('design file export menu', () => {
     expect(container.querySelector('[aria-label="Unsaved changes"]')).toBeNull();
   });
 
+  it('renames the design from its name in the top bar: Enter or leaving commits, Escape cancels', () => {
+    act(() => useDocumentStore.getState().setDesignName('horn'));
+    act(() => root.render(<><DesignFileMenu/><RunNameField/></>));
+    const startRename = () => {
+      act(() => container.querySelector<HTMLButtonElement>('.document-name-edit')!.click());
+      const input = container.querySelector<HTMLInputElement>('[aria-label="Rename design"]')!;
+      expect(document.activeElement).toBe(input);
+      expect(input.value).toBe(useDocumentStore.getState().designName);
+      return input;
+    };
+    const type = (input: HTMLInputElement, value: string) => act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+      input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    });
+    const key = (input: HTMLInputElement, name: string) => act(() => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true }));
+    });
+
+    let input = startRename();
+    type(input, 'horn 2');
+    key(input, 'Escape');
+    expect(useDocumentStore.getState().designName).toBe('horn');
+    expect(container.querySelector('[aria-label="Rename design"]')).toBeNull();
+
+    input = startRename();
+    type(input, 'horn 2');
+    key(input, 'Enter');
+    // One name: the file, the Geometry field and the next run all follow.
+    expect(useDocumentStore.getState()).toMatchObject({ designName: 'horn 2', filename: 'horn_2.cfg' });
+    expect(container.querySelector('.document-name')?.textContent).toBe('horn 2.cfg');
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Design name"]')?.value).toBe('horn 2');
+
+    input = startRename();
+    type(input, 'horn 3');
+    act(() => input.blur());
+    expect(useDocumentStore.getState().designName).toBe('horn 3');
+    // The file it writes is named in the tooltip, as the file system spells it.
+    expect(container.querySelector<HTMLButtonElement>('.document-name-edit')?.title).toContain('Design file horn_3.cfg');
+  });
+
   it('opens the current registry head from the CAD-linked design picker', async () => {
     const identity = {
       designId: 'wgd_01K00000000000000000000000',
@@ -1550,8 +1591,10 @@ it.each(['parametric', 'cad'] as const)('offers Import mesh only inside the File
   workspaceModeStore.setMode(mode);
   const host = document.createElement('div'); const root = createRoot(host);
   act(() => root.render(<DesignFileMenu/>));
-  // The menu button is the only control the closed menu leaves in the top bar.
-  expect([...host.querySelectorAll('button')].map(button => button.textContent)).toEqual(['File⌄']);
+  // The closed menu leaves the menu button in the top bar, and a parametric
+  // design's name, which renames it.
+  expect([...host.querySelectorAll('button')].map(button => button.textContent))
+    .toEqual(mode === 'parametric' ? ['File⌄', 'Untitled'] : ['File⌄']);
   const picker = vi.spyOn(host.querySelector<HTMLInputElement>('[aria-label="Import Gmsh mesh file"]')!, 'click').mockImplementation(() => undefined);
   act(() => host.querySelector<HTMLButtonElement>('button.file-chip')!.click());
   const item = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === 'Import mesh…msh')!;
