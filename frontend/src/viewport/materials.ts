@@ -267,7 +267,10 @@ export function createMaterialLibrary(
     : null;
   const cap = new MeshStandardMaterial({
     color: tokenColor('--vp-cap-material', theme === 'light' ? '#a5674a' : '#c07a4e'),
-    metalness: 0.02, roughness: 0.72, side: FrontSide,
+    // Both faces: the cap's normal follows the clip plane toward the kept half,
+    // while the cut is looked at from the removed half. The stencil already
+    // confines it to where the model is open.
+    metalness: 0.02, roughness: 0.72, side: DoubleSide,
     // Pushed back a hair: a field-plane cut lays the cap in the field plane's own
     // plane, and the two would otherwise fight over every pixel.
     polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
