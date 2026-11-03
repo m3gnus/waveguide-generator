@@ -548,8 +548,47 @@ export function createFieldPlaneStore(
       if (ready) startRequest(ready);
     };
 
+    const loadActivationResults = (jobId: string, saved = remembered.get(jobId)): void => {
+      activationGeneration += 1;
+      const generation = activationGeneration;
+      set({ status: 'loading', error: null, lastErrorCode: null });
+      void fetchResults(jobId)
+        .then((results) => {
+          const frequenciesHz = [...results.frequencies];
+          if (!frequenciesHz.length || frequenciesHz.some((value) => !Number.isFinite(value) || value <= 0)) {
+            throw new ProgramFault('the selected result has no valid solved frequencies');
+          }
+          const current = get();
+          if (generation !== activationGeneration || !current.enabled || current.jobId !== jobId || !current.plane) return;
+          const frequencyIndex = saved?.frequencyIndex === null || saved?.frequencyIndex === undefined
+            ? nearestFieldPlaneFrequencyIndex(frequenciesHz)
+            : Math.max(0, Math.min(frequenciesHz.length - 1, saved.frequencyIndex));
+          const origin = jobsSocket.getSnapshot().jobs.find(job => job.id === jobId)?.config_summary.import_origin;
+          const memberResponses = fieldPlaneMemberResponses(results, origin);
+          const responseId = validResponseId(saved?.responseId ?? 'system', memberResponses);
+          set({ frequenciesHz, frequencyStatus: results.frequency_status ?? null, frequencyIndex, memberResponses, responseId });
+          remember(jobId, current.plane, frequencyIndex, responseId);
+          requestCurrentPlane(get(), current.plane);
+        })
+        .catch((reason: unknown) => {
+          const current = get();
+          if (generation !== activationGeneration || !current.enabled || current.jobId !== jobId) return;
+          set({
+            status: 'error',
+            error: fieldPlaneErrorMessage(reason),
+            lastErrorCode: reason instanceof FieldPlaneHttpError ? reason.code : null,
+          });
+        });
+    };
+
     const requestCurrentPlane = (current: FieldPlaneStore, plane: FieldPlaneSpec): void => {
       if (!current.jobId || current.source === 'fem') return;
+      if (!current.frequenciesHz.length) {
+        // A plane edit fences the pending results continuation and restarts it
+        // before any pressure request can use uninitialised frequency metadata.
+        loadActivationResults(current.jobId);
+        return;
+      }
       const coarsened = current.dragging;
       const requestPlane = coarsened
         ? { ...clonePlane(plane), nx: DRAG_GRID_SIZE, ny: DRAG_GRID_SIZE }
@@ -563,12 +602,17 @@ export function createFieldPlaneStore(
       frequencyIndex: number,
       responseId: FieldPlaneResponseId,
     ): void => {
-      remembered.set(jobId, { plane: clonePlane(plane), frequencyIndex, responseId });
+      const saved = remembered.get(jobId);
+      const hasFrequencies = get().frequenciesHz.length > 0;
+      remembered.set(jobId, {
+        plane: clonePlane(plane),
+        frequencyIndex: hasFrequencies ? frequencyIndex : saved?.frequencyIndex ?? null,
+        responseId: hasFrequencies ? responseId : saved?.responseId ?? responseId,
+      });
     };
 
     const activate = (jobId: string, suppliedDefault: FieldPlaneSpec): void => {
       activationGeneration += 1;
-      const generation = activationGeneration;
       cancelRequests();
       displayedRequest = null;
       if (cacheJobId !== jobId) {
@@ -601,33 +645,7 @@ export function createFieldPlaneStore(
         field: null,
         frozenNormalizationDb: null,
       });
-      void fetchResults(jobId)
-        .then((results) => {
-          const frequenciesHz = [...results.frequencies];
-          if (!frequenciesHz.length || frequenciesHz.some((value) => !Number.isFinite(value) || value <= 0)) {
-            throw new ProgramFault('the selected result has no valid solved frequencies');
-          }
-          const current = get();
-          if (generation !== activationGeneration || !current.enabled || current.jobId !== jobId) return;
-          const frequencyIndex = saved?.frequencyIndex === null || saved?.frequencyIndex === undefined
-            ? nearestFieldPlaneFrequencyIndex(frequenciesHz)
-            : Math.max(0, Math.min(frequenciesHz.length - 1, saved.frequencyIndex));
-          const origin = jobsSocket.getSnapshot().jobs.find(job => job.id === jobId)?.config_summary.import_origin;
-          const memberResponses = fieldPlaneMemberResponses(results, origin);
-          const responseId = validResponseId(saved?.responseId ?? 'system', memberResponses);
-          remember(jobId, plane, frequencyIndex, responseId);
-          set({ frequenciesHz, frequencyStatus: results.frequency_status ?? null, frequencyIndex, memberResponses, responseId });
-          load(jobId, plane, frequencyIndex, responseId);
-        })
-        .catch((reason: unknown) => {
-          const current = get();
-          if (generation !== activationGeneration || !current.enabled || current.jobId !== jobId) return;
-          set({
-            status: 'error',
-            error: fieldPlaneErrorMessage(reason),
-            lastErrorCode: reason instanceof FieldPlaneHttpError ? reason.code : null,
-          });
-        });
+      loadActivationResults(jobId, saved);
     };
 
     return {

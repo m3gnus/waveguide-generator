@@ -251,6 +251,52 @@ describe('field-plane state', () => {
     expect(store.getState().plane?.width_m).toBe(plane.width_m);
   });
 
+  it.each(['setPlane', 'updatePlaneDrag', 'endPlaneDrag'] as const)(
+    'fences activation when %s moves the plane before results arrive', async (move) => {
+      const firstResults = deferred();
+      const latestResults = deferred();
+      const fieldGate = deferred();
+      const fetchResults = vi.fn()
+        .mockImplementationOnce(async () => {
+          await firstResults.promise;
+          return { frequencies: [200, 800, 1_600] };
+        })
+        .mockImplementationOnce(async () => {
+          await latestResults.promise;
+          return { frequencies: [200, 800, 1_600] };
+        });
+      const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {
+        await fieldGate.promise;
+        const field = response(jobId, request);
+        field.real[0] = request.plane.origin_m[0];
+        return field;
+      });
+      const store = createFieldPlaneStore({ fetchResults, fetchPlane });
+      const moved: FieldPlaneSpec = { ...plane, origin_m: [0.25, 0, 0] };
+
+      store.getState().enable('job-moving', plane);
+      if (move !== 'setPlane') store.getState().beginPlaneDrag();
+      store.getState()[move](moved);
+      expect(fetchResults).toHaveBeenCalledTimes(2);
+      expect(fetchPlane).not.toHaveBeenCalled();
+
+      firstResults.resolve();
+      await firstResults.promise;
+      await Promise.resolve();
+      expect(fetchPlane).not.toHaveBeenCalled();
+      expect(store.getState()).toMatchObject({ plane: moved, status: 'loading', field: null, frequenciesHz: [] });
+
+      latestResults.resolve();
+      await vi.waitFor(() => expect(fetchPlane).toHaveBeenCalledOnce());
+      const requestedPlane = move === 'updatePlaneDrag' ? { ...moved, nx: 48, ny: 48 } : moved;
+      expect(fetchPlane.mock.calls[0][1]).toMatchObject({ plane: requestedPlane, frequency_index: 1 });
+      expect(store.getState()).toMatchObject({ plane: moved, status: 'loading', field: null });
+      fieldGate.resolve();
+      await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+      expect(store.getState().field?.real[0]).toBe(0.25);
+      store.getState().disable();
+    });
+
   it('fully disables the overlay when its selected job becomes unavailable', async () => {
     const store = createFieldPlaneStore({
       fetchPlane: async (jobId, request) => response(jobId, request),
