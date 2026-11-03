@@ -1,7 +1,8 @@
 # Dependency compatibility
 
-The mesher pin `b6f2b743` declares version 0.2.8 and includes later development
-changes, including version-gated ATH v3 controls and typed public refusals with
+The mesher pin `983f5a39` declares version 0.2.9. Its only change from
+`b6f2b743` is the package version; geometry and mesh behavior are unchanged.
+It includes version-gated ATH v3 controls and typed public refusals with
 a shipped, checked control-label catalog. Saved v1/v2 retain their prior geometry.
 It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
 in `general_horn.radii_at_z`.
