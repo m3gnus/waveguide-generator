@@ -62,7 +62,7 @@ const ROSSE_DEPTH_TERMS = ['R', 'a', 'a0', 'r0', 'k', 'r', 'b', 'm', 'tmax', 'ro
  * Where an imported R-OSSE morph is not ATH's: ATH V2026-09a builds a
  * Rectangle unmorphed when the depth varies around the mouth, and has no
  * Superellipse morph on R-OSSE. The mesher then uses WG's own R-OSSE morph
- * (Magnus, 2026-10-26), so say once that the shape differs from ATH's.
+ * (the owner, 2026-10-26), so say once that the shape differs from ATH's.
  */
 export function rosseMorphNote(design: DesignDocument): string | undefined {
   if (!isCurrentAthImport(design) || design.formula !== 'R-OSSE') return undefined;

@@ -597,7 +597,7 @@ describe('source editor interactions', () => {
         expect(dialog.querySelector('.sketch-entity.rigid')).not.toBeNull();
         expect(dialog.querySelector('.sketch-role')).toBeNull();
         expect([...dialog.querySelectorAll('button')].some(b => ['Fit drawing', 'Undo edit', 'Draw lines'].includes(b.textContent ?? ''))).toBe(false);
-        // Classic drawing is no longer a user choice (Magnus could not return from it); there is no overflow menu.
+        // Classic drawing is no longer a user choice (the owner could not return from it); there is no overflow menu.
         expect(dialog.querySelector('[aria-label="More sketch actions"]')).toBeNull();
         expect([...dialog.querySelectorAll('button')].some(b => b.textContent === 'Classic drawing')).toBe(false);
       }

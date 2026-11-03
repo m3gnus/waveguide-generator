@@ -2881,7 +2881,7 @@ export function ResultsPanel() {
 
   // Every results notice, warning and error, and the solve progress line: one
   // row each in the one message area under the toolbar, never a box above
-  // the charts (Magnus, 2026-11-03).
+  // the charts (the owner, 2026-11-03).
   const messages: ResultsMessage[] = [
     ...(error ? [{
       key: 'fetch-error', severity: 'error' as const, content: error,

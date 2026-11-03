@@ -9,7 +9,7 @@ child instead:
 
 * a crash (any signal or a nonzero exit) kills only the child and surfaces as
   :class:`MesherCrashError`, a named, user-facing error; the server stays up.
-  Nothing is retried automatically (Magnus, 2026-10-05).
+  Nothing is retried automatically (the owner, 2026-10-05).
 * builds have a conservative one-hour wall-clock ceiling.
   ``WG2_MESH_BUILD_TIMEOUT_S`` selects a longer or shorter positive ceiling.
   A deadline or user cancellation kills and reaps the child.

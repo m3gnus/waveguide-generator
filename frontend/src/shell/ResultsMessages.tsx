@@ -2,7 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState, type HTMLAttributes, ty
 import { Icon } from './icons';
 
 /**
- * The Results panel's one message area (Magnus, 2026-11-03: "a small window at
+ * The Results panel's one message area (the owner, 2026-11-03: "a small window at
  * the top of the results panel where all the different error messages, etc.,
  * appear"). Every results-related notice, warning, error and the solve
  * progress line is a row here, never a box stacked above the charts.

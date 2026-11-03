@@ -258,7 +258,7 @@ def _start_contained(real: Callable[..., Any], args: tuple[Any, ...], armed: _Ar
     the single line that hands it to the caller. Any exception in between,
     an interrupt included, stops it and closes both its handles and its job.
 
-    Accepted residual (Magnus, 2026-10-05): ``KeyboardInterrupt`` is raised
+    Accepted residual (the owner, 2026-10-05): ``KeyboardInterrupt`` is raised
     asynchronously on the main thread, so one arriving in the few
     instructions between ``CreateProcess`` returning and its result being
     stored, or between the handoff and ``Popen`` storing the handles, can

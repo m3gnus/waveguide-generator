@@ -28,7 +28,7 @@ UPDATE_REASON = "an update is replacing it"
 RELEASE_REASON = "Waveguide Generator was closed"
 RELEASE_START_MARGIN = 2.0
 #: How long a CAD solve waiting for its first Prepare press keeps an idle or
-#: quitting backend alive (Magnus, 2026-10-12). The row is durable: the next
+#: quitting backend alive (the owner, 2026-10-12). The row is durable: the next
 #: backend shows it again and a press resumes it.
 MANUAL_WAIT_CAP = 3600.0
 #: Preparing rows read per check; more than this fails closed (holds work).

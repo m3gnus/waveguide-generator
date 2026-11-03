@@ -30,7 +30,7 @@ export function useSolveClock(active = true): number {
  * One place that names a solve's stage for the user, shared by every surface
  * that shows a run in flight -- the Jobs rail card and Results' CAD
  * one-line status alike, so CAD and parametric solves are described the same
- * way (Magnus, 2026-09-23: "same component/design" for both modes; the
+ * way (the owner, 2026-09-23: "same component/design" for both modes; the
  * pre-job CAD operation pipeline joins the same vocabulary too, so the
  * handoff from "a CAD operation is being prepared" to "its job is solving"
  * never steps backward or reads two different ways).

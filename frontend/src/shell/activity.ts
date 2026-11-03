@@ -1,7 +1,7 @@
 /**
  * The one record of what WG is busy with, shown in the status bar
  * (`ActivityStatus.tsx`). Every operation that can take longer than two
- * seconds registers here instead of spinning on its own (Magnus, 2026-11-03,
+ * seconds registers here instead of spinning on its own (the owner, 2026-11-03,
  * hornlab-policy `software/reference/product-decisions.md`): it says what is
  * happening, how long it has run, and either how far it is (when the work can
  * be counted) or how long the same operation usually takes on this machine.

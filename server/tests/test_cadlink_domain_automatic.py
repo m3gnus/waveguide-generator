@@ -1157,7 +1157,7 @@ def test_an_open_backed_shell_without_provenance_is_refused_at_solve(tmp_path: P
 def test_a_split_open_backed_shell_with_provenance_is_mirrored_and_change_unmirrors_it(
     tmp_path: Path,
 ) -> None:
-    """The residual risk Magnus accepted: stated on the card, and Change is the remedy."""
+    """The residual risk the owner accepted: stated on the card, and Change is the remedy."""
 
     from server.cadlink.intake.readings import record_reading
 
