@@ -6,6 +6,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
+import { RETURNED_STEP_UNAVAILABLE } from '../api/returnedStep';
 import { compareSelection, provisionalResults, resultsCache } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { resultViewStore } from '../stores/resultView';
@@ -435,7 +436,21 @@ describe('atomic results display transitions', () => {
     }
   });
 
-  it('exports available preferences with skipped reasons and the shared CAD menu in the Results toolbar', async () => {
+  it.each([false, true])('exports available preferences with skipped reasons and the shared CAD menu in the Results toolbar (returned STEP=%s)', async (stepAvailable) => {
+    const fetcher = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input) === '/api/export/runs/old/step/availability') {
+        return Promise.resolve(new Response(JSON.stringify({
+          available: stepAvailable, reason: stepAvailable ? null : RETURNED_STEP_UNAVAILABLE,
+        }), { headers: { 'Content-Type': 'application/json' } }));
+      }
+      return fetcher(input, init);
+    });
+    exportMocks.runWorkspaceExportBundle.mockResolvedValue({
+      directory: '/exports',
+      files: ['/exports/old.csv', ...(stepAvailable ? ['/exports/old.step'] : [])],
+      failures: [],
+    });
     vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
     preferencesStore.update({ exportFormats: ['csv', 'step'] });
     workspaceModeStore.setImportedInput('cad'); workspaceModeStore.setMode('cad');
@@ -452,14 +467,27 @@ describe('atomic results display transitions', () => {
     expect(trigger.textContent).toBe('Export CSV + STEP');
     expect(trigger.title).toContain('STEP solid (.step)');
     await act(async () => { trigger.click(); });
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('STEP export is not available for imported models.');
-    expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv'], 'confirm');
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Skipped STEP');
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('1 file written');
+    expect(fetch).toHaveBeenCalledWith('/api/export/runs/old/step/availability', expect.objectContaining({ method: 'POST' }));
+    expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledOnce();
+    expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: 'old', selectedRun: expect.objectContaining({ cad_source: { ingest_id: 'wgi_old' } }) }),
+      stepAvailable ? ['csv', 'step'] : ['csv'], 'confirm',
+    );
+    if (stepAvailable) {
+      expect(host.querySelector('[role="alert"]')).toBeNull();
+      expect(host.querySelector('[role="status"]')?.textContent).toContain('2 files written');
+    } else {
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain(RETURNED_STEP_UNAVAILABLE);
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain('Skipped STEP');
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain('1 file written');
+    }
     expect(document.querySelector('[role="menu"]')).toBeNull();
-    act(() => host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click());
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click(); });
     const menu = document.querySelector('[role="menu"]')!;
-    expect(menu.textContent).toContain('STEP export is not available for imported models.');
+    const step = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((item) => item.textContent?.includes('STEP solid'))!;
+    expect(step.getAttribute('aria-disabled')).toBe(stepAvailable ? null : 'true');
+    if (!stepAvailable) expect(step.textContent).toContain(RETURNED_STEP_UNAVAILABLE);
     for (const label of ['Send to CAD', 'Parameter config', 'STL mesh', 'Fusion curves']) {
       expect(menu.textContent).not.toContain(label);
     }
