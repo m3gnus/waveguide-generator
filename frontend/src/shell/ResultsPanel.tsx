@@ -1,6 +1,6 @@
 import { EmptyState } from './EmptyState';
-import { Notice } from './Notice';
 import { CurrentModelStatus } from './CurrentModelStatus';
+import type { ResultsMessage } from './ResultsMessages';
 import { selectJob } from '../jobs/selectJob';
 import { listedRuns, railRuns, useRunFilters } from '../jobs/runFilters';
 import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
@@ -2879,6 +2879,25 @@ export function ResultsPanel() {
     setMeasuredError(problems.length ? problems.join(' ') : null);
   }, []);
 
+  // Every results notice, warning and error, and the solve progress line: one
+  // row each in the one message area under the toolbar, never a box above
+  // the charts (Magnus, 2026-11-03).
+  const messages: ResultsMessage[] = [
+    ...(error ? [{
+      key: 'fetch-error', severity: 'error' as const, content: error,
+      actions: <button type="button" className="btn" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>,
+    }] : []),
+    ...(modelLoad === 'failed' ? [{ key: 'model-load', severity: 'error' as const, content: 'Could not load run model. Try Show this model again.' }]
+      : modelLoad === 'loading' ? [{ key: 'model-load', severity: 'progress' as const, content: 'Loading run model…' }] : []),
+    ...(measuredError ? [{ key: `measured:${measuredError}`, severity: 'error' as const, content: measuredError, dismissible: true, onDismiss: () => setMeasuredError(null) }] : []),
+    ...staleMeshes.map((job) => ({
+      key: `stale-mesh:${job.id}`, severity: 'warning' as const, dismissible: true,
+      content: <>The mesh for {runDisplayName(job)} may differ from the one used to solve it. WG or the geometry has changed since. Solve again to update these results.</>,
+    })),
+    ...(showingPrevious ? [{ key: 'showing-previous', severity: 'progress' as const, content: 'Showing previous results while fetching the selected run…' }] : []),
+    ...(resolved.modelNotLoaded ? [{ key: 'model-not-loaded', severity: 'info' as const, content: 'Run model not loaded' }] : []),
+  ];
+
   const emptyModel = <div className="empty-state" role="status">
     {primaryJob && resolved.verdict !== 'current' && <button type="button" className="btn" onClick={showPrimaryModel}>Show that run's model</button>}
   </div>;
@@ -2978,6 +2997,7 @@ export function ResultsPanel() {
       /> : <button className="btn" disabled title="Select a run to export">Export</button>}
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </>}/>
+    <CurrentModelStatus messages={messages} actions solveStatus activeOnly={!!(charts && resolved.job) || !!error || !!cleanedUpRun}/>
     {powerFlags && cadResultMatchesViewport && powerOpen && <div className="result-diagnostics">
       <div role="status" className="result-power-details">
         <b>{shownActiveChannel ?? 'Result'} · {powerHealth ? powerCheckMessage(powerHealth).label : powerChipLabel(powerFlags)}</b>
@@ -2985,7 +3005,6 @@ export function ResultsPanel() {
         {powerHealth && <p>{powerCheckMessage(powerHealth).title}</p>}
       </div>
     </div>}
-    {modelLoad !== 'idle' && <div className="result-model-load" role="status">{modelLoad === 'loading' ? 'Loading run model…' : 'Could not load run model. Try Show this model again.'}</div>}
     {coherenceOpen && primaryJob && primaryVerdict !== 'current' && <AnchoredPanel
       anchorRef={coherenceAnchor}
       onClose={() => setCoherenceOpen(false)}
@@ -2998,20 +3017,11 @@ export function ResultsPanel() {
         : <><button className="btn" type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }} disabled={modelLoad === 'loading'}>{modelLoad === 'loading' ? 'Loading…' : 'Show this model'}</button><button className="btn" type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
       <button className="btn" type="button" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => { setCoherenceOpen(false); void solve?.solve(); }}>Solve this version</button>
     </AnchoredPanel>}
-    {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">
+    {measuredOverlays.length > 0 && <div className="results-toolbar result-measured">
       <span className="result-measured-caption">Measured</span>
       {measuredOverlays.map((overlay) => <MeasuredOverlayRow key={overlay.id} overlay={overlay}/>)}
-      {measuredError && <span className="result-recombine-error" role="alert">{measuredError}</span>}
     </div>}
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
-    {error && <Notice tone="error" actions={<button type="button" className="btn" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}>{error}</Notice>}
-    {staleMeshes.map(job => <Notice key={job.id} tone="warning">The mesh for {runDisplayName(job)} may differ from the one used to solve it. WG or the geometry has changed since. Solve again to update these results.</Notice>)}
-    {showingPrevious && <Notice tone="info" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</Notice>}
-    {/* Three different empty docks, said apart: a failed fetch, a fetch still
-        in flight, and nothing selected at all. The last used to claim it was
-        loading, which is how a dock with no selection looked like a hang. */}
-    <CurrentModelStatus actions solveStatus activeOnly={!!(charts && resolved.job) || !!error || !!cleanedUpRun}/>
-    {resolved.modelNotLoaded && <div role="status">Run model not loaded</div>}
     {detailPanel !== null && detailPanel < preferences.chartTypes.length && <ChartDetailDialog
       index={detailPanel}
       chartTypes={preferences.chartTypes}
@@ -3030,6 +3040,9 @@ export function ResultsPanel() {
       onShowPanel={setDetailPanel}
       onClose={closeDetail}
     />}
+    {/* Three different empty docks, said apart: a failed fetch, a fetch still
+        in flight, and nothing selected at all. The last used to claim it was
+        loading, which is how a dock with no selection looked like a hang. */}
     {!resolved.job ? emptyModel : charts ?? (cleanedUpRun ? <EmptyState title="Results cleaned up" detail={cleanedUpMessage(cleanedUpRun)}/> : error ? <EmptyState title="Results unavailable" detail="Retry above, or select another run in the Jobs rail."/> : emptyModel)}
   </div>;
 }

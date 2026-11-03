@@ -153,6 +153,26 @@ describe('atomic results display transitions', () => {
     expect([...progress[0].querySelectorAll('button')].map(button => button.textContent)).toEqual(['Stop']);
   });
 
+  it('says an accepted solve\'s engine notice as one dismissible information line above the charts', async () => {
+    const notice = 'This engine solves every woofer at fixed velocity (1 m/s RMS), without its driver. To solve the drivers, set Advanced backend under Solver to Automatic, BEAT CPU or BEAT Metal.';
+    vi.spyOn(coordinator, 'useOptionalSolveControl').mockReturnValue({
+      plan: null, planPending: false, cadMode: false, importedGeometryActive: false, disabled: false, submitting: false, label: 'Solve',
+      title: 'Solve', readinessRequested: false, waitingForEngine: false, waitingEngine: null, readiness: null,
+      solve: vi.fn(), prepareEngine: vi.fn(), prepareAndSolve: vi.fn(), useEngine: vi.fn(), stopWaiting: vi.fn(),
+      preparationError: null, actionError: null, preparingEngine: null, solveNotice: { id: 1, message: notice },
+    });
+    await act(async () => root.render(<ResultsPanel/>));
+    await act(async () => pending.get('old')!(response([100])));
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('old');
+    const area = host.querySelector('.results-panel > .results-messages')!;
+    const line = area.querySelector('.results-message[data-severity="info"]')!;
+    expect(line.textContent).toBe(notice);
+    expect(line.getAttribute('role')).toBe('status');
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => line.querySelector<HTMLButtonElement>('.results-message-dismiss')!.click());
+    expect(host.querySelector('.results-messages')).toBeNull();
+  });
+
   it('keeps one complete previous set until the new set swaps atomically', async () => {
     await act(async () => { root.render(<ResultsPanel/>); });
     await act(async () => { pending.get('old')!(response([100])); });

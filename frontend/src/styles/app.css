@@ -1267,7 +1267,6 @@ textarea:disabled { opacity: .48; }
 .result-recombine-mode { display: inline-flex; align-items: center; gap: 4px; color: var(--fg3); white-space: nowrap; }
 .result-recombine-chip { flex: none; padding: 0 5px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font: var(--text-micro) var(--mono); white-space: nowrap; }
 .result-recombine-chip.warn { border-color: rgba(var(--amber-rgb), .38); background: rgba(var(--amber-rgb), .1); color: var(--amber); }
-.result-recombine-error { color: var(--red); white-space: nowrap; }
 
 /* Measured responses overlaid on the on-axis SPL chart. */
 .result-measured { border-bottom: 1px solid var(--hair-soft); text-transform: none; }
@@ -1450,7 +1449,6 @@ textarea:disabled { opacity: .48; }
 .result-power-check[data-status="qualified"] { border-color: var(--hair-soft); background: none; color: var(--fg2); }
 .result-power-check[data-status="unknown"] { border-color: var(--hair-soft); background: none; color: var(--fg2); font-style: italic; }
 .result-unqualified { flex: none; max-width: 46%; overflow: hidden; padding: 0 5px; border: 1px dashed rgba(var(--amber-rgb), .6); border-radius: 3px; background: rgba(var(--amber-rgb), .12); color: var(--amber); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
-.result-model-load { padding: 3px 8px; color: var(--amber); font-size: var(--text-micro); }
 
 /* Shared by the native source-assembly editors and the CAD panel. */
 .experimental-badge { display: inline-block; justify-self: start; align-self: start; margin: 2px 0; padding: 1px 6px; border: 1px solid rgba(var(--amber-rgb), .45); border-radius: var(--r3); background: rgba(var(--amber-rgb), .1); color: var(--amber); font-size: var(--text-micro); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; vertical-align: middle; white-space: nowrap; cursor: help; }
@@ -1479,12 +1477,57 @@ textarea:disabled { opacity: .48; }
 .imported-input-toggle button { width: auto; padding-inline: 10px; white-space: nowrap; }
 
 /* Pre-job stages use the solve progress area, with no banner treatment. */
-.current-model-status { display: grid; gap: var(--space-8); min-width: 0; font-size: var(--text-base); }
-.current-model-status .notice { margin-bottom: 0; }
-.current-model-status .cad-status-line { padding: var(--space-6) var(--space-8); }
+.current-model-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-8); min-width: 0; font-size: var(--text-base); }
+.current-model-status .cad-status-line { padding: 0; }
 .solve-readiness { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-6); }
 .solve-readiness-note { flex-basis: 100%; }
 .solve-readiness button { white-space: normal; text-align: left; }
+
+/* The Results message area (ResultsMessages.tsx): one line per message under
+   the toolbar, at most two lines; "+N more" opens them all over the charts,
+   so the charts never give up height to a message. */
+.results-messages { position: relative; z-index: 6; display: flex; flex: none; align-items: flex-start; gap: var(--space-4); padding: 2px 6px; border-bottom: 1px solid var(--hair-soft); background: var(--surface-panel); color: var(--fg2); font-size: var(--text-base); }
+.results-messages-list { display: grid; flex: 1; gap: 1px; min-width: 0; }
+.results-message { display: flex; align-items: center; gap: var(--space-6); min-width: 0; min-height: 24px; padding: 1px var(--space-4); border-left: 2px solid transparent; }
+.results-message-error { border-left-color: var(--red); background: rgba(var(--red-rgb), .07); }
+.results-message-warning { border-left-color: var(--amber); background: rgba(var(--amber-rgb), .07); }
+.results-message-progress { border-left-color: var(--blue); }
+.results-message-info { border-left-color: var(--hair-hi); }
+.results-message-glyph { display: grid; flex: none; width: 14px; height: 14px; place-items: center; border-radius: 50%; font: 700 10px/1 var(--ui); }
+.results-message-glyph svg { width: 14px; height: 14px; color: var(--fg3); }
+.results-message-error .results-message-glyph { background: var(--red); color: var(--surface-panel); }
+.results-message-warning .results-message-glyph { background: var(--amber); color: var(--surface-panel); }
+.results-message-progress .results-message-glyph i { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); animation: results-message-pulse 1.6s ease-in-out infinite; }
+@keyframes results-message-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .results-message-progress .results-message-glyph i { animation: none; } }
+.results-message-body { flex: 1; min-width: 0; color: var(--fg1); overflow-wrap: anywhere; }
+.results-message-title { flex: none; font-weight: 600; }
+.results-message-detail { color: var(--fg2); }
+.results-message-body .cad-status-dot { display: none; }
+.results-message-body .cad-status-line { flex: 1; min-width: 0; }
+.results-message-body .solve-readiness { align-items: center; }
+.results-message-actions { display: flex; flex: none; align-items: center; gap: var(--space-4); }
+.results-message :is(.btn, .btn-primary) { height: 20px; min-height: 0; padding: 0 var(--space-6); white-space: nowrap; }
+.results-message-dismiss, .results-messages-toggle { display: inline-flex; flex: none; align-items: center; gap: 2px; height: 20px; padding: 0 var(--space-4); border: 0; border-radius: var(--r3); background: transparent; color: var(--fg3); font: var(--text-micro) var(--ui); cursor: pointer; }
+.results-message-dismiss { width: 20px; justify-content: center; padding: 0; }
+.results-message-dismiss svg, .results-messages-toggle svg { width: 11px; height: 11px; }
+.results-message-dismiss:hover, .results-messages-toggle:hover { background: var(--ov3); color: var(--fg1); }
+.results-messages-toggle { margin: 2px 0 0 auto; white-space: nowrap; }
+.results-messages.expanded .results-messages-toggle svg { transform: rotate(180deg); }
+/* Collapsed: every line is one line. Text gives way with an ellipsis; a
+   message's buttons never do. */
+.results-messages:not(.expanded) .results-message-body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.results-messages:not(.expanded) .results-message-body :is(.current-model-status, .solve-readiness, .cad-status-line, .solve-progress-compact) { flex-wrap: nowrap; min-width: 0; overflow: hidden; white-space: nowrap; }
+.results-messages:not(.expanded) .results-message-body :is(.current-model-status, .solve-readiness, .cad-status-line, .solve-progress-compact) { display: flex; flex: 0 1 auto; }
+.results-messages:not(.expanded) .results-message-body :is(span, p):not(:has(button)) { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+.results-messages:not(.expanded) .results-message-body :is(.results-message-title, .job-stage-word) { flex: none; }
+.results-messages:not(.expanded) .results-message-body .solve-readiness-note { flex-basis: auto; }
+.results-message-body button { flex: none; }
+/* Expanded: the whole list, in full, over the charts; the area keeps its
+   collapsed height so nothing below it moves. */
+.results-messages.expanded .results-messages-list { position: absolute; top: 0; right: 0; left: 0; z-index: 1; max-height: min(60vh, 420px); padding: 2px 64px 6px 6px; overflow: auto; border-bottom: 1px solid var(--hair); background: var(--surface-panel); box-shadow: 0 8px 18px var(--h3-shadow); }
+.results-messages.expanded .results-message { align-items: flex-start; padding-block: 3px; }
+.results-messages.expanded .results-messages-toggle { position: absolute; top: 4px; right: 6px; z-index: 2; margin: 0; }
 
 /* Shared status actions. Dialogs keep their sizing but share the primary look. */
 .btn, .btn-primary {

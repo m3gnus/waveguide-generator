@@ -1325,10 +1325,14 @@ describe('solve invocation mutex', () => {
     const status = host.querySelector('.results-panel .current-model-status')!;
     const title = kind === 'failed' ? 'Solve failed' : 'Not solved yet';
     const detail = kind === 'failed' ? 'Mesh build could not finish.' : 'This version of the model has not been solved.';
-    expect(status.querySelector('.notice-title')?.textContent).toBe(title);
-    expect(status.querySelector('.notice-detail')?.textContent).toBe(detail);
-    expect(status.textContent).toBe(`${title}\n${detail}\n${kind === 'failed' ? 'Retry' : 'Solve'}`);
-    expect(status.querySelector('.notice-actions button')?.className).toBe(kind === 'failed' ? 'btn' : 'btn-primary');
+    const row = status.closest('.results-message')!;
+    expect(row.getAttribute('data-severity')).toBe(kind === 'failed' ? 'error' : 'info');
+    expect(status.querySelector('.results-message-title')?.textContent).toBe(title);
+    expect(status.querySelector('.results-message-detail')?.textContent).toBe(detail);
+    expect(status.textContent).toBe(`${title}${detail}`);
+    const action = row.querySelectorAll('.results-message-actions button');
+    expect([...action].map(button => button.textContent)).toEqual([kind === 'failed' ? 'Retry' : 'Solve']);
+    expect(action[0].className).toBe(kind === 'failed' ? 'btn' : 'btn-primary');
     expect(host.querySelector('.topbar')?.textContent).not.toMatch(/failed|Not solved/i);
   });
 
