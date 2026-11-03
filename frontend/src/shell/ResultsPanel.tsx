@@ -527,6 +527,18 @@ export function smoothContourShape(points: number[][]) {
 interface PlotRect { x: number; y: number; width: number; height: number }
 
 /**
+ * A contour line over a faint stroke in the chart ground. The -3 dB line in
+ * the accent has under 2:1 contrast on the hot end of either ramp; the
+ * under-stroke gives it a crisp edge there without a visible halo elsewhere.
+ */
+function contourPolyline(points: number[][], style: { lineWidth: number } & Record<string, unknown>, background: string | undefined): Array<Record<string, unknown>> {
+  const shape = smoothContourShape(points);
+  const line = { type: 'polyline', shape, style: { fill: null, lineCap: 'round', lineJoin: 'round', ...style } };
+  if (!background) return [line];
+  return [{ type: 'polyline', shape, style: { fill: null, stroke: background, lineWidth: style.lineWidth + 1.6, opacity: .4, lineCap: 'round', lineJoin: 'round' } }, line];
+}
+
+/**
  * Project a dense contour vertex directly into the plot rectangle.
  *
  * Passing a fractional index through `api.coord` on a category axis rounds it
@@ -825,7 +837,7 @@ export function heatmapOption(
         if (!params.coordSys) return null;
         const points = polylines[Number(api.value(0))].map((point) => contourPointToPixels(point, grid, params.coordSys!));
         const middle = points[Math.floor(points.length / 2)];
-        const children: Array<Record<string, unknown>> = [{ type: 'polyline', shape: smoothContourShape(points), style: { fill: null, stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .92, lineCap: 'round', lineJoin: 'round', lineDash: level <= -12 ? [4, 3] : undefined } }];
+        const children = contourPolyline(points, { stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .92, lineDash: level <= -12 ? [4, 3] : undefined }, tokens.background);
         if (Number(api.value(1)) && (density !== 'compact' || level === -6 || isComparisonContour)) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: isComparisonContour && comparison?.showContourNames ? middleEllipsis(comparison.primaryLabel, 14) : `${level} dB`, fill: color, font: '11px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
         return { type: 'group', children };
       },
@@ -852,11 +864,7 @@ export function heatmapOption(
         if (!params.coordSys) return null;
         const points = polylines[Number(api.value(0))].map((point) => comparisonContourPointToPixels(point, referenceGrid, grid, params.coordSys!));
         const middle = points[Math.floor(points.length / 2)];
-        const children: Array<Record<string, unknown>> = [{
-          type: 'polyline',
-          shape: smoothContourShape(points),
-          style: { fill: null, stroke: color, lineWidth: 1.7, opacity: .96, lineCap: 'round', lineJoin: 'round', lineDash: [6, 4] },
-        }];
+        const children = contourPolyline(points, { stroke: color, lineWidth: 1.7, opacity: .96, lineDash: [6, 4] }, tokens.background);
         if (comparison.showContourNames && Number(api.value(1))) children.push({
           type: 'text',
           style: { x: middle[0] + 3, y: middle[1] - 3, text: middleEllipsis(reference.label, density === 'compact' ? 12 : 18), fill: color, font: '11px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 },

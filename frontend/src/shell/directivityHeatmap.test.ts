@@ -164,14 +164,30 @@ describe('directivity heatmap', () => {
     }> };
     const contourStyle = (name: string) => {
       const contour = option.series.find((series) => series.name === name)!;
+      // The last polyline is the contour; the one under it is its ground stroke.
       return contour.renderItem!(
         { coordSys: { x: 0, y: 0, width: 400, height: 200 } },
         { value: (index) => contour.data![0][index] },
-      ).children[0].style;
+      ).children.filter((child) => (child as unknown as { type: string }).type === 'polyline').at(-1)!.style;
     };
 
     expect(contourStyle('-6 dB contour')).toMatchObject({ stroke: tokens.foreground, lineWidth: 1.6 });
     expect(contourStyle('-3 dB contour')).toMatchObject({ stroke: tokens.accent, lineWidth: 1.05 });
+  });
+
+  it('draws each contour over a faint stroke in the chart ground', () => {
+    const grounded = { ...tokens, background: '#211F1D' };
+    const option = heatmapOption(payload(), grounded, 'horizontal', -6) as { series: Array<{
+      name?: string;
+      data?: number[][];
+      renderItem?: (params: unknown, api: { value: (index: number) => unknown }) => { children: Array<{ type: string; shape?: unknown; style: { stroke: string; lineWidth: number; opacity: number } }> };
+    }> };
+    const contour = option.series.find((series) => series.name === '-3 dB contour')!;
+    const [under, line] = contour.renderItem!({ coordSys: { x: 0, y: 0, width: 400, height: 200 } }, { value: (index) => contour.data![0][index] }).children;
+    expect(under.style).toMatchObject({ stroke: '#211F1D', opacity: .4 });
+    expect(under.style.lineWidth).toBeCloseTo(line.style.lineWidth + 1.6);
+    expect(under.shape).toEqual(line.shape);
+    expect(line.style.stroke).toBe(tokens.accent);
   });
 
   it('joins adjacent contour fragments into smoothable continuous paths', () => {
