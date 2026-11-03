@@ -44,7 +44,8 @@ describe('viewport material mode matrix', () => {
     const expected = mode === 'xray' ? DoubleSide : FrontSide;
     for (const material of Object.values(library.surfaces)) expect(material.side).toBe(expected);
     expect(library.wire.side).toBe(FrontSide);
-    expect(library.cap.side).toBe(FrontSide);
+    // The cap faces the kept half but is seen from the removed one.
+    expect(library.cap.side).toBe(DoubleSide);
     library.all.forEach((material) => material.dispose());
   });
 
