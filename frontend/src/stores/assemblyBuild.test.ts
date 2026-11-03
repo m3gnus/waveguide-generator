@@ -9,6 +9,7 @@ import { designForFamily, resetDesignStore, useDesignStore } from './design';
 import { useDesignModelStore } from './importedModel';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { mesh } from '../shell/cadlink/selection.fixtures';
+import { currentModel, currentModelScene } from '../model/currentModel';
 
 let counter = 0;
 const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '0')}`;
@@ -143,12 +144,15 @@ describe('assembly background build', () => {
     const first = requestAssemblyBuild(fetcher);
     expect(prepareDesignModel(fetcher)).toBe(first);
     expect(pending).toHaveLength(1);
+    expect(pending[0].body.design).toMatchObject({ assembly: { woofers: [{ shape: { kind: 'ath_cone' } }] } });
     answer(0, record('wgi_one'));
     await first;
     expect(await prepareDesignModel(fetcher)).toMatchObject({ status: 'published', reused: true, prepared: { ingest_id: 'wgi_one' } });
     expect(pending).toHaveLength(1);
     const scene = importedMeshStore.getSnapshot().solver;
     expect(scene).toMatchObject({ ingestId: 'wgi_one', modelKey: 'prepared:wgi_one' });
+    // Build publishes through the retained imported-mesh scene used by Geometry.
+    expect(currentModelScene(currentModel())).toBe(scene);
     const woofer = useDesignStore.getState().design.assembly!.woofers![0].id;
     commitAssembly(setPlacement(useDesignStore.getState().design.assembly!, woofer, { anchor: 'below', gap_mm: 30 }));
     const reused = prepareDesignModel(fetcher);

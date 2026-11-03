@@ -76,7 +76,9 @@ export function addWoofer(assembly: DesignAssembly, options: NewWooferOptions,
     : { anchor: options.anchor, gap_mm: options.gapMm ?? DEFAULT_WOOFER_GAP_MM };
   next.woofers = [...woofers(next), {
     id, label, enabled: true, radius_mm: options.radiusMm ?? DEFAULT_WOOFER_RADIUS_MM,
-    shape: structuredClone(options.shape ?? { kind: 'piston' }), placement, drive: 'prescribed',
+    // Only creation defaults to ATH's radius-scaled cap/cone. Stored shapes are
+    // explicit, so reopening an existing flat/recessed piston preserves it.
+    shape: structuredClone(options.shape ?? { kind: 'ath_cone' }), placement, drive: 'prescribed',
   }];
   next.signal_groups = [...groups(next), { id: newId(), label, members: [{ radiator_id: id }] }];
   return { assembly: next, id };

@@ -29,6 +29,18 @@ describe('assembly identity', () => {
       .toEqual([[HF_RADIATOR_ID], [first], [second]]);
     expect(new Set(assembly.signal_groups?.map(group => group.id)).size).toBe(3);
     expect(assembly.woofers?.[0].placement).toEqual({ anchor: 'below', gap_mm: 10 });
+    expect(assembly.woofers?.[0].shape).toEqual({ kind: 'ath_cone' });
+  });
+
+  it.each([0, 3])('preserves a saved piston with %s mm recess when adding a new woofer', recess_mm => {
+    const saved = addWoofer(emptyAssembly(ids), { anchor: 'below', shape: { kind: 'piston', recess_mm } }, ids);
+    const assembly = setDriver(saved.assembly, saved.id, driver);
+    const reopened = hydrateDesignDocument(JSON.parse(JSON.stringify(serializeDesign({ ...designForFamily('R-OSSE'), assembly }))));
+    expect(reopened.assembly).toEqual(assembly);
+    const added = addWoofer(reopened.assembly!, { anchor: 'above' }, ids);
+    expect(added.assembly.woofers?.[0]).toEqual(assembly.woofers?.[0]);
+    expect(added.assembly.drivers?.[saved.id]).toEqual(driver);
+    expect(added.assembly.woofers?.[1].shape).toEqual({ kind: 'ath_cone' });
   });
 
   it('never lets a recreated label inherit a deleted woofer driver', () => {

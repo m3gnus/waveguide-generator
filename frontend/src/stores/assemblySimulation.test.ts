@@ -17,9 +17,9 @@ function compiledFor(woofers: string[]): CompiledAssembly {
     msh_text: '$MeshFormat', design: { design_uid: 'wgu_x', name: 'x', revision: 1, content_sha256: 'c', assembly_sha256: 'a', geometry_sha256: 'g' },
     radiators: [], signal_groups: [], source_tags: {},
     sources: [{ id: 'horn-throat', role: 'HF', radiator_id: 'horn-throat', segment_id: null },
-      ...woofers.map(id => ({ id: `${id}/piston`, role: 'LF', radiator_id: id, segment_id: 'piston' }))],
+      ...woofers.flatMap(id => ['cap', 'cone'].map(segment => ({ id: `${id}/${segment}`, role: 'LF', radiator_id: id, segment_id: segment })))],
     excitations: [{ id: 'horn-throat', source_ids: ['horn-throat'], motion: 'normal', patch_weights: { 'horn-throat': 1 } },
-      ...woofers.map(id => ({ id, source_ids: [`${id}/piston`], motion: 'axial' as const, motion_axis: [0, 0, 1] as [number, number, number], patch_weights: { [`${id}/piston`]: 1 } }))],
+      ...woofers.map(id => ({ id, source_ids: [`${id}/cap`, `${id}/cone`], motion: 'axial' as const, motion_axis: [0, 0, 1] as [number, number, number], patch_weights: { [`${id}/cap`]: 1, [`${id}/cone`]: 1 } }))],
   };
 }
 
@@ -43,7 +43,7 @@ describe('assembly as the shared Simulation input', () => {
     expect(state.input).toBe('assembly');
     expect(state.driveChannels.map(channel => [channel.id, channel.motion])).toEqual([['horn-throat', 'normal'], [first, 'axial'], [second, 'axial']]);
     expect(state.driverGroups.map(group => group.channelIds)).toEqual([['horn-throat'], [first], [second]]);
-    expect(state.sources.map(source => source.role)).toEqual(['HF', 'LF', 'LF']);
+    expect(state.sources.map(source => source.role)).toEqual(['HF', 'LF', 'LF', 'LF', 'LF']);
     expect(state.frequencyStartHz).toBe(useDesignStore.getState().design.simulation.f1);
   });
 
@@ -122,6 +122,7 @@ describe('assembly solve setup', () => {
     expect(coupled.notice).toBeNull();
     expect(coupled.setup.geometry.required_features).toEqual(['wg-design-assembly-v1']);
     const channels = coupled.setup.geometry.drive_channels;
+    expect(channels.find(channel => channel.id === first)?.source_ids).toEqual([`${first}/cap`, `${first}/cone`]);
     expect(channels.find(channel => channel.id === first)?.exterior_transducer?.motion_axis).toEqual([0, 0, 1]);
     expect(coupled.setup.geometry.drive_voltage_v).toBe(2.83);
     expect(coupled.setup.geometry.driver_groups?.find(group => group.channel_ids.includes(second))?.member_processing)

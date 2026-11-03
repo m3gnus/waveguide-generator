@@ -200,6 +200,30 @@ def test_a_lower_woofer_compiles_with_roles_tags_evidence_and_full_domain(store,
     assert store.get_model(design_model_id(UID))["producer"] == "design-assembly"
 
 
+def test_authored_ath_woofer_reuses_the_lf_contour_as_one_axial_radiator(store, tmp_path):
+    from hornlab_mesher.enclosure_woofers import AthConeShape, EnclosureWoofer, ath_contour
+
+    flat = compile_(store, tmp_path, design(assembly=assembly(woofer())))["record"]
+    cone = compile_(store, tmp_path, design(assembly=assembly(woofer(shape="ath_cone"))), revision=2)["record"]
+    # Compare the child build's published meridian against the existing ATH
+    # owner, without copying its radius-derived contour formula into WG.
+    x, y = cone["radiators"][1]["center_mm"]
+    expected = ath_contour(EnclosureWoofer(W1, x, y, 80, AthConeShape()))
+    assert cone["mesh"]["metadata"]["assembly"]["contours"][W1] == json.loads(json.dumps(expected.to_dict()))
+    assert [r["radiator_id"] for r in flat["radiators"]] == [r["radiator_id"] for r in cone["radiators"]]
+    assert [e["id"] for e in flat["excitations"]] == [e["id"] for e in cone["excitations"]] == ["horn-throat", W1]
+    assert cone["excitations"][1] == {
+        "id": W1, "source_ids": [f"{W1}/cap", f"{W1}/cone"], "motion": "axial",
+        "motion_axis": [0.0, 0.0, 1.0], "patch_weights": {f"{W1}/cap": 1.0, f"{W1}/cone": 1.0},
+    }
+    assert cone["signal_groups"] == flat["signal_groups"]
+    assert cone["source_tags"] == {"horn-throat": 2, f"{W1}/cap": 101, f"{W1}/cone": 102}
+    mesh = parse_file_mesh(open(cone["mesh_store_path"], encoding="utf-8").read())
+    for segment in ("cap", "cone"):
+        vertices = np.unique(mesh.triangles[mesh.tags == cone["source_tags"][f"{W1}/{segment}"]])
+        assert np.ptp(mesh.points[vertices, 2]) > 0.001
+
+
 def test_a_curved_horn_preserves_axial_motion_and_replaces_a_cached_normal_record(store, tmp_path):
     dump = design(assembly=assembly(), source={"shape": 1, "radius": 30, "velocity_convention": "normal"})
     normal = compile_(store, tmp_path, dump)["record"]
