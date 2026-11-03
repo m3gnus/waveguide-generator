@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, expect, it, vi } from 'vitest';
 import { designForFamily, type DesignDocument } from '../stores/design';
 import { expectNoJargon } from '../testing/expectNoJargon';
-import { MeshTriangleEstimate, roughCount } from './MeshTriangleEstimate';
+import { MeshTriangleEstimate } from './MeshTriangleEstimate';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const unmount: (() => void)[] = [];
@@ -26,18 +26,11 @@ const answer = (off: number, on: number) => vi.fn<typeof fetch>(async (_url, ini
 
 afterEach(() => { unmount.splice(0).forEach((stop) => stop()); vi.unstubAllGlobals(); });
 
-it('gives two figures, because the build pass is an estimate', () => {
-  expect(roughCount(3772)).toBe('3,800');
-  expect(roughCount(22710)).toBe('23,000');
-  expect(roughCount(998)).toBe('1,000');
-});
-
-it('states the cost of a target while Off, without presenting a count as exact', async () => {
+it('shows the exact count and the cost of a target while Off', async () => {
   vi.stubGlobal('fetch', answer(4321, 0));
   const { host, render } = mount();
   render(designForFamily('OSSE'));
-  await vi.waitFor(() => expect(host.textContent).toContain('about 4,300'));
-  expect(host.textContent).not.toContain('4,321');
+  await vi.waitFor(() => expect(host.textContent).toContain('4,321'));
   expect(host.textContent).toContain('7 to 8× the triangles');
   expect(host.textContent).toContain('2.8× the memory');
 });
@@ -48,13 +41,13 @@ it('compares a target with the same design Off and waits for the latest edit', a
   const { host, render } = mount();
   const design = designForFamily('OSSE');
   render(design);
-  await vi.waitFor(() => expect(host.textContent).toContain('about 3,800'));
+  await vi.waitFor(() => expect(host.textContent).toContain('3,772'));
   design.mesh.surface_deviation_mm = 0.3;
   render(design);
   expect(host.textContent).toContain('calculating');
-  await vi.waitFor(() => expect(host.textContent).toContain('about 23,000 or more'), { timeout: 2000 });
-  expect(host.textContent).toContain('With this Off, about 3,800: at least 6× the triangles.');
-  expect(host.textContent).toContain('reads low, often by half or more');
+  await vi.waitFor(() => expect(host.textContent).toContain('22,710'), { timeout: 2000 });
+  expect(host.textContent).toContain('With this Off, 3,772: 6× the triangles.');
+  expect(host.textContent).not.toContain('or more');
   const targets = fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).design.mesh.surface_deviation_mm);
   expect(targets).toContain(0.3);
   // The Off baseline is the query already answered, not a second request.
@@ -66,7 +59,7 @@ it('asks for no baseline while Off', async () => {
   vi.stubGlobal('fetch', fetcher);
   const { host, render } = mount();
   render(designForFamily('OSSE'));
-  await vi.waitFor(() => expect(host.textContent).toContain('about 100'));
+  await vi.waitFor(() => expect(host.textContent).toContain('100'));
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
 
@@ -79,7 +72,7 @@ it.each([
   const { host, render } = mount();
   render(designForFamily('OSSE'));
   await vi.waitFor(() => expect(host.textContent).toContain('not available'));
-  expect(host.textContent).toContain('WG could not estimate this mesh. Open the Mesh view to build it and see its size.');
+  expect(host.textContent).toContain('WG could not count this mesh. Open the Mesh view to build it and see its size.');
   expectNoJargon(host.textContent ?? '');
 });
 
