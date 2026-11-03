@@ -14,6 +14,7 @@ import { fullTime } from '../shell/cadTime';
 import { createImportedMeshScene, previewImportedMeshRoles } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
+import { assemblyMeshScene } from '../viewport/solverMeshScene';
 import { workspaceModeStore } from './workspaceMode';
 import {
   applyWireOptionsToImportedSolveOptions, seedImportedSolveOptionsForFile,
@@ -507,10 +508,7 @@ registerImportedView('assembly', {
         if (record.producer !== 'design-assembly' || !opened.setup || typeof record.msh_text !== 'string'
           || !record.excitations?.length) throw new Error('This run’s mesh or solve settings are gone. Solve the design again.');
         if (!current()) return null;
-        const scene = createImportedMeshScene(opened.model?.display_name || record.design.name || 'Assembly',
-          parseMSH(record.msh_text), 'file', record.ingest_id, [], {
-            rolesByTag: Object.fromEntries(record.sources.map(source => [record.source_tags[source.id], source.role])),
-          });
+        const scene = assemblyMeshScene(opened.model?.display_name || record.design.name || 'Assembly', record, 'file');
         if (!importedMeshStore.setFile(scene, generation)) return null;
         seedFileOptions(opened.setup);
         return record;

@@ -1,3 +1,4 @@
+import type { CompiledAssembly } from '../api/assembly';
 import { solverMeshArtifactToken, type SolverMeshResult } from '../api/solverMesh';
 import { createImportedMeshScene, type ImportedMeshScene } from './importedMesh';
 import { parseMSH } from './mshParser';
@@ -23,4 +24,14 @@ export function solverMeshScene(name: string, result: SolverMeshResult): Importe
     element_shape: result.stats.element_shape,
   };
   return scene;
+}
+
+/** A compiled design assembly's solve mesh, the full domain with its sources
+ * coloured by role. A reopened assembly run shows it as its retained `file`
+ * model; the parametric design it was built from shows it as its `solver`
+ * artifact. */
+export function assemblyMeshScene(name: string, record: CompiledAssembly, source: 'file' | 'solver'): ImportedMeshScene {
+  return createImportedMeshScene(name, parseMSH(record.msh_text), source, record.ingest_id, [], {
+    rolesByTag: Object.fromEntries(record.sources.map(item => [record.source_tags[item.id], item.role])),
+  });
 }
