@@ -859,7 +859,9 @@ describe('solve invocation mutex', () => {
     mocks.solveModel.mockResolvedValueOnce('job-1');
     await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(mocks.solveModel).toHaveBeenCalledTimes(1);
-    expect(solveControlStore.getSnapshot()!.actionError).toContain('prescribed velocity');
+    // An accepted solve's notice is information, never a failed press.
+    expect(solveControlStore.getSnapshot()!.actionError).toBeNull();
+    expect(solveControlStore.getSnapshot()!.solveNotice?.message).toContain('prescribed velocity');
   });
 
   it('asks Solve anyway when an assembly mesh is over the limit, and sends the override', async () => {

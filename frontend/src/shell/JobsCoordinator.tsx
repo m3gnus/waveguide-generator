@@ -111,6 +111,10 @@ interface SolveControl {
   useEngine(engine: string): void;
   preparationError: string | null;
   actionError: string | null;
+  /** What the accepted solve does differently from what was set up, said
+   * with it (an engine that solves woofers at fixed velocity). Information,
+   * never an error: the solve was accepted. `id` changes per solve. */
+  solveNotice?: { id: number; message: string } | null;
   preparingEngine: string | null;
   /** A BEAT runtime's setup state in plain words for the status line, if it has one. */
   runtimeSetup?(engine: string | null | undefined): string | null;
@@ -350,6 +354,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [selectedEngine, refreshCapabilities]);
   const preparation = usePrepareEngine(engines, refreshCapabilities);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [solveNotice, setSolveNotice] = useState<{ id: number; message: string } | null>(null);
+  const solveNoticeSequence = useRef(0);
   // "Solve did not start" says an error waits in Results: once that error is
   // gone, so is the indication.
   useEffect(() => { if (actionError === null) solveAttention.dismissFailure(); }, [actionError]);
@@ -476,6 +482,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     submissionInFlight.current = true;
     setSubmitting(true);
     setActionError(null);
+    setSolveNotice(null);
     // Inherited from the action, never captured here: a delayed submission
     // after the user navigated away must not move them back. The token
     // travels with this submission, never through a shared slot another
@@ -596,7 +603,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     let deferred: DeferredSolvePlan | null = null;
     const onAccepted = () => {
       acceptSubmittedLabel(designName);
-      if (notice) setActionError(notice);
+      const message = notice;
+      if (message) setSolveNotice({ id: ++solveNoticeSequence.current, message });
     };
     const jobId = await acceptSubmission(async () => {
       const live = currentModel().kind === 'parametric';
@@ -884,6 +892,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     prepareAndSolve,
     preparationError: preparation.error,
     actionError,
+    solveNotice,
     preparingEngine: preparation.starting ?? engines.find(engine => engine.name === selectedEngine && engine.runtime_state === 'preparing')?.name ?? null,
     runtimeSetup: (name: string | null | undefined) => {
       const engine = engines.find(item => item.name === name);
@@ -913,7 +922,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable),
-  }), [requested.state, requestCurrent, warming, actionError, readyMeshActive, readyMesh, engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, readyMeshBlocker, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveReadyMesh, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
+  }), [requested.state, requestCurrent, warming, actionError, solveNotice, readyMeshActive, readyMesh, engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, readyMeshBlocker, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveReadyMesh, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
 
   useEffect(() => {
     publishSolveControl(control);
