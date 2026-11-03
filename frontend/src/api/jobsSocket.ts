@@ -3,7 +3,7 @@ import { deadlineFetch } from './deadlineFetch';
 import type { ExteriorTransducerForm } from '../stores/exteriorTransducer';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import type { components } from './generated/openapi';
-import { compareSelection, provisionalResults, type ResultData } from './results';
+import { compareSelection, invalidateJobResults, provisionalResults, type ResultData } from './results';
 import type { CadDeliveryStatus, CadInboxRefusal, CadOperationSummary } from './cadOperations';
 import { ProgramFault } from './httpError';
 
@@ -1568,7 +1568,15 @@ export class JobsSocketManager {
     const previous = this.snapshot;
     const next = { ...previous, ...patch };
     this.snapshot = next;
-    if (patch.jobs) compareSelection.prune(new Set(patch.jobs.map((job) => job.id)));
+    if (patch.jobs) {
+      const incoming = new Map(patch.jobs.map(job => [job.id, job]));
+      for (const job of previous.jobs) {
+        const updated = incoming.get(job.id);
+        if (!updated || updated.has_results !== job.has_results
+          || updated.has_radiation_impedance_artifact !== job.has_radiation_impedance_artifact) invalidateJobResults(job.id);
+      }
+      compareSelection.prune(new Set(incoming.keys()));
+    }
     // Every subscriber reads the whole snapshot through useSyncExternalStore,
     // which compares by identity -- so any notification re-renders the Results
     // panel, the Jobs panel and the coordinator. Two things must therefore not

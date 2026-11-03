@@ -479,11 +479,17 @@ def directivity(result: Any) -> dict[str, list[list[list[float | None]]]]:
 def _wrapped_phase_degrees(value: complex) -> float | None:
     """Map one pressure sample using the result contract's phase convention."""
 
-    amplitude = _finite(np.abs(value))
-    if amplitude is None or amplitude <= 0.0:
-        return None
-    phase = float(np.angle(value, deg=True))
-    return phase if math.isfinite(phase) else None
+    return _wrapped_phase_values(np.asarray(value)).item()
+
+
+def _wrapped_phase_values(values: np.ndarray) -> np.ndarray:
+    """One phase convention for scalar curves and plane arrays."""
+    amplitudes = np.abs(values)
+    phases = np.angle(values, deg=True)
+    usable = np.isfinite(amplitudes) & (amplitudes > 0.0) & np.isfinite(phases)
+    levels = np.asarray(phases, dtype=object)
+    levels[~usable] = None
+    return levels
 
 
 def directivity_phase(result: Any) -> dict[str, list[list[list[float | None]]]]:
@@ -513,11 +519,9 @@ def directivity_phase(result: Any) -> dict[str, list[list[list[float | None]]]]:
         points[:, :, 0] = angle_values[None, :]
         points[:, :, 1] = None
         usable_frequency_count = min(frequency_count, pressure.shape[0])
-        for frequency_index in range(usable_frequency_count):
-            for point_index, angle_index in enumerate(finite_angle_indices):
-                points[frequency_index, point_index, 1] = _wrapped_phase_degrees(
-                    pressure[frequency_index, plane_index, angle_index]
-                )
+        if usable_frequency_count and point_count:
+            values = pressure[:usable_frequency_count, plane_index][:, finite_angle_indices]
+            points[:usable_frequency_count, :, 1] = _wrapped_phase_values(values)
         output[str(plane_name)] = points.tolist()
     return output
 

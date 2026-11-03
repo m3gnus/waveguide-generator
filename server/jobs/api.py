@@ -6,7 +6,7 @@ from server.preview.errors import public_error_message, user_error_message
 
 import logging
 import asyncio
-from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Collection
 import json
 from pathlib import Path
 import re
@@ -24,6 +24,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from server.jobs.fem_field import FemFieldCorrupt, FemFieldInvalidSelection
 from server.platform.feature_flags import fem_regions_enabled
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
+from server.jobs.json_encoding import json_chunks as _json_chunks
 from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.jobs.models import (
     CadApprovalsRequest,
@@ -85,51 +86,6 @@ from server.platform.origin import websocket_request_allowed
 from server.updates.restart import UPDATE_RESTART_PENDING, RestartApproval
 
 logger = logging.getLogger(__name__)
-
-
-def _json_tokens(value: Any) -> Iterator[str]:
-    """Yield valid JSON without encoding one unbounded string or array at once."""
-
-    if isinstance(value, str):
-        yield '"'
-        for offset in range(0, len(value), 64 * 1024):
-            encoded = json.dumps(value[offset : offset + 64 * 1024], allow_nan=False)
-            yield encoded[1:-1]
-        yield '"'
-    elif isinstance(value, Mapping):
-        yield "{"
-        for index, (key, member) in enumerate(value.items()):
-            if index:
-                yield ","
-            yield json.dumps(str(key), allow_nan=False)
-            yield ":"
-            yield from _json_tokens(member)
-        yield "}"
-    elif isinstance(value, (list, tuple)):
-        yield "["
-        for index, member in enumerate(value):
-            if index:
-                yield ","
-            yield from _json_tokens(member)
-        yield "]"
-    else:
-        yield json.dumps(value, allow_nan=False, separators=(",", ":"))
-
-
-def _json_chunks(value: Any) -> Iterator[bytes]:
-    """Coalesce tokens into bounded chunks for StreamingResponse's threadpool."""
-
-    buffered: list[str] = []
-    buffered_characters = 0
-    for token in _json_tokens(value):
-        buffered.append(token)
-        buffered_characters += len(token)
-        if buffered_characters >= 256 * 1024:
-            yield "".join(buffered).encode("utf-8")
-            buffered.clear()
-            buffered_characters = 0
-    if buffered:
-        yield "".join(buffered).encode("utf-8")
 
 
 class RadiationImpedanceAperture(BaseModel):

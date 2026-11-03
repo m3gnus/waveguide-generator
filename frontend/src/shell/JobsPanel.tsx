@@ -55,9 +55,11 @@ function OutputFolderBar() {
   </div>;
 }
 
+const clockFormatter = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+
 function clock(iso: string | null): string {
   if (!iso) return '—';
-  return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
+  return clockFormatter.format(new Date(iso));
 }
 
 function secondsBetween(start: string | null, end: string | null, now: number): number {
@@ -150,7 +152,8 @@ export function jobCardPropsEqual(previous: JobCardProps, next: JobCardProps): b
 
 const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExportSettings }: JobCardProps) {
   const meshNotice = useRunExportStore(state => state.meshNotices[job.id]);
-  const overlaid = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot).overlays.includes(job.id);
+  const getOverlaid = useCallback(() => compareSelection.getSnapshot().overlays.includes(job.id), [job.id]);
+  const overlaid = useSyncExternalStore(compareSelection.subscribe, getOverlaid, getOverlaid);
   const running = isActiveJobStatus(job.status);
   const failed = job.status === 'error';
   const cancelled = job.status === 'cancelled';

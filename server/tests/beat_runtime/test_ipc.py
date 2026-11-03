@@ -210,6 +210,26 @@ def test_nonfinite_json_numbers_refused(number):
         ipc.receive_frame(FragmentedPeer(frame(f'{{"a":{number}}}'.encode())))
 
 
+def test_numeric_validation_visits_only_float_tokens(monkeypatch):
+    loads = json.loads
+    tokens = []
+
+    def checked_loads(body, **kwargs):
+        parse_float = kwargs["parse_float"]
+
+        def counted(token):
+            tokens.append(token)
+            return parse_float(token)
+
+        return loads(body, **{**kwargs, "parse_float": counted})
+
+    monkeypatch.setattr(ipc.json, "loads", checked_loads)
+    body = b'{"binary":"' + b"9" * 4096 + b'","values":[1.25,-0.0,1e-999],"large":' + b"9" * 400 + b'}'
+    decoded = ipc.receive_frame(FragmentedPeer(frame(body)))
+    assert decoded == loads(body)
+    assert tokens == ["1.25", "-0.0", "1e-999"]
+
+
 @pytest.mark.skipif(os.name != "posix", reason="Unix socket residue")
 @pytest.mark.parametrize("failure", ["chmod", "listen"])
 def test_failed_post_bind_step_unlinks_only_own_socket(tmp_path, monkeypatch, failure):
@@ -331,8 +351,7 @@ def test_large_integer_remains_exact():
 
 
 @pytest.mark.parametrize("number", ["1.25", "1e99", "1e-999", "-12", "0.0"])
-def test_safe_numbers_skip_finite_walk(monkeypatch, number):
-    monkeypatch.setattr(ipc, "_check_finite", lambda value: pytest.fail("unnecessary finite walk"))
+def test_safe_numbers_keep_json_values(number):
     assert ipc.receive_frame(FragmentedPeer(frame(f'{{"a":{number}}}'.encode()))) == {"a": json.loads(number)}
 
 

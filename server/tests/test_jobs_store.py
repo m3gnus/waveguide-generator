@@ -102,6 +102,57 @@ def _complete(store: JobStore, job_id: str, results: dict[str, object]) -> None:
     )
 
 
+@pytest.mark.parametrize("complete", [False, True])
+def test_result_preparation_does_not_hold_the_store_lock(tmp_path, monkeypatch, complete):
+    from concurrent.futures import TimeoutError as FutureTimeout
+    import server.jobs.store as module
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("preparing", "running"))
+    entered, release = threading.Event(), threading.Event()
+
+    def preparing(results):
+        entered.set()
+        assert release.wait(2)
+        return annotate_results(results)
+
+    monkeypatch.setattr(module, "annotate_results", preparing)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writer = pool.submit(_complete if complete else JobStore.store_results,
+                             store, "preparing", _result_envelope())
+        try:
+            assert entered.wait(1)
+            reader = pool.submit(store.get_job_row, "preparing")
+            try:
+                assert reader.result(timeout=0.2)["status"] == "running"
+            except FutureTimeout:
+                pytest.fail("result preparation held the store lock")
+        finally:
+            release.set()
+            writer.result(timeout=2)
+            store.close()
+
+
+def test_cancellation_during_result_preparation_wins_the_complete_transition(tmp_path, monkeypatch):
+    import server.jobs.store as module
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("cancel", "running"))
+
+    def preparing(results):
+        store.request_cancellation("cancel", {"cancellation_requested": True}, {"cancellation_requested": True})
+        return annotate_results(results)
+
+    monkeypatch.setattr(module, "annotate_results", preparing)
+    assert store.complete_job("cancel", _result_envelope(), {"status": "complete"}, {}) is None
+    assert store.get_job_row("cancel")["cancellation_requested"]
+    assert store.get_job_row("cancel")["status"] == "running"
+    assert store.get_results("cancel") is None
+    store.close()
+
+
 def test_v1_schema_columns_are_exact_and_live_under_wg2_data_dir(tmp_path: Path) -> None:
     store = JobStore.for_data_dir(tmp_path)
     store.initialize()

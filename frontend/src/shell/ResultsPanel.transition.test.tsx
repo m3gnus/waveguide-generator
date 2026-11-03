@@ -131,6 +131,25 @@ describe('atomic results display transitions', () => {
     vi.restoreAllMocks();
   });
 
+  it('retains active comparison payloads beyond the history cache and when removing an overlay', async () => {
+    const rows = Array.from({ length: 18 }, (_, index) => ({ ...job(`compare-${index}`), has_radiation_impedance_artifact: true }));
+    publishJobs(rows);
+    compareSelection.setPrimary(rows[0].id);
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/presentation')
+      ? new Response(JSON.stringify({ schema_version: 1, frequencies: [100], aperture_names: [], matrix: { real: [], imaginary: [] } }))
+      : response([100]));
+    vi.stubGlobal('fetch', fetcher);
+    await act(async () => root.render(<ResultsPanel/>));
+    for (const row of rows.slice(1)) await act(async () => compareSelection.toggleOverlay(row.id));
+    expect(fetcher.mock.calls.filter(([url]) => String(url).startsWith('/api/results/'))).toHaveLength(18);
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/presentation'))).toHaveLength(18);
+    expect(resultsCache.keys()).toHaveLength(15);
+    const count = fetcher.mock.calls.length;
+    await act(async () => compareSelection.toggleOverlay(rows[1].id));
+    expect(fetcher).toHaveBeenCalledTimes(count);
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe(rows[0].id);
+  });
+
   it('shows a new warming solve once alongside the previous results', async () => {
     const control = vi.spyOn(coordinator, 'useOptionalSolveControl').mockReturnValue(null);
     await act(async () => root.render(<ResultsPanel/>));
