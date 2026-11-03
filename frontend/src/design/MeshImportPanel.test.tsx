@@ -18,6 +18,7 @@ import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import { preferencesStore } from '../prefs/preferences';
 import { MeshImportPanel } from './MeshImportPanel';
 import { CurrentModelStatus } from '../shell/CurrentModelStatus';
+import { activityStore } from '../shell/activity';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 const panel = () => <QueryClientProvider client={queryClient}><MeshImportPanel tab="geometry"/><MeshImportPanel tab="simulation"/></QueryClientProvider>;
@@ -31,6 +32,7 @@ const initial = useMeshImportStore.getState();
 let root: Root;
 let host: HTMLDivElement;
 beforeEach(() => {
+  activityStore.reset();
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   useMeshImportStore.setState(initial, true);
   resetSolveOptionsStore();
@@ -43,7 +45,95 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
 });
+
+// Real file/model stores and viewport parser, with only the HTTP boundary mocked.
+const tetraText = new TextDecoder().decode(readFileSync('../server/tests/fixtures/mesh_import/tetra.msh'));
+const tetraSummary = { node_count: 4, triangle_count: 4, dimensions: [100, 100, 100], suggested_units: 'mm',
+  groups: [{ tag: 1, name: 'Rigid', triangle_count: 3, suggested_role: 'RIGID' },
+    { tag: 2, name: 'HF', triangle_count: 1, suggested_role: 'HF' }] };
+const tetraRecord: RegisteredMesh = { ingest_id: 'wgi_tetra', model_id: 'mesh-file:sha256:tetra', producer: 'mesh-file',
+  manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact', summary: tetraSummary,
+  source_file: { filename: 'tetra.msh', transform: { units: 'mm', forward: '+z', up: '+y' }, source_tags: [2] },
+  source_tags: { group_2: 2 }, msh_text: tetraText };
+const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status,
+  headers: { 'Content-Type': 'application/json' } });
+function renderFileImport() {
+  act(() => root.render(<>{panel()}<section aria-label="Results"><CurrentModelStatus actions solveStatus/></section></>));
+}
+
+it('sends registration for a valid file, then replaces Preparing with a ready model and Drivers', async () => {
+  let finish!: (response: Response) => void;
+  const registration = new Promise<Response>(resolve => { finish = resolve; });
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? jsonResponse(tetraSummary) : registration);
+  const started = vi.spyOn(activityStore, 'start');
+  renderFileImport();
+  let loading!: Promise<void>;
+  await act(async () => { loading = loadMeshFile('tetra.msh', tetraText, fetcher); });
+  expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/models/files/inspect', '/api/models/files']);
+  expect(JSON.parse(fetcher.mock.calls[1][1]!.body as string)).toMatchObject({ msh_text: tetraText,
+    units: 'mm', roles: { 1: 'RIGID', 2: 'HF' } });
+  expect(host.querySelector('.cad-status-line')?.textContent).toContain('Preparing tetra.msh…');
+  expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'mesh-import', cancel: expect.any(Function) }]);
+  await act(async () => { finish(jsonResponse({ prepared: tetraRecord })); await loading; });
+  expect(started.mock.calls.filter(([start]) => start.kind === 'mesh-import')).toHaveLength(1);
+  expect(useMeshImportStore.getState()).toMatchObject({ busy: false, error: null });
+  expect(useImportedModelStore.getState()).toMatchObject({ phase: 'ready', prepared: { ingest_id: tetraRecord.ingest_id } });
+  expect(host.querySelector('.cad-status-line')?.textContent).not.toContain('Preparing');
+  expect(host.querySelector('[data-section="Drivers"]')).not.toBeNull();
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+});
+
+it('shows missing units and roles as choices, sends no registration until both are set, then shows Drivers', async () => {
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? jsonResponse({ ...tetraSummary, suggested_units: null,
+      groups: tetraSummary.groups.map(group => ({ ...group, needs_role_choice: group.tag === 2 })) })
+    : jsonResponse({ prepared: tetraRecord }));
+  renderFileImport();
+  await act(async () => { await loadMeshFile('tetra.msh', tetraText, fetcher); });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(useMeshImportStore.getState().busy).toBe(false);
+  expect(host.querySelector('.cad-status-line')?.textContent).toBe("Choose the file's units.");
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+  await act(async () => { await editMeshImport({ units: 'mm' }, fetcher); });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(host.querySelector('.cad-status-line')?.textContent).toBe('Choose which surface is a driver.');
+  expect(useMeshImportStore.getState().busy).toBe(false);
+  await act(async () => { await editMeshImport({ roles: { 1: 'RIGID', 2: 'HF' } }, fetcher); });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(host.querySelector('[data-section="Drivers"]')).not.toBeNull();
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+});
+
+it.each(['inspection', 'registration', 'frame inspection'] as const)(
+  'ends a valid file import with a visible remedy after refused %s', async stage => {
+    const message = 'The mesh has an opening. Close it in the meshing tool and import it again.';
+    const refusal = () => jsonResponse({ error: { code: 'mesh_refused', message } }, 422);
+    let inspections = 0;
+    const fetcher = vi.fn<typeof fetch>(async url => {
+      if (String(url).endsWith('/inspect')) {
+        inspections += 1;
+        return stage === 'inspection' || inspections > 1 ? refusal() : jsonResponse(tetraSummary);
+      }
+      return stage === 'registration' ? refusal() : jsonResponse({ prepared: tetraRecord });
+    });
+    renderFileImport();
+    let caught: unknown;
+    await act(async () => {
+      try { await loadMeshFile('tetra.msh', tetraText, fetcher); } catch (error) { caught = error; }
+      if (stage === 'frame inspection') await editMeshImport({ up: '+x' }, fetcher);
+    });
+    expect(Boolean(caught)).toBe(stage === 'inspection');
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(stage === 'inspection' ? ['/api/models/files/inspect']
+      : stage === 'registration' ? ['/api/models/files/inspect', '/api/models/files']
+        : ['/api/models/files/inspect', '/api/models/files', '/api/models/files/inspect']);
+    expect(useMeshImportStore.getState()).toMatchObject({ busy: false, error: message });
+    expect(host.querySelector('.cad-status-line')?.textContent).toContain(message);
+    expect(host.querySelector('.cad-status-line')?.textContent).not.toContain('Preparing');
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+  });
 afterEach(() => {
+  vi.restoreAllMocks();
   const geometry = host.querySelector('[aria-label="Imported mesh geometry"]');
   if (geometry) expectNoJargon(geometry);
   vi.unstubAllGlobals();
@@ -450,7 +540,7 @@ it('disables the shared Simulation controls while no prepared file is available'
 });
 
 it.each(['share', 'separate'] as const)('shows the %s choice after adding a surface to its role', async (choice) => {
-  const msh = new TextDecoder().decode(readFileSync('../server/tests/fixtures/mesh_import/tetra.msh'));
+  const msh = tetraText;
   const mesh: RegisteredMesh = { ingest_id: 'wgi_roles', model_id: 'mesh-file:sha256:roles', producer: 'mesh-file',
     manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact', msh_text: msh, summary: fileSummary,
     source_file: { filename: 'speaker.msh', transform: { units: 'mm', forward: '+z', up: '+y' },
