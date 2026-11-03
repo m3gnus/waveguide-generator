@@ -673,8 +673,10 @@ export function usePreferences(): Preferences {
 
 /** Whether WG shows its technical detail: the one owner is the
  * `showDeveloperDetails` preference (Settings ▸ Advanced). */
+const developerDetailsSnapshot = (): boolean => preferencesStore.getSnapshot().showDeveloperDetails;
+
 export function useDeveloperDetails(): boolean {
-  return usePreferences().showDeveloperDetails;
+  return useSyncExternalStore(preferencesStore.subscribe, developerDetailsSnapshot, developerDetailsSnapshot);
 }
 
 export type RunDisplayVariant = 'full' | 'short';

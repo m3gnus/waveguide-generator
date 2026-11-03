@@ -159,12 +159,9 @@ export function fieldPlaneColormap(
 }
 
 export function maxFieldSplDb(real: Float32Array, imag: Float32Array): number {
-  if (real.length !== imag.length) throw new ProgramFault('Complex field components must have equal lengths');
-  let maximum = -Infinity;
-  for (let index = 0; index < real.length; index += 1) {
-    const value = splDb(real[index], imag[index]);
-    if (Number.isFinite(value) && value > maximum) maximum = value;
-  }
+  // SPL increases with magnitude. Reuse the magnitude scanner, then convert
+  // only its maximum through the same scalar SPL definition.
+  const maximum = splDb(maxFieldMagnitudePa(real, imag), 0);
   return Number.isFinite(maximum) ? maximum : 0;
 }
 

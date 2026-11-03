@@ -1,4 +1,4 @@
-import { createContext, useContext, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useSyncExternalStore, type ReactNode } from 'react';
 import { useStore, type StoreApi, type UseBoundStore } from 'zustand';
 import { runNormalizationAngle } from '../results/normalization';
 import { workspaceModeStore, type WorkspaceMode } from './workspaceMode';
@@ -30,8 +30,10 @@ export function SolveOptionsStoreProvider({ mode, children }: { mode: WorkspaceM
  */
 export function useScopedSolveOptionsStore(): SolveOptionsStoreApi {
   const provided = useContext(SolveOptionsStoreContext);
-  const workspace = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot);
-  return provided ?? solveOptionsStoreForMode(workspace.mode);
+  // Only changing the selected store affects these controls. Input intent and
+  // workspace switches beneath an explicit provider keep the same store.
+  const selectedStore = useCallback(() => provided ?? solveOptionsStoreForMode(workspaceModeStore.getSnapshot().mode), [provided]);
+  return useSyncExternalStore(workspaceModeStore.subscribe, selectedStore, selectedStore);
 }
 
 /** Drop-in for `useSolveOptionsStore(selector)` that follows the scope. */
