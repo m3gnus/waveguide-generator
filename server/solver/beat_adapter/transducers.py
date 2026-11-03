@@ -16,7 +16,7 @@ from urllib.parse import quote
 import numpy as np
 
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
-from .mesh import SurfaceMesh, read_surface
+from .mesh import SurfaceMesh
 from .observations import ObservationLayout
 from .preflight import UnsupportedPhysics, validate_exterior_physics
 from .request import SourceBasis, build_request, _axis, _image_frame
@@ -330,15 +330,17 @@ def build_transducer_request(
         frame=frame, frequencies_hz=frequencies_hz, precision=precision, engine_id=f"beat-{backend}",
         mesh_scale_to_m=mesh_scale_to_m, sound_speed_m_per_s=sound_speed_m_per_s,
         density_kg_per_m3=density_kg_per_m3,
-        symmetry=symmetry,
+        symmetry=symmetry, _retain_source_mesh=True,
     )
     wire = prepared.wire
     system = wire["compiled_system"]
     components = system["components"][:len(ideal_sources)]
     ports = system["excitation_ports"][:len(ideal_sources)]
-    source_mesh = read_surface(msh_text, scale_to_m=mesh_scale_to_m)
+    source_mesh = prepared.source_mesh
+    assert source_mesh is not None
     sd_metadata = {}
     channel_warnings = {}
+    prepared_symmetry = {}
     mode, rotation, _ = _image_frame(symmetry, None)
     axes = (0,) if mode == "x" else (0, 1) if mode == "xy" else ()
     from server.solver.coupled_admission import validate_driver_sd_geometry
@@ -352,6 +354,7 @@ def build_transducer_request(
         validate_driver_sd_geometry(raw, {"exterior": [(selected, source_mesh.points_m[selected])]},
                                     driver.axis, driver.id)
         inferred = infer_component_symmetry(moving, axis, axes, channel_id=driver.id)
+        prepared_symmetry[driver.component_id] = inferred
         if any(abs(axis[a]) > 1e-8 for a in axes):
             raise UnsupportedPhysics(f"Channel {driver.id!r}: {EXTERIOR_AXIS_SYMMETRY_MESSAGE}")
         area, sd_metadata[driver.id], notes = resolve_driver_sd(
@@ -375,12 +378,18 @@ def build_transducer_request(
     wire.update(excitation_port_ids=requested, outputs=outputs(prepared.layout))
     wire["solver_options"]["transducer_reference_voltage_v"] = voltage
     request = TransducerRequest(wire, prepared.layout, prepared.mesh, sd_metadata, channel_warnings)
-    validate_transducer_request(request)
+    _validate_transducer_request(request, prepared_symmetry=prepared_symmetry)
     return request
 
 
 def validate_transducer_request(request: TransducerRequest) -> None:
     """WG-only v3 admission; BEAT's existing validator remains authoritative."""
+    _validate_transducer_request(request)
+
+
+def _validate_transducer_request(request: TransducerRequest, *, prepared_symmetry=None) -> None:
+    # Only the builder's immediate check can reuse its local geometry facts.
+    # Public admission always infers again, including after in-place mutations.
     wire = request.wire
     system, options = wire["compiled_system"], wire["solver_options"]
     if (system["contract_version"] != 3 or (options.get("bem_backend"), options.get("precision")) not in
@@ -422,9 +431,12 @@ def validate_transducer_request(request: TransducerRequest) -> None:
                 raise UnsupportedPhysics("WG transducers require rigid_translation")
             axes = (0,) if options["symmetry"] == "x" else (0, 1) if options["symmetry"] == "xy" else ()
             tags = [groups[b][2] for b in boundaries]
-            faces = request.mesh.faces[np.isin(request.mesh.tags, tags)]
-            inferred = infer_component_symmetry({"exterior": [(faces, request.mesh.points_m[faces])]},
-                                                params["motion_axis"], axes, channel_id=component["name"])
+            if prepared_symmetry is None:
+                faces = request.mesh.faces[np.isin(request.mesh.tags, tags)]
+                inferred = infer_component_symmetry({"exterior": [(faces, request.mesh.points_m[faces])]},
+                                                    params["motion_axis"], axes, channel_id=component["name"])
+            else:
+                inferred = prepared_symmetry[component["id"]]
             if any(abs(_axis(params["motion_axis"])[a]) > 1e-8 for a in axes):
                 raise UnsupportedPhysics(f"Channel {component['name']!r}: {EXTERIOR_AXIS_SYMMETRY_MESSAGE}")
             if any(params.get(key, value if options["symmetry"] == "off" else None) != value

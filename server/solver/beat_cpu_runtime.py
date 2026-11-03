@@ -232,7 +232,7 @@ def cancel_unselected_preparation(engine: str | None) -> None:
         resources = tuple(_provision_resources)
     for resource in resources:
         try:
-            resource.terminate()
+            getattr(resource, "cancel", resource.terminate)()
         except Exception:
             log.debug("Preparation child already stopped", exc_info=True)
 
@@ -276,23 +276,46 @@ def _start_official_provisioning(env: Mapping[str, str], *, backend: str = CPU_B
             check_cancelled()
 
     def worker_factory(**kwargs):
+        from .beat_runtime.manager import ManagedWorker
         from .beat_runtime.readiness import _engine_worker
 
         check_cancelled()
-        raw = own(_engine_worker(**kwargs))
-        check_cancelled()
+        client = ManagedWorker(_engine_worker(**kwargs), "child")
+        lease = client.acquire(check_cancelled)
 
         class OwnedWorker:
-            def __getattr__(self, name):
-                return getattr(raw, name)
+            @property
+            def worker_info(self):
+                return client.worker_info
 
-            def terminate(self):
+            def submit(self, request):
                 try:
-                    raw.terminate()
+                    check_cancelled()
+                    lease.start()
+                    check_cancelled()
+                    return lease.submit(request)
                 finally:
                     check_cancelled()
 
-        return OwnedWorker()
+            def cancel(self):
+                # Selection-thread retirement must not unwind its caller.
+                try:
+                    client.close(detach=False)
+                finally:
+                    lease.close()
+
+            def terminate(self):
+                try:
+                    self.cancel()
+                finally:
+                    # Probe teardown must unwind before failure is persisted.
+                    check_cancelled()
+
+        # Register the admission owner, not the restartable raw worker. Closure
+        # also retires a stream returned after cancellation during lazy startup.
+        owned = own(OwnedWorker())
+        check_cancelled()
+        return owned
 
     def worker() -> None:
         global _preparation_in_flight, _provision_step, _provision_phase, _gpu_stage_backend, _gpu_stage_step

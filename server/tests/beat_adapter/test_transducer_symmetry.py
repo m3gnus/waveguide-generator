@@ -34,6 +34,46 @@ def octahedron(make_mesh, axes=(), offset=(0., 0., 0.), *, scale=1.):
     return make_mesh((points[used] * scale + offset).tolist(), remap[faces].tolist(), tags[selected].tolist())
 
 
+@pytest.mark.parametrize("axes,symmetry,backend,precision", [
+    ((), "full", "cpu", "float64"),
+    ((0,), "yz", "cpu", "float64"),
+    ((0, 1), "yz+xz", "metal", "float32"),
+    ((1,), "xz", "metal", "float32"),
+])
+def test_builder_reuses_original_surface_and_prepared_inference(
+    make_mesh, layout, monkeypatch, axes, symmetry, backend, precision,
+):
+    from server.solver.beat_adapter import request as requests
+
+    mesh = octahedron(make_mesh, axes)
+    counts = {"parse": 0, "infer": 0}
+    parse, infer = requests.read_surface, t.infer_component_symmetry
+
+    def counted_parse(*a, **kw):
+        counts["parse"] += 1
+        return parse(*a, **kw)
+
+    def counted_infer(*a, **kw):
+        counts["infer"] += 1
+        return infer(*a, **kw)
+
+    monkeypatch.setattr(requests, "read_surface", counted_parse)
+    monkeypatch.setattr(t, "read_surface", counted_parse, raising=False)
+    monkeypatch.setattr(t, "infer_component_symmetry", counted_infer)
+    built = t.build_transducer_request(
+        mesh, drivers=[driver(tags=(2,), axis=[0, 0, 1])], layout=layout, frame=FRAME,
+        frequencies_hz=[100.], symmetry=symmetry, backend=backend, precision=precision,
+        mesh_scale_to_m=.001,
+    )
+    assert counts == {"parse": 1, "infer": 1}
+    # Public admission still checks mutable and externally supplied geometry.
+    t.validate_transducer_request(built)
+    assert counts["infer"] == 2
+    built.mesh.points_m[:] = 0
+    with pytest.raises(ValueError):
+        t.validate_transducer_request(built)
+
+
 def symmetry_raw(request):
     result = raw(request, 100.)
     # Derive copy accounting from geometry, independently of component parameters.

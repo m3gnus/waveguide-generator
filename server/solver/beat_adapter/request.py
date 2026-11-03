@@ -54,6 +54,8 @@ class CompiledRequest:
     surface_traces: bool
     # Application metadata from the exact source preparation; never sent on the wire.
     axial_identity: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    # Original metre coordinates, before precision conversion and image snapping.
+    source_mesh: SurfaceMesh | None = field(default=None, repr=False, compare=False)
 
 
 def validate_imported_request(compiled: CompiledRequest, native_plane: str | None) -> None:
@@ -168,6 +170,7 @@ def build_request(
     sound_speed_m_per_s: float = 343., density_kg_per_m3: float = 1.2041,
     quadrature_order: int = QUADRATURE_ORDER, singular_order: int = SINGULAR_ORDER, surface_traces: bool = False,
     cancel_path: Path | None = None, ground_plane_min_clearance_m: float = 0.,
+    _retain_source_mesh: bool = False,
 ) -> CompiledRequest:
     """Build independent unit-velocity bases; WG channels sum their named ports.
 
@@ -299,7 +302,8 @@ def build_request(
     if cancel_path is not None:
         wire["cancel_path"] = str(cancel_path.resolve())
     return CompiledRequest(wire, transformed_layout, transformed, tuple(bases), channels,
-                           loading, frame, engine_id, surface_traces)
+                           loading, frame, engine_id, surface_traces,
+                           source_mesh=mesh if _retain_source_mesh else None)
 
 
 def build_parametric_request(

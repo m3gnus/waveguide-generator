@@ -365,3 +365,155 @@ def test_deselected_probe_cannot_admit_preparation_after_selection_changes(offic
     caller.join(2)
     assert not caller.is_alive() and errors == ["selection changed"]
     assert facade._provision_thread is None
+
+
+@pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm"])
+@pytest.mark.parametrize("pause", ["fixture", "startup", "submission", None])
+def test_preparation_probe_cancellation_closes_lazy_admission(official, monkeypatch, tmp_path, backend, pause):
+    from server.solver.beat_runtime import probe
+    from server.tests.beat_runtime.test_probe import COMPLETED, WORKER_INFO, result
+
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **kw:
+                        readiness.BackendReadiness(False, "unprovisioned", "mock"))
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kw:
+                        {backend: {"available": True, "reason": "mock"}})
+
+    def wait_here():
+        entered.set()
+        assert release.wait(2)
+
+    class Stream:
+        events = iter([result(backend=backend), COMPLETED])
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            calls.append("probe")
+            return next(self.events)
+
+        def close(self):
+            calls.append("close")
+
+    class Worker:
+        worker_info = WORKER_INFO
+
+        def ensure_started(self):
+            if pause == "startup":
+                wait_here()
+            calls.append("start")
+
+        def submit(self, request, **kwargs):
+            if pause == "submission":
+                wait_here()
+            calls.append("submit")
+            return Stream()
+
+        def terminate(self):
+            calls.append("terminate")
+
+    monkeypatch.setattr(readiness, "_engine_worker", lambda **kw: Worker())
+    original = probe.build_request
+
+    def prepare_fixture(*a, **kw):
+        if pause == "fixture":
+            wait_here()
+        return original(*a, **kw)
+
+    monkeypatch.setattr(probe, "build_request", prepare_fixture)
+
+    def provision(**kwargs):
+        worker = kwargs["worker_factory"]()
+        try:
+            verdict = probe.compiled_probe(worker, directory=tmp_path, backend=backend)
+            assert verdict.ready, verdict.reason
+        finally:
+            worker.terminate()
+        return {"status": "ready"}
+
+    monkeypatch.setattr(readiness, f"provision_{backend}", provision)
+    thread = facade._start_official_provisioning({}, backend=backend)
+    try:
+        if pause is not None:
+            assert entered.wait(2)
+            facade.cancel_unselected_preparation("bempp")
+            assert "terminate" in calls
+    finally:
+        release.set()
+        thread.join(2)
+    assert not thread.is_alive()
+    if pause is not None:
+        assert "probe" not in calls
+    else:
+        assert "probe" in calls
+    if pause in {"fixture", "startup"}:
+        assert "submit" not in calls
+        if pause == "startup":
+            assert calls.index("start") < len(calls) - 1
+            assert calls[-1] == "terminate"
+    elif pause == "submission":
+        # An engine call already admitted before cancellation must retire its
+        # late stream before it can expose any probe events.
+        assert "close" in calls
+    assert facade.runtime_preparation_status(backend) == (None, None)
+    assert facade._provision_resources == []
+    assert facade._preparation_errors == {}
+
+
+def test_cancel_during_probe_read_does_not_persist_failed_readiness(official, cpu_provisioning, monkeypatch):
+    from server.solver.beat_runtime import state
+    from server.tests.beat_runtime.test_probe import WORKER_INFO
+
+    root, _, _, _, options = cpu_provisioning
+    entered, retired = threading.Event(), threading.Event()
+
+    class Stream:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            entered.set()
+            assert retired.wait(2)
+            raise StopIteration
+
+        def close(self):
+            retired.set()
+
+    class Worker:
+        worker_info = WORKER_INFO
+
+        def ensure_started(self):
+            pass
+
+        def submit(self, *a, **kw):
+            return Stream()
+
+        def terminate(self):
+            retired.set()
+
+    monkeypatch.setattr(readiness, "_engine_worker", lambda **kw: Worker())
+    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **kw:
+                        readiness.BackendReadiness(False, "unprovisioned", "mock"))
+    original = readiness.provision_cpu
+    setup = {key: value for key, value in options.items()
+             if key not in {"probe", "probe_contract", "probe_fixture_identity"}}
+
+    def provision(**kwargs):
+        return original(root, worker_factory=kwargs["worker_factory"], **setup)
+
+    monkeypatch.setattr(readiness, "provision_cpu", provision)
+    thread = facade._start_official_provisioning({})
+    try:
+        assert entered.wait(2)
+        facade.cancel_unselected_preparation("bempp")
+    finally:
+        retired.set()
+        thread.join(2)
+    assert not thread.is_alive()
+    record = state.read_state(root, backend="cpu")
+    assert record["status"] == "in_progress"
+    assert record["step"] == "cpu_probe"
+    assert record["error"] is None
+    assert facade._preparation_errors == {}
