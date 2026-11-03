@@ -4,9 +4,9 @@ import type { CurveAnchor, CurveDeviation, InsertMode } from '../api/freeformPro
 import type { GeneratedPlaneChange } from '../api/profileSamples';
 import { Notice } from '../shell/Notice';
 import {
-  activePlanes, angleField, deleteAnchor, formatAngle, formatMm, horizontalThroatForVertical, insertAnchorBuilder,
+  activePlanes, angleField, commitProfileEdit, currentEditOrigin, deleteAnchor, formatAngle, formatMm, horizontalThroatForVertical, insertAnchorBuilder,
   isSharedProfile, isUnseparatedVertical, MAX_FREEFORM_ANCHORS, moveMouthBuilder, previewAcceptable, separateVerticalBlocker, setAnchorAngle, setAnchorJoin,
-  pasteBuilder, setAnchorValue, setSeparateVertical, stretchLengthBuilder, useCurrentProfileCurves, useProfileEdit, type Plane,
+  pasteBuilder, setAnchorValue, setSeparateVertical, spliceCrossSectionStations, stretchLengthBuilder, useCurrentProfileCurves, useProfileEdit, type Plane,
 } from './customProfileEdit';
 import { ToggleRow } from './SolveOptionsSections';
 import type { ParameterDefinition } from './parameterRegistry';
@@ -528,13 +528,21 @@ export function stationPosition(value: number, span: number): number {
 }
 
 export function EditableStationTable({ field, stations }: { field: ParameterDefinition; stations: CrossSectionStation[] }) {
-  const updateValue = useDesignStore((state) => state.updateValue);
+  const commitEmbedded = useDesignStore((state) => state.commitEmbedded);
   const length = useDesignStore((state) => state.design.length ?? 120);
   const beginDrag = useDesignStore((state) => state.beginDrag);
   const endDrag = useDesignStore((state) => state.endDrag);
   const write = (index: number, replacement: CrossSectionStation) => {
-    const next = stations.map((station, item) => item === index ? replacement : station).sort((a, b) => a.t - b.t);
-    updateValue('cross_sections', next);
+    const current = stations[index];
+    const fields = new Set([...Object.keys(current), ...Object.keys(replacement)] as (keyof CrossSectionStation)[]);
+    const updates = Object.fromEntries([...fields]
+      .filter((key) => current[key] !== replacement[key])
+      .map((key) => [`cross_sections.${index}.${key}`, replacement[key]]));
+    if (Object.keys(updates).length) commitEmbedded(updates, 'step');
+  };
+  const splice = (index: number, deleteCount: number, ...rows: CrossSectionStation[]) => {
+    const before = useDesignStore.getState().design;
+    commitProfileEdit(currentEditOrigin(), before, spliceCrossSectionStations(before, index, deleteCount, ...rows));
   };
   const update = (index: number, patch: Partial<CrossSectionStation>) => {
     if (patch.t !== undefined && positionMessage(index, patch.t)) return;
@@ -551,7 +559,7 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
     let gap = 0;
     for (let index = 1; index < stations.length - 1; index += 1) if (stations[index + 1].t - stations[index].t > stations[gap + 1].t - stations[gap].t) gap = index;
     const station = { t: (stations[gap].t + stations[gap + 1].t) / 2, shape: 'ellipse' as const };
-    updateValue('cross_sections', [...stations, station].sort((a, b) => a.t - b.t));
+    splice(gap + 1, 0, station);
   };
   return <div className="editable-parameter-table" role="group" aria-label={field.label}>
     <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{stations.length} / 32 stations</span></div>
@@ -570,7 +578,7 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
             default exponent, or an empty required corner radius, which it has no
             default for and rejects the station without. */}
         <td>{station.shape === 'superellipse' ? <NumberField label={`Station ${index + 1} exponent`} value={station.exponent ?? MESHER_SUPERELLIPSE_EXPONENT} min={2} max={16} step={.1} precision={2} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, { exponent: value })} /> : station.shape === 'rounded_rectangle' ? <NumberField label={`Station ${index + 1} corner radius`} value={station.corner_radius_mm} min={1} step={1} precision={2} unit="mm" onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, { corner_radius_mm: value })} /> : '—'}</td>
-        <td><button className="btn" type="button" aria-label={`Remove station ${index + 1}`} disabled={stations.length <= 2 || index === 0 || index === stations.length - 1} onClick={() => updateValue('cross_sections', stations.filter((_station, item) => item !== index))}>−</button></td>
+        <td><button className="btn" type="button" aria-label={`Remove station ${index + 1}`} disabled={stations.length <= 2 || index === 0 || index === stations.length - 1} onClick={() => splice(index, 1)}>−</button></td>
       </tr>)}
     </tbody></table>
     <button className="btn" type="button" disabled={stations.length >= 32} onClick={add}>Add station</button>

@@ -222,6 +222,37 @@ describe('Custom profile commit and preview', () => {
     act(() => useDesignStore.getState().replaceDocument(design));
   }
 
+  it.each(['H', 'V'] as const)('pastes %s into an opened design with one literal throat through save and Undo/Redo', (target) => {
+    const original = custom();
+    original.shared_profile = false;
+    const wire = serializeDesign(original);
+    for (const key of ['profile_h', 'profile_v']) {
+      const profile = wire[key] as { points: Record<string, unknown>[] };
+      profile.points[0].r = { value: 12.7, raw: '25.4/2' };
+    }
+    const otherKey = target === 'H' ? 'profile_v' : 'profile_h';
+    const otherPoints = (wire[otherKey] as { points: Record<string, unknown>[] }).points;
+    otherPoints[otherPoints.length - 1].r = { value: 140, raw: '70*2' };
+    const design = hydrateDesignDocument(wire);
+    load(design);
+    const { after } = applyPastedProfile(design, {
+      points: [{ t: 0, r: 20 }, { t: .5, r: 50 }, { t: 1, r: 140 }], importedLength: 120,
+    }, { target, adoptLength: false, join: 'corner' });
+    const saved = serializeDesign(after);
+    for (const key of ['profile_h', 'profile_v']) {
+      expect((saved[key] as { points: { r: unknown }[] }).points[0].r).toBe(20);
+    }
+    expect(after._expressions?.[`${otherKey}.points.${otherPoints.length - 1}.r`]?.raw).toBe('70*2');
+    expect(serializeDesign(hydrateDesignDocument(JSON.parse(JSON.stringify(saved))))).toEqual(saved);
+    commitProfileEdit(currentEditOrigin(), design, after);
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(saved);
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+    act(() => useDesignStore.getState().undo());
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(wire);
+    act(() => useDesignStore.getState().redo());
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(saved);
+  });
+
   it('commits one Undo step, restores re-keyed expressions, and Undo/Redo round-trip exactly', () => {
     const design = custom();
     design._expressions = { 'profile_h.points.3.r': { value: 90, raw: '45 * 2' } };
@@ -289,6 +320,28 @@ describe('Custom profile commit and preview', () => {
       await vi.waitFor(() => expect(edit.preview?.validation).toEqual({ status: 'error', message: 'FREEFORM profileH span 2 is infeasible' }));
       act(() => edit.accept());
       expect(useDesignStore.getState().design.profile_h!.points[2].angle_deg).toBeUndefined();
+      expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
+    });
+
+    it.each(['insert', 'curves', 'compare'] as const)('settles an unkeyed HTTP failure during %s instead of leaving progress pending', async (route) => {
+      load(custom());
+      const fetcher = routes({ [`/${route}`]: () => new Response('Internal Server Error', { status: 500 }) });
+      act(() => root.render(<Probe fetcher={fetcher} />));
+      await act(async () => {
+        edit.propose('Edit', route === 'insert'
+          ? insertAnchorBuilder('H', 40, 'exact', fetcher)
+          : (design) => deleteAnchor(design, 'H', 2));
+      });
+      if (route === 'insert') {
+        await vi.waitFor(() => expect(edit.preview?.status).toBe('refused'));
+        expect(edit.preview?.message).toMatch(/could not check this profile.*Try again/);
+      } else {
+        const key = route === 'curves' ? 'validation' : 'curve';
+        await vi.waitFor(() => expect(edit.preview?.[key].status).toBe('error'));
+        expect(edit.preview?.[key]).toMatchObject({ message: 'WG could not check this profile. Try again.' });
+      }
+      act(() => edit.accept());
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(serializeDesign(custom()));
       expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
     });
 

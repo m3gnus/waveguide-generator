@@ -36,6 +36,17 @@ describe('Custom profile curve client', () => {
     await expect(malformed).rejects.toThrow('malformed');
   });
 
+  it.each([
+    ['plain-text 500', () => new Response('Internal Server Error', { status: 500 }), 'Try again.'],
+    ['unkeyed JSON 503', () => json({ detail: 'The profile service is unavailable. Try again.' }, 503), 'Try again.'],
+    ['empty JSON 500', () => json({}, 500), 'Try again.'],
+  ])('surfaces a current %s as a request error', async (_label, response, message) => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response());
+    const request = queryFreeformCurves(designForFamily('FREEFORM'), 'current', undefined, fetcher);
+    await expect(request).rejects.toBeInstanceOf(FreeformRequestError);
+    await expect(request).rejects.toThrow(message);
+  });
+
   it('hydrates the inserted design and sends the edit fields', async () => {
     const design = designForFamily('FREEFORM');
     const returned = structuredClone(serializeDesign(design)) as Record<string, unknown> & { profile_h: { points: unknown[] } };

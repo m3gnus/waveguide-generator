@@ -69,9 +69,9 @@ function pointPath(plane: Plane, index: number, field?: string): string {
   return `${PROFILE_KEY[plane]}.points.${index}${field ? `.${field}` : ''}`;
 }
 
-/** Metadata keys under a plane's point list, with `$last` resolved, re-indexed by `map` (null deletes). */
-function remapPointMetadata(design: DesignDocument, plane: Plane, oldCount: number, map: (index: number) => number | null): void {
-  const prefix = `${PROFILE_KEY[plane]}.points.`;
+/** List metadata, with `$last` resolved, re-indexed by `map` (null deletes). */
+function remapListMetadata(design: DesignDocument, path: string, oldCount: number, map: (index: number) => number | null): void {
+  const prefix = `${path}.`;
   const rekey = (key: string): string | null | undefined => {
     if (!key.startsWith(prefix)) return undefined;
     const [head, ...rest] = key.slice(prefix.length).split('.');
@@ -94,6 +94,17 @@ function remapPointMetadata(design: DesignDocument, plane: Plane, oldCount: numb
     });
     if (absent.length) design._absent = absent; else delete design._absent;
   }
+}
+
+/** Insert/delete stations without losing expressions and omissions on surviving rows. */
+export function spliceCrossSectionStations(design: DesignDocument, index: number, deleteCount: number, ...stations: CrossSectionStation[]): DesignDocument {
+  const after = structuredClone(design);
+  const rows = after.cross_sections;
+  if (!rows) throw new ProfileEditRefusal('This design has no cross-section stations. Open a Custom profile design and try again.');
+  remapListMetadata(after, 'cross_sections', rows.length, (old) =>
+    old < index ? old : old < index + deleteCount ? null : old + stations.length - deleteCount);
+  rows.splice(index, deleteCount, ...stations);
+  return after;
 }
 
 /**
@@ -168,7 +179,7 @@ export function deleteAnchor(design: DesignDocument, plane: Plane, index: number
   if (present(following.handle_in)) { delete following.handle_in; released.push(`${pointLabel(plane, index + 1, points.length)} (in)`); }
   next.splice(index, 1);
   const after = withPlane(design, plane, next);
-  remapPointMetadata(after, plane, points.length, (old) => old === index ? null : old > index ? old - 1 : old);
+  remapListMetadata(after, `${PROFILE_KEY[plane]}.points`, points.length, (old) => old === index ? null : old > index ? old - 1 : old);
   clearMetadata(after, [pointPath(plane, index - 1, 'handle_out'), pointPath(plane, index, 'handle_in')]);
   return { after: reconcileAbsent(after), notes: [
     `Deleted ${pointLabel(plane, index, points.length)} at z = ${formatMm(positionMm(points[index].t, lengthOf(design)))} mm.`,
@@ -336,7 +347,7 @@ export function withInsertedProfile(design: DesignDocument, inserted: DesignDocu
   const index = points.findIndex((point, item) => item >= before.length || point.t !== before[item].t);
   const after = withPlane(design, plane, points);
   // Surviving points keep their authored expressions and omissions at their new indices.
-  remapPointMetadata(after, plane, before.length, (old) => old >= index ? old + 1 : old);
+  remapListMetadata(after, `${PROFILE_KEY[plane]}.points`, before.length, (old) => old >= index ? old + 1 : old);
   // The insertion pins neighbouring handles; omissions recorded for those paths no longer hold.
   return reconcileAbsent(after);
 }
@@ -616,7 +627,7 @@ export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile
       return row;
     });
     after[PROFILE_KEY[plane]] = { ...profileOf(base, plane), points };
-    remapPointMetadata(after, plane, current.length, () => null);
+    remapListMetadata(after, `${PROFILE_KEY[plane]}.points`, current.length, () => null);
     notes.push(`${plane}: ${points.length} anchors as ${choice.join === 'corner' ? 'corners (adjacent corners without angles join with straight spans)' : 'smooth anchors with automatic tangents'}.`);
   };
   if (target === 'H' || target === 'both') replace('H', pasted.pointsByPlane?.H ?? pasted.points);
@@ -630,6 +641,7 @@ export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile
     if (after.profile_h!.points[0].r !== radius || after.profile_v!.points[0].r !== radius) notes.push(`Both planes use throat radius ${formatMm(radius)} mm.`);
     after.profile_h!.points[0].r = radius;
     after.profile_v!.points[0].r = radius;
+    clearMetadata(after, [pointPath('H', 0, 'r'), pointPath('V', 0, 'r')]);
   }
   if (adopting) {
     notes.push(`Length becomes ${formatMm(length)} mm (pasted). Everything the paste does not replace is stretched with it (Stretch profile): ${stretched!.notes.join(' ')}`);

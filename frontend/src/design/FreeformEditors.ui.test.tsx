@@ -5,6 +5,7 @@ import { designForFamily, resetDesignStore, serializeDesign, useDesignStore, typ
 import type { ParameterDefinition } from './parameterRegistry';
 import { stubProfileServer } from '../testing/customProfileServer';
 import { rememberUnseparatedVertical } from './customProfileEdit';
+import { hydrateDesignDocument } from '../api/designIo';
 import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableLookupTable, EditableStationTable, FREEFORM_IMPORT_HINT } from './FreeformEditors';
 
 const stationField: ParameterDefinition = {
@@ -182,6 +183,61 @@ describe('FREEFORM numeric tables', () => {
 
     act(() => chooseShape(host, 'Station 2 shape', 'ellipse'));
     expect(stored()[1]).toEqual({ t: 1, shape: 'ellipse' });
+  });
+
+  it.each(['exponent', 'shape', 'insert', 'delete'] as const)('preserves unrelated station metadata through %s, save/reopen and Undo/Redo', (action) => {
+    const design = hydrateDesignDocument({
+      ...serializeDesign(designForFamily('FREEFORM')),
+      cross_sections: [
+        { t: 0, shape: 'ellipse' },
+        { t: { value: .5, raw: '1/2' }, shape: 'superellipse', exponent: { value: 4, raw: '2*2' }, corner_radius_mm: null },
+        { t: { value: .75, raw: '3/4' }, shape: 'superellipse', exponent: null, corner_radius_mm: null },
+        { t: 1, shape: 'superellipse', exponent: { value: 4, raw: '8/2' } },
+      ],
+    });
+    act(() => useDesignStore.getState().replaceDocument(design));
+    const before = serializeDesign(design);
+    const rows = (wire: Record<string, unknown>) => wire.cross_sections as Record<string, unknown>[];
+    act(() => root.render(<EditableStationTable field={stationField} stations={design.cross_sections!}/>));
+    if (action === 'exponent') {
+      const input = inputWithLabel(host, 'Station 4 exponent');
+      act(() => enterDraft(input, '5')); act(() => input.blur());
+    } else if (action === 'shape') {
+      act(() => chooseShape(host, 'Station 4 shape', 'rounded_rectangle'));
+    } else if (action === 'insert') {
+      const button = [...host.querySelectorAll('button')].find(button => button.textContent === 'Add station')!;
+      act(() => button.click());
+    } else {
+      act(() => host.querySelector<HTMLButtonElement>('[aria-label="Remove station 2"]')!.click());
+    }
+    const edited = useDesignStore.getState().design;
+    const saved = serializeDesign(edited);
+    if (action === 'delete') {
+      expect(rows(saved)).toEqual([rows(before)[0], rows(before)[2], rows(before)[3]]);
+      expect(edited._expressions?.['cross_sections.1.t']?.raw).toBe('3/4');
+      expect(edited._absent).toContain('cross_sections.1.exponent');
+      expect(edited._expressions?.['cross_sections.1.exponent']).toBeUndefined();
+    } else {
+      const midpoint = action === 'insert' ? 2 : 1;
+      expect(rows(saved)[midpoint]).toEqual(rows(before)[1]);
+      expect(rows(saved)[midpoint + 1]).toEqual(rows(before)[2]);
+      expect(edited._absent).toContain(`cross_sections.${midpoint + 1}.exponent`);
+      expect(edited._expressions?.[`cross_sections.${midpoint}.t`]?.raw).toBe('1/2');
+      if (action === 'insert') {
+        expect(rows(saved)[1]).toEqual({ t: .25, shape: 'ellipse' });
+        expect(rows(saved)[4]).toEqual(rows(before)[3]);
+      } else if (action === 'exponent') expect(rows(saved)[3].exponent).toBe(5);
+      else {
+        expect(rows(saved)[3]).toEqual({ t: 1, shape: 'rounded_rectangle', corner_radius_mm: 10 });
+        expect(edited._expressions?.['cross_sections.3.exponent']).toBeUndefined();
+      }
+    }
+    expect(serializeDesign(hydrateDesignDocument(JSON.parse(JSON.stringify(saved))))).toEqual(saved);
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+    act(() => useDesignStore.getState().undo());
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
+    act(() => useDesignStore.getState().redo());
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(saved);
   });
 
   it('offers circle at the throat and every station with no outline parameters', () => {

@@ -48,14 +48,12 @@ async function post<T extends { content_key: string }>(
   try { payload = await response.json(); } catch { payload = undefined; }
   if (!response.ok) {
     const error = payload as Partial<FreeformErrorWire> | undefined;
-    // A refusal names its request; one for another (or no) request is stale.
-    if (error?.content_key !== contentKey) {
-      if (error?.content_key == null && error?.detail !== undefined && response.status === 422) {
-        throw new FreeformRequestError(refusalText(error.detail, 'profile edit'), response.status);
-      }
+    // Only an explicitly different key identifies an obsolete refusal. Proxy
+    // and unexpected server failures may have no keyed JSON body at all.
+    if (error?.content_key != null && error.content_key !== contentKey) {
       throw new StaleFreeformResponse(`Discarded a response for another profile request (${response.status}).`);
     }
-    throw new FreeformRequestError(error.detail !== undefined ? refusalText(error.detail, 'profile edit') : 'WG could not check this profile. Try again.', response.status);
+    throw new FreeformRequestError(error?.detail !== undefined ? refusalText(error.detail, 'profile edit') : 'WG could not check this profile. Try again.', response.status);
   }
   const result = payload as T | undefined;
   if (!result || result.content_key !== contentKey) throw new StaleFreeformResponse('Discarded a response for another profile request.');
