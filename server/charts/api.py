@@ -126,9 +126,20 @@ class DirectivityRenderRequest(ChartModel):
     reference_directivity: dict[str, Any] | None = None
     reference_label: str | None = None
     reference_level: float = -6.0
+    display_range_db: tuple[float, float] = (-30.0, 0.0)
     # 0 means no graticule: ``directivity.py`` draws none for a step <= 0.
     angle_guide_step: float = Field(default=10.0, ge=0.0, le=180.0)
     theme: str = DEFAULT_CHART_THEME
+
+    @field_validator("display_range_db")
+    @classmethod
+    def validate_display_range(cls, value: tuple[float, float]) -> tuple[float, float]:
+        if value[0] >= value[1]:
+            raise ValueError(
+                "The directivity display range is reversed or empty. "
+                "Set its lower dB level below its upper level."
+            )
+        return value
 
     @field_validator("theme", mode="before")
     @classmethod
@@ -211,6 +222,7 @@ def _render_charts(payload: dict[str, Any]) -> dict[str, str]:
 def _render_directivity(payload: dict[str, Any]) -> str | None:
     kwargs: dict[str, Any] = {
         "reference_level": payload["reference_level"],
+        "display_range_db": payload["display_range_db"],
         "angle_guide_step": payload["angle_guide_step"],
         "theme": payload["theme"],
     }

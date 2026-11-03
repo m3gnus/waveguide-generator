@@ -84,6 +84,7 @@ def render_directivity_heatmap_b64(
     reference_frequencies: list[float] | None = None,
     reference_directivity: dict[str, Any] | None = None,
     reference_label: str | None = None,
+    display_range_db: tuple[float, float] = (-30.0, 0.0),
     angle_guide_step: float = DEFAULT_ANGLE_GUIDE_STEP_DEG,
     dpi: int = 150,
 ) -> str | None:
@@ -98,6 +99,13 @@ def render_directivity_heatmap_b64(
         "reference_level": reference_level,
         "theme": theme,
     }
+    # Older pins have a fixed -30 dB floor. Forward the range only when the
+    # canonical renderer exposes it; never duplicate its clipping or colours.
+    range_kwargs = (
+        {"display_range_db": display_range_db}
+        if "display_range_db" in parameters else {}
+    )
+    kwargs.update(range_kwargs)
     if reference_directivity is not None:
         kwargs.update(
             reference_frequencies=reference_frequencies,
@@ -115,7 +123,9 @@ def render_directivity_heatmap_b64(
         )
 
     module = importlib.import_module(renderer.__module__)
-    planes = module._build_planes_from_legacy(frequencies, directivity, smooth=False)  # noqa: SLF001
+    planes = module._build_planes_from_legacy(  # noqa: SLF001
+        frequencies, directivity, smooth=False, **range_kwargs,
+    )
     if not planes:
         return None
     reference_planes = None
@@ -124,6 +134,7 @@ def render_directivity_heatmap_b64(
             reference_frequencies,
             reference_directivity,
             smooth=False,
+            **range_kwargs,
         )
     theme_object = module.apply_theme_overrides(theme)
     figure = module._build_figure_from_planes(  # noqa: SLF001
@@ -132,6 +143,7 @@ def render_directivity_heatmap_b64(
         theme=theme_object,
         reference_planes=reference_planes,
         reference_label=reference_label,
+        **range_kwargs,
     )
     add_angle_guides(
         figure,

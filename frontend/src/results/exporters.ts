@@ -529,10 +529,14 @@ async function chartPng(context: ExportContext): Promise<string[]> {
   if (!directivityResponse.ok) throw await responseError(directivityResponse);
   const directivityBody = await directivityResponse.json() as { image?: string };
   if (!directivityBody.image) throw new ProgramFault('HornLab plots returned no directivity image.');
-  const response = await fetcher('/api/render-charts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildChartRenderPayload(result, context.preferences)) });
+  // The dedicated renderer owns the map settings. Keep the combined request
+  // to line charts so the map is rendered once, and ignore any legacy map key
+  // in its response before filenames are staged by the bundle.
+  const chartPayload = { ...buildChartRenderPayload(result, context.preferences), directivity: {} };
+  const response = await fetcher('/api/render-charts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(chartPayload) });
   if (!response.ok) throw await responseError(response);
   const body = await response.json() as { charts?: Record<string, string> };
-  const entries = Object.entries(body.charts ?? {});
+  const entries = Object.entries(body.charts ?? {}).filter(([chart]) => chart !== 'directivity_map');
   if (!entries.length) throw new ProgramFault('Chart renderer returned no images.');
   const baseName = exportContextBaseName(context);
   const files = entries.map(([chart, data]) => {
@@ -651,6 +655,7 @@ export function buildDirectivityRenderPayload(
     reference_directivity: reference ? directivityFor(reference.result) : null,
     reference_label: reference?.label ?? null,
     reference_level: preferences.mapReference,
+    display_range_db: [preferences.mapReference * 5, 0],
     angle_guide_step: preferences.directivityGuideInterval,
     theme: resolveChartTheme(preferences.chartTheme),
   };

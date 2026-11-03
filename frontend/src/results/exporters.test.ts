@@ -7,7 +7,7 @@ import { resultExportSnapshot } from './exportContext';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
 import type { RadiationImpedancePresentation } from '../api/results';
-import { runAutomaticWorkspaceExport, archiveRunToWorkspace, buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
+import { runAutomaticWorkspaceExport, archiveRunToWorkspace, buildChartRenderPayload, buildDirectivityRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 import {
   ExportCancelledError,
@@ -618,18 +618,29 @@ describe('result exporters', () => {
     expect(files).toEqual(['horn_1_profiles.csv', 'horn_1_slices.csv']);
     expect(saveBlob).toHaveBeenCalledTimes(2);
   });
-  it('sends the selected theme to the PNG renderer endpoint', async () => {
+  it.each([-3, -6, -9, -12] as const)('passes the selected %s dB map range without changing result arrays', (mapReference) => {
+    const before = JSON.stringify(result);
+    const payload = buildDirectivityRenderPayload(result, { ...preferencesStore.getSnapshot(), mapReference });
+    expect(payload).toMatchObject({ reference_level: mapReference, display_range_db: [mapReference * 5, 0] });
+    expect(payload.directivity).toBe(result.directivity);
+    expect(JSON.stringify(result)).toBe(before);
+  });
+
+  it('keeps only the dedicated PNG map with the selected settings', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => String(input) === '/api/render-directivity'
       ? new Response(JSON.stringify({ image: 'data:image/png;base64,Ag==' }), { status: 200 })
-      : new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQ==' } }), { status: 200 }));
+      : new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQ==', directivity_map: 'data:image/png;base64,Aw==' } }), { status: 200 }));
     const saveBlob = vi.fn();
-    const context = { jobStem: 'horn_1', preferences: { ...preferencesStore.getSnapshot(), chartTheme: 'paper' }, result, fetcher, saveBlob };
+    const context = { jobStem: 'horn_1', preferences: { ...preferencesStore.getSnapshot(), chartTheme: 'paper', mapReference: -12 as const, directivityGuideInterval: 15 as const }, result, fetcher, saveBlob };
     expect(await runExportFormat('png', context)).toEqual(['horn_1_spl.png', 'horn_1_directivity_map.png']);
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/render-directivity', '/api/render-charts']);
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).theme).toBe('paper');
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).angle_guide_step).toBe(0);
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({ reference_level: -12, angle_guide_step: 15 });
     expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body)).theme).toBe('paper');
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body)).directivity).toEqual({});
     expect(saveBlob.mock.calls.map(([, filename]) => filename)).toEqual(['horn_1_spl.png', 'horn_1_directivity_map.png']);
+    expect(Array.from(new Uint8Array(await saveBlob.mock.calls[1][0].arrayBuffer()))).toEqual([2]);
+    expect(buildChartRenderPayload(result, context.preferences).directivity).toEqual(result.directivity);
     expect(buildChartRenderPayload({
       ...result,
       metadata: {
@@ -1043,7 +1054,7 @@ describe('result exporters', () => {
       const path = String(input);
       requests.push({ path, init });
       if (path === '/api/render-charts') {
-        return new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQID' } }), { status: 200 });
+        return new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQID', directivity_map: 'data:image/png;base64,BwgJ' } }), { status: 200 });
       }
       if (path === '/api/render-directivity') {
         return new Response(JSON.stringify({ image: 'data:image/png;base64,BAUG' }), { status: 200 });
@@ -1078,6 +1089,8 @@ describe('result exporters', () => {
     ]);
     expect(Array.from(new Uint8Array(await payload.members[1].blob.arrayBuffer()))).toEqual([1, 2, 3]);
     expect(Array.from(new Uint8Array(await payload.members[2].blob.arrayBuffer()))).toEqual([4, 5, 6]);
+    expect(requests.filter(({ path }) => path === '/api/render-directivity')).toHaveLength(1);
+    expect(JSON.parse(String(requests.find(({ path }) => path === '/api/render-charts')!.init?.body)).directivity).toEqual({});
   });
 
   it.each([false, true])('auto-saves a mesh with regenerated=%s into the same per-run Workspace directory', async (regenerated) => {

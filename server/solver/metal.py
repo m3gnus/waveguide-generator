@@ -51,6 +51,7 @@ from .base import (
 )
 from .context import SolverContext
 from .frequency_sweep import (
+    _FREQUENCY_SHAPED_RESULT_FIELDS,
     canonical_frequencies,
     live_execution_frequencies,
     order_frequencies_for_live_plotting,
@@ -1249,10 +1250,16 @@ def _slice_native_result(result: Any, indices: np.ndarray) -> Any:
 
     sliced = copy(result)
     count = len(np.asarray(result.frequencies_hz).reshape(-1))
+    sliced.frequencies_hz = np.asarray(result.frequencies_hz)[indices].copy()
     for name, value in vars(result).items():
-        if isinstance(value, np.ndarray) and value.ndim and value.shape[0] == count:
+        if (
+            name in _FREQUENCY_SHAPED_RESULT_FIELDS
+            and isinstance(value, np.ndarray)
+            and value.ndim
+            and value.shape[0] == count
+        ):
             setattr(sliced, name, np.asarray(value)[indices].copy())
-        elif isinstance(value, Mapping):
+        elif name == "surface_pressure_avg" and isinstance(value, Mapping):
             mapped: dict[Any, Any] = {}
             changed = False
             for key, item in value.items():

@@ -43,6 +43,8 @@ import numpy as np
 
 from server.design.schema import DesignConfig, Expr
 
+from .frequency_sweep import _FREQUENCY_SHAPED_RESULT_FIELDS
+
 #: The elements-per-wavelength rule the ladder sizes against.  It is the same
 #: 6.0 ``hornlab_metal_bem.config.SolverConfig.mesh_elements_per_wavelength_min``
 #: uses to compute ``mesh_max_valid_frequency_hz``, so "valid at the band's top
@@ -454,8 +456,8 @@ class MergedBandResults:
 def merge_band_results(results: Sequence[Any]) -> MergedBandResults:
     """Concatenate per-band native results onto one ascending frequency axis.
 
-    Everything whose leading axis is frequency and whose trailing shape agrees
-    across bands is concatenated and re-sorted; mesh-shaped surface arrays are
+    Known frequency fields whose trailing shape agrees across bands are
+    concatenated and re-sorted; mesh-shaped surface arrays are
     dropped and named, because there is no single mesh they could belong to.
     Non-frequency fields (observation grid, sphere grid, config) come from the
     first band, which is the top band and therefore the user's own mesh.
@@ -475,7 +477,7 @@ def merge_band_results(results: Sequence[Any]) -> MergedBandResults:
     merged = shallow_copy(results[0])
     dropped: set[str] = set()
     for name, value in vars(results[0]).items():
-        if isinstance(value, np.ndarray) and value.ndim and value.shape[0] == counts[0]:
+        if name in _FREQUENCY_SHAPED_RESULT_FIELDS and value is not None:
             if name in MESH_SHAPED_RESULT_FIELDS:
                 setattr(merged, name, None)
                 dropped.add(name)
@@ -487,7 +489,7 @@ def merge_band_results(results: Sequence[Any]) -> MergedBandResults:
                 dropped.add(name)
                 continue
             setattr(merged, name, stacked[order])
-        elif isinstance(value, Mapping):
+        elif name == "surface_pressure_avg" and isinstance(value, Mapping):
             mapped: dict[Any, Any] = {}
             changed = False
             for key, item in value.items():

@@ -431,6 +431,72 @@ def test_a_single_band_merges_to_itself_untouched() -> None:
     assert merged.dropped_fields == ()
 
 
+def _with_colliding_coordinates(result: SimpleNamespace) -> SimpleNamespace:
+    result.observation_angles_deg = np.asarray([-90.0, 90.0])
+    result.observation_points = np.arange(12.0).reshape(2, 2, 3)
+    result.sphere_points = np.arange(6.0).reshape(2, 3)
+    result.sphere_theta_deg = np.asarray([45.0, 135.0])
+    result.sphere_phi_deg = np.asarray([0.0, 180.0])
+    result.native_runtime = {"coordinates": np.asarray([10.0, 20.0])}
+    count = len(result.frequencies_hz)
+    result.directivity_db = np.arange(count * 6.0).reshape(count, 2, 3)
+    result.sphere_pressure_complex = result.pressure_complex[:, :2].copy()
+    result.radiated_power_surface_w = result.frequencies_hz.copy()
+    result.radiated_power_sphere_w = result.frequencies_hz.copy() * 2
+    result.surface_neumann_complex = result.surface_pressure_complex.copy()
+    return result
+
+
+@pytest.mark.parametrize("lower_frequencies", [(100.0, 200.0), (50.0, 100.0, 200.0)])
+def test_merging_preserves_coordinates_when_their_counts_match_frequencies(
+    lower_frequencies,
+) -> None:
+    top = _with_colliding_coordinates(_band_result((300.0, 400.0), dofs=5))
+    lower = _with_colliding_coordinates(_band_result(lower_frequencies, dofs=4))
+
+    merged = merge_band_results([top, lower])
+
+    for field in (
+        "observation_angles_deg", "observation_points", "sphere_points",
+        "sphere_theta_deg", "sphere_phi_deg", "native_runtime",
+    ):
+        assert getattr(merged.result, field) is getattr(top, field)
+    order = np.argsort(np.concatenate([top.frequencies_hz, lower.frequencies_hz]))
+    for field in (
+        "pressure_complex", "directivity_db", "impedance", "sphere_pressure_complex",
+        "radiated_power_surface_w", "radiated_power_sphere_w",
+    ):
+        expected = np.concatenate([getattr(top, field), getattr(lower, field)])[order]
+        np.testing.assert_array_equal(getattr(merged.result, field), expected)
+    assert merged.dropped_fields == (
+        "surface_neumann_complex", "surface_pressure_complex",
+    )
+
+
+def test_slicing_preserves_coordinates_when_their_counts_match_frequencies() -> None:
+    original = _with_colliding_coordinates(_band_result((300.0, 400.0), dofs=5))
+    indices = np.asarray([1, 0])
+
+    sliced = metal._slice_native_result(original, indices)
+
+    for field in (
+        "observation_angles_deg", "observation_points", "sphere_points",
+        "sphere_theta_deg", "sphere_phi_deg", "native_runtime",
+    ):
+        assert getattr(sliced, field) is getattr(original, field)
+    for field in (
+        "frequencies_hz", "pressure_complex", "directivity_db", "impedance",
+        "sphere_pressure_complex", "radiated_power_surface_w", "radiated_power_sphere_w",
+        "surface_pressure_complex", "surface_neumann_complex",
+    ):
+        np.testing.assert_array_equal(getattr(sliced, field), getattr(original, field)[indices])
+        assert not np.shares_memory(getattr(sliced, field), getattr(original, field))
+    np.testing.assert_array_equal(
+        sliced.surface_pressure_avg["1"], original.surface_pressure_avg["1"][indices],
+    )
+    assert original.frequencies_hz.tolist() == [300.0, 400.0]
+
+
 # --------------------------------------------------------------------------
 # The seam probe
 # --------------------------------------------------------------------------
