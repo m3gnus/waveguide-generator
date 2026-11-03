@@ -2,6 +2,7 @@ import type { JobItem } from '../api/jobsSocket';
 import type { ExportFormat } from '../prefs/preferences';
 import type { ExportBundleResult } from '../results/exporters';
 import { failureWords, httpErrorMessage } from '../api/httpError';
+import { combineAbortSignals } from '../api/deadlineFetch';
 
 async function post(path: string, body?: unknown): Promise<Record<string, unknown>> {
   const controller = new AbortController();
@@ -53,7 +54,8 @@ export async function ownedAutoExport(
     if (lost) return Promise.reject(lost);
     const headers = new Headers(init?.headers);
     headers.set('X-WG-Auto-Export', token);
-    return fetch(input, { ...init, headers, signal: abort.signal });
+    const signal = init?.signal ? combineAbortSignals([init.signal, abort.signal]) : abort.signal;
+    return fetch(input, { ...init, headers, signal });
   };
   try {
     let result: ExportBundleResult;
