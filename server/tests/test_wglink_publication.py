@@ -1,8 +1,11 @@
 """Crash boundaries and monotonic locators use immutable, checksummed artifacts."""
 
+import errno
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import stat
 
 import pytest
 from fastapi import HTTPException
@@ -26,6 +29,53 @@ def setup(monkeypatch, tmp_path):
 
 def locator(result):
     return Path(result["bundlePath"]).parent / f"{result['identity']['designId']}.latest.json"
+
+
+@pytest.fixture(params=[None, "open", "fsync"])
+def directory_sync_refused(request, monkeypatch):
+    """Model privacy controls on directory handles without changing file sync."""
+    if request.param is not None and os.name == "nt":
+        pytest.skip("Directory sync is POSIX-only")
+    refused = []
+    file_syncs = []
+    real_open, real_fsync = os.open, os.fsync
+
+    def open_directory(path, flags, *args, **kwargs):
+        if request.param == "open" and flags == os.O_RDONLY and Path(path).is_dir():
+            refused.append(Path(path))
+            raise PermissionError(errno.EPERM, "Directory open refused")
+        return real_open(path, flags, *args, **kwargs)
+
+    def fsync(descriptor):
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            if request.param == "fsync":
+                refused.append(descriptor)
+                raise PermissionError(errno.EPERM, "Directory fsync refused")
+        else:
+            file_syncs.append(descriptor)
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(json_file.os, "open", open_directory)
+    monkeypatch.setattr(json_file.os, "fsync", fsync)
+    yield
+    if request.param is not None:
+        assert refused, "The directory sync failure was not exercised"
+    assert file_syncs, "Regular files must still be flushed"
+
+
+def test_send_publishes_with_directory_sync_refused(monkeypatch, tmp_path, directory_sync_refused):
+    store, saved, workspace, _ = setup(monkeypatch, tmp_path)
+    try:
+        result = service.export_wglink_sync(_request(saved), store, workspace, "directory-sync",
+            handoff={"dataDir": str(tmp_path / "data")})
+        row = store.get_export(result["exportId"])
+        publication.bundle_products(Path(result["bundlePath"]), publication.row_facts(row))
+        assert json.loads(locator(result).read_text())["exportId"] == result["exportId"]
+        journal = publication._journal_folder(store) / f"{result['exportId']}.json"
+        assert json.loads(journal.read_text())["done"] is True
+        assert result["cadHandoff"] == "published"
+    finally:
+        store.close()
 
 
 def test_bundle_without_row_recovers_original_reservation_after_b(monkeypatch, tmp_path):
@@ -470,7 +520,7 @@ def test_a_crash_between_accept_and_file_is_reissued_only_by_a_live_retry(monkey
 
 
 @pytest.mark.parametrize("stop_at", ["staged_sync", "published_sync", "published_validation"])
-def test_send_stop_at_durability_boundary(monkeypatch, tmp_path, stop_at):
+def test_send_stop_at_durability_boundary(monkeypatch, tmp_path, stop_at, directory_sync_refused):
     from server.jobs.request_cancellation import ClientDisconnected
 
     store, saved, workspace, _ = setup(monkeypatch, tmp_path)

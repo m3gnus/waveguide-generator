@@ -1,6 +1,7 @@
 """Wire bytes and interrupted publication across the JSON owner's consumers."""
 
 from datetime import datetime, timezone
+import errno
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,45 @@ import pytest
 from server.platform import json_file
 
 PAYLOAD = {"z": "räv", "a": {"y": 2, "b": [True, None]}}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Directory sync is POSIX-only")
+@pytest.mark.parametrize("syscall", ["open", "fsync"])
+@pytest.mark.parametrize("error_number", sorted({
+    errno.EPERM, errno.EACCES, errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP,
+    errno.EIO, errno.ENOSPC,
+}) + [None])
+@pytest.mark.parametrize("strict", [False, True])
+def test_directory_sync_error_policy(monkeypatch, tmp_path, syscall, error_number, strict):
+    events = []
+    failure = OSError(error_number, "directory sync failed")
+
+    def open_directory(path, flags):
+        assert path == tmp_path and flags == os.O_RDONLY
+        events.append("open")
+        if syscall == "open":
+            raise failure
+        return 123
+
+    def fsync(descriptor):
+        assert descriptor == 123
+        events.append("fsync")
+        raise failure
+
+    def close(descriptor):
+        assert descriptor == 123
+        events.append("close")
+
+    monkeypatch.setattr(json_file.os, "open", open_directory)
+    monkeypatch.setattr(json_file.os, "fsync", fsync)
+    monkeypatch.setattr(json_file.os, "close", close)
+    if strict and error_number in {errno.EIO, errno.ENOSPC, None}:
+        with pytest.raises(OSError) as error:
+            json_file.sync_directory(tmp_path, strict=strict)
+        assert error.value is failure
+    else:
+        json_file.sync_directory(tmp_path, strict=strict)
+    assert events == (["open"] if syscall == "open" else ["open", "fsync", "close"])
 
 
 def legacy_bytes(payload, *, indent=None, sort_keys=False, ensure_ascii=True,

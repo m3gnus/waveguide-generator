@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+import errno
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,11 @@ import tempfile
 import time
 from typing import Any, Callable, Literal
 import uuid
+
+
+_DIRECTORY_SYNC_UNAVAILABLE = frozenset({
+    errno.EPERM, errno.EACCES, errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP,
+})
 
 
 def json_bytes(
@@ -32,20 +38,25 @@ def json_bytes(
 
 
 def sync_directory(directory: Path, *, strict: bool = False) -> None:
-    """Flush a folder's entries to disk (POSIX), so a rename outlives a power cut."""
+    """Flush a folder's entries where the OS permits directory durability.
+
+    macOS privacy controls can allow file publication while denying directory
+    opens. Permission and unsupported-operation errors are best effort even in
+    strict mode; strict mode still raises real I/O failures such as EIO/ENOSPC.
+    """
 
     if os.name == "nt":
         return
     try:
         descriptor = os.open(directory, os.O_RDONLY)
-    except OSError:
-        if strict:
+    except OSError as exc:
+        if strict and exc.errno not in _DIRECTORY_SYNC_UNAVAILABLE:
             raise
         return
     try:
         os.fsync(descriptor)
-    except OSError:
-        if strict:
+    except OSError as exc:
+        if strict and exc.errno not in _DIRECTORY_SYNC_UNAVAILABLE:
             raise
     finally:
         os.close(descriptor)
@@ -79,7 +90,8 @@ def staged_json(
     Bytes are already encoded JSON; other payloads use ``encode``. Native newline
     and formatting profiles belong to callers. ``sync_file=False`` preserves
     atomic-visibility-only records. Directory durability is best effort for True
-    and propagates errors for "strict". Retry delays may be a constant or one
+    and propagates I/O errors for "strict", except when the OS denies or does
+    not support directory sync. Retry delays may be a constant or one
     delay per retry (the initial attempt has no delay).
 
     ``before_replace`` validates or journals the closed, flushed stage; False
