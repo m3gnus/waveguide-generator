@@ -104,7 +104,7 @@ describe('assembly solve setup', () => {
       .toEqual({ [second]: { weight: 0.5, delay_ms: 0.25, invert: true } });
     expect(coupled.setup.options).toMatchObject({ frequency_range: [design.simulation.f1, design.simulation.f2], solver_mode: 'full_3d' });
     const prescribed = resolveAssemblySetup(assemblyImportedSetup(), design.assembly!, { engine: 'metal', polar_config: {} } as never, design.simulation);
-    expect(prescribed.notice).toMatch(/prescribed velocity/);
+    expect(prescribed.notice).toMatch(/fixed velocity \(1 m\/s RMS\).*BEAT CPU or BEAT Metal/);
     expect(prescribed.setup.geometry.drive_channels.some(channel => channel.exterior_transducer)).toBe(false);
     // The driver stays bound to its radiator in the design either way.
     expect(useDesignStore.getState().design.assembly!.drivers?.[first]).toBeDefined();

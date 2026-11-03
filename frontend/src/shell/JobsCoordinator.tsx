@@ -28,7 +28,8 @@ import {
 import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
-import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { assemblyDriverBlocker, buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { assemblyImportedSetup, assemblyRadiatorLabel } from '../stores/assemblySimulation';
 import { acknowledgeCadSolve, approvedCadFindings, approveCadJob, solveCadAgain, type CadSolvePress, cadSolveClaim, forgetCadSolve, latestCadJobs, rememberCadSolve } from '../jobs/cadSolve';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
@@ -444,7 +445,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       ? importedSubmissionBlocker(cadReturn, solveOptions)
       : null;
   const directivityError = polarValidationError(solveOptions.polar);
-  const solveBlocker = fileGeometryActive ? fileBlocker : (cadGeometryActive ? crossoverDraftError : null) ?? cadSolveBlocker ?? directivityError;
+  // Woofer drivers are checked as they are set up, so Solve says what to fix before it builds.
+  const assemblyBlocker = assemblyActive && currentOptions
+    ? assemblyDriverBlocker(assemblyImportedSetup(), currentOptions, id => assemblyRadiatorLabel(design, id)) : null;
+  const solveBlocker = fileGeometryActive ? fileBlocker : (cadGeometryActive ? crossoverDraftError : null) ?? cadSolveBlocker ?? assemblyBlocker ?? directivityError;
   useEffect(() => {
     if (crossoverDraftError) setActionError(crossoverDraftError);
     else setActionError((current) => current?.includes('frequency must be greater than 0 Hz') ? null : current);

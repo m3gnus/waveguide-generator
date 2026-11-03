@@ -10,6 +10,7 @@ import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeSymmetryLimitation } from './nativeFamilies';
 import { EnclosureResolutionField } from './EnclosureResolutionField';
 import { FrontWorkspaceLauncher } from './FrontWorkspace';
+import { WooferDrivers } from './WooferDrivers';
 import { outerBodyUpdates } from './outerBodyUpdates';
 import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOptions';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
@@ -1293,6 +1294,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
     const custom = showCustom ? definition.title === 'Directivity map' ? <DirectivityMapControls />
       : definition.title === 'Solver' ? <SolveOptionsControls includeSampling={false} showOpenclGuidance />
       : definition.title === 'Frequency sweep' ? <><FrequencySweepControls idPrefix="design-solve" context="design" /><AdaptiveFrequencyControls /></>
+      : definition.title === 'Woofer drivers' ? <WooferDrivers />
       : null : null;
     const slots = definition.fieldOrder ?? fields.map((field) => field.id);
     if (fields.length === 0 && !hasCustomMode && !custom && !(definition.title === 'Imported ATH values' && usesCurrentAthImport(design.text_import_version))) return null;

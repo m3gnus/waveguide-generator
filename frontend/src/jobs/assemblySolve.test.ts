@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FRONT_CONTEXT_LIMIT_MS } from '../api/assembly';
-import { addWoofer, emptyAssembly } from '../stores/assembly';
+import { addWoofer, emptyAssembly, setDriver, setWooferDrive } from '../stores/assembly';
 import { assemblyContentKey, resetAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { prepareAssemblySolve } from './assemblySolve';
@@ -30,6 +30,21 @@ describe('assembly Solve press', () => {
     answer(new Response(JSON.stringify({ minimum_clearance_mm: 0.1, clearances: {} }), { status: 200 }));
     await expect(pressed).rejects.toThrow('The design changed while it was being prepared');
     expect(asked).toEqual(['/api/models/assembly/context']);
+  });
+
+  it('refuses an unfinished woofer driver before checking or building anything', async () => {
+    const { assembly, id } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly: setWooferDrive(assembly, id, 'driver') });
+    useSolveOptionsStore.getState().setEngine('beat-cpu');
+    const fetcher = vi.fn() as unknown as typeof fetch;
+    await expect(prepareAssemblySolve(fetcher, () => 'p1')).rejects.toThrow(
+      'Woofer 1 needs its driver: Enter resistance in the stated units. Pick one from the library or enter its values under Woofer drivers, or set the woofer to Fixed velocity.');
+    expect(fetcher).not.toHaveBeenCalled();
+    useSolveOptionsStore.getState().setAdaptiveFrequencySampling(true);
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly: setDriver(assembly, id, { exterior_transducer: {
+      version: 1, re_ohm: 6, le_h: 0.0005, bl_n_per_a: 7, mmd_kg: 0.02, cms_m_per_n: 0.001, rms_n_s_per_m: 1.5 } }) });
+    await expect(prepareAssemblySolve(fetcher, () => 'p1')).rejects.toThrow('Woofer drivers solve without adaptive sampling and the ground plane.');
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it('never builds a woofer that does not fit, wherever Solve was pressed', async () => {

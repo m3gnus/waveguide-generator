@@ -391,6 +391,39 @@ export function buildImportedSubmission(
 /** Engines whose imported solve couples exterior drivers (BEAT v3 CPU and Metal). */
 const COUPLED_DRIVER_ENGINES = new Set(['auto', 'beat-cpu', 'beat-metal']);
 
+type AssemblyDriverOptions = Pick<ImportedSolveSubmission['options'], 'engine' | 'adaptive_frequency_sampling' | 'ground_plane'>;
+
+/** Whether this engine choice solves an assembly's woofer drivers, voltage-driven. */
+export function assemblyEngineCouplesDrivers(options: Pick<AssemblyDriverOptions, 'engine'>): boolean {
+  return COUPLED_DRIVER_ENGINES.has(String(options.engine ?? 'auto'));
+}
+
+/** What an engine that cannot couple drivers does with them instead, said before Solve and with it. */
+export function assemblyDriverNotice(state: Pick<SimulationData, 'driveChannels'>, options: Pick<AssemblyDriverOptions, 'engine'>): string | null {
+  return state.driveChannels.some(channel => channel.exterior_transducer) && !assemblyEngineCouplesDrivers(options)
+    ? 'This engine solves every woofer at fixed velocity (1 m/s RMS), without its driver. To solve the drivers, choose Auto, BEAT CPU or BEAT Metal as the engine in Solver.'
+    : null;
+}
+
+/**
+ * Why a design assembly with woofer drivers cannot be solved as set up, with the
+ * fix: the same driver check as CAD and file inputs, said at design time. An
+ * engine that cannot couple drivers is not refused; it solves at fixed velocity.
+ */
+export function assemblyDriverBlocker(state: Pick<SimulationData, 'driveChannels'>, options: AssemblyDriverOptions,
+  label: (id: string) => string = id => id): string | null {
+  const driven = state.driveChannels.filter(channel => channel.exterior_transducer);
+  if (!driven.length || !assemblyEngineCouplesDrivers(options)) return null;
+  for (const channel of driven) {
+    const error = exteriorTransducerError(channel.exterior_transducer!);
+    if (error) return `${label(channel.id)} needs its driver: ${error} Pick one from the library or enter its values under Woofer drivers, or set the woofer to Fixed velocity.`;
+  }
+  if (options.adaptive_frequency_sampling || options.ground_plane?.enabled) {
+    return 'Woofer drivers solve without adaptive sampling and the ground plane. Turn both off, or set the woofers to Fixed velocity.';
+  }
+  return null;
+}
+
 export interface AssemblySetupResolution {
   setup: ImportedSetup;
   /** Set when the chosen engine solves the radiators at prescribed velocity instead. */
@@ -409,9 +442,11 @@ export function resolveAssemblySetup(
   assembly: { signal_groups?: Array<{ id: string; members: Array<{ radiator_id: string; weight?: number; delay_ms?: number; invert?: boolean }> }> },
   options: ImportedSolveSubmission['options'],
   sweep: { f1: number; f2: number; num_frequencies: number },
+  label?: (id: string) => string,
 ): AssemblySetupResolution {
-  const coupled = COUPLED_DRIVER_ENGINES.has(String(options.engine ?? 'auto'));
-  const driven = state.driveChannels.some(channel => channel.exterior_transducer);
+  const coupled = assemblyEngineCouplesDrivers(options);
+  const blocker = assemblyDriverBlocker(state, options, label);
+  if (blocker) throw new Error(blocker);
   const physics = coupled ? state : { ...state, driveChannels: state.driveChannels.map(({ exterior_transducer: _driver, ...channel }) => channel) };
   const { drivers, effects } = simulationGeometry(physics, state.sources, null);
   const processing = new Map((assembly.signal_groups ?? []).flatMap(group => group.members.map(member => [member.radiator_id, {
@@ -434,8 +469,6 @@ export function resolveAssemblySetup(
       },
       options: resolvedOptions,
     },
-    notice: driven && !coupled
-      ? 'This engine solves every radiator at prescribed velocity. Drivers and their mutual loading need BEAT (CPU or Metal).'
-      : null,
+    notice: assemblyDriverNotice(state, options),
   };
 }

@@ -176,7 +176,32 @@ export function setDriver(assembly: DesignAssembly, id: string, driver: Assembly
   return next;
 }
 
-export type MemberProcessing = Partial<Pick<AssemblyMember, 'weight' | 'delay_ms' | 'invert'>>;
+/**
+ * How a woofer moves in the solve. Fixed velocity is the default, normalised to
+ * 1 m/s RMS; a driver is voltage-driven through its T/S model; a rigid woofer is
+ * part of the baffle. The schema's `drive` and the woofer's bound driver are the
+ * whole state, so there is no third field to disagree with them.
+ */
+export type WooferDriveMode = 'velocity' | 'driver' | 'rigid';
+
+export function wooferDriveMode(assembly: DesignAssembly, id: string): WooferDriveMode {
+  if (wooferById(assembly, id)?.drive === 'rigid') return 'rigid';
+  return assembly.drivers?.[id] ? 'driver' : 'velocity';
+}
+
+/**
+ * Set a woofer's drive as one edit. Fixed velocity clears its driver; a rigid
+ * woofer keeps a bound driver, so choosing Driver again brings it back; a new
+ * driver starts empty and the shared driver check asks for its values.
+ */
+export function setWooferDrive(assembly: DesignAssembly, id: string, mode: WooferDriveMode): DesignAssembly {
+  let next = updateWoofer(assembly, id, { drive: mode === 'rigid' ? 'rigid' : 'prescribed' });
+  if (mode === 'velocity') next = setDriver(next, id, null);
+  if (mode === 'driver' && !next.drivers?.[id]) next = setDriver(next, id, { exterior_transducer: { version: 1 } });
+  return next;
+}
+
+export type MemberProcessing =Partial<Pick<AssemblyMember, 'weight' | 'delay_ms' | 'invert'>>;
 
 /** Member weight, delay and polarity apply before the group's sum. */
 export function setMemberProcessing(assembly: DesignAssembly, radiatorId: string, processing: MemberProcessing): DesignAssembly {

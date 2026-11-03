@@ -7,7 +7,7 @@ import { Notice } from '../shell/Notice';
  * parameters, written as the Geometry panel writes them.
  */
 import {
-  DEFAULT_WOOFER_GAP_MM, commitAssembly, deleteWoofer, setMemberProcessing, setPlacement, updateWoofer, wooferById,
+  DEFAULT_WOOFER_GAP_MM, commitAssembly, deleteWoofer, setMemberProcessing, setPlacement, setWooferDrive, updateWoofer, wooferById, wooferDriveMode,
   type AssemblyAnchor, type AssemblyPlacement, type AssemblyWoofer, type DesignAssembly,
 } from '../stores/assembly';
 import { isNativeFamily, useDesignStore, type DesignDocument } from '../stores/design';
@@ -19,6 +19,9 @@ import { outerBodyUpdates } from './outerBodyUpdates';
 import { LEGACY_PARAMETER_REGISTRY } from './parameterRegistry';
 import { SelectRow } from './SelectRow';
 import { ToggleRow } from './SolveOptionsSections';
+import { WooferDriveSelect } from './WooferDrivers';
+import { assemblyDriverForm } from '../stores/assemblySimulation';
+import { exteriorTransducerError } from '../stores/exteriorTransducer';
 
 type Session = WorkspaceSession<DesignAssembly, FrontCommand>;
 const ANCHORS: Array<[AssemblyAnchor, string]> = [['above', 'Above the mouth'], ['below', 'Below the mouth'], ['free', 'Free position']];
@@ -54,6 +57,9 @@ function WooferProperties({ assembly, id, session, resolved, select }: { assembl
   const processing = member(assembly, id);
   const others = (assembly.woofers ?? []).filter(item => item.id !== id);
   const place = (next: AssemblyPlacement) => run(session, 'Move woofer', current => setPlacement(current, id, next));
+  const drive = wooferDriveMode(assembly, id);
+  const form = assemblyDriverForm(assembly.drivers?.[id]);
+  const driverProblem = form ? exteriorTransducerError(form) : null;
   return <>
     <div className="front-heading">
       <h3>{woofer.label}</h3>
@@ -80,16 +86,11 @@ function WooferProperties({ assembly, id, session, resolved, select }: { assembl
     </SelectRow>
     {woofer.shape.kind === 'piston' && <NumberField label="Recess" unit="mm" value={woofer.shape.recess_mm ?? 0} min={0} max={1000} precision={1}
       onCommit={recess_mm => run(session, 'Woofer recess', current => updateWoofer(current, id, { shape: { kind: 'piston', recess_mm } }))}/>}
-    <SelectRow>
-      <label htmlFor="front-woofer-drive">Drive</label>
-      <select id="front-woofer-drive" value={woofer.drive ?? 'prescribed'} onChange={event => {
-        const drive = event.currentTarget.value as 'prescribed' | 'rigid';
-        run(session, 'Woofer drive', current => updateWoofer(current, id, { drive }));
-      }}>
-        <option value="prescribed">Driven</option>
-        <option value="rigid">Rigid (no drive)</option>
-      </select>
-    </SelectRow>
+    <WooferDriveSelect id="front-woofer-drive" woofer={woofer} mode={drive}
+      onChange={mode => run(session, 'Woofer drive', current => setWooferDrive(current, id, mode))}/>
+    {drive === 'driver' && <p className="section-note">{driverProblem
+      ? `Pick its driver, or enter its values, under Woofer drivers in Simulation. ${driverProblem}`
+      : 'Its driver is set up under Woofer drivers in Simulation.'}</p>}
 
     <h4>Position</h4>
     <SelectRow>
