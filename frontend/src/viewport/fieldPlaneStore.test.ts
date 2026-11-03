@@ -123,6 +123,7 @@ describe('field-plane state', () => {
     store.getState().updatePlaneDrag({ ...plane, origin_m: [0, 0, 0.02] });
     store.getState().endPlaneDrag();
     store.getState().resume();
+    store.getState().retry();
     store.getState().setAnimating(true);
     await Promise.resolve();
     expect(store.getState()).toMatchObject({ enabled: true, source: 'fem', jobId: 'fem-one',
@@ -342,6 +343,29 @@ describe('field-plane state', () => {
       lastErrorCode: null,
       field: displayed,
     });
+  });
+
+  it.each([false, true])('retries failed activation metadata (plane edited: %s)', async (editPlane) => {
+    const fetchResults = vi.fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    if (editPlane) fetchResults.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    fetchResults.mockResolvedValueOnce({ frequencies: [200, 800, 1600] });
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => response(jobId, request));
+    const store = createFieldPlaneStore({ fetchResults, fetchPlane });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('error'));
+    const latest = editPlane ? { ...plane, origin_m: [0.1, 0, 0] as [number, number, number] } : plane;
+    if (editPlane) {
+      store.getState().setPlane(latest);
+      await vi.waitFor(() => expect(store.getState().status).toBe('error'));
+    }
+    expect(store.getState().frequenciesHz).toEqual([]);
+    store.getState().retry();
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    expect(fetchResults).toHaveBeenCalledTimes(editPlane ? 3 : 2);
+    expect(fetchPlane).toHaveBeenCalledOnce();
+    expect(fetchPlane.mock.calls[0][1].plane).toEqual(latest);
+    expect(store.getState().plane).toEqual(latest);
   });
 
   it('retries a solve-blocked request once it is still the current error', async () => {

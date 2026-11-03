@@ -836,7 +836,7 @@ export function createFieldPlaneStore(
       },
       retry: () => {
         const current = get();
-        if (!current.enabled || !current.jobId || !current.plane || !current.frequenciesHz.length) return;
+        if (!current.enabled || !current.jobId || !current.plane) return;
         requestCurrentPlane(current, current.plane);
       },
       retryIfBlocked: () => {
