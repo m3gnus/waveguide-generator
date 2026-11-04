@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import partial
 import json
 import hashlib
 import inspect
@@ -336,6 +337,83 @@ def _built_for_source(source_id: str) -> dict:
         "integrity": {"valid": True},
         "viewport_mesh": {"available": False, "reason": "not needed for contract test"},
     }
+
+
+@pytest.fixture
+def bundle_publication_ingest(monkeypatch, tmp_path: Path):
+    manifest = wgreturn_manifest(b"STEP")
+    source_id = manifest["sources"][0]["id"]
+    bundle = write_bundle(tmp_path / "returns", manifest, step=b"STEP")
+    monkeypatch.setattr("server.cadlink.intake.ingest.build_imported_mesh_isolated",
+                        lambda *_args, **_kwargs: _built_for_source(source_id))
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    data_dir = tmp_path / "data"
+    try:
+        yield partial(
+            ingest_bundle, bundle,
+            {"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {source_id: 8}},
+            [], store, data_dir, expected_design_id=manifest["instances"][0]["design_id"],
+        ), store, data_dir
+    finally:
+        store.close()
+
+
+def test_refused_record_validation_leaves_no_ingest_or_retained_bundle(
+    bundle_publication_ingest,
+) -> None:
+    prepare, store, data_dir = bundle_publication_ingest
+    validated = []
+
+    def refuse(record):
+        validated.append(record["ingest_id"])
+        assert not Path(record["bundle_store_path"]).exists()
+        assert store.get_ingest(record["ingest_id"]) is None
+        raise IngestRefusal("record validation", "reconstructed interpretation differs")
+
+    with pytest.raises(IngestRefusal, match="reconstructed interpretation differs"):
+        prepare(validate_record=refuse)
+
+    assert len(validated) == 1
+    assert store.ingest_records() == []
+    # The staged copy must also be removed when validation refuses publication.
+    assert list((data_dir / "imports" / "bundles").iterdir()) == []
+
+
+def test_default_ingest_publishes_bundle_once_and_cache_hit_preserves_it(
+    bundle_publication_ingest, monkeypatch,
+) -> None:
+    from server.cadlink.intake import ingest
+
+    prepare, store, data_dir = bundle_publication_ingest
+    publish = ingest._publish_staged_bundle
+    publications = []
+
+    def counted_publish(destination, staged, **kwargs):
+        if staged is not None:
+            publications.append(destination)
+        publish(destination, staged, **kwargs)
+
+    monkeypatch.setattr(ingest, "_publish_staged_bundle", counted_publish)
+    first = prepare()
+    retained = Path(first["bundle_store_path"])
+    assert publications == [retained]
+    assert first["mesh_cache_hit"] is False
+    assert ingest.read_snapshot(retained, retained=True).manifest_sha256 == first["manifest_sha256"]
+    original_bytes = {p.relative_to(retained): p.read_bytes() for p in retained.rglob("*") if p.is_file()}
+    original_stat = retained.stat()
+
+    monkeypatch.setattr(ingest, "build_imported_mesh_isolated",
+                        lambda *_args, **_kwargs: pytest.fail("cache hit must reuse the mesh"))
+    second = prepare()
+
+    assert second["mesh_cache_hit"] is True
+    assert second["ingest_id"] != first["ingest_id"]
+    assert second["bundle_store_path"] == str(retained)
+    assert publications == [retained]
+    assert retained.stat().st_ino == original_stat.st_ino
+    assert {p.relative_to(retained): p.read_bytes() for p in retained.rglob("*") if p.is_file()} == original_bytes
+    assert list((data_dir / "imports" / "bundles").iterdir()) == [retained]
+    assert len(store.ingest_records()) == 2
 
 
 def test_ingest_retains_declared_fem_region_evidence(monkeypatch, tmp_path: Path) -> None:
