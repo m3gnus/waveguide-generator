@@ -42,7 +42,7 @@ from server.cadlink.store import CadLinkStore
 from server.workspace import archive_identity
 from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig, Expr
-from server.design.textcfg import parse
+from server.jobs.design_reader import parse, read_design, read_request
 from server.engines.registry import (
     SELECTABLE_ENGINE_NAMES,
     EngineRegistry,
@@ -570,7 +570,7 @@ def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
     if isinstance(config.get("design"), Mapping) or isinstance(
         config.get("geometry"), Mapping
     ):
-        return SolveRequest.model_validate(config).model_copy(deep=True)
+        return read_request(config).model_copy(deep=True)
 
     resolution = resolve_job_design(row.get("script_snapshot"))
     if (
@@ -583,7 +583,7 @@ def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
         )
     metadata = row.get("task_metadata")
     metadata = metadata if isinstance(metadata, Mapping) else {}
-    return SolveRequest.model_validate(
+    return read_request(
         {
             "design": resolution.snapshot["design"],
             "design_snapshot": resolution.snapshot,
@@ -3121,8 +3121,10 @@ class JobRuntime:
         if not isinstance(geometry, Mapping) or geometry.get("type") != "parametric":
             return "unknown"
         try:
-            design = DesignConfig.model_validate(geometry.get("design"))
-            return await asyncio.to_thread(classify_mesh_open, provenance, design)
+            design = geometry.get("design")
+            return await asyncio.to_thread(
+                lambda: classify_mesh_open(provenance, read_design(design))
+            )
         except Exception:
             logger.exception("Could not compare mesh provenance for job %s", job_id)
             return "unknown"
@@ -3362,7 +3364,7 @@ class JobRuntime:
         snapshot = resolution.snapshot
         raw_design = snapshot.get("design", snapshot)
         try:
-            design = DesignConfig.model_validate(raw_design)
+            design = await asyncio.to_thread(read_design, raw_design)
         except Exception as exc:
             raise JobMeshDiscardedError(
                 "Mesh artifact was discarded by retention and cannot be regenerated: "
@@ -3618,7 +3620,7 @@ class JobRuntime:
 
     async def _run_job(self, job_id: str, row: Mapping[str, Any]) -> None:
         try:
-            effective_request = SolveRequest.model_validate(row["config_json"])
+            effective_request = await asyncio.to_thread(read_request, row["config_json"])
             _refuse_removed_solver(effective_request)
             task_metadata = (
                 dict(row.get("task_metadata") or {})

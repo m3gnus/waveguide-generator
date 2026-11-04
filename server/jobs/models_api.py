@@ -11,6 +11,7 @@ derives which saved setup applies from the prepared mesh's source inventory.
 from __future__ import annotations
 
 import asyncio
+from server.jobs.design_reader import read_design
 from server.preview.errors import public_error_message, user_error_message
 
 from collections import OrderedDict
@@ -53,7 +54,6 @@ from server.jobs.model_solve import ModelSolveRefusal, ModelSolveRequest, solve_
 from server.jobs.models import SolveAccepted
 from server.jobs.runtime import ImportedSolveRefusal
 from server.mesh.artifact import read_verified_import_mesh
-from server.design.schema import DesignConfig
 from server.design.uid import DesignUid
 from server.mesh.builder import AssemblyRefusal, _enforce_dense_solver_memory_ceiling, assembly_front_context
 from server.mesh.child import MesherChildError, MesherCrashError, run_mesh_build
@@ -897,7 +897,7 @@ def mount_models_api(application: FastAPI) -> None:
         """
 
         try:
-            design = DesignConfig.model_validate(body.design)
+            design = read_design(body.design)
             return await assembly_front_context(design)
         except AssemblyRefusal as exc:
             return _refusal(422, "assembly_refused", str(exc))

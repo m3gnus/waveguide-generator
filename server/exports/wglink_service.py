@@ -195,7 +195,7 @@ def _commit_design_for_export(
     export that instead of demanding the download first.
     """
 
-    from server.design.textcfg import parse
+    from server.jobs.design_reader import parse
 
     head = store.get_design(requested.design_id) if requested is not None else None
     filename = f"{design_name}.cfg"

@@ -18,6 +18,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from pydantic import Field, JsonValue
 
+from server.jobs.design_reader import read_request
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.jobs.models_api import MeshRegistration, begin_file_preparation, prepare_registration, public_record, register_mesh
@@ -256,7 +257,7 @@ def capture_mesh_replay(runtime: Any, store: Any, job_id: str) -> CapturedReplay
     job = snapshot["job"]
     if job["status"] != "complete":
         raise ValueError("Complete the run before exporting its mesh replay package.")
-    request = SolveRequest.model_validate(job["config_json"])
+    request = read_request(job["config_json"])
     if not isinstance(request.geometry, ImportedGeometrySource):
         raise ValueError("Mesh replay requires an imported file mesh or CAD surface.")
     record = get_prepared_mesh(store, request.geometry.ingest_id)
@@ -508,7 +509,7 @@ def mount_mesh_replay(application: FastAPI) -> None:
             cancellation.check()
             if isinstance(body, CadMeshReplayPackage):
                 # Read-only ordinary geometry admission, with no job allocation.
-                await runtime._validate_imported_submission(SolveRequest.model_validate(restored["request"]))
+                await runtime._validate_imported_submission(read_request(restored["request"]))
             return restored
         except ClientDisconnected as exc:
             raise HTTPException(499, "Opening this mesh was cancelled. Select the run again.") from exc

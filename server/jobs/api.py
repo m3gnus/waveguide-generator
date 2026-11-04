@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
+from server.jobs.design_reader import SavedSolveRequest
 from server.jobs.fem_field import FemFieldCorrupt, FemFieldInvalidSelection
 from server.jobs.operation_progress import request_operation
 from server.platform.feature_flags import fem_regions_enabled
@@ -432,7 +433,7 @@ def create_jobs_router(
             503: {"model": ErrorEnvelope, "description": "Engine unavailable"},
         },
     )
-    async def plan_solve(body: SolveRequest) -> SolvePlanResponse | JSONResponse:
+    async def plan_solve(body: SavedSolveRequest) -> SolvePlanResponse | JSONResponse:
         """Resolve the submitted design without allocating or persisting a job."""
 
         refused = restart_refusal(body.client_request_id)
@@ -481,7 +482,7 @@ def create_jobs_router(
             503: {"model": ErrorEnvelope, "description": "Engine unavailable"},
         },
     )
-    async def submit_solve(body: SolveRequest) -> SolveAccepted | JSONResponse:
+    async def submit_solve(body: SavedSolveRequest) -> SolveAccepted | JSONResponse:
         refused = restart_refusal(body.client_request_id)
         if refused is not None:
             return refused

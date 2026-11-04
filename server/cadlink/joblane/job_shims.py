@@ -20,7 +20,7 @@ from typing import Any
 
 from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, UNAVAILABLE_BUNDLE_PATH, cad_of, solve_settings_items
 from server.jobs.solve_anyway import Answered, Pressed, carries
-from server.jobs.models import SolveRequest
+from server.jobs.design_reader import read_request
 from server.cadlink.operations import (
     CANCEL_REQUESTED,
     NEEDS_USER_INPUT,
@@ -213,7 +213,7 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
         elif row.get("request_json"):
             # A legacy bind is immutable, including settings changed since it.
             try:
-                request = SolveRequest.model_validate_json(row["request_json"])
+                request = read_request(json.loads(row["request_json"]))
             except ValueError as exc:
                 raise BadSolvePayload(str(exc)) from exc
             request = request.model_copy(update={"client_request_id": key})

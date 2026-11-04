@@ -7,9 +7,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from server.design_io.reader import import_payload, read_design
+from server.jobs.design_reader import import_payload, read_design
 from server.design.schema import DesignConfig
-from server.design_io.reader import parse
+from server.jobs.design_reader import parse
 from server.design.textcfg import serialize
 from server.design_io.api import open_design, serialize_design
 from server.jobs.design_availability import resolve_job_design

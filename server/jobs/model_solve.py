@@ -38,6 +38,7 @@ import weakref
 
 from pydantic import Field, field_validator, model_validator
 
+from server.jobs.design_reader import read_design
 from server.cadlink.intake.design_assembly import (
     PRODUCER as ASSEMBLY_PRODUCER, AssemblyRefusal, compile_spec_digest, require_ready_sketches,
 )
@@ -64,7 +65,6 @@ from server.cadlink.roles import prepared_inventory_sha256
 from server.cadlink.store import UNFILED_MODEL_ID
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
-from server.design.schema import DesignConfig
 from server.jobs.solve_anyway import Answered, Pressed, carries
 from server.jobs.cad_intent import CAD_INTENT, cad_of
 from server.jobs.cad_preparation import preparation_options
@@ -608,7 +608,7 @@ def _assembly_snapshot(body: ModelSolveRequest, record: Mapping[str, Any]) -> di
             "A design can only be stored when solving its built Sources and baffle assembly.",
         )
     try:
-        design = DesignConfig.model_validate(body.design)
+        design = read_design(body.design)
         manifest_sha256 = compile_spec_digest(design) if design.root.assembly is not None else None
     except ValueError as exc:
         raise ModelSolveRefusal(

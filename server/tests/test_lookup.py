@@ -8,7 +8,7 @@ from hornlab_mesher.profile_formulas import lookup_profile_array
 from pydantic import ValidationError
 
 from server.design.schema import LookupConfig
-from server.design_io.reader import parse, read_design
+from server.jobs.design_reader import parse, read_design
 from server.design.textcfg import TextConfigError
 
 TABLE = [[0, 12.7], [20, 25], [80, 60]]

@@ -32,7 +32,7 @@ from server.cadlink.build_flags import fem_regions_enabled
 from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
 from server.cadlink.store import CadLinkStore, StaleAttempt
 from server.cadlink.snapshot_mesh import SnapshotMesh, snapshot_mesh
-from server.design.textcfg import parse
+from server.jobs.design_reader import parse
 from server.preview.geometry_identity import geometry_hash_for_design
 from server.mesh.imported import (
     ImportedMeshDependencyError,

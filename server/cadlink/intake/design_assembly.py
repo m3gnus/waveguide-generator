@@ -28,6 +28,7 @@ from typing import Any
 
 import numpy as np
 
+from server.jobs.design_reader import read_design
 from server.cadlink.identity import mint_id, utc_now
 from server.cadlink.store import StaleAttempt, design_model_id
 from server.contracts.assembly import (
@@ -499,7 +500,7 @@ async def compile_design_assembly(
 
     if cancel_cb is not None:
         cancel_cb()
-    design = DesignConfig.model_validate(dict(design_dump))
+    design = read_design(dict(design_dump))
     if design.root.assembly is None:
         raise AssemblyRefusal(AssemblyRefusal.NO_ASSEMBLY)
     require_ready_sketches(design)

@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from server.jobs.design_reader import read_request
 from server.design.solve_block import has_solve_blocks, solve_options_from_blocks
 from server.design.textcfg import ParsedDesign
 from server.jobs.models import SolveOptions, SolveRequest
@@ -82,7 +83,7 @@ def load_request_document(
             f"solve request is not valid JSON at line {exc.lineno}, "
             f"column {exc.colno}: {exc.msg}"
         ) from exc
-    request = SolveRequest.model_validate(value)
+    request = read_request(value)
     options = request.options
     if overlay is not None:
         options = _apply_overlay(options, _overlay_options(overlay))

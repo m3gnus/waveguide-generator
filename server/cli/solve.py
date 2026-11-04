@@ -20,7 +20,7 @@ from typing import Any, TextIO
 from pydantic import ValidationError
 
 from server.design.conventions import artifact_conventions
-from server.design_io.reader import parse
+from server.jobs.design_reader import parse
 from server.design.textcfg import TextConfigError
 from server.engines.registry import EngineRegistry
 from server.integration.provenance import canonical_json_sha256

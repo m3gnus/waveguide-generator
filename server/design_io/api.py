@@ -10,14 +10,16 @@ from typing import Any, Callable
 from fastapi import APIRouter, Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from hornlab_mesher.errors import UserRefusal
 
 from server.cadlink.identity import SaveIdentity, classify_open, design_hash
 from server.cadlink.store import CadLinkStore
 from server.workspace.api import select_workspace_path
 from server.design.uid import validate_design_uid
 from server.design.schema import DesignConfig, Expr, OSSEConfig
-from server.design_io.reader import parse, read_design
+from server.jobs.design_reader import parse, read_design
 from server.design.textcfg import ParsedDesign, TextConfigError, serialize
+from server.preview.errors import user_error_detail
 
 
 _SAFE_STEM = re.compile(r"[^A-Za-z0-9._-]+")
@@ -113,6 +115,9 @@ def _save_design(
             if "design" in payload and payload.get("identity") is not None
             else None
         )
+    except UserRefusal as exc:
+        # The Custom profile import refuses a saved table it cannot convert.
+        raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
     suggested_filename = _suggested_filename(filename)
@@ -149,6 +154,9 @@ def _serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         design = read_design(design_payload)
         design_uid = validate_design_uid(payload.get("designUid") if "design" in payload else None)
+    except UserRefusal as exc:
+        # The Custom profile import refuses a saved table it cannot convert.
+        raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False, include_context=False)) from exc
     suggested_filename = _suggested_filename(filename)

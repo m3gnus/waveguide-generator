@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from server.contracts.geometry import MODE_BY_QUADRANTS
 from server.design.schema import Expr
 from server.design.solve_block import has_solve_blocks
-from server.design_io.reader import parse
+from server.jobs.design_reader import parse
 from server.design.textcfg import TextConfigError
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.models import ImportedGeometrySource, SolveRequest

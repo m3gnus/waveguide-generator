@@ -16,7 +16,7 @@ import pytest
 from server.cadlink.identity import CadLink, design_hash
 from server.cadlink.store import CadLinkStore
 from server.design.textcfg import parse, serialize
-from server.design_io.reader import read_design
+from server.jobs.design_reader import read_design
 from server.design_io import api
 from server.design_io.api import import_report, open_design, save_design, serialize_design
 from server.tests._asgi import _post
