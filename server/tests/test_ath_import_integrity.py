@@ -85,7 +85,7 @@ UNSUPPORTED = {
     "BEE": BASE + "BEE = {\n x = 1\n}\n",
     "Mesh.Roundover": BASE + "Mesh = {\n Roundover = 10\n}\n",
     "Mesh.Enclosure.Plan": BASE + "Mesh.Enclosure = {\n Depth = 200\n Plan = bigbox\n}\n",
-    "Throat.Profile": BASE.replace(" q = 0.995\n", " q = 0.995\n Throat.Profile = 3\n"),
+    "Throat.Profile": BASE.replace(" q = 0.995\n", " q = 0.995\n Throat.Profile = 2\n"),
 }
 
 
@@ -687,6 +687,12 @@ GAP_STUDY_KEYS = {
 @pytest.mark.parametrize("family, base", [("OSSE", BASE), ("R-OSSE", RBASE)])
 @pytest.mark.parametrize("key", sorted(GAP_STUDY_KEYS))
 def test_every_gap_study_key_has_transport_or_a_named_refusal(family: str, base: str, key: str) -> None:
+    if key == "Throat.Profile" and family == "OSSE":
+        opened = parse(base + GAP_STUDY_KEYS[key])
+        assert opened.design == parse(base).design
+        assert [item.key for item in opened.ignored_settings] == [key]
+        assert "OSSE block" in opened.ignored_settings[0].note
+        return
     if key == "Mesh.Enclosure.Dim":
         # Dim is read through the design mesher's contract (test_ath_lfsource.py):
         # four positive distances, or this named refusal.
@@ -772,9 +778,10 @@ def test_unknown_morph_and_gcurve_keys_are_ignored_as_ath_ignores_them() -> None
 
 def test_refusals_do_not_depend_on_throat_stretch() -> None:
     assert "s1" not in BASE and "s2" not in BASE
-    for key in ("Rollback", "LFSource", "Throat.Profile"):
+    for key in ("Rollback", "LFSource"):
         with pytest.raises(TextConfigError):
             parse(BASE + GAP_STUDY_KEYS[key])
+    assert parse(BASE + GAP_STUDY_KEYS["Throat.Profile"]).design == parse(BASE).design
 
 
 def test_parked_unknown_items_and_known_ignorable_items_import() -> None:

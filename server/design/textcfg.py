@@ -1076,6 +1076,13 @@ def _refuse_unsupported_ath_items(
     # The selected profile block's Throat.Profile wins over the top-level one.
     selected_items = blocks[block_name].items if block_name is not None else {}
     profile = selected_items.get("Throat.Profile", flat.get("Throat.Profile"))
+    if _ath_number(profile or "") == 3 and block_name is None:
+        from hornlab_mesher.config_parser import ConfigError, _reject_unsupported_ath_keys
+
+        try:
+            _reject_unsupported_ath_keys(flat, selected_items, {}, {})
+        except ConfigError as exc:
+            raise TextConfigError(ath_import_failure(exc)) from exc
     if profile is not None and _ath_number(profile) != 1.0:
         add("Throat.Profile", f"Throat.Profile = {profile} is not measured against ATH; only the "
             "OS-SE profile (1) is")
@@ -1830,6 +1837,20 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         )
     geometry_dialect = "mwg" if version == NATIVE_GEOMETRY_VERSION else "ath" if version in TEXT_IMPORT_VERSIONS else dialect
     import_version = version if version in TEXT_IMPORT_VERSIONS else TEXT_IMPORT_VERSION if geometry_dialect == "ath" else None
+    if dialect == "ath" and version is None and "OSSE" in blocks:
+        from hornlab_mesher.text_import import ath_axial_sampling_rule, ath_osse_block_noops
+
+        try:
+            _, ath_version = ath_axial_sampling_rule(text)
+        except ValueError as exc:
+            raise TextConfigError(ath_import_failure(exc, setting="ATH version comments")) from exc
+        for key, value, note in ath_osse_block_noops(
+                flat, {name: block.items for name, block in blocks.items()}, ath_version=ath_version):
+            if key.startswith("OSSE."):
+                blocks["OSSE"].items.pop(key.removeprefix("OSSE."))
+            else:
+                flat.pop(key)
+            ignored_profile.append(IgnoredSetting(key, value, note))
     controls_config = None
     if dialect == "ath" and version is None and "Throat.Ext.Ctrl" in flat:
         # The mesher owns ATH interpretation and certification. Only fresh,
