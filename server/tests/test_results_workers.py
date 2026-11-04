@@ -78,8 +78,11 @@ def test_result_decoding_runs_inside_the_worker(monkeypatch, operation):
         operation_task = core.JobRuntime.get_pressure_basis(runtime, "done", "normal")
     actual = asyncio.run(_heartbeat_during(operation_task, entered, release))
     if operation == "recombine":
-        assert actual == {**results, "recombined": True}
-        assert writes == [actual]
+        expected_result = json.loads(json.dumps({**results, "recombined": True}))
+        expected_result["channels"]["axial"]["metadata"]["source_normalization"] = "voltage_driven_driver_lem"
+        assert actual == expected_result
+        # Read-time comparison identity must not be written into the archive.
+        assert writes == [{**results, "recombined": True}]
     else:
         assert actual == expected
         assert not writes

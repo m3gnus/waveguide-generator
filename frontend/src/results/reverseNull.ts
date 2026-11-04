@@ -1,5 +1,7 @@
-import { channelWeight, complexAbs, complexMultiply, isSupportedSection, type Complex } from './crossoverFilters';
-import { fromResult, type CrossoverSpec } from './crossoverSpec';
+import { onAxisComplex, rawWeight } from './memberResponse';
+import { channelExcitationBasis, runExcitationBasis, withRunExcitationBasis } from './excitationBasis';
+import { complexAbs, complexMultiply, isSupportedSection, type Complex } from './crossoverFilters';
+import { fromResult } from './crossoverSpec';
 import type { CombineMetadata, ResultPayload } from './types';
 
 /**
@@ -22,57 +24,10 @@ import type { CombineMetadata, ResultPayload } from './types';
  * withheld. Comfortably above JSON rounding and far below anything a wrong
  * convention would produce. */
 const RECONSTRUCTION_TOLERANCE_DB = 0.5;
-const TWO_PI = 2 * Math.PI;
 
 export interface ReverseNullTrace {
   name: string;
   points: Array<[number, number]>;
-}
-
-function onAxisComplex(response: ResultPayload['spl_on_axis'] | undefined, count: number): Complex[] | null {
-  const spl = response?.spl;
-  const phase = response?.phase_degrees;
-  if (!spl || !phase || spl.length !== count || phase.length !== count) return null;
-  const values: Complex[] = [];
-  for (let index = 0; index < count; index += 1) {
-    const level = spl[index];
-    const degrees = phase[index];
-    if (typeof level !== 'number' || !Number.isFinite(level)
-      || typeof degrees !== 'number' || !Number.isFinite(degrees)) return null;
-    const amplitude = 10 ** (level / 20);
-    const radians = (degrees * Math.PI) / 180;
-    values.push([amplitude * Math.cos(radians), amplitude * Math.sin(radians)]);
-  }
-  return values;
-}
-
-/**
- * The factor the solver applied to one member's raw `exp(+ikr)` field.
- *
- * The filters, the gain and the delay are defined in the engineering
- * `e^{+jωt}` convention (`server/solver/combine.raw_channel_weights`), and the
- * on-axis phase this payload carries is the raw solver phase, so the
- * engineering weight is conjugated exactly once here — the same single
- * convention boundary the solver has.
- */
-function rawWeight(
-  spec: CrossoverSpec,
-  member: string,
-  gainDb: number,
-  delayMs: number,
-  inverted: boolean,
-  frequencyHz: number,
-): Complex {
-  const channel = spec.channels[member];
-  const band = channelWeight(channel.hp, channel.lp, frequencyHz);
-  const gain = 10 ** (gainDb / 20);
-  const angle = TWO_PI * frequencyHz * (delayMs / 1_000);
-  const sign = inverted ? -1 : 1;
-  // conj(band) * gain * exp(+j 2 pi f tau) * sign
-  return complexMultiply(
-    [band[0] * gain * sign, -band[1] * gain * sign],
-    [Math.cos(angle), Math.sin(angle)],
-  );
 }
 
 function memberLabel(combine: CombineMetadata, index: number): string {
@@ -99,6 +54,22 @@ export function reverseNullTraces(
   combine: CombineMetadata | null,
 ): ReverseNullTrace[] {
   if (!wrapper?.channels || !combined || !combine) return [];
+  const target = runExcitationBasis(wrapper);
+  const physical = combine.members.flatMap(member => combine!.member_channels?.[member] ?? [member]);
+  const allVoltage = physical.length > 0 && physical.every(id => channelExcitationBasis(wrapper!.channels![id] ?? { frequencies: [] }) === 'voltage');
+  if (!target && !allVoltage) return [];
+  if (target) {
+    const id = Object.keys(wrapper.channels).find(id => wrapper!.channels![id] === combined);
+    const converted = withRunExcitationBasis(wrapper, target);
+    if (!converted?.channels || (id && !converted.channels[id])) return [];
+    wrapper = converted as ResultPayload;
+    if (id) {
+      combined = wrapper.channels![id] as ResultPayload;
+      // Preserve the caller's requested combine (legacy callers may pass a
+      // different reconstruction spec); only converted retained fields change.
+      if (combine.member_responses && combined.metadata?.combine?.member_responses) combine = { ...combine, member_responses: combined.metadata.combine.member_responses };
+    }
+  }
   const spec = fromResult(combine);
   if (!spec || spec.members.length < 2) return [];
   const frequencies = combined.spl_on_axis?.frequencies ?? combined.frequencies;

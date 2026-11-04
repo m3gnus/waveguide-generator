@@ -1,3 +1,4 @@
+import { runExcitationBasis, withRunExcitationBasis } from './excitationBasis';
 import { polarValueDb as patternDb } from './values';
 import type { PolarSample, ResultData } from '../api/results';
 import { applySmoothing, type SmoothingMode } from './smoothing';
@@ -29,6 +30,7 @@ export interface NamedResult {
   primary?: boolean;
   /** Which channel of `wrapper` this entry is, for export naming and labels. */
   channelId?: string;
+  notComparable?: string;
 }
 
 /**
@@ -62,6 +64,22 @@ export function selectResultChannels(id: string, label: string, result: ResultDa
       .filter((member) => member !== active && member in payload.channels!)
     : [];
   return [entry(active, false), ...members.map((member) => entry(member, true))];
+}
+
+/** Resolve each selected channel against the primary run's stored excitation. */
+export function compareResultChannels(items: NamedResult[], primary: ResultData): NamedResult[] {
+  const target = runExcitationBasis(primary);
+  const converted = new Map<ResultData, ResultData | null>();
+  return items.map(entry => {
+    if (entry.primary) return entry;
+    const wrapper = entry.wrapper ?? entry.result;
+    if (!converted.has(wrapper)) converted.set(wrapper, withRunExcitationBasis(wrapper, target));
+    const scoped = converted.get(wrapper);
+    const result = entry.channelId ? scoped?.channels?.[entry.channelId] : scoped;
+    return result ? { ...entry, result, wrapper: scoped ?? undefined } : { ...entry,
+      notComparable: `${entry.label} is not comparable: its stored excitation basis cannot be converted to the primary run. Choose a channel with a recorded basis or solve it again.`,
+    };
+  });
 }
 
 function finite(value: unknown): value is number {

@@ -13,7 +13,7 @@ import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation,
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { axes, CHART_FONT_FAMILY, LABEL_FONT, type ChartDensity } from '../results/chartAxes';
 export type { ChartDensity } from '../results/chartAxes';
-import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, hasZeroRadiationRear, impedanceComparable, impedanceSeries, impedanceSubtitle, isOutsideHalfSpace, nearestFrequencyIndex, OUTSIDE_HALF_SPACE_LABEL, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
+import { compareResultChannels, beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, hasZeroRadiationRear, impedanceComparable, impedanceSeries, impedanceSubtitle, isOutsideHalfSpace, nearestFrequencyIndex, OUTSIDE_HALF_SPACE_LABEL, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
 import { RunExportControl } from '../jobs/RunExportControl';
 import {
@@ -1868,7 +1868,7 @@ export function measurementAngleEntries(
     });
     return anchored.every((entry, index) => entry === items[index]) ? items : anchored;
   }
-  return items.filter(({ secondary }) => !secondary).flatMap((item) => angles.map((angle) => ({
+  return items.filter(({ secondary }) => !secondary).flatMap((item) => angles.filter(angle => !item.result.metadata?.excitation_comparison_on_axis_only || angle === onAxis).map((angle) => ({
     ...item,
     id: `${item.id}@${plane}:${angle}`,
     label: `${item.label} · ${measurementAngleLabel(angle)}`,
@@ -1955,6 +1955,15 @@ interface RadiationArtifactView {
   retry?: () => void;
 }
 
+function excitationComparisonNote(entry: NamedResult, chartType: ChartType): string | undefined {
+  if (entry.notComparable) return entry.notComparable;
+  if (entry.result.metadata?.excitation_comparison_on_axis_only
+    && !['frequency_response', 'phase_response', 'group_delay'].includes(chartType)) {
+    return `${entry.label} is not comparable on this chart: its stored branches only support on-axis reconstruction. Choose a physical channel or solve again in the primary run's basis.`;
+  }
+  return undefined;
+}
+
 function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, radiationArtifact, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction; radiationArtifact?: RadiationArtifactView } & SummarySourceProps) {
   const preferences = usePreferences();
   // The shown run owns its display reference, independently of live drafts.
@@ -1964,7 +1973,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
   // surfaces whenever the comparison selection changes.
   const overlays = useMemo(() => {
     if (!COMPARABLE_CHARTS.has(chartType) && !MEMBER_CHARTS.has(chartType)) return NO_NAMED_RESULTS;
-    const entries = chartEntries(chartType, named, preferences.showMembersUnderCombined);
+    const entries = chartEntries(chartType, named.filter(entry => !excitationComparisonNote(entry, chartType)), preferences.showMembersUnderCombined);
     if (entries.length) return entries;
     return COMPARABLE_CHARTS.has(chartType) ? [{ id: 'primary', label: 'Primary', result, primary: true }] : NO_NAMED_RESULTS;
   }, [chartType, named, preferences.showMembersUnderCombined, result]);
@@ -2293,6 +2302,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
       {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
       {samplingDisclosure && <span className="result-unqualified" role="note" title={samplingDisclosure}>Adaptive · reconstructed estimates</span>}
       {unqualifiedNote && <span className="result-unqualified" role="note" title={`${unqualifiedNote}. ${unqualifiedMessage(unqualifiedFormulation)}`}>{density === 'compact' ? 'Unqualified' : unqualifiedNote}</span>}
+      {COMPARABLE_CHARTS.has(chartType) && named.some(entry => excitationComparisonNote(entry, chartType)) && <span className="result-single-run" role="note" title={named.flatMap(entry => excitationComparisonNote(entry, chartType) ?? []).join(' ')}>Not comparable · excitation basis</span>}
       {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {compared.length}</span>}
       <span className="result-chrome-spacer"/>
       {imageReady && <>
@@ -2702,7 +2712,7 @@ export function ResultsPanel() {
   const displayOrigins = JSON.stringify(display?.ids.map((id) => jobs.find(job => job.id === id)?.config_summary.import_origin) ?? []);
   const displayedIdsKey = displayed.ids.join('\u0000');
   const named = useMemo(
-    () => display?.ids.flatMap((id, index) => {
+    () => compareResultChannels(display?.ids.flatMap((id, index) => {
       if (!shownRaw || !displayedIdsKey.split('\u0000').includes(id)) return [];
       // `ids` is [primary, ...overlays], so index 0 is the run the panel is
       // built around. Flagging its entries here is what lets every chart find
@@ -2715,7 +2725,7 @@ export function ResultsPanel() {
         JSON.parse(displayOrigins)[index],
       );
       return index === 0 ? channels.map((entry) => ({ ...entry, primary: true })) : channels;
-    }) ?? NO_NAMED_RESULTS,
+    }) ?? NO_NAMED_RESULTS, shownRaw ?? { frequencies: [] }),
     [display, displayLabels, displayOrigins, view, shownRaw, displayedIdsKey],
   );
   const error = fetchError?.key === selectionKey ? fetchError.message : null;

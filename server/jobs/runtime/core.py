@@ -68,6 +68,7 @@ from server.platform.feature_flags import fem_regions_enabled
 from server.jobs.design_availability import resolve_job_design
 from server.jobs.mesh_provenance import classify_open as classify_mesh_open, record_for_design
 from server.jobs.retention import MAX_RETAINED_RESULTS, RESULT_RETENTION_DAYS
+from server.jobs.result_basis import with_result_basis
 from server.jobs.imported_polar import widen_polar_to_derivation
 from server.jobs.models import (
     JobArchiveIdentity,
@@ -3142,7 +3143,7 @@ class JobRuntime:
         payload = await asyncio.to_thread(self.store.get_results_payload, job_id)
         if payload is None:
             raise JobResourceUnavailableError("This run’s results are gone. Solve the design again.")
-        return payload
+        return await asyncio.to_thread(with_result_basis, *payload, row)
 
     async def get_archive_snapshot(self, job_id: str) -> dict[str, Any]:
         """Copy every retained archive input before retention may resume.
@@ -3281,7 +3282,12 @@ class JobRuntime:
 
             updated = await asyncio.to_thread(recombine)
             await asyncio.to_thread(self.store.store_results, job_id, updated)
-            return updated
+
+            def presented() -> dict[str, Any]:
+                text, _digest = with_result_basis(json.dumps(updated), "", row)
+                return json.loads(text)
+
+            return await asyncio.to_thread(presented)
 
     async def evaluate_field_plane(
         self, job_id: str, request: FieldPlaneRequest

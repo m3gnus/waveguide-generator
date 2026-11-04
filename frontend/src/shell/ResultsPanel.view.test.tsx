@@ -40,7 +40,7 @@ const SPL_CHART = 'Interactive HornLab sound pressure frequency response';
 const POLAR_CHART = 'Interactive HornLab horizontal polar response';
 const IMPEDANCE_CHART = 'Interactive HornLab normalized acoustic impedance by frequency';
 
-interface DrawnSeries { name?: string; lineStyle?: { width?: number; opacity?: number } }
+interface DrawnSeries { data?: Array<[number, number]>; name?: string; lineStyle?: { width?: number; opacity?: number } }
 
 /** The series of the last option a named chart was drawn with. */
 function series(label: string): DrawnSeries[] {
@@ -59,7 +59,7 @@ function channel(splDb: number, role?: string, combine?: Record<string, unknown>
     spl_on_axis: { frequencies: [1_000], spl: [splDb], phase_degrees: [0] },
     directivity: { horizontal: [[[0, 0], [30, -6]]] },
     impedance: { frequencies: [1_000], real: [8], imaginary: [1] },
-    metadata: { ...(role ? { role } : {}), ...(combine ? { combine } : {}) },
+    metadata: { source_normalization: 'native_rms_velocity', phase_time_convention: 'exp(+ikr)', ...(role ? { role } : {}), ...(combine ? { combine } : {}) },
   };
 }
 
@@ -376,6 +376,34 @@ describe('results dock view switch', () => {
     // its first channel, and says on the label which one that is.
     expect(seriesNames(SPL_CHART)).toEqual(['#1 · primary · MF', '#2 · other · HF']);
     expect(seriesNames(POLAR_CHART)).toEqual(['#1 · primary · MF', '#2 · other · HF']);
+  });
+
+  it('aligns an old CAD acceleration overlay to the new CAD RMS channel', async () => {
+    const old = payloads.other.channels!['drive-hf'];
+    old.metadata = { ...old.metadata, source_normalization: 'unit_normal_acceleration' };
+    old.spl_on_axis = { frequencies: [1000], spl: [92 - 20 * Math.log10(2 * Math.PI * 1000)], phase_degrees: [90] };
+    publishJobs([job('primary', 1), job('other', 2)]);
+    compareSelection.setPrimary('primary');
+    compareSelection.toggleOverlay('other');
+    await render();
+    await chooseView('HF');
+    const drawn = series(SPL_CHART);
+    expect(drawn.map(trace => trace.name)).toEqual(['#1 · primary · HF', '#2 · other · HF']);
+    expect(drawn[1].data![0][1]).toBeCloseTo(drawn[0].data![0][1], 10);
+    expect(host.querySelector('.result-card.result-0 [role="note"]')).toBeNull();
+  });
+
+  it('withholds unknown stored excitation and shows a not-comparable note', async () => {
+    for (const result of Object.values(payloads.other.channels!)) {
+      result.metadata = { ...result.metadata, source_normalization: 'future' };
+    }
+    publishJobs([job('primary', 1), job('other', 2)]);
+    compareSelection.setPrimary('primary');
+    compareSelection.toggleOverlay('other');
+    await render();
+    await chooseView('MF');
+    expect(seriesNames(SPL_CHART)).toEqual(['#1 · primary · MF']);
+    expect(host.querySelector('.result-card.result-0 [role="note"]')?.textContent).toContain('Not comparable');
   });
 
   it('keeps the chosen view when the shown run changes', async () => {

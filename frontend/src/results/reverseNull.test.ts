@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sectionResponse, type Complex } from './crossoverFilters';
+import { withExcitationBasis } from './excitationBasis';
 import { reverseNullTraces } from './reverseNull';
 import type { CombineMetadata, ResultPayload } from './types';
 
@@ -33,6 +34,7 @@ function weighted(frequency: number): { mf: Complex; hf: Complex } {
 /** A member solved as an ideal coincident unit source: 0 dB, 0°. */
 function unitMember(): ResultPayload {
   return {
+    metadata: { source_normalization: 'native_rms_velocity', phase_time_convention: 'exp(+ikr)' },
     frequencies: [...FREQUENCIES],
     spl_on_axis: {
       frequencies: [...FREQUENCIES],
@@ -185,6 +187,36 @@ describe('reverseNullTraces', () => {
     const traces = reverseNullTraces(wrapper, combined, legacy);
     expect(traces).toHaveLength(1);
     expect(traces[0].points.find(([frequency]) => frequency === 1_000)![1]).toBeLessThan(-25);
+  });
+
+  it('converts stored acceleration members and their combined reference before reconstructing', () => {
+    const combine = metadata();
+    const combined = combinedChannel(combine);
+    const expected = reverseNullTraces(wrapperFor(combined), combined, combine);
+    const tagged = { ...combined, metadata: { ...combined.metadata, source_normalization: 'native_rms_velocity', phase_time_convention: 'exp(+ikr)' } };
+    const oldCombined = withExcitationBasis(tagged, 'acceleration_legacy') as ResultPayload;
+    const oldMember = withExcitationBasis(unitMember(), 'acceleration_legacy') as ResultPayload;
+    const wrapper = { frequencies: [...FREQUENCIES], metadata: { excitation_normalization: 'rms_velocity' },
+      channels: { 'drive-mf': oldMember, 'drive-hf': oldMember, combined: oldCombined } };
+    const traces = reverseNullTraces(wrapper, oldCombined, combine);
+    expect(traces).toHaveLength(1);
+    traces[0].points.forEach((point, i) => expect(point[1]).toBeCloseTo(expected[0].points[i][1], 9));
+  });
+
+  it('keeps a voltage-only reconstruction unchanged without a prescribed basis', () => {
+    const combine = metadata();
+    const combined = combinedChannel(combine);
+    const wrapper = wrapperFor(combined);
+    for (const id of ['drive-mf', 'drive-hf']) wrapper.channels![id].metadata = { source_normalization: 'native_rms_voltage' };
+    expect(reverseNullTraces(wrapper, combined, combine)).toHaveLength(1);
+  });
+
+  it('withholds reverse null when a member basis is unknown', () => {
+    const combine = metadata();
+    const combined = combinedChannel(combine);
+    const wrapper = wrapperFor(combined);
+    wrapper.channels!['drive-mf'].metadata = { source_normalization: 'future' };
+    expect(reverseNullTraces(wrapper, combined, combine)).toEqual([]);
   });
 
   it('has nothing to draw without a combine record', () => {
