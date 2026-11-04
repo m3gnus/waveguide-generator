@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import configparser
 import copy
+import io
 import hashlib
 import importlib.util
 import json
@@ -994,8 +995,10 @@ def grouped_bases(payload: bytes, plan: Mapping[str, Any]) -> dict[str, Any]:
     unpacked = deserialize_channel_bases(payload)
     bases = copy.deepcopy(unpacked["results_by_id"])
     normalisation = {}
+    with np.load(io.BytesIO(payload), allow_pickle=False) as archive:
+        stored = {channel: _stored_metadata(archive, channel) for channel in bases}
     for channel, basis in bases.items():
-        metadata = _stored_metadata(payload, channel)
+        metadata = stored[channel]
         source = metadata.get("source_normalization")
         if source == "native_rms_velocity":
             scale_channel_result(basis, np.asarray([acceleration_scale(f) for f in basis.frequencies_hz]))
