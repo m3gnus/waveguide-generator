@@ -1644,6 +1644,10 @@ def _mesher_validation_text(
             name = prefix + key
             if preserve_passthrough and name in payload.get("extra_keys", {}):
                 continue
+            if preserve_passthrough and name == "Source.VelocityConvention":
+                # WG's explicit solver convention is saved metadata, outside
+                # ATH's geometry vocabulary. Keep it in the design payload.
+                continue
             if (name in ignored_names and name not in {"OSSE.Rot", "NAC"}) or name.startswith("WG."):
                 continue
             if rollback_off and (name == "Rollback" or name.startswith("Rollback.")):
@@ -1905,6 +1909,14 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         design = DesignConfig.model_validate(payload)
     except ValidationError as exc:
         raise TextConfigError(str(exc)) from exc
+    if fresh_ath:
+        from server.design.source_motion import source_motion
+
+        # Newly accepted axial imports need an explicit editor convention.
+        # Saved designs retain their existing convention and numeric reading.
+        motion = source_motion(design.root.source)
+        if motion == "axial":
+            design.root.source.velocity_convention = motion
     block_name = _profile_block_name(design.formula, blocks)
     return ParsedDesign(
         design=design,

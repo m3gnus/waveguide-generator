@@ -73,6 +73,17 @@ async function untouchedRoundTrip(original: Record<string, unknown>): Promise<Re
 }
 
 describe('design hydration', () => {
+  it('keeps a fresh ATH axial source visible and axial after saving', async () => {
+    const wire = {
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v3',
+      source: { velocity: { value: 2, raw: '2' }, velocity_convention: 'axial' },
+    };
+    const document = hydrateDesignDocument(wire);
+    expect(document.source.velocity_convention).toBe('axial');
+    expect(document.source.velocity).toBe(2);
+    expect((await untouchedRoundTrip(wire)).source).toMatchObject(wire.source);
+  });
+
   it('keeps an imported ATH Dim box on save', () => {
     const wire = { ...serializeDesign(designForFamily('OSSE')) } as Record<string, unknown>;
     wire.enclosure = { ...(wire.enclosure as Record<string, unknown>), depth: 300, dim_mm: [150, 160, 150, 400] };
