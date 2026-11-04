@@ -557,6 +557,7 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
         throw new Error('WG could not open this mesh again. Select the run again.');
       }
       if (opened.record.producer === 'cad') {
+        setup.preparation = structuredClone(opened.record.preparation_options);
         if (!await openImported({ kind: 'cad-replay', record: opened.record, setup }, fetcher)) return false;
       } else {
         assertFileRecord(opened.record, setup, opened.request.geometry.ingest_id);

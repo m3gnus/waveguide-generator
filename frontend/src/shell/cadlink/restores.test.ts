@@ -588,10 +588,15 @@ it('replaces the prior physics when another run of the shown mesh has a non-exac
   expect(effectiveImportedSetup('cad', record.ingest_id, () => next).geometry.drive_voltage_v).toBe(5);
 });
 
-it('opens a portable CAD replay through the existing CAD rail and preserves the whole request', async () => {
+it.each([
+  { symmetry_mode: 'auto', area_drift_overrides: [], surface_deviation_mm: null },
+  { symmetry_mode: 'full', area_drift_overrides: [], surface_deviation_mm: null },
+  { symmetry_mode: 'auto', area_drift_overrides: [], surface_deviation_mm: 0.05 },
+] as const)('opens a portable CAD replay with preparation %j and preserves the whole request', async preparation => {
   const { loadMeshReplay } = await import('../../stores/meshImport');
   const request = archivedRequest();
-  const replayRecord = { ...record, producer: 'cad', model_id: 'wgl_replay', msh_text: mesh };
+  const replayRecord = { ...record, producer: 'cad', model_id: 'wgl_replay', msh_text: mesh,
+    preparation_options: preparation };
   const fetcher = vi.fn<typeof fetch>(async input => {
     if (String(input).endsWith('/mesh-replay')) return json({ record: replayRecord, request });
     if (String(input).endsWith('/viewport-mesh')) return new Response(mesh);
@@ -600,7 +605,12 @@ it('opens a portable CAD replay through the existing CAD rail and preserves the 
   expect(await loadMeshReplay('{}', fetcher)).toBe(true);
   expect(workspaceModeStore.getSnapshot().importedInput).toBe('cad');
   expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
-  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+  expect(useCadReturnStore.getState()).toMatchObject({
+    symmetryMode: preparation.symmetry_mode, surfaceDeviationMm: preparation.surface_deviation_mm,
+    areaDriftOverrides: preparation.area_drift_overrides, needsIngest: false,
+  });
+  expect(useImportedModelStore.getState().setup?.preparation).toEqual(preparation);
+  expect(importedSubmissionBlocker()).toBeNull();
   expect(useImportedModelStore.getState().modelId).toBe('wgl_replay');
   const submitted = buildImportedSubmission();
   expect(submitted?.options).toEqual(request.options);
