@@ -145,3 +145,5 @@ retains its existing fragment behavior. The WG consumer's new-woofer default
 is the ATH contour, and an actual Build with that default is qualified on
 the exact installed pin. Hosted platform and installed-candidate evidence
 remain separate from these source comparisons.
+
+The plots pin `9462f4b` preserves unavailable samples as chart gaps, keeps the signed phase grid and on-axis reference, and supports explicit directivity display ranges. Partial-cap plots state their coverage. These renderer contracts are available to WG export consumers.
