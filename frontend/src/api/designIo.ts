@@ -105,14 +105,16 @@ async function errorMessage(response: Response): Promise<string> {
   return refusalText(null, 'design request');
 }
 
-async function postText<T>(path: string, text: string, fetcher: typeof fetch): Promise<T> {
-  const response = await fetcher(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    body: text,
+async function postText<T>(path: string, text: string, fetcher: typeof fetch, label: string): Promise<T> {
+  return activityOperation({ kind: 'design-open', label }, fetcher, async fetcher => {
+    const response = await fetcher(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      body: text,
+    });
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json() as Promise<T>;
   });
-  if (!response.ok) throw new Error(await errorMessage(response));
-  return response.json() as Promise<T>;
 }
 
 export interface ChosenDesignFile {
@@ -126,22 +128,24 @@ export interface ChosenDesignFile {
 
 /** Null asks the caller to use the browser input; only explicit cancel stops Open. */
 export async function chooseDesignFile(fetcher: typeof fetch = fetch): Promise<ChosenDesignFile | null> {
-  try {
-    const response = await fetcher('/api/design/choose', { method: 'POST' });
-    if (!response.ok) return null;
-    const chosen = await response.json() as ChosenDesignFile;
-    if (chosen.outcome === 'cancelled') return chosen;
-    if (chosen.selected && chosen.filename && typeof chosen.text === 'string') return chosen;
-  } catch { /* unavailable picker, network, or malformed reply: retain browser Open */ }
-  return null;
+  return activityOperation({ kind: 'design-open', label: 'Opening design file' }, fetcher, async fetcher => {
+    try {
+      const response = await fetcher('/api/design/choose', { method: 'POST' });
+      if (!response.ok) return null;
+      const chosen = await response.json() as ChosenDesignFile;
+      if (chosen.outcome === 'cancelled') return chosen;
+      if (chosen.selected && chosen.filename && typeof chosen.text === 'string') return chosen;
+    } catch { /* unavailable picker, network, or malformed reply: retain browser Open */ }
+    return null;
+  });
 }
 
 export function openDesignText(text: string, fetcher: typeof fetch = fetch): Promise<OpenDesignResponse> {
-  return postText('/api/design/open', text, fetcher);
+  return postText('/api/design/open', text, fetcher, 'Opening design file');
 }
 
 export function inspectDesignText(text: string, fetcher: typeof fetch = fetch): Promise<InspectDesignResponse> {
-  return postText('/api/design/import-report', text, fetcher);
+  return postText('/api/design/import-report', text, fetcher, 'Inspecting design file');
 }
 
 /**

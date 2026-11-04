@@ -8,7 +8,7 @@ import {
 import { designForFamily, resetDesignStore, useDesignStore } from './design';
 import { useDesignModelStore } from './importedModel';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { mesh } from '../shell/cadlink/selection.fixtures';
+import { deferred, mesh } from '../shell/cadlink/selection.fixtures';
 import { currentModel, currentModelScene } from '../model/currentModel';
 
 let counter = 0;
@@ -16,10 +16,14 @@ const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '
 
 function deferredFetcher() {
   const pending: Array<{ body: Record<string, unknown>; resolve: (value: Response) => void }> = [];
-  const fetcher = ((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
-    pending.push({ body: JSON.parse(String(init?.body)), resolve });
-    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
-  })) as typeof fetch;
+  const fetcher = ((_url: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'DELETE') return Promise.resolve(new Response(null, { status: 204 }));
+    if (init?.method !== 'POST') return Promise.resolve(new Response(null, { status: 404 }));
+    return new Promise<Response>((resolve, reject) => {
+      pending.push({ body: JSON.parse(String(init.body)), resolve });
+      init.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    });
+  }) as typeof fetch;
   const answer = (index: number, prepared: Record<string, unknown> | null, status = 200) => pending[index].resolve(new Response(
     JSON.stringify(status !== 200 ? { error: { code: 'assembly_refused', message: 'Set an enclosure depth.' } }
       : prepared ? { status: 'published', reused: false, model: { model_id: 'design-assembly:x', producer: 'design-assembly', display_name: 'x' }, prepared }
@@ -55,10 +59,13 @@ describe('assembly background build', () => {
     const before = useAssemblyBuildStore.getState();
     const model = useDesignModelStore.getState();
     let signal: AbortSignal | null | undefined;
-    const fetcher: typeof fetch = (_url, init) => new Promise((_resolve, reject) => {
-      signal = init?.signal;
-      signal?.addEventListener('abort', () => reject(signal?.reason), { once: true });
-    });
+    const fetcher: typeof fetch = (_url, init) => {
+      if (init?.method === 'DELETE') return Promise.resolve(new Response(null, { status: 204 }));
+      return new Promise((_resolve, reject) => {
+        signal = init?.signal;
+        signal?.addEventListener('abort', () => reject(signal?.reason), { once: true });
+      });
+    };
     const classify = vi.spyOn(httpError, 'isAbortError');
     const build = requestAssemblyBuild(fetcher);
     expect(useAssemblyBuildStore.getState().status).toBe('building');
@@ -73,20 +80,65 @@ describe('assembly background build', () => {
     expect(activityStore.typicalMs('assembly-build')).toBeNull();
   });
 
-  it.each([200, 422])('Stop during the response body restores the pre-press build state (%s)', async status => {
+  it.each([false, true])('late Stop preserves a published build (reading body=%s)', async readingBody => {
+    const prepared = record('committed');
+    const response = Response.json({ status: 'published', reused: false,
+      model: { model_id: 'design-assembly:x', producer: 'design-assembly', display_name: 'x' }, prepared });
+    const headers = deferred<Response>();
+    const body = deferred<unknown>();
+    const reading = vi.fn();
+    let signal!: AbortSignal;
+    let operationId: string | null = null;
+    const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+      if (init?.method === 'DELETE') {
+        expect(url).toBe(`/api/operation-progress/${operationId}`);
+        return new Response(null, { status: 409 });
+      }
+      if (init?.method !== 'POST') return new Response(null, { status: 404 });
+      operationId = new Headers(init.headers).get('X-WG-Operation-Id');
+      expect(operationId).toBeTruthy();
+      signal = init.signal!;
+      signal.addEventListener('abort', () => {
+        if (readingBody) body.reject(signal.reason);
+        else headers.reject(signal.reason);
+      }, { once: true });
+      if (!readingBody) return headers.promise;
+      return { ok: true, status: 200, headers: response.headers,
+        json: () => { reading(); return body.promise; } } as Response;
+    });
+    const build = requestAssemblyBuild(fetcher);
+    const outcome = build.catch(error => error);
+    if (readingBody) await vi.waitFor(() => expect(reading).toHaveBeenCalledOnce());
+    activityStore.getSnapshot()[0].cancel!();
+    await vi.waitFor(() => expect(fetcher.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true));
+    expect(signal.aborted).toBe(false);
+    expect(activityStore.getSnapshot()[0].cancel).toBeNull();
+    if (readingBody) body.resolve(await response.json());
+    else headers.resolve(response);
+    await expect(outcome).resolves.toMatchObject({ status: 'published', prepared });
+    expect(useAssemblyBuildStore.getState().status).toBe('published');
+    expect(useDesignModelStore.getState().prepared?.ingest_id).toBe(prepared.ingest_id);
+    expect(importedMeshStore.getSnapshot().solver?.ingestId).toBe(prepared.ingest_id);
+    expect(activityStore.getSnapshot()).toEqual([]);
+  });
+
+  it.each([200, 422])('acknowledged Stop during the response body restores the pre-press build state (%s)', async status => {
     useAssemblyBuildStore.setState({ status: 'refused', refusal: 'Previous refusal', failureDetail: 'Previous detail' });
     const before = useAssemblyBuildStore.getState();
     const model = useDesignModelStore.getState();
     const reading = vi.fn();
-    const fetcher: typeof fetch = async (_url, init) => ({
-      ok: status === 200, status,
-      json: () => new Promise((_resolve, reject) => {
-        reading();
-        const signal = init!.signal!;
-        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-      }),
-      headers: new Headers(),
-    }) as Response;
+    const fetcher: typeof fetch = async (_url, init) => {
+      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+      return {
+        ok: status === 200, status,
+        json: () => new Promise((_resolve, reject) => {
+          reading();
+          const signal = init!.signal!;
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
+        headers: new Headers(),
+      } as Response;
+    };
     const build = requestAssemblyBuild(fetcher);
     await vi.waitFor(() => expect(reading).toHaveBeenCalledOnce());
     activityStore.getSnapshot()[0].cancel!();

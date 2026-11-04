@@ -3256,6 +3256,12 @@ class CadLinkStore:
         existing = getattr(self._local, "conn", None)
         if existing is not None:
             return existing
+        if str(self.db_path) == ":memory:":
+            # Each connection would create a different database. Statements
+            # already hold _lock, so workers can share this store's connection.
+            with self._connections_lock:
+                if self._connections:
+                    return next(iter(self._connections))
         conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         self.journal_mode_status = configure_connection(

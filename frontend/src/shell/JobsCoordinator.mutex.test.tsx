@@ -716,9 +716,9 @@ describe('solve invocation mutex', () => {
     const fetcher = vi.fn<typeof fetch>(async (url, init) => {
       // Debounced settings writes may arrive during this test on a busy host.
       if (String(url).startsWith('/api/settings/')) return json({});
-      return String(url).endsWith('/context')
-        ? json({ minimum_clearance_mm: 0.1, clearances: {} })
-        : new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }));
+      if (String(url).endsWith('/context')) return json({ minimum_clearance_mm: 0.1, clearances: {} });
+      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+      return new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }));
     });
     vi.stubGlobal('fetch', fetcher);
     await act(async () => {
@@ -731,8 +731,13 @@ describe('solve invocation mutex', () => {
     await act(async () => { activityStore.getSnapshot()[0].cancel!(); await pending; });
     expect(solveControlStore.getSnapshot()!.actionError).toBe('Stopped');
     expect(mocks.solveModel).not.toHaveBeenCalled();
-    expect(fetcher.mock.calls.map(([url]) => String(url)).filter(url => !url.startsWith('/api/settings/')))
-      .toEqual(['/api/models/assembly/context', '/api/models/assembly/compile']);
+    const operationCalls = fetcher.mock.calls.filter(([url]) => !String(url).startsWith('/api/settings/'));
+    const operationId = new Headers(operationCalls[1][1]?.headers).get('X-WG-Operation-Id');
+    expect(operationId).toBeTruthy();
+    expect(operationCalls.map(([url]) => String(url))).toEqual([
+      '/api/models/assembly/context', '/api/models/assembly/compile', `/api/operation-progress/${operationId}`,
+    ]);
+    expect(operationCalls[2][1]?.method).toBe('DELETE');
     expect(activityStore.getSnapshot()).toEqual([]);
   });
 

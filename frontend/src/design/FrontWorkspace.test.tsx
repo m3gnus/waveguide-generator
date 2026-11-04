@@ -70,8 +70,16 @@ describe('front workspace', () => {
   it('enables Build after Stop on a newer overlapping build whose predecessor has settled', async () => {
     const older = deferred<Response>();
     let calls = 0;
-    const compile: typeof fetch = (_url, init) => {
+    let operationId: string | null = null;
+    const cancellations: string[] = [];
+    const compile: typeof fetch = (url, init) => {
+      if (init?.method === 'DELETE') {
+        cancellations.push(String(url));
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      if (init?.method !== 'POST') return Promise.resolve(Response.json({ stages: [], total: 4 }));
       if (++calls === 1) return older.promise;
+      operationId = new Headers(init.headers).get('X-WG-Operation-Id');
       return new Promise((_resolve, reject) => {
         const signal = init!.signal!;
         signal.addEventListener('abort', () => reject(signal.reason), { once: true });
@@ -83,7 +91,9 @@ describe('front workspace', () => {
     older.resolve(new Response(JSON.stringify({ status: 'superseded' })));
     await first;
     activityStore.getSnapshot().at(-1)!.cancel!();
-    await second;
+    await expect(second).resolves.toEqual({ status: 'cancelled' });
+    expect(operationId).toBeTruthy();
+    expect(cancellations).toEqual([`/api/operation-progress/${operationId}`]);
     await mount();
     expect(button('Build').disabled).toBe(false);
     expect(activityStore.getSnapshot()).toEqual([]);

@@ -2,7 +2,7 @@ import { activityStore } from '../shell/activity';
 import { readFileSync } from 'node:fs';
 import { failureWords, keepRefusalOriginals, PLAIN_REQUEST_FAILURE } from './httpError';
 import { describe, expect, it, vi } from 'vitest';
-import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, openDesignText, resolveDesignExpressions, sendDesignToCad, serializeDesignDocument } from './designIo';
+import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, inspectDesignText, openDesignText, resolveDesignExpressions, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { setAnchorAngle } from '../design/customProfileEdit';
 import { expectNoJargon } from '../testing/expectNoJargon';
@@ -23,6 +23,35 @@ it('requests constants using the complete saved source and dialect without chang
     body: JSON.stringify({ design: JSON.parse(before), paths: ['a0', 'scale'] }),
   });
   expect(JSON.stringify(serializeDesign(design))).toBe(before);
+});
+
+it.each([
+  [openDesignText, 'Opening design file'], [inspectDesignText, 'Inspecting design file'],
+] as const)('tracks %s through response decoding and clears progress on failure', async (open, label) => {
+  activityStore.reset();
+  let resolve!: (value: unknown) => void;
+  const decoded = new Promise(done => { resolve = done; });
+  const opening = open('OSSE = {}', async () => ({ ok: true, json: () => decoded }) as Response);
+  expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'design-open', label }]);
+  await Promise.resolve();
+  expect(activityStore.getSnapshot()).toHaveLength(1);
+  resolve({ design: {} });
+  await opening;
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+  await expect(open('invalid', async () => Response.json({ detail: 'Choose a valid design file.' }, { status: 422 })))
+    .rejects.toThrow('Choose a valid design file.');
+  expect(activityStore.getSnapshot()).toHaveLength(0);
+});
+
+it('tracks native design file reading through response decoding', async () => {
+  activityStore.reset();
+  let resolve!: (value: Response) => void;
+  const response = new Promise<Response>(done => { resolve = done; });
+  const choosing = chooseDesignFile(() => response);
+  expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'design-open', label: 'Opening design file' }]);
+  resolve(Response.json({ selected: true, filename: 'design.cfg', text: 'OSSE = {}' }));
+  expect(await choosing).toMatchObject({ selected: true, filename: 'design.cfg' });
+  expect(activityStore.getSnapshot()).toHaveLength(0);
 });
 
 async function untouchedRoundTrip(original: Record<string, unknown>): Promise<Record<string, unknown>> {

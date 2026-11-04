@@ -80,12 +80,123 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('standalone imported mesh', () => {
+  async function importFresh() {
+    await loadMeshFile('speaker.msh', MSH, async url => String(url).endsWith('/inspect')
+      ? response({ ...summary, suggested_units: 'mm', previous_roles: { 1: 'RIGID', 2: 'HF' } }) : prepared(record));
+  }
+
+  it('prepares roles and inspects axes by retained identity after a fresh import', async () => {
+    await importFresh();
+    editSourceMotion('group_2', 'axial');
+    useImportedSolveOptionsStore.getState().setSweep({ startHz: 250, endHz: 8000, count: 17 });
+    const physics = fileMeshSetup();
+    const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+      ? response({ ...summary, detected_planes: [] }) : prepared(record));
+    await editMeshImport({ roles: { 1: 'RIGID', 2: 'HF' } }, fetcher);
+    await editMeshImport({ up: '+x' }, fetcher);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      `/api/models/${encodeURIComponent(record.model_id)}/prepare`, '/api/models/files/inspect',
+      `/api/models/${encodeURIComponent(record.model_id)}/prepare`,
+    ]);
+    const bodies = fetcher.mock.calls.map(([, init]) => JSON.parse(init!.body as string));
+    expect(bodies[1]).toEqual({ model_id: record.model_id, units: 'mm', forward: '+z', up: '+x' });
+    for (const body of bodies) expect(body).not.toHaveProperty('msh_text');
+    expect(useMeshImportStore.getState().original).toBe(MSH);
+    expect(registeredMesh()).toEqual(record);
+    expect(fileMeshSetup()).toEqual(physics);
+  });
+
+  it.each(['original_unavailable', 'model_not_found'])('recovers %s using local bytes only after a retained refusal', async code => {
+    await importFresh();
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ error: { code, message: 'Import the mesh again.' } }, 409))
+      .mockResolvedValueOnce(prepared(record));
+    await editMeshImport({ roles: { 1: 'RIGID', 2: 'HF' } }, fetcher);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      `/api/models/${encodeURIComponent(record.model_id)}/prepare`, '/api/models/files',
+    ]);
+    const [retained, upload] = fetcher.mock.calls.map(([, init]) => JSON.parse(init!.body as string));
+    expect(retained).not.toHaveProperty('msh_text');
+    expect(upload).toEqual({ filename: 'speaker.msh', msh_text: MSH, ...retained });
+    expect(registeredMesh()).toEqual(record);
+    expect(useMeshImportStore.getState().error).toBeNull();
+    const retry = vi.fn<typeof fetch>(async () => prepared(record));
+    await prepareMeshFile(retry);
+    expect(retry.mock.calls[0][0]).toBe(`/api/models/${encodeURIComponent(record.model_id)}/prepare`);
+  });
+
+  it('recovers a missing original during frame inspection before uploading the preparation', async () => {
+    await importFresh();
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ error: { code: 'original_unavailable', message: 'Import again.' } }, 409))
+      .mockResolvedValueOnce(response({ ...summary, detected_planes: [] }))
+      .mockResolvedValueOnce(prepared(record));
+    await editMeshImport({ up: '+x' }, fetcher);
+    const bodies = fetcher.mock.calls.map(([, init]) => JSON.parse(init!.body as string));
+    expect(bodies[0]).toEqual({ model_id: record.model_id, units: 'mm', forward: '+z', up: '+x' });
+    expect(bodies[1]).toEqual({ filename: 'speaker.msh', msh_text: MSH, units: 'mm', forward: '+z', up: '+x' });
+    expect(fetcher.mock.calls[2][0]).toBe('/api/models/files');
+    expect(bodies[2]).toMatchObject({ msh_text: MSH, up: '+x' });
+    expect(registeredMesh()).toEqual(record);
+  });
+
+  it('keeps unrelated retained refusals without uploading again', async () => {
+    await importFresh();
+    const fetcher = vi.fn<typeof fetch>(async () => response({ error: { code: 'invalid_preparation', message: 'Choose perpendicular axes.' } }, 422));
+    await editMeshImport({ roles: { 1: 'RIGID', 2: 'HF' } }, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0][0]).toBe(`/api/models/${encodeURIComponent(record.model_id)}/prepare`);
+    expect(useMeshImportStore.getState().error).toBe('Choose perpendicular axes.');
+  });
+
+  it('keeps the import remedy when neither server nor browser has the original', async () => {
+    showPrepared();
+    const fetcher = vi.fn<typeof fetch>(async () => response({ error: {
+      code: 'original_unavailable', message: 'The original is no longer retained. Import the file again.',
+    } }, 409));
+    await editMeshImport({ roles: { 1: 'RIGID', 2: 'HF' } }, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(useMeshImportStore.getState().error).toBe('The original is no longer retained. Import the file again.');
+  });
+
+  it('does not recover a retained refusal after a newer incomplete role edit', async () => {
+    await importFresh();
+    const waiting = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>(() => waiting.promise);
+    const editing = editMeshImport({ roles: { 1: 'RIGID', 2: 'HF' } }, fetcher);
+    await editMeshImport({ roles: { 1: 'RIGID', 2: null } }, fetcher);
+    waiting.resolve(response({ error: { code: 'original_unavailable', message: 'Import again.' } }, 409));
+    await editing;
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(useMeshImportStore.getState().error).toBeNull();
+    expect(useImportedModelStore.getState().fileDraft.roles?.[2]).toBeNull();
+  });
+
+  it.each(['inspection', 'preparation'])('does not recover or apply a stale %s after file replacement', async stage => {
+    await importFresh();
+    const waiting = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>(() => waiting.promise);
+    const editing = editMeshImport(stage === 'inspection' ? { up: '+x' } : { roles: { 1: 'RIGID', 2: 'HF' } }, fetcher);
+    const replacement = { ...record, model_id: 'mesh-file:sha256:replacement', ingest_id: 'wgi_replacement' };
+    const replacing = loadMeshFile('replacement.msh', MSH + '\n', async url => String(url).endsWith('/inspect')
+      ? response({ ...summary, suggested_units: 'mm', previous_roles: { 1: 'RIGID', 2: 'HF' } }) : prepared(replacement));
+    waiting.resolve(response({ error: { code: 'original_unavailable', message: 'Old file is gone. Import again.' } }, 409));
+    await Promise.all([editing, replacing]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(registeredMesh()).toEqual(replacement);
+    expect(useMeshImportStore.getState()).toMatchObject({ filename: 'replacement.msh', original: MSH + '\n', error: null });
+  });
+
   it.each([false, true])('tracks inspection and preparation as one import (failure=%s)', async fail => {
     const inspected = deferred<Response>();
     const started = vi.spyOn(activityStore, 'start');
     const fetcher: typeof fetch = async url => {
       expect(activityStore.getSnapshot()).toHaveLength(1);
-      if (String(url).endsWith('/inspect')) return inspected.promise;
+      if (String(url).endsWith('/inspect')) {
+        expect(activityStore.getSnapshot()[0].label).toBe('Inspecting the mesh file');
+        return inspected.promise;
+      }
+      expect(activityStore.getSnapshot()[0].label).toBe('Preparing the mesh file');
       expect(activityStore.getSnapshot()[0].cancel).toBeTypeOf('function');
       return prepared(record);
     };

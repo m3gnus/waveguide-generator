@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Body, FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from server.cadlink.identity import SaveIdentity, classify_open, design_hash
@@ -107,7 +108,7 @@ def _open_cadlink(parsed: ParsedDesign, store: CadLinkStore) -> dict[str, Any]:
     }
 
 
-async def save_design(
+def _save_design(
     payload: dict[str, Any], *, store: CadLinkStore | None = None
 ) -> dict[str, Any]:
     """Serialize and atomically commit a typed design identity."""
@@ -151,7 +152,7 @@ async def save_design(
     }
 
 
-async def serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
+def _serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
     """Serialize a typed design without creating or advancing CadLink identity."""
 
     design_payload: object = payload.get("design", payload)
@@ -171,7 +172,7 @@ async def serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def open_design(
+def _open_design(
     text: str, *, store: CadLinkStore | None = None
 ) -> dict[str, Any]:
     """Parse and classify .cfg/.txt/legacy .mwg content without mutation."""
@@ -185,7 +186,7 @@ async def open_design(
     }
 
 
-async def import_report(
+def _import_report(
     text: str, *, store: CadLinkStore | None = None
 ) -> dict[str, Any]:
     """Classify a document without mutating any client or server design state."""
@@ -197,38 +198,64 @@ async def import_report(
     }
 
 
+async def save_design(payload: dict[str, Any], *, store: CadLinkStore | None = None) -> dict[str, Any]:
+    return await asyncio.to_thread(_save_design, payload, store=store)
+
+
+async def serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
+    return await asyncio.to_thread(_serialize_design, payload)
+
+
+async def open_design(text: str, *, store: CadLinkStore | None = None) -> dict[str, Any]:
+    return await asyncio.to_thread(_open_design, text, store=store)
+
+
+async def import_report(text: str, *, store: CadLinkStore | None = None) -> dict[str, Any]:
+    return await asyncio.to_thread(_import_report, text, store=store)
+
+
+def _json_response(process: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any) -> JSONResponse:
+    # Encode on the same worker: returning a dict would serialize a large
+    # LOOKUP document again on the event loop inside FastAPI.
+    return JSONResponse(process(*args, **kwargs))
+
+
+def _read_selected_design(selected_path: str) -> dict[str, Any]:
+    path = Path(selected_path).resolve()
+    try:
+        if path.suffix.lower() not in {".cfg", ".mwg", ".txt", ".json"}:
+            raise ValueError("Choose a .cfg, .mwg, .txt or .json design file")
+        with path.open("rb") as stream:
+            content = stream.read(16 * 1024 * 1024 + 1)
+        if len(content) > 16 * 1024 * 1024:
+            raise ValueError("Design exceeds the 16 MiB open limit")
+        text = content.decode("utf-8-sig")
+        stat = path.stat()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"selected": True, "outcome": "chosen", "filename": path.name,
+            "source": str(path), "text": text, "fileKey": f"{stat.st_dev}:{stat.st_ino}"}
+
+
 def create_design_io_router(store: CadLinkStore) -> APIRouter:
     router = APIRouter(prefix="/api/design", tags=["design-io"])
 
-    @router.post("/choose")
-    async def choose_endpoint() -> dict[str, Any]:
+    @router.post("/choose", response_model=dict[str, Any])
+    async def choose_endpoint() -> JSONResponse:
         # Only the native picker supplies a path: callers cannot ask this endpoint
         # to read an arbitrary server file. Paths distinguish same-name copies.
         selected = await asyncio.to_thread(select_workspace_path, "Open design", file=True)
         if selected.outcome != "chosen":
-            return {"selected": False, "outcome": selected.outcome}
-        path = Path(selected.path).resolve()
-        try:
-            if path.suffix.lower() not in {".cfg", ".mwg", ".txt", ".json"}:
-                raise ValueError("Choose a .cfg, .mwg, .txt or .json design file")
-            with path.open("rb") as stream:
-                content = stream.read(16 * 1024 * 1024 + 1)
-            if len(content) > 16 * 1024 * 1024:
-                raise ValueError("Design exceeds the 16 MiB open limit")
-            text = content.decode("utf-8-sig")
-            stat = path.stat()
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {"selected": True, "outcome": "chosen", "filename": path.name,
-                "source": str(path), "text": text, "fileKey": f"{stat.st_dev}:{stat.st_ino}"}
+            return JSONResponse({"selected": False, "outcome": selected.outcome})
+        return await asyncio.to_thread(_json_response, _read_selected_design, selected.path)
 
-    @router.post("/save")
-    async def save_endpoint(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        return await save_design(payload, store=store)
+    @router.post("/save", response_model=dict[str, Any])
+    async def save_endpoint(payload: dict[str, Any] = Body(...)) -> JSONResponse:
+        return await asyncio.to_thread(_json_response, _save_design, payload, store=store)
 
-    @router.post("/serialize")
-    async def serialize_endpoint(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        return await serialize_design(payload)
+    @router.post("/serialize", response_model=dict[str, Any])
+    async def serialize_endpoint(payload: dict[str, Any] = Body(...)) -> JSONResponse:
+        return await asyncio.to_thread(_json_response, _serialize_design, payload)
 
     @router.post("/resolve-expressions")
     async def resolve_expressions(design: DesignConfig, paths: list[str]) -> dict[str, float | None]:
@@ -323,17 +350,17 @@ def create_design_io_router(store: CadLinkStore) -> APIRouter:
             raise HTTPException(status_code=422, detail=_parse_detail(exc)) from exc
         return result
 
-    @router.post("/open")
+    @router.post("/open", response_model=dict[str, Any])
     async def open_endpoint(
         text: str = Body(..., media_type="text/plain"),
-    ) -> dict[str, Any]:
-        return await open_design(text, store=store)
+    ) -> JSONResponse:
+        return await asyncio.to_thread(_json_response, _open_design, text, store=store)
 
-    @router.post("/import-report")
+    @router.post("/import-report", response_model=dict[str, Any])
     async def import_report_endpoint(
         text: str = Body(..., media_type="text/plain"),
-    ) -> dict[str, Any]:
-        return await import_report(text, store=store)
+    ) -> JSONResponse:
+        return await asyncio.to_thread(_json_response, _import_report, text, store=store)
 
     return router
 

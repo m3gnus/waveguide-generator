@@ -145,8 +145,10 @@ afterEach(() => {
 });
 
 /** The file model on screen, as `openImported` leaves it. */
+const fileModelId = 'mesh-file:sha256:artifact';
+const filePreparationPath = `/api/models/${encodeURIComponent(fileModelId)}/prepare`;
 function opened(state: Partial<ReturnType<typeof useImportedModelStore.getState>>) {
-  useImportedModelStore.setState({ input: 'file', phase: 'ready', modelId: 'mesh-file:sha256:artifact', ...state });
+  useImportedModelStore.setState({ input: 'file', phase: 'ready', modelId: fileModelId, ...state });
 }
 
 it('shows actual replay frequencies and physics, with full resolved settings inspectable', () => {
@@ -314,9 +316,9 @@ it('automatically prepares role, mirror, size and axis edits and retries only th
   const otherRequests = globalThis.fetch;
   // Shared sections may flush durable UI settings while a preparation is
   // awaited. Count actual mesh requests rather than unrelated settings writes.
-  vi.stubGlobal('fetch', ((url, init) => String(url).startsWith('/api/models/files')
+  vi.stubGlobal('fetch', ((url, init) => String(url) === filePreparationPath || String(url) === '/api/models/files/inspect'
     ? prepare(url, init) : otherRequests(url, init)) as typeof fetch);
-  const preparations = () => prepare.mock.calls.filter(([url]) => String(url) === '/api/models/files');
+  const preparations = () => prepare.mock.calls.filter(([url]) => String(url) === filePreparationPath);
   geometry();
   act(() => useMeshImportStore.setState({ summary: { ...fileSummary, kept_sides: { x0: 'negative', y0: 'positive' } } }));
   await act(async () => choose(host.querySelector<HTMLSelectElement>('[aria-label="Role for HF source (101)"]')!, 'LF'));
@@ -336,6 +338,10 @@ it('automatically prepares role, mirror, size and axis edits and retries only th
   act(() => button('Change axes').click());
   await act(async () => choose(host.querySelector<HTMLSelectElement>('[aria-label="Mesh up axis"]')!, '+x'));
   expect(JSON.parse(preparations()[4][1]?.body as string)).toMatchObject({ up: '+x', domain_planes: ['x0', 'y0'] });
+  expect(preparations()).toHaveLength(5);
+  for (const [, init] of preparations()) expect(JSON.parse(init?.body as string)).not.toHaveProperty('msh_text');
+  const inspection = prepare.mock.calls.find(([url]) => String(url) === '/api/models/files/inspect');
+  expect(JSON.parse(inspection![1]?.body as string)).toEqual({ model_id: fileModelId, units: 'cm', forward: '+z', up: '+x' });
   expect(host.querySelectorAll('.cad-status-line button')).toHaveLength(1);
   expectNoJargon(host);
 });
@@ -444,10 +450,12 @@ it('offers closed-face removal in the existing symmetry menu and prepares the ch
   expect(host.textContent).not.toContain('Remove the closed face on y = 0');
   expectNoJargon(host);
   await act(async () => removal.click());
-  const registrations = () => prepare.mock.calls.filter(([url]) => String(url) === '/api/models/files');
-  expect(JSON.parse(registrations()[0][1]?.body as string).remove_lid_planes).toEqual(['x0']);
+  const preparations = () => prepare.mock.calls.filter(([url]) => String(url) === filePreparationPath);
+  expect(JSON.parse(preparations()[0][1]?.body as string).remove_lid_planes).toEqual(['x0']);
   await act(async () => choose(host.querySelector<HTMLSelectElement>('[aria-label="Mesh symmetry"]')!, ''));
-  expect(JSON.parse(registrations()[1][1]?.body as string).remove_lid_planes).toEqual([]);
+  expect(JSON.parse(preparations()[1][1]?.body as string).remove_lid_planes).toEqual([]);
+  expect(preparations()).toHaveLength(2);
+  for (const [, init] of preparations()) expect(JSON.parse(init?.body as string)).not.toHaveProperty('msh_text');
 });
 
 it('shows removed closed faces in Model details', () => {

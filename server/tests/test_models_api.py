@@ -106,6 +106,39 @@ def test_file_inspection_and_repreparation_share_axes_roles_and_declared_domain(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("change", ["roles", "frame"])
+def test_retained_file_edits_match_uploaded_mesh_bytes_and_values(tmp_path, change):
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            original = registration().model_dump()
+            first = await call(app, "POST", "/api/models/files", original)
+            model_id = first["model"]["model_id"]
+            settings = {"units": "mm", "forward": "+z", "up": "+y", "roles": {1: "RIGID", 2: "HF"}}
+            if change == "roles":
+                settings["roles"][2] = "MF"
+            else:
+                settings.update(forward="+x", up="+z")
+            frame = {key: settings[key] for key in ("units", "forward", "up")}
+            retained_summary = await call(app, "POST", "/api/models/files/inspect", {"model_id": model_id, **frame})
+            uploaded_summary = await call(app, "POST", "/api/models/files/inspect", {
+                "filename": original["filename"], "msh_text": original["msh_text"], **frame,
+            })
+            assert retained_summary == {key: value for key, value in uploaded_summary.items()
+                                        if key not in {"known_model", "previous_roles", "previous_setup"}}
+            retained = (await call(app, "POST", f"/api/models/{model_id}/prepare", settings))["prepared"]
+            uploaded = (await call(app, "POST", "/api/models/files", {
+                "filename": original["filename"], "msh_text": original["msh_text"], **settings,
+            }))["prepared"]
+            assert retained == uploaded  # Includes tags, transforms, digests and all numerical values.
+            assert retained["msh_text"].encode() == uploaded["msh_text"].encode()
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
 def app_for(tmp_path, store):
     runtime = JobRuntime(
         JobStore.for_data_dir(tmp_path),

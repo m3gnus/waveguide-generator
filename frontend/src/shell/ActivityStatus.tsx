@@ -34,7 +34,7 @@ export function activityMeta(activity: Activity, now: number, typicalMs: number 
 
 /**
  * The status bar's activity slot: the oldest foreground wait that has earned a place
- * (two seconds, or known to take longer), with a progress bar and, when it
+ * (one second, or known to take longer), with a progress bar and, when it
  * can be stopped, a Stop button. Further waits are counted beside it.
  */
 export function ActivityStatus() {

@@ -110,7 +110,7 @@ export function meshImportChoice(draft: FileDraft): string | null {
 }
 
 export async function loadMeshFile(filename: string, text: string, fetcher: typeof fetch = fetch, generation = importedMeshStore.beginIntent()): Promise<void> {
-  return activityOperation({ kind: 'mesh-import', label: 'Importing the mesh file' }, fetcher, async (fetcher) => {
+  return activityOperation({ kind: 'mesh-import', label: 'Importing the mesh file' }, fetcher, async (fetcher, activity) => {
     if (!importedMeshStore.isCurrentGeneration(generation)) return;
     beginMeshFileImport(filename);
     const request = ++requestNumber;
@@ -118,11 +118,13 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
     try {
       await flushImportedSetupWrites();
       if (!importedMeshStore.isCurrentGeneration(generation)) return;
+      activity.label('Inspecting the mesh file');
       let summary = await inspectMesh(filename, text, fetcher);
       if (!importedMeshStore.isCurrentGeneration(generation)) return;
       if (summary.known_model) {
         const known = summary.known_model;
         try {
+          activity.label('Opening the saved mesh');
           if (await openImported({ kind: 'model', modelId: known.model_id, preparedId: known.latest_prepared_id }, fetcher)) {
             useMeshImportStore.setState(state => ({ notice: [state.notice, 'Settings from your last import'].filter(Boolean).join(' · ') }));
           }
@@ -139,6 +141,7 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
       const previous = summary.previous_setup;
       if (previous && (previous.preparation.forward !== '+z' || previous.preparation.up !== '+y')) {
         const { units, forward, up } = previous.preparation;
+        activity.label('Inspecting the mesh file');
         summary = await inspectMesh(filename, text, fetcher, { units, forward, up });
         if (!importedMeshStore.isCurrentGeneration(generation)) return;
       }
@@ -186,7 +189,7 @@ let preparationIntent = 0;
 let preparationController: AbortController | null = null;
 registerImportedPreparationFlush(async () => { await preparationPromise; }, () => preparationController?.abort());
 
-/** Prepare the file as the rail is set: from the original in hand, or the one the server retained. */
+/** Prepare the file from its retained original, keeping local bytes for recovery. */
 export function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFrame = false): Promise<void> {
   const preparing = prepareMeshFileIntent(fetcher, inspectFrame, ++preparationIntent);
   preparationPromise = preparing;
@@ -200,15 +203,32 @@ async function prepareMeshFileIntent(fetcher: typeof fetch, inspectFrame: boolea
   const model = useImportedModelStore.getState();
   let draft = model.fileDraft;
   const modelId = model.input === 'file' ? model.modelId : null;
+  let retainedOriginal = !!(modelId?.startsWith('mesh-file:') && model.originalAvailable);
   preparationController?.abort();
   preparationController = null;
-  if (model.input !== 'file' || meshImportChoice(draft) || (!state.original && !(modelId && model.originalAvailable))) return;
+  if (model.input !== 'file' || meshImportChoice(draft) || (!state.original && !retainedOriginal)) return;
   const controller = new AbortController();
   preparationController = controller;
   return activityOperation({ kind: 'mesh-import', label: 'Importing the mesh file' }, fetcher, async (fetcher, activity) => {
     const generation = importedMeshStore.beginIntent();
     const request = ++requestNumber;
     useMeshImportStore.setState({ busy: true, error: null, request });
+    const currentDraft = () => importedMeshStore.isCurrentGeneration(generation)
+      && intent === preparationIntent && !controller.signal.aborted
+      && useMeshImportStore.getState().original === state.original
+      && JSON.stringify(useImportedModelStore.getState().fileDraft) === JSON.stringify(draft);
+    async function fromOriginal<T>(retained: () => Promise<T>, upload: () => Promise<T>): Promise<T> {
+      if (!retainedOriginal) return upload();
+      try { return await retained(); }
+      catch (error) {
+        // Only an explicit retention loss can retry with the matching local
+        // bytes. A failed or superseded request never starts another upload.
+        if (!state.original || !currentDraft() || !(error instanceof ImportedModelApiError)
+          || (error.code !== 'original_unavailable' && error.code !== 'model_not_found')) throw error;
+        retainedOriginal = false;
+        return upload();
+      }
+    }
     let retained: ImportedSetup | null = null;
     let simulation: SimulationData | null = null;
     const capture = () => {
@@ -228,10 +248,10 @@ async function prepareMeshFileIntent(fetcher: typeof fetch, inspectFrame: boolea
       // Detection follows the chosen axes; registration still owns all verification.
       if (inspectFrame || state.frameDirty || (!state.original && draft.domainPlanes?.length && !state.summary?.lids)) {
         const frame = { units: draft.units, forward: draft.forward, up: draft.up };
-        const summary = state.original ? await inspectMesh(state.filename, state.original, fetcher, frame)
-          : await inspectMeshModel(modelId!, frame, fetcher);
-        if (!importedMeshStore.isCurrentGeneration(generation)
-          || JSON.stringify(useImportedModelStore.getState().fileDraft) !== JSON.stringify(draft)) return;
+        activity.label('Inspecting the mesh file');
+        const summary = await fromOriginal(() => inspectMeshModel(modelId!, frame, fetcher),
+          () => inspectMesh(state.filename, state.original!, fetcher, frame));
+        if (!currentDraft()) return;
         useMeshImportStore.setState({ summary, frameDirty: false });
         if (inspectFrame || state.frameDirty) editFileDraft({ domainPlanes: summary.detected_planes ?? [], reflectPlanes: null, removeLidPlanes: [] });
         draft = useImportedModelStore.getState().fileDraft;
@@ -243,12 +263,11 @@ async function prepareMeshFileIntent(fetcher: typeof fetch, inspectFrame: boolea
         domain_planes: draft.domainPlanes ?? [], reflect_planes: draft.reflectPlanes ?? null,
         remove_lid_planes: draft.removeLidPlanes ?? [] };
 
-      // The same file prepared the same way is the same retained mesh. Without
-      // the original in hand (a restored file), the server prepares its own copy.
+      // Registration and retained preparation use the same server owner.
+      activity.label('Preparing the mesh file');
       const record = await activityOperation({ kind: 'mesh-import', label: 'Importing the mesh file', cancel: () => controller.abort() }, fetcher,
-        fetcher => state.original
-          ? registerMesh({ filename: state.filename, msh_text: state.original, ...preparation }, fetcher, controller.signal)
-          : prepareMeshModel(modelId!, preparation, fetcher, controller.signal));
+        fetcher => fromOriginal(() => prepareMeshModel(modelId!, preparation, fetcher, controller.signal),
+          () => registerMesh({ filename: state.filename, msh_text: state.original!, ...preparation }, fetcher, controller.signal)));
       if (!importedMeshStore.isCurrentGeneration(generation)) {
         if (intent === preparationIntent && retained) {
           const setup = setupForPreparedFile(retained, record, simulation);

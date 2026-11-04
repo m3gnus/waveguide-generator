@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { activityStore } from './activity';
 import { stagedActivity } from './stagedActivity';
 import { deferred } from './cadlink/selection.fixtures';
@@ -62,108 +62,110 @@ it('Stop aborts both the operation and an outstanding progress read, without rec
 });
 
 
-it.each([false, true])('Send Stop preserves the server commit decision (committed=%s)', async committed => {
-  const response = deferred<Response>();
-  let signal: AbortSignal | null | undefined;
-  const fetcher = vi.fn<typeof fetch>((_url, init) => {
-    if (init?.method === 'DELETE') return Promise.resolve(new Response(null, { status: committed ? 409 : 204 }));
-    signal = init?.signal;
-    signal?.addEventListener('abort', () => response.reject(signal?.reason), { once: true });
-    return response.promise;
-  });
-  const pending = stagedActivity({ kind: 'send-to-cad', label: 'Sending to CAD' }, fetcher, undefined,
-    async (fetcher, signal) => (await fetcher('/send', { method: 'POST', signal })).text());
-  const outcome = pending.catch(reason => reason);
-  activityStore.getSnapshot()[0].cancel!();
-  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
-  if (committed) {
-    expect(signal?.aborted).toBe(false);
-    expect(activityStore.getSnapshot()[0].cancel).toBeNull();
-    response.resolve(new Response('Sent to CAD'));
-    expect(await outcome).toBe('Sent to CAD');
-  } else {
-    expect(await outcome).toMatchObject({ name: 'AbortError' });
-    expect(signal?.aborted).toBe(true);
-  }
-});
-
-it.each([200, 503])('Stop during a committed Send response body preserves its outcome (%s)', async status => {
-  const body = deferred<string>();
-  const reading = vi.fn();
-  let signal: AbortSignal | null | undefined;
-  const fetcher: typeof fetch = async (_url, init) => {
-    if (init?.method === 'DELETE') return new Response(null, { status: 409 });
-    signal = init?.signal;
-    signal?.addEventListener('abort', () => body.reject(signal?.reason), { once: true });
-    return { ok: status === 200, status, headers: new Headers(), text: () => { reading(); return body.promise; } } as Response;
-  };
-  const pending = stagedActivity({ kind: 'send-to-cad', label: 'Sending to CAD' }, fetcher, undefined,
-    async (fetcher, signal) => (await fetcher('/send', { method: 'POST', signal })).text());
-  const outcome = pending.catch(reason => reason);
-  await vi.waitFor(() => expect(reading).toHaveBeenCalledOnce());
-  activityStore.getSnapshot()[0].cancel!();
-  await vi.waitFor(() => expect(activityStore.getSnapshot()[0].cancel).toBeNull());
-  expect(signal?.aborted).toBe(false);
-  body.resolve('Sent to CAD');
-  expect(await outcome).toBe('Sent to CAD');
-});
-
-
-it('Stop waits for a queued Send to register before aborting its transport', async () => {
-  vi.useFakeTimers();
-  const response = deferred<Response>();
-  let registered = false;
-  let signal: AbortSignal | null | undefined;
-  const fetcher: typeof fetch = async (_url, init) => {
-    if (init?.method === 'DELETE') return new Response(null, { status: registered ? 204 : 404 });
-    if (init?.method !== 'POST') return new Response(null, { status: 404 });
-    signal = init.signal;
-    signal?.addEventListener('abort', () => response.reject(signal?.reason), { once: true });
-    return response.promise;
-  };
-  const pending = stagedActivity({ kind: 'send-to-cad', label: 'Sending to CAD' }, fetcher, undefined,
-    async (fetcher, signal) => (await fetcher('/send', { method: 'POST', signal })).text());
-  const outcome = pending.catch(reason => reason);
-  activityStore.getSnapshot()[0].cancel!();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(signal?.aborted).toBe(false);
-  registered = true;
-  await vi.advanceTimersByTimeAsync(200);
-  expect(await outcome).toMatchObject({ name: 'AbortError' });
-});
-
-it('bounds a hanging Stop acknowledgement and permits retry without deciding the Send outcome', async () => {
-  vi.useFakeTimers();
-  vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
-    const deadline = new AbortController();
-    setTimeout(() => deadline.abort(new DOMException('Deadline expired', 'TimeoutError')), ms);
-    return deadline.signal;
-  });
-  const post = deferred<Response>();
-  let postSignal!: AbortSignal;
-  let deleteSignal!: AbortSignal;
-  let stops = 0;
-  const fetcher: typeof fetch = async (_url, init) => {
-    if (init?.method === 'DELETE') {
-      if (++stops === 2) return new Response(null, { status: 204 });
-      deleteSignal = init.signal!;
-      return new Promise((_resolve, reject) => deleteSignal.addEventListener('abort', () => reject(deleteSignal.reason), { once: true }));
+describe.each(['send-to-cad', 'assembly-build'] as const)('%s acknowledged Stop', kind => {
+  it.each([false, true])('operation Stop preserves the server commit decision (committed=%s)', async committed => {
+    const response = deferred<Response>();
+    let signal: AbortSignal | null | undefined;
+    const fetcher = vi.fn<typeof fetch>((_url, init) => {
+      if (init?.method === 'DELETE') return Promise.resolve(new Response(null, { status: committed ? 409 : 204 }));
+      signal = init?.signal;
+      signal?.addEventListener('abort', () => response.reject(signal?.reason), { once: true });
+      return response.promise;
+    });
+    const pending = stagedActivity({ kind, label: 'operationing to CAD' }, fetcher, undefined,
+      async (fetcher, signal) => (await fetcher('/send', { method: 'POST', signal })).text());
+    const outcome = pending.catch(reason => reason);
+    activityStore.getSnapshot()[0].cancel!();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    if (committed) {
+      expect(signal?.aborted).toBe(false);
+      expect(activityStore.getSnapshot()[0].cancel).toBeNull();
+      response.resolve(new Response('Sent to CAD'));
+      expect(await outcome).toBe('Sent to CAD');
+    } else {
+      expect(await outcome).toMatchObject({ name: 'AbortError' });
+      expect(signal?.aborted).toBe(true);
     }
-    if (init?.method !== 'POST') return new Response(null, { status: 404 });
-    postSignal = init.signal!;
-    postSignal.addEventListener('abort', () => post.reject(postSignal.reason), { once: true });
-    return post.promise;
-  };
-  const pending = stagedActivity({ kind: 'send-to-cad', label: 'Sending' }, fetcher, undefined,
-    async (fetcher, signal) => (await fetcher('/send', { method: 'POST', signal })).text());
-  const outcome = pending.catch(reason => reason);
-  activityStore.getSnapshot()[0].cancel!();
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(deleteSignal.aborted).toBe(true);
-  expect(deleteSignal.reason.name).toBe('TimeoutError');
-  expect(postSignal.aborted).toBe(false);
-  expect(activityStore.getSnapshot()).toHaveLength(1);
-  activityStore.getSnapshot()[0].cancel!();
-  expect(await outcome).toMatchObject({ name: 'AbortError' });
-  expect(stops).toBe(2);
+  });
+
+  it.each([200, 503])('Stop during a committed operation response body preserves its outcome (%s)', async status => {
+    const body = deferred<string>();
+    const reading = vi.fn();
+    let signal: AbortSignal | null | undefined;
+    const fetcher: typeof fetch = async (_url, init) => {
+      if (init?.method === 'DELETE') return new Response(null, { status: 409 });
+      signal = init?.signal;
+      signal?.addEventListener('abort', () => body.reject(signal?.reason), { once: true });
+      return { ok: status === 200, status, headers: new Headers(), text: () => { reading(); return body.promise; } } as Response;
+    };
+    const pending = stagedActivity({ kind, label: 'operationing to CAD' }, fetcher, undefined,
+      async (fetcher, signal) => (await fetcher('/send', { method: 'POST', signal })).text());
+    const outcome = pending.catch(reason => reason);
+    await vi.waitFor(() => expect(reading).toHaveBeenCalledOnce());
+    activityStore.getSnapshot()[0].cancel!();
+    await vi.waitFor(() => expect(activityStore.getSnapshot()[0].cancel).toBeNull());
+    expect(signal?.aborted).toBe(false);
+    body.resolve('Sent to CAD');
+    expect(await outcome).toBe('Sent to CAD');
+  });
+
+
+  it('Stop waits for a queued operation to register before aborting its transport', async () => {
+    vi.useFakeTimers();
+    const response = deferred<Response>();
+    let registered = false;
+    let signal: AbortSignal | null | undefined;
+    const fetcher: typeof fetch = async (_url, init) => {
+      if (init?.method === 'DELETE') return new Response(null, { status: registered ? 204 : 404 });
+      if (init?.method !== 'POST') return new Response(null, { status: 404 });
+      signal = init.signal;
+      signal?.addEventListener('abort', () => response.reject(signal?.reason), { once: true });
+      return response.promise;
+    };
+    const pending = stagedActivity({ kind, label: 'operationing to CAD' }, fetcher, undefined,
+      async (fetcher, signal) => (await fetcher('/send', { method: 'POST', signal })).text());
+    const outcome = pending.catch(reason => reason);
+    activityStore.getSnapshot()[0].cancel!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signal?.aborted).toBe(false);
+    registered = true;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await outcome).toMatchObject({ name: 'AbortError' });
+  });
+
+  it('bounds a hanging Stop acknowledgement and permits retry without deciding the operation outcome', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+      const deadline = new AbortController();
+      setTimeout(() => deadline.abort(new DOMException('Deadline expired', 'TimeoutError')), ms);
+      return deadline.signal;
+    });
+    const post = deferred<Response>();
+    let postSignal!: AbortSignal;
+    let deleteSignal!: AbortSignal;
+    let stops = 0;
+    const fetcher: typeof fetch = async (_url, init) => {
+      if (init?.method === 'DELETE') {
+        if (++stops === 2) return new Response(null, { status: 204 });
+        deleteSignal = init.signal!;
+        return new Promise((_resolve, reject) => deleteSignal.addEventListener('abort', () => reject(deleteSignal.reason), { once: true }));
+      }
+      if (init?.method !== 'POST') return new Response(null, { status: 404 });
+      postSignal = init.signal!;
+      postSignal.addEventListener('abort', () => post.reject(postSignal.reason), { once: true });
+      return post.promise;
+    };
+    const pending = stagedActivity({ kind, label: 'operationing' }, fetcher, undefined,
+      async (fetcher, signal) => (await fetcher('/send', { method: 'POST', signal })).text());
+    const outcome = pending.catch(reason => reason);
+    activityStore.getSnapshot()[0].cancel!();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(deleteSignal.aborted).toBe(true);
+    expect(deleteSignal.reason.name).toBe('TimeoutError');
+    expect(postSignal.aborted).toBe(false);
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    activityStore.getSnapshot()[0].cancel!();
+    expect(await outcome).toMatchObject({ name: 'AbortError' });
+    expect(stops).toBe(2);
+  });
 });

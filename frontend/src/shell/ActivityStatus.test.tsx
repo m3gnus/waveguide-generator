@@ -31,19 +31,23 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it('stays hidden for a short wait and appears once it has run two seconds', () => {
+it.each(['export', 'design-open'] as const)('%s stays hidden at 999 ms and appears at 1,000 ms through a 1,500 ms wait', (kind) => {
   const host = mount();
   let handle!: ReturnType<typeof activityStore.start>;
-  act(() => { handle = activityStore.start({ kind: 'export', label: 'Exporting STL' }); });
+  act(() => { handle = activityStore.start({ kind, label: 'Working' }); });
   expect(host.textContent).toBe('');
-  act(() => { vi.advanceTimersByTime(2_000); });
-  expect(host.textContent).toContain('Exporting STL');
-  expect(host.textContent).toContain('0:02');
+  act(() => { vi.advanceTimersByTime(999); });
+  expect(host.textContent).toBe('');
+  act(() => { vi.advanceTimersByTime(1); });
+  expect(host.textContent).toContain('Working');
+  expect(host.textContent).toContain('0:01');
+  act(() => { vi.advanceTimersByTime(500); });
+  expect(host.textContent).toContain('Working');
   act(() => handle.end());
   expect(host.textContent).toBe('');
 });
 
-it('appears at once when this kind usually takes longer than two seconds, and says how long', async () => {
+it('appears at once when this kind usually takes at least one second, and says how long', async () => {
   await activityStore.track({ kind: 'assembly-build', label: 'Building the mesh' }, async () => {
     vi.advanceTimersByTime(7_000);
   });
@@ -55,9 +59,35 @@ it('appears at once when this kind usually takes longer than two seconds, and sa
 });
 
 it('never shows background work early, whatever it usually takes', () => {
-  expect(activityVisible(activity({ background: true }), 1_000, 9_000)).toBe(false);
-  expect(activityVisible(activity({ background: true }), 2_000, null)).toBe(true);
-  expect(activityVisible(activity(), 1_000, 9_000)).toBe(true);
+  expect(activityVisible(activity({ background: true }), 999, 9_000)).toBe(false);
+  expect(activityVisible(activity({ background: true }), 1_000, null)).toBe(true);
+  expect(activityVisible(activity(), 0, 1_000)).toBe(true);
+  expect(activityVisible(activity(), 999, 999)).toBe(false);
+});
+
+it('shows a wait that starts between shared clock ticks at its own boundary', () => {
+  const host = mount();
+  act(() => { activityStore.start({ kind: 'mesh-count', label: 'Counting triangles', background: true }); });
+  act(() => { vi.advanceTimersByTime(350); });
+  act(() => { activityStore.start({ kind: 'design-open', label: 'Opening the design' }); });
+  act(() => { vi.advanceTimersByTime(999); });
+  expect(host.textContent).not.toContain('Opening the design');
+  act(() => { vi.advanceTimersByTime(1); });
+  expect(host.querySelector('[role="progressbar"]')?.getAttribute('aria-label')).toBe('Opening the design');
+});
+
+it('disposes visibility timers on completion, reset and status unmount', () => {
+  const host = mount();
+  let handle!: ReturnType<typeof activityStore.start>;
+  act(() => { handle = activityStore.start({ kind: 'export', label: 'Exporting STEP' }); });
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+  act(() => { handle.end(false); });
+  expect(host.textContent).toBe('');
+  expect(vi.getTimerCount()).toBe(0);
+  act(() => { activityStore.start({ kind: 'export', label: 'Exporting STEP' }); });
+  act(() => activityStore.reset());
+  unmount.splice(0).forEach(stop => stop());
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 it('fills the bar and gives the percentage and time left when the work is counted', () => {

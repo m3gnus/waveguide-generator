@@ -22,7 +22,7 @@ export function stagedActivity<T>(
     let done = 0;
     let active = true;
     let cancelPending = false;
-    const cancelSend = async () => {
+    const cancelPublication = async () => {
       if (cancelPending || !active) return;
       cancelPending = true;
       try {
@@ -35,10 +35,10 @@ export function stagedActivity<T>(
           if (response.status !== 404) return;
           // The POST can still be queued when Stop arrives. Wait for the
           // server to register it; never turn a missing acknowledgement into
-          // a claim that a possibly committed send was stopped.
+          // a claim that a possibly committed operation was stopped.
           await new Promise(resolve => setTimeout(resolve, 200));
         }
-      } catch { /* Keep awaiting the Send result when Stop was not acknowledged. */ }
+      } catch { /* Keep awaiting the result when Stop was not acknowledged. */ }
       finally { cancelPending = false; }
     };
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -72,7 +72,9 @@ export function stagedActivity<T>(
       if (init?.method?.toUpperCase() !== 'POST') return scoped(input, { ...init, signal: requestSignal });
       const headers = new Headers(init.headers);
       headers.set('X-WG-Operation-Id', id);
-      if (start.kind === 'send-to-cad') activity.setCancel(() => { void cancelSend(); });
+      if (start.kind === 'send-to-cad' || start.kind === 'assembly-build') {
+        activity.setCancel(() => { void cancelPublication(); });
+      }
       activity.progress(0, 4);
       const response = scoped(input, { ...init, headers, signal: requestSignal }).then(response => {
         // The operation POST can confirm rollback before DELETE's 204 arrives.

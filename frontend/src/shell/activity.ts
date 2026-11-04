@@ -1,7 +1,7 @@
 /**
  * The one record of what WG is busy with, shown in the status bar
- * (`ActivityStatus.tsx`). Every operation that can take longer than two
- * seconds registers here instead of spinning on its own (the owner, 2026-11-03,
+ * (`ActivityStatus.tsx`). Every operation that can take longer than one
+ * second registers here instead of spinning on its own (the owner, 2026-11-03,
  * hornlab-policy `software/reference/product-decisions.md`): it says what is
  * happening, how long it has run, and either how far it is (when the work can
  * be counted) or how long the same operation usually takes on this machine.
@@ -19,6 +19,7 @@ export type ActivityKind =
   | 'export'
   | 'send-to-cad'
   | 'cad-import'
+  | 'design-open'
   | 'mesh-import'
   | 'engine-check'
   | 'recombine'
@@ -48,7 +49,7 @@ export interface Activity {
   /** Present when the operation can be stopped. */
   cancel: (() => void) | null;
   /** Background work the user did not ask for (a triangle count after an
-   * edit) shows only once it has really run two seconds, never early. */
+   * edit) shows only once it has really run one second, never early. */
   background: boolean;
 }
 
@@ -70,7 +71,7 @@ export interface StartActivity {
 }
 
 /** Shown once it has run this long, or at once when it usually takes longer. */
-export const ACTIVITY_SHOW_AFTER_MS = 2_000;
+export const ACTIVITY_SHOW_AFTER_MS = 1_000;
 
 const HISTORY_KEY = 'wg.activity.durations';
 const HISTORY_LENGTH = 5;
@@ -99,6 +100,7 @@ class ActivityStore {
   private history: History = readHistory();
   private nextId = 1;
   private listeners = new Set<() => void>();
+  private visibilityTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -121,6 +123,13 @@ class ActivityStore {
       progress: null, progressAt: null, cancel: cancel ?? null, background,
     };
     this.set([...this.activities, activity]);
+    // Wake the status bar at this activity's boundary, even when the shared
+    // elapsed-time clock ticks on a different offset. A new snapshot is needed
+    // for useSyncExternalStore; the activity's data and start time stay intact.
+    this.visibilityTimers.set(activity.id, setTimeout(() => {
+      this.visibilityTimers.delete(activity.id);
+      this.set([...this.activities]);
+    }, ACTIVITY_SHOW_AFTER_MS));
     let ended = false;
     const patch = (change: Partial<Activity>) => {
       if (ended) return;
@@ -137,6 +146,8 @@ class ActivityStore {
       end: (completed = true) => {
         if (ended) return;
         ended = true;
+        clearTimeout(this.visibilityTimers.get(activity.id));
+        this.visibilityTimers.delete(activity.id);
         if (completed) this.remember(kind, Date.now() - activity.startedAt);
         this.set(this.activities.filter((item) => item.id !== activity.id));
       },
@@ -158,6 +169,8 @@ class ActivityStore {
 
   /** Tests only. */
   reset(): void {
+    this.visibilityTimers.forEach(clearTimeout);
+    this.visibilityTimers.clear();
     this.history = {};
     this.set([]);
   }

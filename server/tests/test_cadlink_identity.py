@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -173,7 +174,7 @@ def test_serialize_endpoint_never_adds_or_advances_registry_rows(tmp_path: Path)
     )
 
     serialized = [
-        asyncio.run(endpoint({"design": design, "filename": "portable.cfg"}))
+        json.loads(asyncio.run(endpoint({"design": design, "filename": "portable.cfg"})).body)
         for _ in range(2)
     ]
 
