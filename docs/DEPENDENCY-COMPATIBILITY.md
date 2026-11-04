@@ -164,3 +164,13 @@ Hornresp export refusals follow their existing physical owners. These are
 intentional numerical/output corrections, qualified by standard-install and
 native seam suites. The schema unit test uses a stand-in; its known P2 coverage
 limitation remains recorded rather than being treated as real-schema coverage.
+
+## Metal stream ownership and field geometry
+
+Metal-BEM pin `722ed50607b66b06c493e570238f5e29eaa73725` adds stream-owned execution directories, bounded
+process-group cleanup after EPERM, complete-image trace replay and immutable
+field-geometry reuse. Its source tree equals the qualified aggregation/gaps
+prefix `d246bc1d33a0510e273b174a94e3344586a5e9bf`. Persistent-helper work is
+excluded after Windows fixture-contract failures. BM multi-source refusal occurs
+before setup. Experimental BM ground remains opt-in and defaults off; BEAT
+qualification is still required before enabling it.
