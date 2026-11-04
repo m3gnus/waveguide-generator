@@ -62,6 +62,7 @@ export function assemblySimulationData(design: DesignDocument, record: CompiledA
     const form = assemblyDriverForm(assembly.drivers?.[excitation.id]);
     const inputs = assembly.drivers?.[excitation.id]?.exterior_driver_inputs;
     return { id: excitation.id, source_ids: [...excitation.source_ids], motion: excitation.motion,
+      ...(Object.values(excitation.patch_weights ?? {}).some(weight => weight !== 1) ? { patch_weights: { ...excitation.patch_weights } } : {}),
       ...(inputs ? { exterior_driver_inputs: inputs } : {}),
       ...(form ? { exterior_transducer: form } : {}) };
   });

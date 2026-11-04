@@ -202,3 +202,21 @@ describe('assembly in the design document', () => {
     expect(mergeDesignForFamily(design, 'OSSE-NATIVE').assembly).toEqual(assembly);
   });
 });
+
+it('commits each named diaphragm atomically with one Undo and preserves other radiators', async () => {
+  const { commitWooferShape, commitHfSource } = await import('./assembly');
+  resetDesignStore();
+  const { assembly, first, second } = twoWoofers();
+  commitAssembly(assembly);
+  const oldSecond = structuredClone(assembly.woofers?.find(w => w.id === second));
+  commitWooferShape(first, { kind: 'sketched', status: 'unfinished', authoring: { version: 'wg-source-authoring-v2', pending: true } });
+  expect(useDesignStore.getState().design.assembly?.woofers?.find(w => w.id === first)?.shape.kind).toBe('sketched');
+  useDesignStore.getState().undo();
+  expect(useDesignStore.getState().design.assembly).toEqual(assembly);
+  useDesignStore.getState().redo();
+  expect(useDesignStore.getState().design.assembly?.woofers?.find(w => w.id === second)).toEqual(oldSecond);
+  const before = structuredClone(useDesignStore.getState().design.assembly);
+  commitHfSource(HF_RADIATOR_ID, { kind: 'sketched', status: 'unfinished' });
+  useDesignStore.getState().undo();
+  expect(useDesignStore.getState().design.assembly).toEqual(before);
+});

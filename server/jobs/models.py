@@ -975,7 +975,7 @@ class ImportedGeometrySource(JobModel):
                 channel.id for channel in self.drive_channels if channel.exterior_transducer is not None
             }, {group.id: {name: (group.member_processing or {}).get(name, {}) for name in group.channel_ids}
                 for group in self.driver_groups or []}, {channel.id for channel in self.drive_channels})
-        if any(c.patch_weights is not None or c.physical_source_id is not None for c in self.drive_channels) and "native-source-contour-v1" not in self.required_features:
+        if any(c.patch_weights is not None or c.physical_source_id is not None for c in self.drive_channels) and not {"native-source-contour-v1", "wg-design-assembly-v1"}.intersection(self.required_features):
             raise ValueError("weighted/grouped patches require native-source-contour-v1 negotiation")
         channel_ids = [channel.id for channel in self.drive_channels]
         if len(set(channel_ids)) != len(channel_ids):
@@ -1035,7 +1035,7 @@ class ImportedGeometrySource(JobModel):
                     "Set generator resistance to 0 ohms or drive the surfaces separately "
                     "when a driver group contains multiple channels."
                 )
-            if len(channels) > 1 and any(channel.patch_weights is not None for channel in channels):
+            if len(channels) > 1 and not self.design_assembly and any(channel.patch_weights is not None for channel in channels):
                 raise ValueError("driver groups cannot combine weighted patch channels")
             if group.member_processing is None and any(
                 (channel.motion, channel.driver, channel.exterior_transducer)

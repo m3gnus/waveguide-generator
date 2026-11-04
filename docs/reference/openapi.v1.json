@@ -392,18 +392,61 @@
       },
       "AssemblyHfSource": {
         "additionalProperties": false,
-        "description": "The horn's classic prescribed throat source, with the mesher's identity.",
+        "description": "The horn's prescribed throat source: classic or a committed sketch.",
         "properties": {
+          "authoring": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authoring"
+          },
+          "diaphragm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "kind": {
-            "const": "classic",
             "default": "classic",
+            "enum": [
+              "classic",
+              "sketched"
+            ],
             "title": "Kind",
             "type": "string"
+          },
+          "phase_plugs": {
+            "items": {
+              "$ref": "#/components/schemas/PhasePlug"
+            },
+            "maxItems": 8,
+            "title": "Phase Plugs",
+            "type": "array"
           },
           "radiator_id": {
             "const": "horn-throat",
             "default": "horn-throat",
             "title": "Radiator Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "valid",
+            "enum": [
+              "valid",
+              "unfinished",
+              "invalid"
+            ],
+            "title": "Status",
             "type": "string"
           }
         },
@@ -829,10 +872,33 @@
       "AssemblyWooferShape": {
         "additionalProperties": false,
         "properties": {
+          "authoring": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authoring"
+          },
+          "diaphragm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "kind": {
             "enum": [
               "piston",
-              "ath_cone"
+              "ath_cone",
+              "sketched"
             ],
             "title": "Kind",
             "type": "string"
@@ -843,6 +909,16 @@
             "minimum": 0.0,
             "title": "Recess Mm",
             "type": "number"
+          },
+          "status": {
+            "default": "valid",
+            "enum": [
+              "valid",
+              "unfinished",
+              "invalid"
+            ],
+            "title": "Status",
+            "type": "string"
           }
         },
         "required": [

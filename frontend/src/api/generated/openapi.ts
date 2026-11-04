@@ -2909,21 +2909,34 @@ export interface components {
         };
         /**
          * AssemblyHfSource
-         * @description The horn's classic prescribed throat source, with the mesher's identity.
+         * @description The horn's prescribed throat source: classic or a committed sketch.
          */
         AssemblyHfSource: {
+            /** Authoring */
+            authoring?: {
+                [key: string]: unknown;
+            } | null;
+            diaphragm?: components["schemas"]["SourceDocument"] | null;
             /**
              * Kind
              * @default classic
-             * @constant
+             * @enum {string}
              */
-            kind?: "classic";
+            kind?: "classic" | "sketched";
+            /** Phase Plugs */
+            phase_plugs?: components["schemas"]["PhasePlug"][];
             /**
              * Radiator Id
              * @default horn-throat
              * @constant
              */
             radiator_id?: "horn-throat";
+            /**
+             * Status
+             * @default valid
+             * @enum {string}
+             */
+            status?: "valid" | "unfinished" | "invalid";
         };
         /**
          * AssemblyMember
@@ -3085,16 +3098,27 @@ export interface components {
         };
         /** AssemblyWooferShape */
         AssemblyWooferShape: {
+            /** Authoring */
+            authoring?: {
+                [key: string]: unknown;
+            } | null;
+            diaphragm?: components["schemas"]["SourceDocument"] | null;
             /**
              * Kind
              * @enum {string}
              */
-            kind: "piston" | "ath_cone";
+            kind: "piston" | "ath_cone" | "sketched";
             /**
              * Recess Mm
              * @default 0
              */
             recess_mm?: number;
+            /**
+             * Status
+             * @default valid
+             * @enum {string}
+             */
+            status?: "valid" | "unfinished" | "invalid";
         };
         /**
          * AthLfProvenance

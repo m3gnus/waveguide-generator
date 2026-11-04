@@ -90,6 +90,8 @@ def geometry_spec(design: DesignConfig) -> dict[str, Any]:
         "mesher_config": _solver_mesher_config(design),
         "ath_lf_envelope": assembly_ath_envelope(design),
         "woofers": assembly_woofer_rows(design),
+        **({"hf_diaphragm": {**assembly.hf_source.model_dump(mode="json", exclude={"authoring", "status"}), "fit_wg0_rim": True}}
+           if assembly.hf_source.kind == "sketched" else {}),
         "signal_groups": [
             {"id": group.id, "members": [member.radiator_id for member in group.members]}
             for group in assembly.signal_groups
@@ -145,11 +147,24 @@ def _radiators(design: DesignConfig, built: Mapping[str, Any], source_ids: list[
     assert assembly is not None
     placed = {row["radiator_id"]: row for row in built["placement"]["woofers"]}
     patches = {patch["patch_id"]: patch for patch in (built["metadata"].get("assembly") or {}).get("patches", [])}
+    contours = (built["metadata"].get("assembly") or {}).get("contours", {})
+    for radiator_id, sketch in [(HF_RADIATOR_ID, assembly.hf_source),
+                                *((w.id, w.shape) for w in assembly.woofers if w.enabled)]:
+        if sketch.kind == "sketched" and (
+                sketch.diaphragm is None or _digest(contours.get(radiator_id))
+                != _digest(sketch.diaphragm.contour.model_dump(mode="json"))):
+            raise ValueError("mesher did not compile the committed valid diaphragm geometry")
     radiators: list[dict[str, Any]] = [{
         "radiator_id": HF_RADIATOR_ID, "kind": assembly.hf_source.kind, "label": "HF",
         "state": "compiled", "role": "HF", "motion": source_motion(design.root.source),
         "source_ids": [HF_RADIATOR_ID],
     }]
+    if assembly.hf_source.kind == "sketched":
+        radiators[0].update(
+            motion=assembly.hf_source.diaphragm.drive.motion,
+            source_ids=[source_id for source_id in source_ids if split_source_id(source_id)[0] == HF_RADIATOR_ID],
+            compiled_from_committed_valid_geometry=True,
+        )
     if radiators[0]["motion"] == "axial":
         radiators[0]["motion_axis"] = [0.0, 0.0, 1.0]
     for woofer in assembly.woofers:
@@ -163,6 +178,14 @@ def _radiators(design: DesignConfig, built: Mapping[str, Any], source_ids: list[
             "projected_area_m2": math.pi * (woofer.radius_mm * 1e-3) ** 2,
             "source_ids": ids,
         }
+        if woofer.shape.kind == "sketched":
+            # A rigid land or weighted segments make aperture area different
+            # from effective Sd. The shared solver derives Sd from moving faces.
+            entry["aperture_area_m2"] = entry.pop("projected_area_m2")
+            entry["motion"] = woofer.shape.diaphragm.drive.motion if woofer.shape.diaphragm else "normal"
+            if entry["motion"] != "axial":
+                entry.pop("motion_axis", None)
+            entry["compiled_from_committed_valid_geometry"] = state in {"compiled", "rigid"}
         if woofer.id in placed:
             entry["center_mm"] = [placed[woofer.id]["x_mm"], placed[woofer.id]["y_mm"]]
         if ids:
@@ -237,6 +260,7 @@ def compose_record(
     assembly = design.root.assembly
     assert assembly is not None
     compiled = {radiator["radiator_id"] for radiator in radiators if radiator["state"] == "compiled"}
+    patches = {p["patch_id"]: p for p in assembly_meta.get("patches", [])}
     excitations = [
         {
             "id": radiator["radiator_id"],
@@ -244,7 +268,7 @@ def compose_record(
             "motion": radiator["motion"],
             **({"motion_axis": radiator["motion_axis"]} if "motion_axis" in radiator else {}),
             # One excitation per radiator: every patch moves with unit weight.
-            "patch_weights": {source_id: 1.0 for source_id in radiator["source_ids"]},
+            "patch_weights": {source_id: patches.get(source_id, {}).get("weight", 1.0) for source_id in radiator["source_ids"]},
         }
         for radiator in radiators if radiator["radiator_id"] in compiled
     ]
@@ -316,11 +340,15 @@ def compose_record(
             "integrity": file_mesh_integrity(mesh, []),
             "metadata": {
                 "mesher_identity": mesher_identity(),
-                "mesher_features": ["design-enclosure-woofers"] if assembly_meta else [],
+                "mesher_features": (
+                    (["design-enclosure-woofers"] if built["placement"]["woofers"] else [])
+                    + (["design-sketched-diaphragms-v1"] if any(
+                        r["kind"] == "sketched" and r["state"] in {"compiled", "rigid"} for r in radiators) else [])
+                ),
                 "build_stats": built["stats"],
                 "normals": "outward, certified by the design mesher and the ready-mesh check",
                 "placement": built["placement"],
-                **({"assembly": {key: assembly_meta[key] for key in ("patches", "contours", "half_x", "coordinate_frame")
+                **({"assembly": {key: assembly_meta[key] for key in ("patches", "contours", "phase_plugs", "half_x", "coordinate_frame")
                                  if key in assembly_meta}} if assembly_meta else {}),
             },
         },
@@ -462,6 +490,11 @@ async def compile_design_assembly(
     design = DesignConfig.model_validate(dict(design_dump))
     if design.root.assembly is None:
         raise AssemblyRefusal(AssemblyRefusal.NO_ASSEMBLY)
+    for name, sketch in [("HF diaphragm", design.root.assembly.hf_source),
+                         *((w.label, w.shape) for w in design.root.assembly.woofers)]:
+        if sketch.kind == "sketched" and (sketch.status != "valid" or sketch.diaphragm is None
+                                          or (sketch.authoring or {}).get("pending") is True):
+            raise AssemblyRefusal(f"Finish or revert the {name} sketch before solving.")
     model_id = design_model_id(design_uid)
     if not model_id:
         raise AssemblyRefusal("Save the design before solving its assembly.")

@@ -107,7 +107,9 @@ def test_identity_contract_names_patches_by_radiator_uuid() -> None:
     assert patch_id(W1, "piston") == f"{W1}/piston"
     assert split_source_id(f"{W1}/cap") == (W1, "cap")
     assert split_source_id(HF_RADIATOR_ID) == (HF_RADIATOR_ID, None)
-    for bad in ("LF 1/piston", f"{W1}", f"{W1}/Cap", "rigid"):
+    assert split_source_id(patch_id(W1, "Cap.1/inner")) == (W1, "Cap.1/inner")
+    assert split_source_id(patch_id(HF_RADIATOR_ID, "dome")) == (HF_RADIATOR_ID, "dome")
+    for bad in ("LF 1/piston", f"{W1}", "rigid"):
         with pytest.raises(ValueError):
             split_source_id(bad)
     assert source_role("primary") == "HF" and source_role("secondary") == "LF"

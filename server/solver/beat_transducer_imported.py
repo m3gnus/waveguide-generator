@@ -168,6 +168,9 @@ def preflight(record: Mapping, msh_text: str, channels: Sequence, *, backend: st
 
 
 def drivers_for(record: Mapping, channels: Sequence) -> list[ExteriorDriver]:
+    for channel in channels:
+        if channel.exterior_transducer is not None and any(w != 1.0 for w in (channel.patch_weights or {}).values()):
+            raise ValueError("BEAT exterior transducers cannot use signed or nonunit patch weights. Choose fixed velocity for this radiator, or use unit patch weights.")
     tags = record.get("source_tags")
     if not isinstance(tags, Mapping):
         raise ValueError("Ingestion record requires source_tags")
@@ -231,15 +234,17 @@ def package_sweep(
     for channel in geometry.drive_channels:
         ports = indices[channel.id]
         port_index = ports[0]
-        # Linear superposition of a channel's own excitation columns.
+        weights = ([1.0] if channel.exterior_transducer is not None else
+                   [(channel.patch_weights or {}).get(source, 1.0) for source in channel.source_ids])
+        # Linear superposition of the signed, weighted unit-velocity bases.
         pressure = np.stack(
             [
-                np.stack([sum(row.pressure_rms_pa[plane][i] for i in ports) for plane in layout.planes])
+                np.stack([sum(weight * row.pressure_rms_pa[plane][i] for i, weight in zip(ports, weights)) for plane in layout.planes])
                 for row in sweep.rows
             ]
         )
         sphere = (
-            np.stack([sum(row.pressure_rms_pa["sphere"][i] for i in ports) for row in sweep.rows])
+            np.stack([sum(weight * row.pressure_rms_pa["sphere"][i] for i, weight in zip(ports, weights)) for row in sweep.rows])
             if "sphere" in layout.points_m
             else None
         )

@@ -366,3 +366,26 @@ export function designHasEnabledWoofers(design: DesignDocument): boolean {
 export function designAssembly(design: DesignDocument): DesignAssembly | undefined {
   return design.assembly ?? undefined;
 }
+
+/** Replace only the named diaphragm, publishing geometry and draft state atomically. */
+export function setWooferShape(assembly: DesignAssembly, id: string, shape: AssemblyWooferShape): DesignAssembly {
+  return updateWoofer(assembly, id, { shape });
+}
+
+export function setHfSource(assembly: DesignAssembly, id: string, source: NonNullable<DesignAssembly['hf_source']>): DesignAssembly {
+  if (id !== HF_RADIATOR_ID || source.radiator_id && source.radiator_id !== id) throw new ProgramFault('Unknown HF radiator.');
+  return { ...structuredClone(assembly), hf_source: structuredClone(source) };
+}
+
+/** Each call is one project Undo; the shared workspace owns gestures and drafts. */
+export function commitWooferShape(id: string, shape: AssemblyWooferShape): void {
+  const assembly = useDesignStore.getState().design.assembly;
+  if (!assembly) throw new ProgramFault('No design assembly.');
+  commitAssembly(setWooferShape(assembly, id, shape));
+}
+
+export function commitHfSource(id: string, source: NonNullable<DesignAssembly['hf_source']>): void {
+  const assembly = useDesignStore.getState().design.assembly;
+  if (!assembly) throw new ProgramFault('No design assembly.');
+  commitAssembly(setHfSource(assembly, id, source));
+}

@@ -427,3 +427,28 @@ def test_wired_submission_selects_by_coupled_capability(engine, available):
     else:
         with pytest.raises((ImportedSolveRefusal, EngineUnavailableError), match="Wired woofers need BEAT CPU or BEAT Metal"):
             asyncio.run(resolve_imported_submission(validated, registry, request_refusal=None))
+
+
+def test_signed_prescribed_weights_reach_the_shared_beat_bases(solid, record):
+    from server.jobs.models import DriveChannel
+    from server.solver.beat_adapter.request import imported_source_bases
+    sources = ['horn-throat', W1+'/piston']
+    bases, ports = imported_source_bases(record, solid, [DriveChannel(
+        id='sketch', source_ids=sources, motion='normal', patch_weights=dict(zip(sources, [1., -.25])))])
+    assert [b.weight for b in bases] == [1., -.25]
+    assert len(ports['sketch']) == 2
+
+
+def test_signed_driver_weights_name_beat_and_fixed_velocity(solid, record):
+    driven = request(combine=False)
+    driven.geometry.drive_channels[1].patch_weights = {W1+'/piston': -.25}
+    refusal = jobs.preflight(record, solid, driven.geometry.drive_channels, backend='cpu')
+    assert 'BEAT' in refusal and 'fixed velocity' in refusal
+
+
+def test_bempp_weight_refusal_names_a_supported_engine():
+    from server.jobs.models import DriveChannel
+    from server.solver.bempp_imported import imported_bempp_preflight
+    refusal = imported_bempp_preflight({}, [DriveChannel(
+        id='sketch', source_ids=['patch'], patch_weights={'patch': -.25})])
+    assert 'BEMPP' in refusal and 'BEAT CPU' in refusal

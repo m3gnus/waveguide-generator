@@ -14,6 +14,8 @@ import re
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal, Union
 
+from server.design.source_document import SourceDocument, PhasePlug
+
 from server.drivers.models import ExteriorDriverInputs
 
 from pydantic import (
@@ -838,8 +840,46 @@ class AssemblyPlacement(StrictModel):
         return self
 
 
-class AssemblyWooferShape(StrictModel):
-    kind: Literal["piston", "ath_cone"]
+class AssemblySketch(StrictModel):
+    """The shared workspace's last valid geometry and persisted draft state."""
+
+    diaphragm: SourceDocument | None = Field(default=None, exclude_if=lambda v: v is None)
+    authoring: dict[str, Any] | None = Field(default=None, exclude_if=lambda v: v is None)
+    status: Literal["valid", "unfinished", "invalid"] = Field(default="valid", exclude_if=lambda v: v == "valid")
+
+    @field_validator("diaphragm")
+    @classmethod
+    def _canonical_diaphragm(cls, document):
+        if document is None:
+            return None
+        from hornlab_mesher.source_contour import SourceContour, ContourDrive
+        from server.source_editor import canonical_document
+
+        contour = SourceContour.from_dict(document.contour.model_dump())
+        drive = ContourDrive(document.drive.channel_id, tuple(document.drive.weights.items()), document.drive.motion)
+        drive.validate(contour)
+        return SourceDocument.model_validate(canonical_document(contour, drive))
+
+    @field_validator("authoring", mode="before")
+    @classmethod
+    def _authoring(cls, value):
+        if value is None:
+            return None
+        blob = _json_blob(value, "source authoring")
+        if blob.get("version") != "wg-source-authoring-v2":
+            raise ValueError("source authoring requires wg-source-authoring-v2")
+        return blob
+
+    def validate_sketch(self):
+        if self.kind == "sketched":
+            if self.status == "valid" and self.diaphragm is None:
+                raise ValueError("a valid sketched diaphragm needs a committed SourceDocument")
+        elif self.diaphragm is not None or self.authoring is not None or self.status != "valid":
+            raise ValueError("diaphragm and authoring state require kind sketched")
+
+
+class AssemblyWooferShape(AssemblySketch):
+    kind: Literal["piston", "ath_cone", "sketched"]
     recess_mm: AssemblyNumber = Field(default=0.0, ge=0, le=1_000, exclude_if=lambda v: v == 0)
 
     @model_validator(mode="after")
@@ -847,7 +887,11 @@ class AssemblyWooferShape(StrictModel):
         # The design mesher owns the diaphragm contract (recess weld floor).
         from hornlab_mesher.enclosure_woofers import AthConeShape, PistonShape
 
-        if self.kind == "ath_cone":
+        self.validate_sketch()
+        if self.kind == "sketched":
+            if self.recess_mm:
+                raise ValueError("recess_mm is piston-only; set depth in the diaphragm sketch")
+        elif self.kind == "ath_cone":
             if self.recess_mm:
                 raise ValueError("the ATH cone has a fixed recess; recess_mm is piston-only")
             AthConeShape()
@@ -876,11 +920,24 @@ class AssemblyWoofer(StrictModel):
     ath: AthLfProvenance | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
-class AssemblyHfSource(StrictModel):
-    """The horn's classic prescribed throat source, with the mesher's identity."""
+class AssemblyHfSource(AssemblySketch):
+    """The horn's prescribed throat source: classic or a committed sketch."""
 
     radiator_id: Literal["horn-throat"] = "horn-throat"
-    kind: Literal["classic"] = "classic"
+    kind: Literal["classic", "sketched"] = "classic"
+    phase_plugs: list[PhasePlug] = Field(default_factory=list, max_length=8, exclude_if=lambda v: not v)
+
+    @model_validator(mode="after")
+    def _sketch(self):
+        self.validate_sketch()
+        if self.phase_plugs and self.kind != "sketched":
+            raise ValueError("phase plugs require a sketched HF diaphragm")
+        from hornlab_mesher.phase_plug import PhasePlug as NativePlug
+        for plug in self.phase_plugs:
+            NativePlug(**plug.model_dump())
+        if len({p.id for p in self.phase_plugs}) != len(self.phase_plugs):
+            raise ValueError("phase plug ids must be unique")
+        return self
 
 
 class AssemblyDriverReference(StrictModel):

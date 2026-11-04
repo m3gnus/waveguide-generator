@@ -7,6 +7,7 @@ import { resetAssemblyBuild } from './assemblyBuild';
 import { adoptDesignBuild } from './importedModel';
 import { combineBaseSpec, combineEnabledEffective, combineWire } from './cadReturn';
 import { applyAssemblySimulation, assemblyImportedSetup, assemblySimulationData } from './assemblySimulation';
+import { useSolveOptionsStore } from './solveOptions';
 import { currentDocumentLoad, designForFamily, resetDesignStore, serializeDesign, useDesignStore } from './design';
 
 let counter = 0;
@@ -258,4 +259,17 @@ describe('assembly solve setup', () => {
     // The driver stays bound to its radiator in the design either way.
     expect(useDesignStore.getState().design.assembly!.drivers?.[first]).toBeDefined();
   });
+});
+
+it('carries signed contour weights and motion from the record into assembly submission', () => {
+  counter = 0;
+  const added = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+  const record = compiledFor([added.id]);
+  record.excitations[1].patch_weights[`${added.id}/cone`] = -0.25;
+  record.excitations[1].motion = 'normal';
+  const state = assemblySimulationData({ ...designForFamily('R-OSSE'), assembly: added.assembly }, record);
+  expect(state.driveChannels[1].patch_weights).toEqual(record.excitations[1].patch_weights);
+  const resolved = resolveAssemblySetup({ ...state, sources: record.sources }, added.assembly,
+    { ...useSolveOptionsStore.getState().options(), engine: 'beat-cpu' }, { f1: 100, f2: 100, num_frequencies: 1 });
+  expect(resolved.setup.geometry.drive_channels?.[1]).toMatchObject({ motion: 'normal', patch_weights: record.excitations[1].patch_weights });
 });

@@ -9,6 +9,7 @@ compiled record and the solve setup, so they live here once.
 from __future__ import annotations
 
 import re
+from urllib.parse import quote, unquote
 
 #: The design mesher's fixed physical source id for the horn throat.
 HF_RADIATOR_ID = "horn-throat"
@@ -21,7 +22,6 @@ ASSEMBLY_RECORD_FEATURE = "wg-design-assembly-v1"
 MESHER_ROLE_TO_SOURCE_ROLE = {"primary": "HF", "secondary": "LF"}
 
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-_SEGMENT = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
 def is_radiator_uuid(value: object) -> bool:
@@ -31,24 +31,27 @@ def is_radiator_uuid(value: object) -> bool:
 
 
 def patch_id(radiator_id: str, segment_id: str) -> str:
-    if not (is_radiator_uuid(radiator_id) and _SEGMENT.fullmatch(segment_id)):
-        raise ValueError("assembly patch ids are <radiator uuid>/<segment>")
-    return f"{radiator_id}/{segment_id}"
+    if not ((is_radiator_uuid(radiator_id) or radiator_id == HF_RADIATOR_ID)
+            and isinstance(segment_id, str) and segment_id and segment_id.strip() == segment_id
+            and segment_id.isprintable()):
+        raise ValueError("assembly patch ids name a radiator and a canonical contour segment")
+    return f"{radiator_id}/{quote(segment_id, safe='')}"
 
 
 def split_source_id(source_id: str) -> tuple[str, str | None]:
     """``(radiator_id, segment_id)`` of a compiled source id.
 
-    The horn is one unsegmented source. A woofer patch must use the
-    ``patch_id`` grammar; anything else is refused rather than guessed.
+    The classic horn is unsegmented; sketches use the same escaped segment
+    address on an HF or woofer radiator. Noncanonical spellings are refused.
     """
 
     if source_id == HF_RADIATOR_ID:
         return HF_RADIATOR_ID, None
     radiator, sep, segment = source_id.partition("/")
-    if not sep or not is_radiator_uuid(radiator) or _SEGMENT.fullmatch(segment) is None:
+    if (not sep or not segment or not (is_radiator_uuid(radiator) or radiator == HF_RADIATOR_ID)
+            or patch_id(radiator, unquote(segment)) != source_id):
         raise ValueError(f"unknown assembly source id {source_id!r}")
-    return radiator, segment
+    return radiator, unquote(segment)
 
 
 def source_role(mesher_role: str) -> str:

@@ -184,3 +184,20 @@ def test_invalid_source_area_is_refused(area):
 def test_decoder_preserves_c_order_for_multiple_excitation_rows():
     values = np.array([[1 + 2j, 3 - 4j], [5 + 6j, 7 - 8j]])
     np.testing.assert_array_equal(decode_complex_values(wire(values), (2, 2)), values)
+
+
+def test_signed_patch_weights_apply_to_pressure_and_traces(layout, raw_result):
+    raw = raw_result()
+    raw['excitation_port_ids'] = ['a', 'b']
+    for item in raw['quantities']:
+        if item['axes'] == ['radiator']:
+            item['values'] = wire([4-5j, 8-10j])
+        else:
+            count = item['values']['shape'][1]
+            item['values'] = wire(np.stack([np.ones(count, complex), np.full(count, 3+0j)]))
+    result = parse(raw, layout, excitation_port_id='a', excitation_port_ids=('a','b'),
+                   channel_port_ids=('a','b'), port_weights={'a':1., 'b':-.25}, mean_pressure_velocity=0j)
+    expected = .25 * acceleration_scale(500.)
+    np.testing.assert_allclose(result.pressure_complex, expected)
+    np.testing.assert_allclose(result.surface_pressure_complex, expected)
+    np.testing.assert_allclose(result.surface_neumann_complex, expected)

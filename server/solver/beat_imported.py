@@ -692,7 +692,7 @@ def solve_imported_beat_from_msh_text(
         )
         if geometry.uses_rms_velocity:
             channel_response["metadata"]["impedance_drive"] = "rms_velocity"
-        if len(channel.source_ids) > 1:
+        if len(channel.source_ids) > 1 or any(w != 1 for w in (channel.patch_weights or {}).values()):
             channel_response.pop("impedance", None)
             channel_response["metadata"]["impedance_omitted"] = (
                 "multi-source channel: per-patch impedance is not a channel impedance"

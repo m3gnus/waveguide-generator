@@ -104,6 +104,9 @@ def imported_bempp_preflight(
     pressure is pinned to zero and Metal's is not.
     """
 
+    if any(any(weight != 1.0 for weight in (getattr(channel, "patch_weights", None) or {}).values())
+           for channel in (drive_channels or ())):
+        return "BEMPP cannot use signed or nonunit patch weights. Choose BEAT CPU, BEAT Metal or Metal for this diaphragm."
     if has_axial_channel(drive_channels):
         bempp._load_api()
         if not config_supports_source_axes(getattr(bempp, "SolveConfig", None)):
