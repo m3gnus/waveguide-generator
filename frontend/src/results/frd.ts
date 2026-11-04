@@ -1,3 +1,5 @@
+import { fixedDecimal as fixed } from './exportNumbers';
+import { polarValueDb as patternDb } from './values';
 import { samplingNotes } from './sampling';
 import { ARTIFACT_CONVENTIONS, ENGINEERING_NPZ_PHASOR } from '../api/conventions';
 import type { Preferences } from '../prefs/preferences';
@@ -25,7 +27,6 @@ const DELIMITER = '\t';
 const FREQUENCY_PRECISION = 6;
 const LEVEL_PRECISION = 4;
 const PHASE_PRECISION = 4;
-const VALUE_PRECISION = LEVEL_PRECISION;
 
 type PolarPlane = 'horizontal' | 'vertical';
 
@@ -33,36 +34,10 @@ function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function fixed(value: number, precision = VALUE_PRECISION): string {
-  const formatted = value.toFixed(precision);
-  if (!/[eE]/.test(formatted)) return formatted;
-
-  // Number#toFixed delegates to exponential notation at |value| >= 1e21.
-  // FRD readers expect ordinary decimals, so expand that rare case explicitly.
-  const [coefficient, exponentText] = value.toExponential(precision).split('e');
-  const sign = coefficient.startsWith('-') ? '-' : '';
-  const digits = coefficient.replace('-', '').replace('.', '');
-  const exponent = Number(exponentText);
-  return `${sign}${digits}${'0'.repeat(Math.max(0, exponent - precision))}.${'0'.repeat(precision)}`;
-}
-
 function onAxisFrequencies(result: ResultPayload): number[] {
   return result.spl_on_axis?.frequencies?.length
     ? result.spl_on_axis.frequencies
     : result.frequencies;
-}
-
-// Kept local so this standalone module does not depend on exporters.ts or mappers.ts.
-function patternDb(value: unknown): number | null {
-  if (Array.isArray(value)) {
-    const real = Number(value[0]);
-    const imaginary = Number(value[1]);
-    const magnitude = Math.hypot(real, imaginary);
-    return Number.isFinite(magnitude) && magnitude > 0
-      ? 20 * Math.log10(magnitude)
-      : null;
-  }
-  return finite(value) ? value : null;
 }
 
 // REW states the smoothing it applied in its own header. These files are

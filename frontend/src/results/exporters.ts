@@ -27,7 +27,8 @@ import { applySmoothing, type SmoothingValue } from './smoothing';
 import { buildDerivedAcousticsCsv, buildDerivedAcousticsJson } from './derivedAcoustics';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
 import { withNormalizationAngle } from './normalization';
-import { complexToDb, impedanceUnits } from './mappers';
+import { impedanceUnits } from './mappers';
+import { polarValueDb } from './values';
 import { propagationReference } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
 import { buildRunReportHtml } from './runReport';
@@ -231,8 +232,8 @@ export function buildSummaryText(result: ResultPayload, preferences: Preferences
 }
 
 function patternDb(value: unknown): number | null {
-  if (Array.isArray(value)) return complexToDb(Number(value[0]), Number(value[1]));
-  return finite(value);
+  // CSV historically accepts coercible scalar values; strict chart/FRD readers do not.
+  return polarValueDb(Array.isArray(value) ? value : finite(value));
 }
 
 /**

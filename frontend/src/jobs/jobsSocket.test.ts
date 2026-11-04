@@ -38,6 +38,58 @@ describe('jobs websocket state machine', () => {
   beforeEach(() => { vi.useFakeTimers(); compareSelection.clear(); provisionalResults.clear(); });
   afterEach(() => { provisionalResults.clear(); vi.useRealTimers(); });
 
+  it.each(['snapshot', 'event', 'partialResult'] as const)('keeps the exact depth boundary at %s ingress', (kind) => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    const nested = (leaf: unknown) => ({
+      value: Array.from({ length: kind === 'event' ? 39 : 38 }).reduce<unknown>((value) => [value], leaf),
+    });
+    const message = (leaf: unknown, cursor: number) => kind === 'snapshot'
+      ? { v: 1, kind, epoch: 4, cursor, jobs: [job({ script_snapshot: nested(leaf) })] }
+      : kind === 'event'
+        ? { v: 1, kind, epoch: 4, cursor, jobId: 'job-1', type: 'metadata', payload: { changed: { script_snapshot: nested(leaf) } } }
+        : { v: 1, kind, epoch: 4, jobId: 'job-1', revision: cursor, result: { frequencies: [100], metadata: nested(leaf) } };
+    try {
+      if (kind === 'event') socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 0, jobs: [job()] });
+      socket.message(message('leaf', 1));
+      expect(manager.getSnapshot().error).toBeNull();
+      if (kind === 'partialResult') expect(provisionalResults.get('job-1')?.revision).toBe(1);
+      else expect(manager.getSnapshot().cursor).toBe(1);
+      socket.message(message({}, 2));
+      expect(manager.getSnapshot().error).toBe(kind === 'event'
+        ? 'Invalid jobs event message; resyncing' : `Invalid jobs ${kind} message`);
+      if (kind === 'partialResult') expect(provisionalResults.get('job-1')?.revision).toBe(1);
+    } finally { manager.stop(); }
+  });
+
+  it.each(['snapshot', 'event', 'partialResult'] as const)('keeps unsafe JSON refusals at %s ingress', (kind) => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    const message = (value: unknown) => kind === 'snapshot'
+      ? { v: 1, kind, epoch: 4, cursor: 1, jobs: [job({ script_snapshot: { value } })] }
+      : kind === 'event'
+        ? { v: 1, kind, epoch: 4, cursor: 1, jobId: 'job-1', type: 'metadata', payload: { changed: { script_snapshot: { value } } } }
+        : { v: 1, kind, epoch: 4, jobId: 'job-1', revision: 1, result: { frequencies: [100], metadata: { value } } };
+    try {
+      if (kind === 'event') socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 0, jobs: [job()] });
+      const unsafe = ['__proto__', 'constructor', 'prototype'].map((key) => Object.fromEntries([[key, 1]]));
+      for (const value of unsafe) {
+        socket.message(message([value]));
+        expect(manager.getSnapshot().error).toBe(kind === 'event'
+          ? 'Invalid jobs event message; resyncing' : `Invalid jobs ${kind} message`);
+      }
+      // JSON.parse accepts an overflowing exponent as Infinity; JSON.stringify would turn Infinity into null.
+      socket.raw(JSON.stringify(message('overflow')).replace('"overflow"', '1e999'));
+      expect(manager.getSnapshot().error).toBe(kind === 'event'
+        ? 'Invalid jobs event message; resyncing' : `Invalid jobs ${kind} message`);
+      expect(provisionalResults.get('job-1')).toBeUndefined();
+    } finally { manager.stop(); }
+  });
+
   it('invalidates cached payloads when retention removes availability', () => {
     const socket = new MockSocket();
     const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');

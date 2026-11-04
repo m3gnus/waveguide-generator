@@ -2,10 +2,33 @@ import { keepRefusalOriginals } from '../api/httpError';
 import { activityStore } from '../shell/activity';
 import { describe, expect, it, vi } from 'vitest';
 import { CompareStore, fetchJobArchiveSnapshot, fetchJobResults, fetchRadiationImpedancePresentation, invalidateJobResults, mergeProvisionalResults, parseFinalResultEnvelope, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults, type ResultData } from '../api/results';
+
 import { COMBINED_VIEW } from '../stores/resultView';
 import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, groupDelayValue, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from './mappers';
 import { combinedChannelId, type ResultPayload } from './types';
 
+describe('HTTP result safe JSON boundary', () => {
+  it('accepts a finite nested leaf at depth 40 and refuses a container there', () => {
+    const nested = (leaf: unknown) => Array.from({ length: 38 }).reduce<unknown>((value) => [value], leaf);
+    const envelope = (leaf: unknown) => ({
+      frequencies: [100], result_kind: 'parametric', result_contract_version: 1,
+      metadata: { value: nested(leaf) },
+    });
+    const accepted = envelope(1);
+    expect(parseFinalResultEnvelope(accepted)).toBe(accepted);
+    expect(() => parseFinalResultEnvelope(envelope({}))).toThrow('invalid final result envelope');
+  });
+
+  it.each([
+    { nested: [null, 'text', true, 1] },
+    { nested: [NaN] }, { nested: [Infinity] }, { nested: [-Infinity] },
+    ...['__proto__', 'constructor', 'prototype'].map((key) => ({ nested: [Object.fromEntries([[key, 1]])] })),
+  ])('retains HTTP acceptance and errors for nested metadata %j', (metadata) => {
+    const envelope = { frequencies: [100], result_kind: 'parametric', result_contract_version: 1, metadata };
+    if (metadata.nested[0] === null) expect(parseFinalResultEnvelope(envelope)).toBe(envelope);
+    else expect(() => parseFinalResultEnvelope(envelope)).toThrow('invalid final result envelope');
+  });
+});
 /** A channel as the server stamps it from the ingest record's source roles. */
 function roled(payload: JobResults, role: string): JobResults {
   return { ...payload, metadata: { ...payload.metadata, role } };

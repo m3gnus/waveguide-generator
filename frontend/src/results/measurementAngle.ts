@@ -43,6 +43,7 @@
  */
 import type { NullableNumber, PolarSample, ResultData } from '../api/results';
 import type { ResultPayload } from './types';
+import { polarValueDb as sampleDb } from './values';
 
 export const POLAR_PLANES = ['horizontal', 'vertical', 'diagonal'] as const;
 export type MeasurementPlane = typeof POLAR_PLANES[number];
@@ -55,14 +56,6 @@ type PhaseRows = Array<Array<[number, NullableNumber]>>;
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
-}
-
-function sampleDb(value: PolarSample[1]): number | null {
-  if (Array.isArray(value)) {
-    const magnitude = Math.hypot(Number(value[0]), Number(value[1]));
-    return Number.isFinite(magnitude) && magnitude > 0 ? 20 * Math.log10(magnitude) : null;
-  }
-  return finite(value) ? value : null;
 }
 
 function rowsFor(result: ResultData, plane: MeasurementPlane): PatternRows | undefined {

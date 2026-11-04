@@ -1,0 +1,48 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`polar value compatibility across charts and exports > retains exact CSV and FRD bytes for mixed legacy samples 1`] = `
+{
+  "csv": "Frequency_Hz,Plane,Theta_deg,SPL_norm_dB
+100,horizontal,30,-6
+101,horizontal,30,0
+102,horizontal,30,0
+103,horizontal,30,13.979400086720377
+104,horizontal,30,
+105,horizontal,30,
+106,horizontal,30,
+107,horizontal,30,
+108,horizontal,30,
+109,horizontal,30,
+110,horizontal,30,
+111,horizontal,30,12
+112,horizontal,30,
+113,horizontal,30,0
+114,horizontal,30,1
+115,horizontal,30,0
+116,horizontal,30,13.979400086720377
+117,horizontal,30,0
+118,horizontal,30,
+",
+  "frd": [
+    {
+      "filename": "hor/compat 30.frd",
+      "text": "* Plane: horizontal, angle 30 deg
+* Phasor convention: solver and FRD pressure use exp(-i omega t)
+* Phase sign: when present, Phase(degrees) = arg(p); engineering NPZ exp(+j omega t) phase has the opposite sign
+* Observation distance: unavailable
+* Observation origin: unavailable
+* Normalization: per-frequency polar level; reference angle unavailable
+* Smoothing: none
+* HornLab polar frequency response — magnitude-only; phase is not available and is intentionally omitted
+* Freq(Hz)	SPL_rel(dB)
+100.000000	-6.0000
+101.000000	0.0000
+102.000000	0.0000
+103.000000	13.9794
+116.000000	13.9794
+117.000000	0.0000
+",
+    },
+  ],
+}
+`;

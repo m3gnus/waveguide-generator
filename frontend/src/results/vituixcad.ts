@@ -1,3 +1,4 @@
+import { fixedDecimal as fixed } from './exportNumbers';
 import { samplingNotes } from './sampling';
 import type { Preferences } from '../prefs/preferences';
 import { familyOrders, isFilterFamily, type FilterFamily } from './crossoverSpec';
@@ -73,16 +74,6 @@ const ENGINEERING_IMPEDANCE_CONVENTIONS = new Set([
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
-}
-
-function fixed(value: number, precision: number): string {
-  const formatted = value.toFixed(precision);
-  if (!/[eE]/.test(formatted)) return formatted;
-  const [coefficient, exponentText] = value.toExponential(precision).split('e');
-  const sign = coefficient.startsWith('-') ? '-' : '';
-  const digits = coefficient.replace('-', '').replace('.', '');
-  const exponent = Number(exponentText);
-  return `${sign}${digits}${'0'.repeat(Math.max(0, exponent - precision))}.${'0'.repeat(precision)}`;
 }
 
 function electricalImpedance(result: ResultPayload): NonNullable<ResultPayload['impedance']> {

@@ -32,13 +32,18 @@ from pydantic import (
 )
 
 
+from server.design.text_syntax import (
+    LINE_BREAK as _LINE_BREAK,
+    has_balanced_braces as _has_balanced_braces,
+    is_complete_legacy_function as _is_complete_legacy_function,
+    line_is_config_block_syntax as _line_is_config_block_syntax,
+)
+
 from server.design.text_import import (
     TextImportVersion, ath_extension_segments, uses_current_ath_import, uses_ath_v3_import,
 )
 
 _NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
-_CONFIG_BLOCK_START = re.compile(r"^[\w.:-]+\s*=\s*\{$")
-_LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 # Validation must work before the optional geometry engine can be loaded.
 # Standard scalar functions remain usable on hosts without native libraries;
 # engine-specific implementations are loaded only when actually evaluated.
@@ -113,48 +118,6 @@ _COMPARE_OPERATORS = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
 
 class _NonConstantExpression(ValueError):
     """The ATH source is not a bounded scalar expression."""
-
-
-def _has_balanced_braces(source: str) -> bool:
-    """Match the deliberately simple brace accounting used by textcfg."""
-
-    depth = 0
-    for character in source:
-        if character == "{":
-            depth += 1
-        elif character == "}":
-            depth -= 1
-            if depth < 0:
-                return False
-    return depth == 0
-
-
-def _is_complete_legacy_function(source: str) -> bool:
-    """Return whether textcfg's multiline function collector consumes all of it."""
-
-    lines = source.splitlines()
-    if (
-        len(lines) < 2
-        or _LINE_BREAK.search(source[-1:]) is not None
-        or not lines[0].strip().startswith("function anonymous(")
-    ):
-        return False
-    depth = 0
-    opened = False
-    for index, line in enumerate(lines):
-        if "{" in line:
-            opened = True
-        depth += line.count("{") - line.count("}")
-        if depth < 0:
-            return False
-        if opened and depth == 0:
-            return index == len(lines) - 1
-    return False
-
-
-def _line_is_config_block_syntax(line: str) -> bool:
-    candidate = line.split(";", 1)[0].strip()
-    return candidate == "}" or _CONFIG_BLOCK_START.fullmatch(candidate) is not None
 
 
 def _expression_candidate(raw: str, dialect: str = "ath") -> str:

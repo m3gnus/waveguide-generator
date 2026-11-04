@@ -1,0 +1,16 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`VituixCAD exports > keeps exact decimal bytes for large signed frequencies, magnitudes and rounding boundaries 1`] = `
+"* HornLab electrical input impedance
+* Phase convention: engineering exp(+jωt), from impedance tag engineering_exp_plus_jwt
+* Freq(Hz)	Magnitude(ohms)	Phase(degrees)
+-12345680000000000000000000.000000	12345680000000000000000000.000000	180.0000
+-1000000000000000000000.000000	1000000000000000000000.000000	180.0000
+-0.000000	0.000000	180.0000
+0.000000	0.000000	180.0000
+1.234568	1.234568	0.0000
+1.234568	1.234568	0.0000
+1000000000000000000000.000000	1000000000000000000000.000000	0.0000
+12345680000000000000000000.000000	12345680000000000000000000.000000	0.0000
+"
+`;

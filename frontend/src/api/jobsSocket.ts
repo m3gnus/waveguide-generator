@@ -1,3 +1,4 @@
+import { isSafeJson } from './safeJson';
 import type { CadMeshSizes } from './cadlink';
 import { deadlineFetch } from './deadlineFetch';
 import type { ExteriorTransducerForm } from '../stores/exteriorTransducer';
@@ -293,7 +294,6 @@ const EVENT_TYPES = new Set<EventType>([
   'queued', 'started', 'progress', 'stage', 'log', 'completed', 'failed',
   'cancelled', 'deleted', 'metadata',
 ]);
-const FORBIDDEN_JSON_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -336,18 +336,6 @@ function isNullableNumber(value: unknown): boolean {
 
 function isNumberArray(value: unknown, nullable = false): value is number[] {
   return Array.isArray(value) && value.every(nullable ? isNullableNumber : isFiniteNumber);
-}
-
-/** Reject non-JSON values and keys that are hazardous when records are merged. */
-function isSafeJson(value: unknown, depth = 0): boolean {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
-  if (isFiniteNumber(value)) return true;
-  if (depth >= 40) return false;
-  if (Array.isArray(value)) return value.every((item) => isSafeJson(item, depth + 1));
-  if (!isRecord(value)) return false;
-  return Object.entries(value).every(([key, item]) => (
-    !FORBIDDEN_JSON_KEYS.has(key) && isSafeJson(item, depth + 1)
-  ));
 }
 
 function isTimestamp(value: unknown): value is string {

@@ -1,4 +1,5 @@
 import { activityOperation } from '../shell/activityOperation';
+import { isSafeJson } from './safeJson';
 import { deadlineFetch } from './deadlineFetch';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import type { components } from './generated/openapi';
@@ -58,17 +59,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
-}
-
-function isSafeJson(value: unknown, depth = 0): boolean {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
-  if (isFiniteNumber(value)) return true;
-  if (depth >= 40) return false;
-  if (Array.isArray(value)) return value.every((item) => isSafeJson(item, depth + 1));
-  if (!isRecord(value)) return false;
-  return Object.entries(value).every(([key, item]) => (
-    key !== '__proto__' && key !== 'constructor' && key !== 'prototype' && isSafeJson(item, depth + 1)
-  ));
 }
 
 function isResultData(value: unknown, depth = 0): value is ResultData {

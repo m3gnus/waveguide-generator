@@ -34,6 +34,14 @@ function dataRows(text: string): string[][] {
 describe('VituixCAD exports', () => {
   beforeEach(() => preferencesStore.resetForTests());
 
+  it('keeps exact decimal bytes for large signed frequencies, magnitudes and rounding boundaries', () => {
+    const values = [1e21, -1e21, 1.23456789e25, -1.23456789e25, 1.2345675, 1.2345685, -0, -0.0000001];
+    expect(buildZma(electricalResult({
+      frequencies: values,
+      impedance: { frequencies: values, real: values, imaginary: values.map(() => 0) },
+    }))).toMatchSnapshot();
+  });
+
   it('writes a sorted three-column ZMA with FRD-style headers and engineering phase', () => {
     const result = electricalResult({
       impedance: {

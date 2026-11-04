@@ -1,4 +1,5 @@
-import type { NullableNumber, PolarSample, ResultData } from '../api/results';
+import { polarValueDb as patternDb } from './values';
+import type { PolarSample, ResultData } from '../api/results';
 import { applySmoothing, type SmoothingMode } from './smoothing';
 import { channelLabel } from './channelLabel';
 import { combineMetadataOf, type ResultPayload } from './types';
@@ -67,16 +68,7 @@ function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-export function complexToDb(real: number, imaginary: number, reference = 1): number | null {
-  const magnitude = Math.hypot(real, imaginary);
-  if (!Number.isFinite(magnitude) || magnitude <= 0 || reference <= 0) return null;
-  return 20 * Math.log10(magnitude / reference);
-}
-
-function patternDb(value: NullableNumber | [number, number]): number | null {
-  if (Array.isArray(value)) return complexToDb(Number(value[0]), Number(value[1]));
-  return finite(value) ? value : null;
-}
+export { complexToDb } from './values';
 
 function frequencyAxis(result: ResultData, nested?: number[]): number[] {
   return nested?.length ? nested : result.frequencies;

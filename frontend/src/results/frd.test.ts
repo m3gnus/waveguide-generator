@@ -58,6 +58,19 @@ function rewVituixCadRows(text: string): string[][] {
 }
 
 describe('FRD builders', () => {
+  it('keeps exact decimal bytes for large levels, rounding boundaries and signed zero', () => {
+    const levels = [1e21, -1e21, 1.23456789e25, -1.23456789e25, 1.23445, 1.23455, -0, -0.00001];
+    const result: ResultPayload = {
+      frequencies: levels.map((_, index) => index + 1),
+      spl_on_axis: { spl: levels, phase_degrees: levels.map(() => 0) },
+      directivity: { horizontal: levels.map((level) => [[0, level]]) },
+    };
+    expect({
+      onAxis: buildOnAxisFrd(result, preferences()),
+      polar: buildPolarFrdSet(result, preferences(), 'decimals'),
+    }).toMatchSnapshot();
+  });
+
   it('accepts a channel scope without combining the flat wrapper', () => {
     const wrapped: ResultPayload = {
       frequencies: [],

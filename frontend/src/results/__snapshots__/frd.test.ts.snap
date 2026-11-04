@@ -1,0 +1,47 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`FRD builders > keeps exact decimal bytes for large levels, rounding boundaries and signed zero 1`] = `
+{
+  "onAxis": "* HornLab on-axis frequency response
+* Phasor convention: solver and FRD pressure use exp(-i omega t)
+* Phase sign: when present, Phase(degrees) = arg(p); engineering NPZ exp(+j omega t) phase has the opposite sign
+* Observation distance: unavailable
+* Observation origin: unavailable
+* Normalization: absolute SPL re 20 µPa; level normalization none
+* Smoothing: none
+* Common time-of-flight not removed: directivity distance and/or speed-of-sound metadata is unavailable; raw phase emitted
+* Freq(Hz)	SPL(dB)	Phase(degrees)
+1.000000	1000000000000000000000.0000	0.0000
+2.000000	-1000000000000000000000.0000	0.0000
+3.000000	12346000000000000000000000.0000	0.0000
+4.000000	-12346000000000000000000000.0000	0.0000
+5.000000	1.2345	0.0000
+6.000000	1.2346	0.0000
+7.000000	0.0000	0.0000
+8.000000	-0.0000	0.0000
+",
+  "polar": [
+    {
+      "filename": "hor/decimals 0.frd",
+      "text": "* Plane: horizontal, angle 0 deg
+* Phasor convention: solver and FRD pressure use exp(-i omega t)
+* Phase sign: when present, Phase(degrees) = arg(p); engineering NPZ exp(+j omega t) phase has the opposite sign
+* Observation distance: unavailable
+* Observation origin: unavailable
+* Normalization: per-frequency polar level; reference angle unavailable
+* Smoothing: none
+* HornLab polar frequency response — magnitude-only; phase is not available and is intentionally omitted
+* Freq(Hz)	SPL_rel(dB)
+1.000000	1000000000000000000000.0000
+2.000000	-1000000000000000000000.0000
+3.000000	12346000000000000000000000.0000
+4.000000	-12346000000000000000000000.0000
+5.000000	1.2345
+6.000000	1.2346
+7.000000	0.0000
+8.000000	-0.0000
+",
+    },
+  ],
+}
+`;

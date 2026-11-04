@@ -27,6 +27,7 @@
  */
 import type { NullableNumber, PolarSample, ResultData } from '../api/results';
 import type { ResultPayload } from './types';
+import { polarValueDb as sampleDb } from './values';
 
 /** The portable default, matching `_portable_defaults` on the server. */
 export const DEFAULT_NORMALIZATION_ANGLE = 5;
@@ -44,15 +45,6 @@ type DirectivityBlock = NonNullable<ResultData['directivity']>;
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
-}
-
-/** dB of one stored sample, which may be a level or a complex pair. */
-function sampleDb(value: PolarSample[1]): number | null {
-  if (Array.isArray(value)) {
-    const magnitude = Math.hypot(Number(value[0]), Number(value[1]));
-    return Number.isFinite(magnitude) && magnitude > 0 ? 20 * Math.log10(magnitude) : null;
-  }
-  return finite(value) ? value : null;
 }
 
 /**

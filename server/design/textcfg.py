@@ -28,6 +28,14 @@ from .text_import import (
     GEOMETRY_STAMP_LABEL, NATIVE_GEOMETRY_VERSION, TEXT_IMPORT_VERSION, TEXT_IMPORT_VERSIONS,
     uses_current_ath_import, uses_ath_v3_import,
 )
+from .text_syntax import (
+    BLOCK_START as _BLOCK_START,
+    LINE_BREAK as _LINE_BREAK,
+    has_balanced_braces as _has_balanced_braces,
+    is_complete_legacy_function as _is_complete_legacy_function,
+    line_is_config_block_syntax as _is_block_syntax,
+    without_comment as _without_comment,
+)
 from .schema import (
     ConfigBlock,
     DesignConfig,
@@ -46,10 +54,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_BLOCK_START = re.compile(r"^([\w.:-]+)\s*=\s*\{$")
 _MWG_SNIFF = re.compile(r";\s*(?:Parameter|MWG) config", re.IGNORECASE)
 _PRIVATE_BLOCK_START = re.compile(r"(?m)^\s*(?:WG\.(?:NativeDesign|Geometry|Solve)|CadLink)\s*=\s*\{")
-_LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 _DESIGN_FORMAT = 2
 # ATH's report block, which carries the design's name in its ``Title``.
 _REPORT_BLOCK = "Report"
@@ -196,50 +202,6 @@ class ParsedDesign:
         """Return the JSON/API meaning used by the corpus round-trip law."""
 
         return self.design.model_dump(mode="json")
-
-
-def _without_comment(line: str) -> str:
-    return line.split(";", 1)[0].strip()
-
-
-def _is_complete_legacy_function(value: str) -> bool:
-    """Return whether ``_collect_function`` would consume the whole value."""
-
-    lines = value.splitlines()
-    if (
-        len(lines) < 2
-        or _LINE_BREAK.search(value[-1:]) is not None
-        or not lines[0].strip().startswith("function anonymous(")
-    ):
-        return False
-    depth = 0
-    opened = False
-    for index, line in enumerate(lines):
-        if "{" in line:
-            opened = True
-        depth += line.count("{") - line.count("}")
-        if depth < 0:
-            return False
-        if opened and depth == 0:
-            return index == len(lines) - 1
-    return False
-
-
-def _has_balanced_braces(value: str) -> bool:
-    depth = 0
-    for character in value:
-        if character == "{":
-            depth += 1
-        elif character == "}":
-            depth -= 1
-            if depth < 0:
-                return False
-    return depth == 0
-
-
-def _is_block_syntax(line: str) -> bool:
-    candidate = _without_comment(line)
-    return candidate == "}" or _BLOCK_START.fullmatch(candidate) is not None
 
 
 def _validate_serialized_key(key: str) -> None:
