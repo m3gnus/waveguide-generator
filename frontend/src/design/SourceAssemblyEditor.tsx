@@ -1,3 +1,4 @@
+import { PhasePlugControls } from './PhasePlugControls';
 import { Notice } from '../shell/Notice';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
@@ -274,16 +275,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       </svg>
       <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (valid ? 'Valid assembly · passive bodies and source roles checked' : 'Validating assembly…')}</div>
       {valid && accepted!.value.passage_contract && <p>{accepted!.value.passage_contract.open_passage_count} open passages · minimum analytical clearance {Math.min(...Object.values(accepted!.value.passage_contract.clearances_mm)).toFixed(3)} mm.</p>}
-      <h3>Phase plug and annular vanes</h3><p>Rigid, full circular bodies with independently tapered radii. All bodies share inlet and outlet planes.</p>
-      <div className="source-editor-toolbar"><button className="btn" type="button" disabled={draft.phase_plugs.length >= 8 || draft.phase_plugs.some((p) => p.inner0_mm === 0)} onClick={() => {
-        const first = draft.phase_plugs[0]; change({ ...draft, phase_plugs: [{ id: `core-${crypto.randomUUID()}`, z0_mm: first?.z0_mm ?? 2, z1_mm: first?.z1_mm ?? 6, inner0_mm: 0, inner1_mm: 0, outer0_mm: first ? first.inner0_mm / 2 : 1, outer1_mm: first ? first.inner1_mm / 2 : 1.4 }, ...draft.phase_plugs] });
-      }}>Add central plug</button><button className="btn" type="button" disabled={draft.phase_plugs.length >= 8} onClick={() => {
-        const last = draft.phase_plugs.at(-1); const inner0 = last ? last.outer0_mm + 1 : 2; const inner1 = last ? last.outer1_mm + 1 : 2.4;
-        change({ ...draft, phase_plugs: [...draft.phase_plugs, { id: `vane-${crypto.randomUUID()}`, z0_mm: last?.z0_mm ?? 2, z1_mm: last?.z1_mm ?? 6, inner0_mm: inner0, outer0_mm: inner0 + .5, inner1_mm: inner1, outer1_mm: inner1 + .5 }] });
-      }}>Add annular vane</button></div>
-      {!!draft.phase_plugs.length && <div className="source-fields">{(['z0_mm','z1_mm'] as const).map((field) => <NumberField key={field} label={field === 'z0_mm' ? 'Plug inlet Z' : 'Plug outlet Z'} value={draft.phase_plugs[0][field]} unit="mm" precision={6} displayPrecision={2} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p) => ({ ...p, [field]: v })) })}/>)}</div>}
-      {draft.phase_plugs.map((plug, i) => <section key={i}>
-        <div className="source-fields">{(['inner0_mm','outer0_mm','inner1_mm','outer1_mm'] as const).map((field) => <NumberField key={field} label={`Body ${i+1} ${field.startsWith('inner') ? 'inner' : 'outer'} ${field.includes('0') ? 'inlet' : 'outlet'} radius`} value={plug[field]} unit="mm" precision={6} displayPrecision={2} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, [field]: v } : p) })}/>)}</div><button className="btn" type="button" onClick={() => change({ ...draft, phase_plugs: draft.phase_plugs.filter((_,j) => j !== i) })}>Remove body {i+1}</button></section>)}
+      <PhasePlugControls plugs={draft.phase_plugs} onChange={phase_plugs => change({ ...draft, phase_plugs })}/>
       {!!draft.phase_plugs.length && <details className="source-identifiers" open={identifiersOpen} onToggle={(e) => setIdentifiersOpen(e.currentTarget.open)}><summary>Identifiers</summary>
         {draft.phase_plugs.map((plug, i) => <label key={i}>Passive body {i+1} ID<input aria-label={`Passive body ${i+1} ID`} value={plug.id} onChange={(e) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, id:e.target.value } : p) })}/></label>)}
       </details>}
