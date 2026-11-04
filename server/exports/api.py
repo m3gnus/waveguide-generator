@@ -13,13 +13,13 @@ from fastapi.responses import JSONResponse, Response
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 from server.cadlink.store import CadLinkStore
 from server.workspace.api import WorkspaceState
+from server.workspace.artifacts import STAGED_EXPORTS
 from server.jobs.operation_progress import request_operation
 from server.jobs.request_cancellation import ClientDisconnected
 
 from server.platform.cad_launch import focus_cad
 from server.cadlink.fusion.fusion_status import ADDIN_OUTDATED_MESSAGE, read_fusion_status
 
-from .artifacts import STAGED_EXPORTS
 from .cad_handoff import UPDATE_TARGET_REQUIRED
 from .core import build_profiles, build_step, build_step_solid, build_stl
 from .wglink_publication import recover_publications

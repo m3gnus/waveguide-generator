@@ -389,14 +389,22 @@ def test_postmesh_verification_failure_returns_immutable_input(monkeypatch):
     import server.mesh.file_import as file_import
     owner = file_import._prepare_transformed_file_mesh
     mesh = full_mesh()
-    def verify(candidate, *args):
+    snapshots = [array.copy() for array in (mesh.points, mesh.triangles, mesh.tags)]
+    verified_sizes = []
+    def verify(candidate, *args, **kwargs):
+        verified_sizes.append(len(candidate.triangles))
         if len(candidate.triangles) < len(mesh.triangles):
             raise ValueError("injected post-cut verification failure")
-        return owner(candidate, *args)
+        return owner(candidate, *args, **kwargs)
     monkeypatch.setattr(file_import, "_prepare_transformed_file_mesh", verify)
     result, transform = prepare(mesh, auto_cut=True)
     np.testing.assert_array_equal(result.triangles, mesh.triangles)
     np.testing.assert_array_equal(result.points, mesh.points)
+    np.testing.assert_array_equal(result.tags, mesh.tags)
+    assert verified_sizes[0] == len(mesh.triangles)
+    assert any(size < len(mesh.triangles) for size in verified_sizes[1:])
+    for actual, saved in zip((mesh.points, mesh.triangles, mesh.tags), snapshots):
+        np.testing.assert_array_equal(actual, saved)
     assert transform["domain_planes"] == transform["cut_planes"] == []
     assert "could not be verified" in transform["symmetry_report"]["note"]
 

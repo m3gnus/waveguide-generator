@@ -1,4 +1,4 @@
-"""Bounded ephemeral ownership of generated export bytes pending publication."""
+"""Bounded ephemeral ownership of export bytes pending workspace publication."""
 
 from collections import OrderedDict
 import secrets

@@ -245,20 +245,23 @@ def test_ath_whitelist_and_scalar_results_share_mesher_implementations():
             Expr.model_validate(raw)
 
 
-def test_authored_segment_counts_remain_in_lip_and_opus_cache_keys():
-    config = design_to_mesher_config(parse(CORE).design)
-    for feature in ('athRoundover', 'athRearShape'):
-        active = {**config, 'mesh': dict(config['mesh'])}
-        for key in ('athRoundover', 'athRearShape'):
-            if key != feature:
-                active['mesh'].pop(key)
-        assert 'angularSegments' in _cache_relevant_config(active)['mesh']
-        assert 'lengthSegments' in _cache_relevant_config(active)['mesh']
-        for key in ('angularSegments', 'lengthSegments'):
-            changed = {**active, 'mesh': {**active['mesh'], key: 64}}
-            assert _cache_relevant_config(active) != _cache_relevant_config(changed)
-    plain = design_to_mesher_config(parse(BASE).design)
-    assert 'angularSegments' not in _cache_relevant_config(plain)['mesh']
+@pytest.mark.parametrize('feature', ['athRoundover', 'athRearShape', 'plain'])
+def test_authored_segment_counts_remain_in_preview_cache_keys(feature):
+    config = design_to_mesher_config(parse(BASE if feature == 'plain' else CORE).design)
+    if feature == 'athRoundover':
+        # Rear offsets belong to the Opus rear; removing its shape must remove
+        # those controls too so the lip-only fixture remains a valid import.
+        for key in ('athRearShape', 'athRearFrontOffset', 'athRearStep'):
+            config['mesh'].pop(key)
+    elif feature == 'athRearShape':
+        config['mesh'].pop('athRoundover')
+    relevant = _cache_relevant_config(config)
+    # Ordinary profiles also use authored sampling for canonical dimensions
+    # and validation, even when their preview surface uses the LOD's density.
+    for key in ('angularSegments', 'lengthSegments'):
+        assert relevant['mesh'][key] == config['mesh'][key]
+        changed = {**config, 'mesh': {**config['mesh'], key: 64}}
+        assert relevant != _cache_relevant_config(changed)
 
 
 def test_core_builds_coarse_preview_through_wg_options_and_recentering():

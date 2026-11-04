@@ -21,7 +21,7 @@ from server.design.textcfg import TextConfigError, parse, serialize
 from server.design_io.api import open_design, save_design
 from server.exports.wglink_service import WgLinkExportRequest, export_wglink_sync
 from server.cadlink.store import CadLinkStore
-from server.exports.core import _build_step_solid_sync, _build_stl_mesh_sync, build_profiles
+from server.exports.core import _build_step_solid_sync, _build_stl_mesh_sync, binary_stl, build_profiles
 from server.mesh.builder import (
     MAX_SOLVER_MESH_ARTIFACT_TRIANGLES, _build_sync, _dense_solver_memory_requirements,
     _enforce_dense_solver_memory_ceiling, _mesh_policy, _solver_mesher_config,
@@ -215,8 +215,19 @@ def test_native_step_and_stl_export_complete_geometry(formula: str) -> None:
     assert "ISO-10303-21" in step.step_text
     assert step.cad_info is not None
     mesh = _build_stl_mesh_sync(design.model_dump(mode="json"))
-    assert mesh["vertices"] and mesh["indices"]
+    vertices = np.asarray(mesh["vertices"])
+    indices = np.asarray(mesh["indices"])
+    tags = np.asarray(mesh["surfaceTags"])
+    assert vertices.ndim == indices.ndim == tags.ndim == 1
+    assert vertices.size > 0 and vertices.size % 3 == 0
+    assert indices.size > 0 and indices.size % 3 == 0
+    assert tags.size == indices.size // 3
+    assert np.isfinite(vertices).all()
+    assert indices.min() >= 0 and indices.max() < vertices.size // 3
     assert set(mesh["surfaceTags"]) == {1, 2}
+    assert binary_stl(vertices, indices, tags) == binary_stl(
+        vertices.tolist(), indices.tolist(), tags.tolist(),
+    )
 
 
 @pytest.mark.parametrize("formula", FAMILIES)

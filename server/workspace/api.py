@@ -226,7 +226,7 @@ def _member_bytes(
     member: ExportMember, remaining: int = MAX_EXPORT_BYTES, *, retain_until: float | None = None,
 ) -> bytes:
     if member.artifact_id is not None:
-        from server.exports.artifacts import STAGED_EXPORTS
+        from server.workspace.artifacts import STAGED_EXPORTS
 
         content = STAGED_EXPORTS.read(member.artifact_id, retain_until=retain_until)
         if len(content) > remaining:
@@ -1493,7 +1493,7 @@ def create_workspace_router(
             except OSError:
                 logger.warning("Could not remember the export folder %s", root)
         if artifact_ids:
-            from server.exports.artifacts import STAGED_EXPORTS
+            from server.workspace.artifacts import STAGED_EXPORTS
 
             for artifact_id in artifact_ids:
                 STAGED_EXPORTS.discard(artifact_id)

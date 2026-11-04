@@ -8,8 +8,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from server.exports import api
-from server.exports import artifacts
-from server.exports.artifacts import StagedArtifactStore
+from server.workspace import artifacts
+from server.workspace.artifacts import StagedArtifactStore
 from server.workspace import api as workspace
 
 
