@@ -319,9 +319,10 @@ export function incompleteDriverBlocker(state: Pick<SimulationData, 'driveChanne
 /** Channel physics has one wire owner for CAD and file inputs. */
 export function simulationDriverGeometry(state: Pick<SimulationData, 'driveChannels' | 'channelDrivers' | 'driveVoltageV' | 'maxDriveVoltageV'>, retained?: Pick<ImportedSetup['geometry'], 'excitation_normalization' | 'drive_voltage_v'>): Pick<ImportedSetup['geometry'], 'drive_channels' | 'drive_voltage_v' | 'max_drive_voltage_v' | 'excitation_normalization'> {
   return {
-      // Missing normalization is part of a legacy setup's replay contract.
-      ...(retained && retained.excitation_normalization === undefined ? {}
-        : { excitation_normalization: retained?.excitation_normalization ?? 'acceleration_legacy' }),
+      // An omitted normalization decodes as the legacy acceleration basis, so CAD and
+      // file setups state it only when a retained setup already did.
+      ...(retained?.excitation_normalization === undefined ? {}
+        : { excitation_normalization: retained.excitation_normalization }),
       drive_channels: state.driveChannels.map((channel) => {
         const driver = submittedDriver(state, channel);
         return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
