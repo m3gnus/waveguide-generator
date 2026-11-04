@@ -819,6 +819,7 @@ def combine_drive_channels(
     member_channels: Mapping[str, list[str]] | None = None,
     member_labels: Mapping[str, str | None] | None = None,
     member_processing: Mapping[str, Mapping[str, Any]] | None = None,
+    retain_member_responses: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
     """Sum member channel results into one synthetic native-shaped result.
 
@@ -1304,6 +1305,14 @@ def combine_drive_channels(
         ),
         "warnings": warnings,
     }
+    if retain_member_responses:
+        # These are the actual branches after network termination and member
+        # processing, before DSP. Independent voltage ports cannot rebuild them.
+        payload["member_responses"] = {
+            name: {"spl": _spl_db(fields[name][:, 0, on_axis], 20.0e-6).tolist(),
+                   "phase_degrees": np.angle(fields[name][:, 0, on_axis], deg=True).tolist()}
+            for name in members
+        }
     if member_channels is not None:
         payload["member_channels"] = {member: list(member_channels.get(member, [member])) for member in members}
         payload["member_labels"] = [(member_labels or {}).get(member) for member in members]

@@ -433,18 +433,20 @@ const UNSUPPORTED_ENGINE_DRIVERS: UnsupportedDriverPolicy | 'requested' = 'reque
  * never a geometry producer. Fixed velocity has already been the assembly
  * adapter's contract; CAD/file requests continue to ask for coupled drivers. */
 export function resolveExteriorDriverPolicy(channels: CadDriveChannel[], options: Pick<AssemblyDriverOptions, 'engine'>,
-  requested: UnsupportedDriverPolicy = 'block', fem = false): {
+  requested: UnsupportedDriverPolicy = 'block', fem = false, wiring = false): {
     coupled: boolean; channels: CadDriveChannel[]; blocker: string | null; notice: string | null;
   } {
   const engine = String(options.engine ?? 'auto');
-  const coupled = (fem ? ['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] : ['auto', 'beat-cpu', 'beat-metal']).includes(engine);
+  const coupled = (fem && !wiring ? ['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] : ['auto', 'beat-cpu', 'beat-metal']).includes(engine);
   const policy = UNSUPPORTED_ENGINE_DRIVERS === 'requested' ? requested : UNSUPPORTED_ENGINE_DRIVERS;
   const unsupported = channels.some(channel => channel.exterior_transducer) && !coupled;
-  const fixed = unsupported && policy === 'fixed_velocity';
+  const fixed = unsupported && policy === 'fixed_velocity' && !wiring;
   return {
     coupled,
     channels: fixed ? channels.map(({ exterior_transducer: _driver, exterior_driver_inputs: _inputs, ...channel }) => channel) : channels,
-    blocker: unsupported && !fixed ? (fem
+    blocker: wiring && !coupled
+      ? 'Wired woofers need BEAT CPU or BEAT Metal; choose Automatic or a coupled engine in Advanced, or remove the wiring.'
+      : unsupported && !fixed ? (fem
       ? 'Choose Auto or BEAT CPU, Metal, CUDA or ROCm for FEM drivers.'
       : 'Choose BEAT CPU or BEAT Metal for coupled exterior drivers.') : null,
     notice: fixed
@@ -500,11 +502,9 @@ export function resolveAssemblySetup(
   sweep: { f1: number; f2: number; num_frequencies: number },
   label?: (id: string) => string,
 ): AssemblySetupResolution {
-  const policy = resolveExteriorDriverPolicy(state.driveChannels, options, 'fixed_velocity');
   const wiring = assembly.wiring_groups ?? [];
-  if (wiring.length && !['beat-cpu', 'beat-metal'].includes(String(options.engine))) {
-    throw new Error('Wired woofers need BEAT CPU or BEAT Metal; choose one in Advanced, or remove the wiring.');
-  }
+  const policy = resolveExteriorDriverPolicy(state.driveChannels, options, 'fixed_velocity', false, wiring.length > 0);
+  if (policy.blocker) throw new Error(policy.blocker);
   if (wiring.length) {
     const active = new Set(state.driveChannels.map(channel => channel.id));
     if (wiring.some(group => wiringDriverIds(group.network).some(id => !active.has(id)))) {

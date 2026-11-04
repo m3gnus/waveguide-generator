@@ -66,7 +66,12 @@ describe('assembly as the shared Simulation input', () => {
     const resolved = resolveAssemblySetup(state, assembly, { engine: 'beat-cpu' } as never, design.simulation);
     expect(resolved.setup.geometry.wiring_groups).toEqual(assembly.wiring_groups);
     expect(applyAssemblySimulation(assembly, data).wiring_groups).toEqual(assembly.wiring_groups);
-    for (const engine of ['auto', 'metal', 'bempp']) {
+    const automatic = resolveAssemblySetup(state, assembly, { engine: 'auto' } as never, design.simulation);
+    expect(automatic.setup.options.engine).toBe('auto');
+    expect(automatic.setup.geometry.drive_channels).toEqual(resolved.setup.geometry.drive_channels);
+    expect(automatic.setup.geometry.wiring_groups).toEqual(assembly.wiring_groups);
+    expect(automatic.notice).toBeNull();
+    for (const engine of ['metal', 'bempp', 'beat-cuda', 'beat-rocm']) {
       expect(() => resolveAssemblySetup(state, assembly, { engine } as never, design.simulation)).toThrow('Wired woofers need BEAT CPU or BEAT Metal');
     }
     expect(() => resolveAssemblySetup({ ...state, driveChannels: state.driveChannels.filter(channel => channel.id !== first) },

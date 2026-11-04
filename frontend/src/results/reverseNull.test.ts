@@ -95,6 +95,27 @@ function wrapperFor(combined: ResultPayload): ResultPayload {
 }
 
 describe('reverseNullTraces', () => {
+  it('uses the network response for two identical series drivers', () => {
+    // At one amplifier volt, equal series drivers each receive half a volt.
+    // Their acoustic sum is one unit, while their independent bases sum to two.
+    const combine = metadata({ member_channels: { 'drive-mf': ['left', 'right'], 'drive-hf': ['drive-hf'] },
+      member_responses: { 'drive-mf': { spl: FREQUENCIES.map(() => 0), phase_degrees: FREQUENCIES.map(() => 0) },
+        'drive-hf': { spl: FREQUENCIES.map(() => 0), phase_degrees: FREQUENCIES.map(() => 0) } } });
+    const combined = combinedChannel(combine);
+    const wrapper = { ...wrapperFor(combined), channels: { left: unitMember(), right: unitMember(),
+      'drive-hf': unitMember(), combined } };
+    const traces = reverseNullTraces(wrapper, combined, combine);
+    expect(traces).toHaveLength(1);
+    traces[0].points.forEach(([frequency, level]) => {
+      const { mf, hf } = weighted(frequency);
+      expect(level).toBeCloseTo(20 * Math.log10(Math.hypot(mf[0] - hf[0], mf[1] - hf[1])), 9);
+    });
+    const { member_responses: _responses, ...independent } = combine;
+    expect(reverseNullTraces(wrapper, combined, independent)).toEqual([]);
+    delete combine.member_responses!['drive-mf'];
+    expect(reverseNullTraces(wrapper, combined, combine)).toEqual([]);
+  });
+
   it('rebuilds a branch from its physical channels', () => {
     const combine = metadata({ member_channels: { 'drive-mf': ['left', 'right'], 'drive-hf': ['drive-hf'] },
       member_labels: ['Mid array', null] });

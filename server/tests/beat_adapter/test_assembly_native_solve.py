@@ -344,14 +344,18 @@ def test_an_all_driver_assembly_keeps_its_bases_and_a_driverless_one_uses_the_pr
 
 @pytest.mark.parametrize("kind", ["series", "parallel"])
 @pytest.mark.parametrize("combine", [True, False])
-def test_wired_solve_and_stored_recombine_share_network_math(solid, record, monkeypatch, kind, combine):
+@pytest.mark.parametrize("features", [[], ["wg-design-assembly-v1"]])
+def test_wired_solve_and_stored_recombine_share_network_math(solid, record, monkeypatch, kind, combine, features):
     from server.tests.beat_adapter.conftest import wire
     from server.solver.driver_network import prepare_network_bases
 
     network_id = "00000000-0000-4000-8000-0000000000c1"
     solve_request = request(w2_driver=True, processing={W1: {}, W2: {}}, combine=combine,
+        required_features=features, excitation_normalization="rms_velocity",
         wiring_groups=[dict(id=network_id, label="LF network", network=dict(kind=kind, children=[
             dict(kind="driver", radiator_id=W1), dict(kind="driver", radiator_id=W2)]))])
+    if not features:
+        record = {key: value for key, value in record.items() if key not in {"producer", "required_features"}}
     original = distinct
 
     def coupled(compiled, frequency):
@@ -373,7 +377,13 @@ def test_wired_solve_and_stored_recombine_share_network_math(solid, record, monk
     spec = request(w2_driver=True, processing={W1: {}, W2: {}}).geometry.combine
     stored = {key: value for key, value in result.items() if not key.startswith("_")}
     replay = recombine_stored_results(stored, result["_channel_bases_npz"], spec, solve_request)
+    responses = replay["channels"]["combined"]["metadata"]["combine"]["member_responses"]
+    for member, ids in solve_request.geometry.crossover_branches(spec.members)[0].items():
+        pressure = sum(prepared.results[name].pressure_complex[:, 0, 0] for name in ids)
+        np.testing.assert_allclose(responses[member]["spl"], 20 * np.log10(abs(pressure) / 20e-6))
+        np.testing.assert_allclose(responses[member]["phase_degrees"], np.angle(pressure, deg=True))
     if combine:
+        assert responses == result["channels"]["combined"]["metadata"]["combine"]["member_responses"]
         assert replay["channels"]["combined"]["metadata"]["combine"]["wiring"] == result["channels"]["combined"]["metadata"]["combine"]["wiring"]
         np.testing.assert_allclose(replay["channels"]["combined"]["spl_on_axis"]["spl"], result["channels"]["combined"]["spl_on_axis"]["spl"])
     assert "max_output" not in replay["channels"]["combined"]["metadata"]["combine"]
@@ -387,11 +397,33 @@ def test_wired_solve_and_stored_recombine_share_network_math(solid, record, monk
         recombine_stored_results(stored, result["_channel_bases_npz"], spec, solve_request)
 
 
-@pytest.mark.parametrize("engine", ["auto", "bempp", "metal"])
-def test_wired_submission_needs_a_coupled_beat_engine(engine):
+@pytest.mark.parametrize("engine", ["auto", "beat-cpu", "beat-metal", "bempp", "metal"])
+@pytest.mark.parametrize("available", [True, False])
+def test_wired_submission_selects_by_coupled_capability(engine, available):
+    import asyncio
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.jobs.runtime import ImportedSolveRefusal
+    from server.jobs.runtime.core import resolve_imported_submission
+    from server.jobs.runtime.engine_policy import EngineUnavailableError
+
     payload = request(w2_driver=True, processing={W1: {}, W2: {}}).model_dump(mode="json")
     payload["geometry"]["wiring_groups"] = [dict(id="00000000-0000-4000-8000-0000000000c1", label="LF", network=dict(
         kind="series", children=[dict(kind="driver", radiator_id=W1), dict(kind="driver", radiator_id=W2)]))]
     payload["options"]["engine"] = engine
-    with pytest.raises(ValidationError, match="Wired woofers need BEAT CPU or BEAT Metal"):
-        SolveRequest.model_validate(payload)
+    payload["geometry"]["required_features"] = []
+    validated = SolveRequest.model_validate(payload)
+    registry = EngineRegistry(
+        detector=lambda: [EngineInfo(name, ready, "ready" if ready else "unavailable", "1",
+            geometry_sources=("imported",), imported_features=features) for name, ready, features in (
+                ("metal", True, ()), ("bempp", True, ()),
+                ("beat-cpu", available, ("exterior-transducers",)),
+                ("beat-metal", available, ("exterior-transducers",)))],
+        factory=lambda _: object(),
+    )
+    if available and engine in {"auto", "beat-cpu", "beat-metal"}:
+        resolved = asyncio.run(resolve_imported_submission(validated, registry, request_refusal=None))
+        assert resolved.engine_name in {"beat-cpu", "beat-metal"}
+        assert resolved.request.geometry.wiring_groups == validated.geometry.wiring_groups
+    else:
+        with pytest.raises((ImportedSolveRefusal, EngineUnavailableError), match="Wired woofers need BEAT CPU or BEAT Metal"):
+            asyncio.run(resolve_imported_submission(validated, registry, request_refusal=None))

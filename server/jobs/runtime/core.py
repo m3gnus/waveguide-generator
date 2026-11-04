@@ -1153,6 +1153,8 @@ async def resolve_imported_submission(
     selection = await select_engine(requested, request.options.accuracy, detected, verdict,
                                     alternative_verdict=alternative, preferred=("beat-cpu",) if fem else ())
     if isinstance(selection, SolveBlocker):
+        if request.geometry.wiring_groups:
+            selection.message += " Wired woofers need BEAT CPU or BEAT Metal; enable a coupled engine, or remove the wiring."
         if fem_reference and requested in {"auto", "beat"} and selection.engine == "beat-cpu":
             selection.message += f" {fem_reference}."
         _raise_engine_blocker(selection, imported=True)

@@ -188,8 +188,8 @@ _IMPORTED_FEATURE_LABELS = {"passive-cardioid": "the passive-cardioid radiation 
 
 def _imported_features_needed(geometry: ImportedGeometrySource, record=None) -> set[str]:
     features = {"passive-cardioid"} if geometry.passive_cardioid_enabled else set()
-    if (any(channel.exterior_transducer is not None for channel in geometry.drive_channels)
-            and not (record and record.get("fem_regions") and not geometry.exterior_only)):
+    if (geometry.wiring_groups or (any(channel.exterior_transducer is not None for channel in geometry.drive_channels)
+            and not (record and record.get("fem_regions") and not geometry.exterior_only))):
         features.add("exterior-transducers")
     if record and record.get("fem_regions") and not geometry.exterior_only:
         features.add("fem-regions")

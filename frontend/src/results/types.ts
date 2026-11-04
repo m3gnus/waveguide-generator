@@ -118,6 +118,8 @@ export interface CombineMetadata {
   reference?: string;
   /** The resolved per-channel form. Absent on payloads solved before it. */
   channels?: Record<string, CombineChannelMetadata>;
+  /** Actual pre-DSP branches after wiring and member processing, on the result frequency grid. */
+  member_responses?: Record<string, { spl: number[]; phase_degrees: number[] }>;
   pairs?: Record<string, CombinePairMetadata>;
   /** Time alignment applied per member, keyed by channel id. */
   delays_ms?: Record<string, number>;

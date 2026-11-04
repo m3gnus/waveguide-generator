@@ -120,6 +120,7 @@ def package_combined_channel(
         member_channels=physical if labels else None,
         member_labels=labels if labels else None,
         member_processing=request.geometry.branch_processing(list(spec.members)) if labels else None,
+        retain_member_responses=network_bases is not None,
     )
     if coupled_exterior:
         combine_payload["driver_basis_limits"] = {member: member_limit_ratings(limit) for member, limit in member_limits.items()}

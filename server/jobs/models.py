@@ -969,8 +969,6 @@ class ImportedGeometrySource(JobModel):
     @model_validator(mode="after")
     def validate_channels_and_sizes(self) -> "ImportedGeometrySource":
         if self.wiring_groups:
-            if not self.design_assembly:
-                raise ValueError("Wiring requires a design assembly; open Sources and baffle to configure it.")
             if self.combine is not None and self.combine.id in {group.id for group in self.wiring_groups}:
                 raise ValueError("The combined result and wiring networks need distinct ids; rename the combined result.")
             validate_wiring_groups(self.wiring_groups, {
@@ -1207,8 +1205,6 @@ class SolveRequest(JobDesignIdentity):
     @model_validator(mode="after")
     def validate_exterior_transducer_mode(self) -> Self:
         geometry = self.geometry
-        if isinstance(geometry, ImportedGeometrySource) and geometry.wiring_groups and self.options.engine not in {"beat-cpu", "beat-metal"}:
-            raise ValueError("Wired woofers need BEAT CPU or BEAT Metal; choose one in Advanced, or remove the wiring.")
         if not isinstance(geometry, ImportedGeometrySource) or not any(c.exterior_transducer for c in geometry.drive_channels):
             return self
         # The ingestion record determines whether a mixed system uses FEM.
