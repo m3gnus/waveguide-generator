@@ -606,10 +606,6 @@ def _common_mesher_config(root: Any, *, profile: dict[str, Any] | None = None) -
         validate_ath_mesher_config(config)
     elif mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
         feature = "Mesh.Roundover / Mesh.RearShape = 3"
-        if scale != 1:
-            raise ValueError(f"Scale with {feature} is unsupported: awaiting ATH probes")
-        if root.source.shape is not None and root.source.shape.constant_value() == 2:
-            raise ValueError(f"Source.Shape = 2 with {feature} is unsupported: awaiting ATH probes")
         if root.enclosure is not None:
             raise ValueError(f"{feature} with Mesh.Enclosure is unsupported")
         if mode not in {"freestanding", "bare"}:

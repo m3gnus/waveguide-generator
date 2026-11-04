@@ -267,7 +267,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Finite, nonnegative distance behind the mouth. Defaults to 40 mm. Must leave at least one body row for the rear loft.",
+      "description": "Finite distance behind the mouth; negative values place the front ahead of it and require no lip. Defaults to 40 mm. Must leave at least one body row for the rear loft.",
       "visible_when": {
         "operator": "all",
         "conditions": [

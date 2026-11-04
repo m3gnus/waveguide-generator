@@ -4,14 +4,16 @@ import type { DesignDocument } from '../stores/design';
 export const isCurrentAthImport = (design: DesignDocument): boolean => usesCurrentAthImport(design.text_import_version);
 export const isAthV3Import = (design: DesignDocument): boolean => design.text_import_version === 'ath-2026-09a-v3';
 
-export function athControlError(path: string | undefined, value: number): string | undefined {
+const NEGATIVE_LIP_OFFSET = 'Turn off the mouth lip or enter a front offset of 0 or more. The measured ATH rear crosses the lip with a negative offset.';
+
+export function athControlError(path: string | undefined, value: number, design?: DesignDocument): string | undefined {
   if (path === 'ath_axial_scale' && (!Number.isFinite(value) || value <= 0)) return 'Enter a finite scale greater than 0.';
   if (path === 'mesh.ath_throat_ext_segments' && (!Number.isInteger(value) || value < 1 || value > 4096)) return 'Enter a whole number from 1 to 4096.';
   if (path === 'mesh.ath_roundover.radius' && (!Number.isFinite(value) || value <= 0)) return 'Enter a radius greater than 0.';
   if (path === 'mesh.ath_roundover.segments' && (!Number.isFinite(value) || value < 1 || !Number.isInteger(value))) return 'Enter a whole number of at least 1.';
   if (path === 'mesh.ath_rear_front_offset') {
     if (!Number.isFinite(value)) return 'Enter a number.';
-    if (value < 0) return 'Enter 0 or more. WG cannot fit a negative front offset.';
+    if (value < 0 && design?.mesh.ath_roundover) return NEGATIVE_LIP_OFFSET;
   }
   if (path === 'mesh.ath_rear_step' && (!Number.isFinite(value) || value <= 0)) return 'Enter a step greater than 0.';
   return undefined;
@@ -58,6 +60,7 @@ export function opusClampNote(design: DesignDocument): string | undefined {
 export function lipUnavailableReason(design: DesignDocument): string | undefined {
   if (design.formula !== 'OSSE') return 'ATH builds the mouth lip on OSSE horns only.';
   if (design.ath_axial_scale != null) return AXIAL_SCALE_CONFLICT;
+  if ((design.mesh.ath_rear_front_offset ?? 40) < 0) return NEGATIVE_LIP_OFFSET;
   if (design.simulation.sim_type === 'infinite-baffle' || design.enclosure.depth > 0) {
     return 'The mouth lip needs a free-standing or bare horn. Change Mounting to Thickened waveguide (freestanding) or Bare shell to use it.';
   }

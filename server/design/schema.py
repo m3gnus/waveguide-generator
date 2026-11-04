@@ -621,7 +621,7 @@ class MeshConfig(StrictModel):
     )
     ath_roundover: AthRoundoverConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     ath_rear_shape: Literal[1, 3] | None = Field(default=None, exclude_if=lambda value: value is None)
-    ath_rear_front_offset: float | None = Field(default=None, ge=0, allow_inf_nan=False, exclude_if=lambda value: value is None)
+    ath_rear_front_offset: float | None = Field(default=None, allow_inf_nan=False, exclude_if=lambda value: value is None)
     ath_throat_ext_segments: int | None = Field(default=None, ge=1, le=4096, exclude_if=lambda value: value is None)
     ath_rear_step: float | None = Field(default=None, gt=0, allow_inf_nan=False, exclude_if=lambda value: value is None)
     angular_segments: Expr | None = None
@@ -1133,6 +1133,10 @@ class DesignCommon(StrictModel):
                 raise ValueError("The ATH mouth lip and Opus rear need a current ATH import. Re-import a copy of the original file to use them.")
         if mesh.ath_rear_shape != 3 and (mesh.ath_rear_front_offset is not None or mesh.ath_rear_step is not None):
             raise ValueError("Mesh.RearShape.FrontOffset/Step require Mesh.RearShape = 3")
+        if mesh.ath_roundover is not None and mesh.ath_rear_front_offset is not None:
+            from hornlab_mesher.ath_import_surfaces import validate_lip_front_offset
+
+            validate_lip_front_offset(mesh.ath_roundover, mesh.ath_rear_front_offset)
         return self
 
     @model_validator(mode="after")

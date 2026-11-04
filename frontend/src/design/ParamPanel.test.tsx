@@ -432,6 +432,25 @@ describe('ParamPanel inventory UX', () => {
     expect(useDesignStore.getState().design.mesh.ath_roundover).toEqual({ radius: 10, segments: 5 });
   });
 
+  it('edits a negative Opus offset without a lip and refuses adding the lip', () => {
+    act(() => useDesignStore.getState().replaceDocument(hydrateDesignDocument({
+      formula: 'OSSE', text_import_version: 'ath-2026-09a-v3', enclosure: null,
+      mesh: { ath_rear_shape: 3, ath_rear_front_offset: 40 },
+    })));
+    const input = host.querySelector<HTMLInputElement>('[data-parameter-id="mesh.ath_rear_front_offset"] input')!;
+    act(() => input.focus());
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '-5');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => input.blur());
+    expect(serializeDesign(useDesignStore.getState().design).mesh).toMatchObject({ ath_rear_front_offset: -5 });
+    expect(input.getAttribute('aria-invalid')).not.toBe('true');
+    const lip = host.querySelector<HTMLSelectElement>('[data-parameter-id="mesh.ath_roundover"] select')!;
+    expect(lip.querySelector<HTMLOptionElement>('option[value="1"]')!.disabled).toBe(true);
+    expect(host.textContent).toContain('enter a front offset of 0 or more');
+  });
+
   it.each(['bare', 'freestanding'] as const)('keeps the absent enclosure through Mounting %s so a lip/Opus import still previews', (mode) => {
     act(() => useDesignStore.getState().replaceDocument(hydrateDesignDocument({
       formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null,
@@ -798,7 +817,7 @@ describe('ParamPanel inventory UX', () => {
     ['mesh.ath_roundover.radius', '-1', 'Enter a radius greater than 0.'],
     ['mesh.ath_roundover.segments', '1.5', 'Enter a whole number of at least 1.'],
     ['mesh.ath_roundover.segments', '0', 'Enter a whole number of at least 1.'],
-    ['mesh.ath_rear_front_offset', '-1', 'WG cannot fit a negative front offset'],
+    ['mesh.ath_rear_front_offset', '-1', 'Turn off the mouth lip or enter a front offset of 0 or more.'],
     ['mesh.ath_rear_step', '0', 'Enter a step greater than 0.'],
   ])('validates %s input %s with the mesher diagnostic', (id, draft, message) => {
     act(() => useDesignStore.getState().replaceDocument(hydrateDesignDocument({

@@ -9970,7 +9970,6 @@
           "ath_rear_front_offset": {
             "anyOf": [
               {
-                "minimum": 0.0,
                 "type": "number"
               },
               {

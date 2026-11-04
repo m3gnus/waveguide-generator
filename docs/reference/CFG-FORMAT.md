@@ -74,13 +74,21 @@ must provide its own length, even when a flat `Length` is present. WG parks its
 nongeometry metadata and already validated no-op controls for this check.
 
 V2 supports `Mesh.Roundover = { Radius; Segments }` (Segments default 5),
-`Mesh.RearShape = 3`, `Mesh.RearShape.FrontOffset` (default 40 mm), and
+`Mesh.RearShape = 3`, `Mesh.RearShape.FrontOffset` (default 40 mm; negative
+values place the front ahead of the mouth and require no lip), and
 `Mesh.RearShape.Step` (default 25 mm). These are import-only controls retained
 through preview, solve, and save. Profile/slice CSV exports keep the lip rows
 and remove rear-body controls for their bore-only geometry. FREEFORM conversion
 removes these controls and reports that change. STEP and CAD Link exports
 refuse these imports by name because their patches have no faithful STEP
 transport yet.
+
+Lip and Opus compositions support global `Scale`, throat extension length/angle,
+top-level `Rot`, `Mesh.VerticalOffset` and `Source.Shape=2`; v3 also supports
+constant positive `Scale.Z`. The mesher owns their measured ATH construction
+order. Lip radius, wall and Opus rear dimensions remain unscaled. Negative
+FrontOffset with a lip and R-OSSE lips remain refused because the measured ATH
+constructions cross or fold back.
 
 The bounded import policy uses a tapered OSSE slot at the throat angle, counted
 inside `Length`, and derives circular morph radius from the largest raw mouth

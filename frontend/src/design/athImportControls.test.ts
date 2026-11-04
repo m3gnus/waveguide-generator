@@ -41,6 +41,7 @@ describe.each(['ath-2026-09a-v2', 'ath-2026-09a-v3'] as const)('ATH import wall 
     expect(athControlError('mesh.ath_roundover.radius', 1e8)).toBeUndefined();
     expect(athControlError('mesh.ath_roundover.segments', 1)).toBeUndefined();
     expect(athControlError('mesh.ath_rear_front_offset', 0)).toBeUndefined();
+    expect(athControlError('mesh.ath_rear_front_offset', -5)).toBeUndefined();
     expect(athControlError('mesh.ath_rear_step', 1e8)).toBeUndefined();
   });
 });
@@ -54,6 +55,10 @@ describe('ATH lip availability and radius/wall rule', () => {
     expect(lipUnavailableReason(load({ simulation: { sim_type: 'infinite-baffle' } }))).toContain('free-standing or bare');
     expect(lipUnavailableReason(load({ enclosure: { depth: 100 } }))).toContain('free-standing or bare');
     expect(lipUnavailableReason(load({ mesh: { length_segments: 2 } }))).toContain('at least 3 length segments');
+    const negative = load({ mesh: { ath_rear_shape: 3, ath_rear_front_offset: -5 } });
+    expect(lipUnavailableReason(negative)).toContain('enter a front offset of 0 or more');
+    expect(athControlError('mesh.ath_rear_front_offset', -5, negative)).toBeUndefined();
+    expect(athControlError('mesh.ath_rear_front_offset', -5, load({ mesh: { ath_roundover: { radius: 10, segments: 5 } } }))).toContain('Turn off the mouth lip');
   });
 
   it('applies Radius > WallThickness only to a lip over a full rear on a free-standing wall', () => {

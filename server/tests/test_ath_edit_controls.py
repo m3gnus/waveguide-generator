@@ -86,7 +86,8 @@ def test_opus_clamps_geometry_without_overwriting_saved_wall(wall, effective):
 @pytest.mark.parametrize('mesh', [
     {'ath_roundover': {'radius': 0}}, {'ath_roundover': {'radius': float('inf')}},
     {'ath_roundover': {'radius': 10, 'segments': 0}}, {'ath_roundover': {'radius': 10, 'segments': 1.5}},
-    {'ath_rear_shape': 3, 'ath_rear_front_offset': -1}, {'ath_rear_shape': 3, 'ath_rear_front_offset': float('inf')},
+    {'ath_rear_shape': 3, 'ath_rear_front_offset': float('inf')},
+    {'ath_rear_shape': 3, 'ath_rear_front_offset': -1, 'ath_roundover': {'radius': 10}},
     {'ath_rear_shape': 3, 'ath_rear_step': 0}, {'ath_rear_shape': 3, 'ath_rear_step': float('inf')},
     {'ath_rear_shape': 1, 'ath_rear_step': 25}, {'ath_rear_shape': 1, 'ath_rear_front_offset': 40},
 ])
@@ -112,3 +113,62 @@ def test_small_preview_edited_lip_radius_changes_mouth_and_keeps_body():
     assert first.positions.shape == second.positions.shape
     assert not np.array_equal(first.positions, second.positions)
     assert np.max(second.positions[:, 0]) > np.max(first.positions[:, 0])
+
+
+def test_negative_opus_offset_survives_save_export_reimport_and_preview():
+    from hornlab_mesher.config_builder import resolve_geometry
+
+    design = parse(SMALL + 'Mesh.RearShape=3\nMesh.RearShape.FrontOffset=-50\nMesh.WallThickness=100\n').design
+    restored = DesignConfig.model_validate_json(design.model_dump_json())
+    text = serialize(restored)
+    assert 'Mesh.RearShape.FrontOffset = -50' in text
+    before = resolve_geometry(design_to_mesher_config(design)).geometry
+    for variant in (restored, parse(text).design):
+        cfg = design_to_mesher_config(variant)
+        assert cfg['mesh']['athRearFrontOffset'] == -50
+        geometry = resolve_geometry(cfg).geometry
+        np.testing.assert_array_equal(geometry.inner_points, before.inner_points)
+        np.testing.assert_array_equal(geometry.ath_rear_points, before.ath_rear_points)
+        np.testing.assert_array_equal(geometry.ath_rear_apex, before.ath_rear_apex)
+    preview = build_preview_geometry(cfg, preview_options('coarse'))
+    assert {'horn.inner', 'horn.outer', 'mouth_rim', 'wall.rear_cap'} <= {s.role for s in preview.surfaces}
+    assert all(np.isfinite(s.positions).all() for s in preview.surfaces)
+
+
+@pytest.mark.parametrize('stamp', ['ath-2026-09a-v2', 'ath-2026-09a-v3'])
+@pytest.mark.parametrize('controls', [
+    'Mesh.Roundover = {\nRadius=10\nSegments=5\n}\n',
+    'Mesh.RearShape=3\nMesh.RearShape.FrontOffset=10\n',
+    'Mesh.Roundover = {\nRadius=10\nSegments=5\n}\nMesh.RearShape=3\nMesh.RearShape.FrontOffset=10\n',
+])
+@pytest.mark.parametrize('composition', [
+    'Scale=.7\n', 'Throat.Ext.Length=8\n', 'Throat.Ext.Length=8\nThroat.Ext.Angle=12\n',
+    'Rot=5\n', 'Mesh.VerticalOffset=17\n', 'Source.Shape=2\n',
+])
+def test_measured_surface_compositions_survive_saved_design_and_both_mesh_transports(stamp, controls, composition):
+    from hornlab_mesher.config_builder import resolve_geometry
+    from hornlab_mesher.config_parser import parse_text_config
+    from server.mesh.builder import _solver_mesher_config
+
+    text = f'; Waveguide Generator geometry-interpretation: {stamp}\n' + SMALL + controls + composition
+    design = parse(text).design
+    original = resolve_geometry(parse_text_config(text)).geometry
+    saved = DesignConfig.model_validate_json(design.model_dump_json())
+    for copy in (design, saved, parse(serialize(saved)).design):
+        for cfg in (design_to_mesher_config(copy), _solver_mesher_config(copy)):
+            actual = resolve_geometry(cfg).geometry
+            np.testing.assert_array_equal(actual.inner_points, original.inner_points)
+            np.testing.assert_array_equal(actual.ath_rear_points, original.ath_rear_points)
+            np.testing.assert_array_equal(actual.ath_rear_apex, original.ath_rear_apex)
+            assert actual.source_shape == original.source_shape
+
+
+def test_axial_scaled_lip_survives_saved_design_and_export():
+    from hornlab_mesher.config_builder import resolve_geometry
+
+    design = parse(SMALL + 'Scale=.7\nScale.Z=1.4\nMesh.Roundover = {\nRadius=10\nSegments=5\n}\n').design
+    before = resolve_geometry(design_to_mesher_config(design)).geometry
+    for copy in (DesignConfig.model_validate_json(design.model_dump_json()), parse(serialize(design)).design):
+        after = resolve_geometry(design_to_mesher_config(copy)).geometry
+        np.testing.assert_array_equal(after.inner_points, before.inner_points)
+        np.testing.assert_array_equal(after.ath_rear_points, before.ath_rear_points)

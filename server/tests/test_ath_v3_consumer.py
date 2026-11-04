@@ -124,7 +124,7 @@ def test_saved_stamps_cannot_silently_acquire_new_geometry(stamp, control):
 
 @pytest.mark.parametrize('text, remedy', [
     ('; Ath version V2025-06\nOSSE = {\nL=80\n}\nMesh.ThroatExtSegments=4\n', 'Change or remove'),
-    ('OSSE = {\nL=80\n}\nABEC.SimType=2\nScale.Z=2\nMesh.Roundover = {\nRadius=10\n}\n', 'Change or remove'),
+    ('; Waveguide Generator geometry-interpretation: ath-2026-09a-v2\nOSSE = {\nL=80\n}\nABEC.SimType=2\nScale.Z=2\nMesh.Roundover = {\nRadius=10\n}\n', 'Change or remove'),
 ])
 def test_unqualified_new_control_combinations_explain_the_fix(text, remedy):
     with pytest.raises(TextConfigError, match=remedy):

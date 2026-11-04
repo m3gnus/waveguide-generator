@@ -362,7 +362,7 @@ function storedValueError(field: ParameterDefinition, design: DesignDocument): s
 function prospectiveValidation(field: ParameterDefinition, design: DesignDocument, value: number): string | undefined {
   if (['icw.kappa_abs_max', 'icw.dkappa_ds_abs_max', 'icw.icw_S'].includes(field.id) && value <= 0) return 'Must be greater than zero.';
   if (field.id === 'icw.theta_max_deg' && value <= 90) return 'Must be greater than 90° and at most 180°.';
-  const athError = athControlError(field.path, value);
+  const athError = athControlError(field.path, value, design);
   if (athError) return athError;
   if (field.id === 'common.ath_axial_scale') return axialScaleUnavailableReason(design);
   if (field.id.startsWith('cross_section.') && value <= 0) return 'Must be greater than zero.';
@@ -557,7 +557,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       disabledReason={disabledReason}
       invalidMessage={error ?? serverError}
       validate={(next) => prospectiveValidation(field, design, next)}
-      formatRangeError={field.id.startsWith('mesh.ath_') || field.path === 'ath_axial_scale' ? (next) => athControlError(field.path, next) : field.path === 's1' || field.path === 's2'
+      formatRangeError={field.id.startsWith('mesh.ath_') || field.path === 'ath_axial_scale' ? (next) => athControlError(field.path, next, design) : field.path === 's1' || field.path === 's2'
         ? (next) => throatStretchError(field.path as 's1' | 's2', next) : undefined}
       onCommit={(next) => commit(next)}
       optional={optional}
