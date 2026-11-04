@@ -398,7 +398,13 @@ def result_findings(results: Mapping[str, Any], *, channel_ids: Sequence[str], d
     return findings
 
 
-async def _solve(data_dir: Path, report: Mapping[str, Any], engines: Sequence[str], timeout_s: float) -> dict[str, Any]:
+async def _solve(data_dir: Path, report: Mapping[str, Any], engines: Sequence[str], timeout_s: float,
+                 *, on_result: Any = None) -> dict[str, Any]:
+    """Run ordinary jobs; optionally inspect a completed job's retained bases.
+
+    ``on_result(runtime, job_id, results, request)`` is awaited before the runtime closes,
+    so measurement harnesses can reuse this driver without another job loop.
+    """
     from server.cadlink.store import CadLinkStore
     from server.engines.registry import EngineRegistry
     from server.jobs.runtime import JobRuntime
@@ -436,15 +442,18 @@ async def _solve(data_dir: Path, report: Mapping[str, Any], engines: Sequence[st
                         job = await runtime.get_job(job_id)
                     outcome["status"] = job["status"]
                     if job["status"] == "complete":
+                        results = await runtime.get_results(job_id)
                         combine = request.geometry.combine
                         polar = request.options.polar_config
                         outcome["findings"] = result_findings(
-                            await runtime.get_results(job_id),
+                            results,
                             channel_ids=[channel.id for channel in request.geometry.drive_channels],
                             driver_ids=summary["transducer_channels"],
                             combined_id=getattr(combine, "id", None) if combine is not None else None,
                             frequencies_hz=request.options.frequencies_hz, polar_axes=polar.enabled_axes,
                             angle_count=polar.angle_range[2])
+                        if on_result is not None:
+                            outcome["measurement"] = await on_result(runtime, job_id, results, request)
                     elif not outcome["findings"]:
                         outcome["findings"] = [f"the job ended {job['status']}: {job.get('error') or ''}".strip()]
                 except Exception as exc:
