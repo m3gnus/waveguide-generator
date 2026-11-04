@@ -93,3 +93,9 @@ of Sources & Mesh, while preserving user-picked sources and linked read-only fac
 WGLink 0.3.4 names affected bodies and their corrective actions in scope
 refusals before Send or Solve. Its shared protocol bytes remain identical
 at this package pin.
+
+The current pin `6df604a` retains the qualified 0.3.4 protocol and scope
+wording while improving detach, unsaved document identity, metadata access,
+request-history locking and dialog cleanup. Handoff claims and cloud open-document
+features remain excluded. The shared protocol bytes and frozen endpoint fixtures
+are unchanged; their source identity follows this exact packaged commit.

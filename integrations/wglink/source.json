@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "2416448b19c6c715f5c93f1266d8ca282ac1a85f",
+  "commit": "6df604a842ccbb10b36c51b2f27340c62e9c8510",
   "license": "AGPL-3.0-or-later",
   "addinVersion": "0.3.4",
-  "note": "Scope refusals name each affected body and its corrective action before Send or Solve. Linked throat defaults and existing authoring checks are retained."
+  "note": "Reliable detach, stable unsaved identity, wrapper-independent metadata, locked two-session request history and dialog cleanup. Shared protocol retains the qualified 0.3.4 contract; handoff claims and open-document features are excluded."
 }
