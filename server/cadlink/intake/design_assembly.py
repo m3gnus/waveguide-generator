@@ -471,6 +471,18 @@ def _publish_record(
     return json.loads(row["record_json"])
 
 
+def require_ready_sketches(design: DesignConfig) -> None:
+    """Refuse draft sketches even when their committed geometry can be reused."""
+    assembly = design.root.assembly
+    if assembly is None:
+        return
+    for name, sketch in [("HF diaphragm", assembly.hf_source),
+                         *((w.label, w.shape) for w in assembly.woofers)]:
+        if sketch.kind == "sketched" and (sketch.status != "valid" or sketch.diaphragm is None
+                                          or (sketch.authoring or {}).get("pending") is True):
+            raise AssemblyRefusal(f"Finish or revert the {name} sketch before solving.")
+
+
 async def compile_design_assembly(
     store: Any, data_dir: Path, design_dump: Mapping[str, Any], *,
     design_uid: str, design_name: str, design_revision: int, build_session: str = "",
@@ -490,11 +502,7 @@ async def compile_design_assembly(
     design = DesignConfig.model_validate(dict(design_dump))
     if design.root.assembly is None:
         raise AssemblyRefusal(AssemblyRefusal.NO_ASSEMBLY)
-    for name, sketch in [("HF diaphragm", design.root.assembly.hf_source),
-                         *((w.label, w.shape) for w in design.root.assembly.woofers)]:
-        if sketch.kind == "sketched" and (sketch.status != "valid" or sketch.diaphragm is None
-                                          or (sketch.authoring or {}).get("pending") is True):
-            raise AssemblyRefusal(f"Finish or revert the {name} sketch before solving.")
+    require_ready_sketches(design)
     model_id = design_model_id(design_uid)
     if not model_id:
         raise AssemblyRefusal("Save the design before solving its assembly.")
@@ -536,4 +544,5 @@ __all__ = [
     "compile_spec_digest",
     "compose_record",
     "geometry_spec",
+    "require_ready_sketches",
 ]

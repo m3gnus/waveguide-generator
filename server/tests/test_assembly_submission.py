@@ -199,6 +199,54 @@ def test_an_assembly_solve_keeps_the_pressed_design_even_when_the_record_was_reu
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("source", ["hf", "woofer", "disabled-woofer"])
+@pytest.mark.parametrize("draft", ["unfinished", "pending"])
+def test_solve_refuses_unfinished_sketch_even_with_matching_prepared_record(compiled_app, source, draft):
+    from hornlab_mesher.source_contour import dome
+    from server.cadlink.intake.design_assembly import compile_spec_digest
+    from server.design.schema import DesignConfig
+    from test_assembly_diaphragms import document, sketched_design
+
+    app, runtime, _store = compiled_app
+    runtime._ensure_scheduler = lambda: None
+
+    async def scenario():
+        try:
+            current = compile_body()
+            current["design"] = sketched_design().model_dump(mode="json")
+            target = current["design"]["assembly"]["woofers"][0]
+            if source == "hf":
+                current["design"]["assembly"]["hf_source"] = {
+                    "kind": "sketched", "diaphragm": document(dome(12.7, 3), "normal")}
+                sketch = current["design"]["assembly"]["hf_source"]
+                name = "HF diaphragm"
+            else:
+                if source == "disabled-woofer":
+                    target["enabled"] = False
+                sketch = target["shape"]
+                name = target["label"]
+            compiled = await call(app, "POST", "/api/models/assembly/compile", current)
+            record = compiled["prepared"]
+            if draft == "unfinished":
+                sketch["status"] = "unfinished"
+            else:
+                sketch["authoring"] = {"version": "wg-source-authoring-v2", "pending": True}
+            # The draft keeps its last valid document and the exact compile digest.
+            assert compile_spec_digest(DesignConfig.model_validate(current["design"])) == record["manifest_sha256"]
+            setup = setup_for(record, engine="beat-cpu", combine=False)
+            for channel, excitation in zip(setup["geometry"]["drive_channels"], record["excitations"]):
+                channel["patch_weights"] = excitation["patch_weights"]
+            refused = await call(app, "POST", f"/api/models/{compiled['model']['model_id']}/solve", {
+                "prepared_id": record["ingest_id"], "client_request_id": "draft-press",
+                "setup": setup, "design": current["design"]}, expected=422)
+            assert refused["error"]["code"] == "design_refused"
+            assert f"Finish or revert the {name} sketch before solving" in refused["error"]["message"]
+            assert runtime.store.list_jobs()[1] == 0
+        finally:
+            await runtime.shutdown()
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("change", ["geometry", "invalid", "no-assembly", "unbuildable"])
 def test_an_assembly_solve_refuses_a_design_that_does_not_describe_its_record(compiled_app, change):
     app, runtime, _store = compiled_app

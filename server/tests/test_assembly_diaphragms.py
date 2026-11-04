@@ -1,6 +1,7 @@
 """Sketched documents compile into the shared assembly record and excitations."""
 import asyncio
 import copy
+import math
 from pathlib import Path
 
 import pytest
@@ -124,3 +125,48 @@ def test_old_mesher_cannot_silently_build_a_classic_source(monkeypatch):
     monkeypatch.setattr(builtins, '__import__', old_mesher)
     with pytest.raises(AssemblyRefusal, match='installed mesher.*Update Waveguide Generator'):
         assembly_mesher_config(config)
+
+
+@pytest.mark.parametrize('weight', [1., 0.])
+def test_prescribed_axial_annulus_uses_compiled_axis_despite_small_net_area(weight):
+    from server.jobs.models import DriveChannel
+    from server.solver.beat_adapter.request import build_imported_request, imported_source_bases
+    from server.solver.beat_transducer_imported import excitation_plan
+    from server.solver.context import SolverContext
+    from server.solver.imported import SourceAxisError, prepare_axial_drive, resolve_source_axes
+    from test_axial_source_axes import _msh
+
+    sectors = 64
+    # A 20 mm tall annular segment with only 0.01 mm radial change.
+    nodes = [(r * math.cos(2 * math.pi * i / sectors), r * math.sin(2 * math.pi * i / sectors), z)
+             for r, z in ((.01, 0.), (.01001, .02)) for i in range(sectors)]
+    triangles = []
+    for i in range(sectors):
+        a, b = i + 1, (i + 1) % sectors + 1
+        triangles.extend([(101, (a, a + sectors, b + sectors)), (101, (a, b + sectors, b))])
+    text = _msh(nodes, triangles)
+    with pytest.raises(SourceAxisError, match='no outward axis'):
+        resolve_source_axes(text, [101])
+    record = {'required_features': ['wg-design-assembly-v1'], 'source_tags': {'hf/annulus': 101},
+              'normalisation': {'assembly_frame_is_solver_frame': True},
+              'excitations': [{'id': 'hf', 'source_ids': ['hf/annulus'], 'motion': 'axial',
+                               'motion_axis': [0., 0., 1.]}]}
+    channels = [DriveChannel(id='hf', source_ids=['hf/annulus'], motion='axial',
+                             patch_weights={'hf/annulus': weight})]
+    axes, _ = prepare_axial_drive(record, text, channels)
+    assert axes[101].axis == (0., 0., 1.)
+    assert axes[101].net_area_ratio == pytest.approx(.0005, rel=.002)
+    # The same source preparation supplies both prescribed BEAT routes.
+    bases, ports = imported_source_bases(record, text, channels)
+    assert bases[0].axis == (0., 0., 1.)
+    assert bases[0].weight == weight
+    assert ports == {'hf': [bases[0].port_id]}
+    compiled = build_imported_request(text, SolverContext(None, (100, 1000), 3), record, channels,
+                                      frequencies_hz=[100.], precision='float64')
+    assert compiled.wire['compiled_system']['components'][0]['parameters']['motion_axis'] == [0., 0., 1.]
+    mixed_bases, order, indices = excitation_plan(record, text, channels)
+    assert mixed_bases == bases and order == [bases[0].port_id] and indices == {'hf': [0]}
+    with pytest.raises(SourceAxisError, match='no faces'):
+        prepare_axial_drive(record, _msh(nodes, []), channels)
+    with pytest.raises(SourceAxisError, match='degenerate'):
+        prepare_axial_drive(record, _msh(nodes, [(101, (1, 1, 2))]), channels)
