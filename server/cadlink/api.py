@@ -852,10 +852,13 @@ async def request_fusion_return(
     )
     from server.cadlink.fusion.fusion_status import last_fusion_heartbeat, observation_policy
     last_report = await asyncio.to_thread(last_fusion_heartbeat, Path(request.app.state.data_dir))
+    if status.get("state") == "closed":
+        raise HTTPException(status_code=409, detail=(
+            "Fusion is closed. Open Fusion, then use Send to WG to bring the current model into WG."))
     if (status.get("observationPolicy") == "command"
             or last_report is not None and observation_policy(last_report) == "command"):
         raise HTTPException(status_code=409, detail=(
-            "Fusion reports changes only after a command. Press Send in Fusion "
+            "Fusion reports changes only after a command. Use Send to WG in Fusion "
             "to bring the current model into WG."))
     session_id = str(status.get("sessionId") or "")
     if not status.get("running") or not session_id:
@@ -2029,7 +2032,8 @@ def _fusion_delivery_summary(row: Mapping[str, Any], data_dir: Path,
                                   "from WG, then restart the add-in in Fusion and send again.")
         else:
             summary["message"] = ("Waiting for Fusion to receive this request. Finish any active "
-                                  "Fusion command; if it keeps waiting, start or restart the add-in in Fusion.")
+                                  "Fusion command or edit, then switch to Solid; if it keeps waiting, "
+                                  "start or restart the add-in in Fusion.")
     return summary
 
 

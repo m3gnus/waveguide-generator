@@ -2326,8 +2326,12 @@ without handoff intent also reports `failed`, with reason `not_published`.
 **Activation.** Pressing **Send to CAD** in WG is the deliberate command. WGLink
 applies it without a second click in Fusion, after startup completes and while
 `ui.activeCommand == "SelectCommand"`. In an active Design,
-`Design.activeEditObject` must also equal its root component: a sketch, feature
-or component edit defers pickup even with no tool running. A non-Design product
+`Design.activeEditObject` must identify a Component, the active workspace must
+be `FusionSolidEnvironment`, and every active toolbar tab must be the ordinary
+`SolidTab`. Component activation is allowed. Sketch, Form, Base Feature and
+unknown edit states defer pickup even with no tool running. `SurfaceTab` also
+occurs during Base Feature edits with a Component edit object, so it does not
+prove an idle Design. A non-Design product
 does not add an edit deferral. Other Fusion commands are never ended for it.
 With automatic coordination off (the unchanged default), the owner uses a
 two-second file-only poll of `.fusion-handoffs`: an empty folder reads no JSON,
@@ -2343,7 +2347,8 @@ last report without this flag (install the updated add-in and restart it) from a
 capable add-in that has not answered (finish the active command or start/restart
 the add-in). Version 0.3.3 reports continue to be read. Return requests remain
 unconsumed with coordination off. WG refuses its return-request route with the
-remedy **Press Send in Fusion**; Fusion-originated Send still uses WG's inbox.
+remedy **Use Send to WG in Fusion**; a closed Fusion first asks the user to open
+it. Fusion-originated Send still uses WG's inbox.
 
 **The add-in** handles each kind in this order:
 
@@ -2428,7 +2433,13 @@ summaries and show completion only after `fusionDelivery: applied`.
 | `lastRequest: running` (`_begin_request`) | left `processing` |
 | `lastRequest: requested` (`_submit_to_wg`) | ignored for Fusion-bound rows |
 
-`recentOutcomes` is a 16-item ring, coalesced by channel and request ID. Every
+`recentOutcomes` is a registration-local 16-item ring, coalesced by channel and
+request ID. Entries carry additive `recordedAt` timestamps and expire after
+30 minutes on the next explicit work or status publication; stop/start clears
+the ring. Shutdown removes the session heartbeat. An on-disk heartbeat remains
+a snapshot until replaced or removed; exact terminal receipts can still settle
+after the live-observation TTL. This is bounded delivery evidence; WG's ledger
+owns durable settled history. Every
 WG handoff records its claim and replaces it with its result and any refusal
 message, then publishes post-mutation status. It changes only on explicit work,
 so a delayed WG read can record the retained terminal result durably. `lastRequest` is one overwritten slot, matched by

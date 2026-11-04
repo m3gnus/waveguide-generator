@@ -16,6 +16,7 @@ import runSource from '../../jobs/RunExportControl.tsx?raw';
 import { activityStore } from '../activity';
 import * as caughtErrors from './caughtErrors';
 import * as replacementCheck from '../../design/replacementCheck';
+import { expectNoJargon } from '../../testing/expectNoJargon';
 
 const controllers: ReturnType<typeof createCadOutboundController>[] = [];
 const connections: ReturnType<typeof createCadConnectionStore>[] = [];
@@ -44,6 +45,28 @@ function exportsFrom(fetcher: typeof fetch) {
 }
 
 describe('outbound commands without a mounted coordinator (row 17)', () => {
+  it('uses Insert wording after a workspace choice changes an Update into an Insert', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/wglink')
+      ? json({ ...exported, cadHandoff: 'published', cadHandoffRequestId: 'workspace-insert' })
+      : json({ selected: true }));
+    const { controller, reader } = setup(status({ cadFolderConfigured: false }), fetcher);
+    reader.mockResolvedValueOnce(status({ cadFolderConfigured: false }))
+      .mockResolvedValueOnce(status({ state: 'not_linked', link: null, selectedInstanceId: null }));
+    await controller.sendWgToFusion();
+    const body = JSON.parse(String(exportsFrom(fetcher)[0][1]?.body));
+    expect(body.expectedFusionDocumentId).toBeNull();
+    expect(body.expectedFusionInstanceId).toBeNull();
+    expect(useCadSendOutcome.getState().outcome?.text).toBe('Waiting for Fusion to open this model.');
+  });
+  it('keeps the unchanged-design refusal short and actionable', async () => {
+    const { controller, fetcher } = setup(status({ state: 'current' }));
+    await expect(controller.sendWgToFusion()).rejects.toThrow(
+      'Fusion is up to date. Edit the design in WG to send an update.');
+    const text = useCadSendOutcome.getState().outcome!.text;
+    expect(text.length).toBeLessThan(70);
+    expectNoJargon(text);
+    expect(exportsFrom(fetcher)).toHaveLength(0);
+  });
   it.each(['sendWgToFusion', 'confirmFusionConflict'] as const)('%s shares every guard and refuses unavailable evidence', async (entry) => {
     const { controller, reader, fetcher } = setup(); reader.mockRejectedValueOnce(new Error('offline'));
     await expect(controller[entry]()).rejects.toThrow('could not check');

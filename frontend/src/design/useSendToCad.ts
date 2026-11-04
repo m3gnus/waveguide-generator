@@ -44,7 +44,7 @@ export function fusionDeliveryWords(facts: FusionDeliveryFacts): FusionDeliveryW
   if (waitingRemedy) return { tone: 'status', text: failureWords(waitingRemedy, 'Restart Fusion to update WGLink, then send the model again.') };
   if (fusion?.processRunning === false) return { tone: 'status', text: 'Fusion is closed. Open Fusion and this model will arrive.' };
   if (!waited) return { tone: 'status', text: `Waiting for Fusion to ${verb} this model.` };
-  if (fusion?.wgRequestPickup) return { tone: 'status', text: 'Fusion has not confirmed this model yet. Finish any open command in Fusion.' };
+  if (fusion?.wgRequestPickup) return { tone: 'status', text: 'Fusion has not confirmed this model yet. Finish any command or edit in Fusion, then switch to Solid.' };
   // Only an add-in that has answered can be judged; silence may be a slow start.
   if (fusion?.processRunning && fusion.addinDeliveryVersion) {
     return { tone: 'status', text: 'WGLink in Fusion cannot take this model. Restart Fusion to update WGLink, then send the model again.' };

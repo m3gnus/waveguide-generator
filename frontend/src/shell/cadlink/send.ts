@@ -92,7 +92,7 @@ export async function runGuardedFusionSend({
     // one, the create-over-a-link defect -- so it is refused with the reason.
     if (action === null) {
       throw refuse(view.state === 'current'
-        ? 'Fusion already holds this design as it is in WG, so there is nothing to send.'
+        ? 'Fusion is up to date. Edit the design in WG to send an update.'
         : `WG did not send this design: ${view.headline}. ${view.detail}`);
     }
     if (action === 'update' && current.fusionChangesAvailable && !confirmed) {

@@ -953,6 +953,21 @@ def _real_package(base: Path, root: Path, pin: str) -> Path:
     return archive
 
 
+def test_installer_persists_the_selected_data_folder_for_fusion_before_wg_start(short_tmp_path: Path) -> None:
+    installer = _load(REAL_ROOT / 'scripts' / 'install_wglink.py', 'wglink_installer_routing')
+    root = short_tmp_path / 'wg'
+    data = short_tmp_path / 'development-data'
+    archive = _real_package(short_tmp_path / 'package', root, PIN_A)
+    status, target = installer.install(
+        root=root, data_dir=data, addins_dir=short_tmp_path / 'AddIns',
+        archive_path=archive, python=Path(sys.executable),
+    )
+    assert status == 'installed'
+    runtime = json.loads((target / installer.RUNTIME_FILE).read_text())
+    assert runtime['schema'] == 1
+    assert runtime['dataDir'] == str(data.resolve())
+
+
 def test_a_replacement_keeps_the_managed_copy_it_displaced(short_tmp_path: Path) -> None:
     installer = _load(REAL_ROOT / "scripts" / "install_wglink.py", "wglink_installer_activation")
     root = short_tmp_path / "wg"

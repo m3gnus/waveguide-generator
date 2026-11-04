@@ -953,7 +953,8 @@ def _install_unlocked(
         shutil.copytree(source_addin, staging)
         (staging / RUNTIME_FILE).write_text(
             json.dumps(
-                {"schema": 1, "root": str(runtime_root), "python": str(python)},
+                {"schema": 1, "root": str(runtime_root), "python": str(python),
+                 "dataDir": str(data_paths(data_dir).root.resolve())},
                 indent=2,
                 sort_keys=True,
             )

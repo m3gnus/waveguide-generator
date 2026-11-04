@@ -53,6 +53,7 @@ def test_operation_endpoint_reports_waiting_claimed_and_correlated_result(monkey
     result = _operation(state)
     assert result['fusionDelivery'] == 'waiting' and result['state'] == 'received'
     assert 'Finish any active' in result['message']
+    assert 'switch to Solid' in result['message']
     # A missing file has still not proved pickup.
     assert store.get_operation('update-1')['attempt_generation'] == 0
     _report(tmp_path, outcome='claimed')
@@ -198,13 +199,47 @@ def test_version_033_fresh_last_request_still_settles(monkeypatch, tmp_path):
 def test_return_route_refuses_command_observation_with_send_remedy(monkeypatch, tmp_path, age):
     _, state, _ = _state(tmp_path, monkeypatch)
     _report(tmp_path, age=age)
+    monkeypatch.setattr(api, 'fusion_process_running', lambda: True)
+    monkeypatch.setattr(api, 'publish_return_request', lambda *_, **__: pytest.fail('must not publish'))
+    payload = api.FusionReturnRequest(designId='wgd_1', documentId='fusion:doc-1',
+                                      instanceId='instance-1', expectedReturnStateHash='sha256:x')
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(api.request_fusion_return(payload, SimpleNamespace(app=SimpleNamespace(state=state))))
+    assert raised.value.status_code == 409 and 'Use Send to WG in Fusion' in raised.value.detail
+
+
+@pytest.mark.parametrize('report', ['absent', 'continuous', 'command'])
+def test_closed_fusion_return_route_names_the_current_remedy(monkeypatch, tmp_path, report):
+    _, state, _ = _state(tmp_path, monkeypatch)
+    if report != 'absent':
+        payload = _report(tmp_path, age=60)
+        if report == 'continuous':
+            payload['diagnostics']['activation']['automaticCoordination'] = True
+            (_ipc(tmp_path) / '.fusion-status.json').write_text(json.dumps(payload))
     monkeypatch.setattr(api, 'fusion_process_running', lambda: False)
     monkeypatch.setattr(api, 'publish_return_request', lambda *_, **__: pytest.fail('must not publish'))
     payload = api.FusionReturnRequest(designId='wgd_1', documentId='fusion:doc-1',
                                       instanceId='instance-1', expectedReturnStateHash='sha256:x')
     with pytest.raises(HTTPException) as raised:
         asyncio.run(api.request_fusion_return(payload, SimpleNamespace(app=SimpleNamespace(state=state))))
-    assert raised.value.status_code == 409 and 'Press Send in Fusion' in raised.value.detail
+    assert raised.value.status_code == 409
+    assert raised.value.detail == 'Fusion is closed. Open Fusion, then use Send to WG to bring the current model into WG.'
+
+
+def test_startup_history_publication_is_read_only_and_does_not_repeat(monkeypatch, tmp_path):
+    store, state, events = _state(tmp_path, monkeypatch)
+    _report(tmp_path, outcome='applied')
+    assert settle_reported_outcomes(store, tmp_path) == 1
+    before = store.get_operation('update-1')
+    assert before['state'] == 'accepted'
+    # This is the existing delivery pass, against a fresh process state.
+    assert not hasattr(state, 'cad_fusion_cursors')
+    for _ in range(3):
+        assert asyncio.run(api._publish_request_status(state, None)) is None
+    assert store.get_operation('update-1') == before
+    assert len(events) == 1
+    assert events[0]['operation']['fusionDelivery'] == 'applied'
+    assert state.cad_fusion_reported == {}
 
 
 def test_disabled_solve_intake_keeps_observing_outbound_results(monkeypatch, tmp_path):
