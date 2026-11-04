@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  compareFreeformProfiles, FreeformRequestError, insertFreeformAnchor, queryFreeformCurves, StaleFreeformResponse,
-  type CompareResponse, type CurveAnchor, type CurvesResponse, type InsertMode,
+  compareFreeformProfiles, convertToCustomProfile, FreeformRequestError, insertFreeformAnchor, queryFreeformCurves, StaleFreeformResponse,
+  type CompareResponse, type ConversionReport, type ConversionVerdict, type CurveAnchor, type CurvesResponse, type InsertMode,
 } from '../api/freeformProfile';
 import { inspectProfileSamples } from '../api/designIo';
 import { compareProfileSamples, type GeneratedProfileChange } from '../api/profileSamples';
@@ -10,6 +10,7 @@ import {
   type CrossSectionStation, type DesignDocument, type ExprNumber, type FreeformPoint, type FreeformProfile,
 } from '../stores/design';
 import { failureWords } from '../api/httpError';
+import { activityOperation } from '../shell/activityOperation';
 
 /**
  * The one owner of Custom profile (FREEFORM) edits.
@@ -75,6 +76,7 @@ export interface ProfileEditResult {
   after: DesignDocument;
   /** What the user should know before accepting: pins kept or released, rewritten values. */
   notes: string[];
+  conversion?: { report: ConversionReport; verdict: ConversionVerdict };
 }
 
 export const isSharedProfile = (design: DesignDocument) => design.shared_profile === true;
@@ -745,9 +747,12 @@ export function commitProfileEdit(origin: EditOrigin, before: DesignDocument, af
   if (JSON.stringify(serializeDesign(store.design)) !== JSON.stringify(serializeDesign(before))) {
     throw new ProfileEditRefusal('The design changed before this edit was accepted. Review it and try again.');
   }
-  const updates = Object.fromEntries(COMMITTED_FIELDS
-    .filter((field) => JSON.stringify(before[field]) !== JSON.stringify(after[field]))
-    .map((field) => [field, structuredClone(after[field])]));
+  // Conversion replaces the family and its complete authored payload in the
+  // same embedded step. Other edits keep their established field boundary.
+  const fields = before.formula !== after.formula ? [...new Set([...Object.keys(before), ...Object.keys(after)])] : COMMITTED_FIELDS;
+  const updates = Object.fromEntries(fields
+    .filter((field) => JSON.stringify(before[field as keyof DesignDocument]) !== JSON.stringify(after[field as keyof DesignDocument]))
+    .map((field) => [field, structuredClone(after[field as keyof DesignDocument])]));
   if (!Object.keys(updates).length) return;
   store.commitEmbedded(updates, 'step');
   const committed = useDesignStore.getState().design;
@@ -771,6 +776,7 @@ export interface ProfileEditPreview {
   validation: Pending<CurvesResponse>;
   curve: Pending<CompareResponse>;
   generated: Pending<GeneratedProfileChange>;
+  conversion?: { report: ConversionReport; verdict: ConversionVerdict };
 }
 
 export type EditBuilder = (design: DesignDocument, context: { origin: EditOrigin; signal: AbortSignal }) => ProfileEditResult | Promise<ProfileEditResult>;
@@ -828,14 +834,23 @@ export function useProfileEdit({ fetcher = fetch }: ProfileEditFetchers = {}) {
         return;
       }
       if (!live()) return;
-      const { after, notes } = result;
-      update({ status: 'ready', before, after, notes });
+      const { after, notes, conversion } = result;
+      update({ status: 'ready', before, after, notes, conversion });
       const failed = <K extends 'validation' | 'curve' | 'generated'>(key: K) => (reason: unknown) => {
         if (reason instanceof StaleFreeformResponse || abort.signal.aborted) return;
         update({ [key]: { status: 'error', message: reason instanceof FreeformRequestError ? reason.message : messageOf(reason) } } as Partial<ProfileEditPreview>);
       };
-      queryFreeformCurves(after, profileRequestKey(origin, after), abort.signal, fetcher)
+      const validate = (scoped: typeof fetch) => queryFreeformCurves(after, profileRequestKey(origin, after), abort.signal, scoped);
+      (conversion ? activityOperation({ kind: 'export', label: 'Checking the converted Custom profile' }, fetcher, async (scoped, activity) => {
+        activity.progress(0, 1);
+        const value = await validate(scoped);
+        activity.progress(1, 1);
+        return value;
+      }) : validate(fetcher))
         .then((value) => update({ validation: { status: 'ready', value } }), failed('validation'));
+      // The source may be any family. Its server-generated whole-horn report
+      // is the comparison; the FREEFORM-only curve endpoint cannot compare it.
+      if (conversion) return;
       compareFreeformProfiles(before, after, profileRequestKey(origin, before, after), abort.signal, fetcher)
         .then((value) => update({ curve: { status: 'ready', value } }), failed('curve'));
       Promise.all([
@@ -866,7 +881,25 @@ export function useProfileEdit({ fetcher = fetch }: ProfileEditFetchers = {}) {
 /** Accept needs a valid candidate and both measurements; otherwise the old design stays. */
 export function previewAcceptable(preview: ProfileEditPreview): boolean {
   return preview.status === 'ready' && preview.validation.status === 'ready'
-    && preview.curve.status === 'ready' && preview.generated.status === 'ready' && isCurrentOrigin(preview.origin);
+    && (Boolean(preview.conversion) || (preview.curve.status === 'ready' && preview.generated.status === 'ready')) && isCurrentOrigin(preview.origin);
+}
+
+/** Conversion uses the same preview, cancellation, stale guard and Undo owner as anchor edits. */
+export function convertToCustomProfileBuilder(fetcher: typeof fetch = fetch): EditBuilder {
+  return async (design, { origin, signal }) => {
+    const result = await convertToCustomProfile(design, profileRequestKey(origin, design), fetcher, signal);
+    if (!isCurrentOrigin(origin)) throw new StaleFreeformResponse('Discarded a conversion for an older design.');
+    const report = result.report;
+    const measured = (label: string, d: ConversionReport['wall']) => `${label}: ${d.max_deviation_mm.toFixed(5)} mm at ${d.azimuth_deg}°, z = ${d.z_mm.toFixed(5)} mm (physical mm, Scale applied).`;
+    return { after: result.design, notes: [
+      `Conversion verdict: ${result.verdict}.`, measured('H', report.H), measured('V', report.V),
+      measured('Whole wall maximum', report.wall), measured('Mouth outline', report.mouth),
+      `Axial extent change: ${report.axial_extent_deviation_mm.toFixed(5)} mm.`,
+      `Source-cap angle: ${report.source_cap_angle_before_deg.toFixed(5)}° → ${report.source_cap_angle_after_deg.toFixed(5)}°.`,
+      ...report.features.map(feature => feature.message), report.method.grid, ...report.method.limits,
+    ],
+      conversion: { report: result.report, verdict: result.verdict } };
+  };
 }
 
 interface CurvesState { origin: EditOrigin; attempt: number; curves?: CurvesResponse; error?: string; refused?: boolean }

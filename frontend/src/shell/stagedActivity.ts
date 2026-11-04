@@ -8,6 +8,8 @@ const nextStep: Record<string, string> = {
   locate: 'Verifying returned bytes', verify: 'Returned STEP verified',
   resolve: 'Building geometry', mesh: 'Checking geometry',
   check: 'Writing files', write: 'Files ready', publish: 'Files ready',
+  sample: 'Fitting profiles and sections', fit: 'Comparing the whole horn',
+  compare: 'Preparing the report', ready: 'Preview ready',
 };
 
 /** The same request-owned stage channel for Build, geometry exports and Send.

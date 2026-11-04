@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { designForFamily, mergeDesignForFamily, resetDesignStore, serializeDesign, useDesignStore, type DesignDocument } from '../stores/design';
 import {
-  applyPastedProfile, commitProfileEdit, currentEditOrigin, deleteAnchor, horizontalThroatForVertical, insertAnchorBuilder, moveMouth,
+  applyPastedProfile, commitProfileEdit, convertToCustomProfileBuilder, currentEditOrigin, deleteAnchor, horizontalThroatForVertical, insertAnchorBuilder, moveMouth,
   POSITION_ROUND_TRIP_TOLERANCE, ProfileEditRefusal, separateVerticalBlocker, setAnchorAngle, setAnchorJoin, setAnchorValue,
   setSeparateVertical, stretchLength, useProfileEdit, withInsertedProfile, isUnseparatedVertical, rememberUnseparatedVertical,
 } from './customProfileEdit';
@@ -292,6 +292,65 @@ describe('Custom profile commit and preview', () => {
         throw new Error(`unexpected ${path}`);
       });
     }
+
+    const deviation = { max_deviation_mm: .02, azimuth_deg: 15, z_mm: 30, sample_count: 100 };
+    const conversionReport = { H: deviation, V: deviation, wall: deviation, mouth: deviation, off_axis: [deviation],
+      axial_extent_deviation_mm: 0, source_cap_angle_before_deg: 15.5, source_cap_angle_after_deg: 15.5,
+      features: [{ name: 'Morph', change: 'baked', message: 'The morph is baked into the stations.' }],
+      method: { grid: 'Full-domain generated grid.', limits: ['Sampled estimate.'] } };
+    const conversionReply = (body: Record<string, unknown>) => new Response(JSON.stringify({ content_key: body.content_key,
+      design: serializeDesign(custom()), report: conversionReport, verdict: 'approximate' }));
+
+    it('previews a conversion with its report, cancels untouched and accepts the entire family change in one Undo step', async () => {
+      const original = { ...designForFamily('OSSE'), scale: 2, extra_keys: { Note: 'retain me' } };
+      original._expressions = { scale: { value: 2, raw: '1+1' } };
+      load(original);
+      const before = serializeDesign(useDesignStore.getState().design);
+      const fetcher = routes({ '/convert': conversionReply });
+      act(() => root.render(<Probe fetcher={fetcher} />));
+      await act(async () => edit.propose('Convert', convertToCustomProfileBuilder(fetcher)));
+      await vi.waitFor(() => expect(edit.preview?.validation.status).toBe('ready'));
+      expect(edit.preview?.conversion).toEqual({ report: conversionReport, verdict: 'approximate' });
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
+      expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/compare') || String(url).startsWith('/api/export/profiles'))).toBe(false);
+      act(() => edit.cancel());
+      expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
+      await act(async () => edit.propose('Convert', convertToCustomProfileBuilder(fetcher)));
+      await vi.waitFor(() => expect(edit.preview?.validation.status).toBe('ready'));
+      const after = serializeDesign(edit.preview!.after!);
+      act(() => edit.accept());
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(after);
+      expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+      act(() => useDesignStore.getState().undo());
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
+      act(() => useDesignStore.getState().redo());
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(after);
+    });
+
+    it.each(['cancel', 'edit', 'open'] as const)('discards a conversion response after %s even if the fetch ignores cancellation', async (action) => {
+      load(designForFamily('OSSE'));
+      let finish!: (response: Response) => void;
+      let body!: Record<string, unknown>;
+      const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+        if (init?.method !== 'POST') return new Response('', { status: 404 });
+        body = JSON.parse(String(init.body));
+        return new Promise<Response>(resolve => { finish = resolve; });
+      });
+      act(() => root.render(<Probe fetcher={fetcher} />));
+      act(() => edit.propose('Convert', convertToCustomProfileBuilder(fetcher)));
+      act(() => {
+        if (action === 'cancel') edit.cancel();
+        else if (action === 'edit') useDesignStore.getState().updateValue('L', 160);
+        else load(designForFamily('R-OSSE'));
+      });
+      const current = serializeDesign(useDesignStore.getState().design);
+      const history = useDesignStore.temporal.getState().pastStates.length;
+      await act(async () => finish(conversionReply(body)));
+      expect(edit.preview).toBeNull();
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(current);
+      expect(useDesignStore.temporal.getState().pastStates).toHaveLength(history);
+    });
 
     it('previews, cancels without history and accepts as one Undo step', async () => {
       load(custom());

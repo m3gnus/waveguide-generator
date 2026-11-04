@@ -3421,6 +3421,37 @@
         "title": "ControlThroatAdapter",
         "type": "object"
       },
+      "ConvertResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "content_key": {
+            "title": "Content Key",
+            "type": "string"
+          },
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "report": {
+            "$ref": "#/components/schemas/GeneratedComparison"
+          },
+          "verdict": {
+            "enum": [
+              "match",
+              "approximate"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content_key",
+          "design",
+          "report",
+          "verdict"
+        ],
+        "title": "ConvertResponse",
+        "type": "object"
+      },
       "CornerGrid": {
         "additionalProperties": false,
         "description": "Optional per-ring corner samples used by advanced FREEFORM payloads.",
@@ -5777,6 +5808,35 @@
         "title": "ExteriorTransducerSpec",
         "type": "object"
       },
+      "FeatureChange": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "enum": [
+              "removed",
+              "changed",
+              "baked"
+            ],
+            "title": "Change",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "change",
+          "message"
+        ],
+        "title": "FeatureChange",
+        "type": "object"
+      },
       "FemFieldPresentation": {
         "properties": {
           "channel_id": {
@@ -7023,6 +7083,121 @@
           }
         },
         "title": "GainSpec",
+        "type": "object"
+      },
+      "GeneratedComparison": {
+        "additionalProperties": false,
+        "properties": {
+          "H": {
+            "$ref": "#/components/schemas/WallDeviation"
+          },
+          "V": {
+            "$ref": "#/components/schemas/WallDeviation"
+          },
+          "axial_extent_deviation_mm": {
+            "title": "Axial Extent Deviation Mm",
+            "type": "number"
+          },
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/FeatureChange"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "method": {
+            "$ref": "#/components/schemas/GeneratedComparisonMethod"
+          },
+          "mouth": {
+            "$ref": "#/components/schemas/WallDeviation"
+          },
+          "off_axis": {
+            "items": {
+              "$ref": "#/components/schemas/WallDeviation"
+            },
+            "title": "Off Axis",
+            "type": "array"
+          },
+          "source_cap_angle_after_deg": {
+            "title": "Source Cap Angle After Deg",
+            "type": "number"
+          },
+          "source_cap_angle_before_deg": {
+            "title": "Source Cap Angle Before Deg",
+            "type": "number"
+          },
+          "wall": {
+            "$ref": "#/components/schemas/WallDeviation"
+          }
+        },
+        "required": [
+          "H",
+          "V",
+          "off_axis",
+          "wall",
+          "mouth",
+          "axial_extent_deviation_mm",
+          "source_cap_angle_before_deg",
+          "source_cap_angle_after_deg",
+          "features",
+          "method"
+        ],
+        "title": "GeneratedComparison",
+        "type": "object"
+      },
+      "GeneratedComparisonMethod": {
+        "additionalProperties": false,
+        "properties": {
+          "angular_samples": {
+            "title": "Angular Samples",
+            "type": "integer"
+          },
+          "angular_samples_after": {
+            "title": "Angular Samples After",
+            "type": "integer"
+          },
+          "angular_samples_before": {
+            "title": "Angular Samples Before",
+            "type": "integer"
+          },
+          "axial_segments_after": {
+            "title": "Axial Segments After",
+            "type": "integer"
+          },
+          "axial_segments_before": {
+            "title": "Axial Segments Before",
+            "type": "integer"
+          },
+          "azimuths_deg": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Azimuths Deg",
+            "type": "array"
+          },
+          "grid": {
+            "title": "Grid",
+            "type": "string"
+          },
+          "limits": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limits",
+            "type": "array"
+          }
+        },
+        "required": [
+          "angular_samples",
+          "angular_samples_before",
+          "angular_samples_after",
+          "axial_segments_before",
+          "axial_segments_after",
+          "azimuths_deg",
+          "grid",
+          "limits"
+        ],
+        "title": "GeneratedComparisonMethod",
         "type": "object"
       },
       "GroundPlaneConfig": {
@@ -15627,6 +15802,35 @@
         "title": "WaitRemedy",
         "type": "object"
       },
+      "WallDeviation": {
+        "additionalProperties": false,
+        "properties": {
+          "azimuth_deg": {
+            "title": "Azimuth Deg",
+            "type": "number"
+          },
+          "max_deviation_mm": {
+            "title": "Max Deviation Mm",
+            "type": "number"
+          },
+          "sample_count": {
+            "title": "Sample Count",
+            "type": "integer"
+          },
+          "z_mm": {
+            "title": "Z Mm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "max_deviation_mm",
+          "azimuth_deg",
+          "z_mm",
+          "sample_count"
+        ],
+        "title": "WallDeviation",
+        "type": "object"
+      },
       "WgLinkExportRequest": {
         "additionalProperties": false,
         "properties": {
@@ -17741,6 +17945,47 @@
           }
         },
         "summary": "Compare",
+        "tags": [
+          "freeform"
+        ]
+      }
+    },
+    "/api/design/freeform/convert": {
+      "post": {
+        "operationId": "convert_api_design_freeform_convert_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CurvesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConvertResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeformError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Convert",
         "tags": [
           "freeform"
         ]

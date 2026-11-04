@@ -1273,7 +1273,7 @@ describe('ParamPanel inventory UX', () => {
     expect(launcher!.textContent).toContain('Experimental');
   });
 
-  it('names the family Custom profile, starts it blank and shared, and does not offer the approximate conversion', () => {
+  it('names the family Custom profile, starts it blank and shared, and offers conversion through a preview', async () => {
     const fetcher = vi.fn<typeof fetch>();
     vi.stubGlobal('fetch', fetcher);
     const family = host.querySelector<HTMLSelectElement>('#family')!;
@@ -1283,8 +1283,8 @@ describe('ParamPanel inventory UX', () => {
       family.dispatchEvent(new Event('change', { bubbles: true }));
     });
     const choice = host.querySelector('[aria-label="Start a Custom profile"]')!;
-    expect([...choice.querySelectorAll('button')].map((button) => button.textContent)).toEqual(['Start blank', 'Cancel']);
-    expect(choice.textContent).toContain('Converting the current design is not available yet');
+    expect([...choice.querySelectorAll('button')].map((button) => button.textContent)).toEqual(['Start blank', 'Convert current design', 'Cancel']);
+    expect(choice.textContent).toContain('preview a conversion of the current design with its generated-wall, mouth and source-cap report');
     act(() => [...choice.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Start blank')!.click());
     const design = useDesignStore.getState().design;
     expect(design.formula).toBe('FREEFORM');
@@ -1294,6 +1294,36 @@ describe('ParamPanel inventory UX', () => {
     expect(fetcher.mock.calls.some(([url]) => String(url).startsWith('/api/export/profiles?kind=profiles') && String((fetcher.mock.calls[0][1] as RequestInit | undefined)?.body ?? '').includes('freeform-conversion'))).toBe(false);
     act(() => useDesignStore.getState().undo());
     expect(useDesignStore.getState().design.formula).not.toBe('FREEFORM');
+
+    const before = serializeDesign(useDesignStore.getState().design);
+    const deviation = { max_deviation_mm: .02, azimuth_deg: 15, z_mm: 30, sample_count: 100 };
+    const curves = stubProfileServer();
+    fetcher.mockImplementation(async (url, init) => {
+      if (!String(url).endsWith('/convert')) return curves(url, init);
+      const body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ content_key: body.content_key, design: serializeDesign(design), verdict: 'approximate',
+        report: { H: deviation, V: deviation, wall: deviation, mouth: deviation, off_axis: [deviation],
+          axial_extent_deviation_mm: 0, source_cap_angle_before_deg: 15.5, source_cap_angle_after_deg: 15.5,
+          features: [], method: { grid: 'Full-domain generated grid.', limits: ['Sampled estimate.'] } } }));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    await act(async () => {
+      family.value = 'FREEFORM';
+      family.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Start a Custom profile"] button')]
+      .find((button) => button.textContent === 'Convert current design')!.click());
+    const preview = () => host.querySelector('.profile-edit-preview')!;
+    await vi.waitFor(() => expect(preview()?.textContent).toContain('Preview: Convert to Custom profile'));
+    await vi.waitFor(() => expect(preview().querySelector<HTMLButtonElement>('button')!.disabled).toBe(false));
+    expect(preview().textContent).toContain('Conversion verdict: approximate.');
+    expect([...preview().querySelectorAll<HTMLButtonElement>('button')].map((button) => button.textContent)).toEqual(['Accept', 'Cancel']);
+    expect(preview().querySelector<HTMLButtonElement>('button')!.disabled).toBe(false);
+    expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/convert'))).toBe(true);
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
+    act(() => [...preview().querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Cancel')!.click());
+    expect(host.querySelector('.profile-edit-preview')).toBeNull();
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
   });
 
   it('filters across labels and ATH/v1 keys, including a mode-hidden field', () => {
@@ -2891,9 +2921,16 @@ describe('ParamPanel inventory UX', () => {
     act(() => head().click());
     expect(host.querySelector('[data-parameter-id="mesh.surface_deviation_mm"]')).toBeNull();
     act(() => requestParameterReveal({ id: 'mesh.surface_deviation_mm', tab: 'simulation', query: 'Max surface deviation' }));
-    await vi.waitFor(() => {
-      expect(document.activeElement).toBe(host.querySelector('[data-parameter-id="mesh.surface_deviation_mm"] input'));
-    });
+    await vi.waitFor(() => expect(document.activeElement).toBe(host.querySelector('[data-parameter-id="mesh.surface_deviation_mm"] input')));
+  });
+
+  it('focuses a newly mounted reveal target after commit even when animation frames are held', async () => {
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 1);
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    act(() => host.querySelector<HTMLButtonElement>('[data-section="Surface accuracy"] .section-head')!.click());
+    expect(host.querySelector('[data-parameter-id="mesh.surface_deviation_mm"]')).toBeNull();
+    act(() => requestParameterReveal({ id: 'mesh.surface_deviation_mm', tab: 'simulation', query: 'Max surface deviation' }));
+    await vi.waitFor(() => expect(document.activeElement).toBe(host.querySelector('[data-parameter-id="mesh.surface_deviation_mm"] input')));
   });
 
   it('searches and reveals moved source cap fields and sweep controls under their new sections', async () => {

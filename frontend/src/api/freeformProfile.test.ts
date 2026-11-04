@@ -1,11 +1,34 @@
 import { describe, expect, it, vi } from 'vitest';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { compareFreeformProfiles, FreeformRequestError, insertFreeformAnchor, queryFreeformCurves, StaleFreeformResponse } from './freeformProfile';
+import { compareFreeformProfiles, convertToCustomProfile, FreeformRequestError, insertFreeformAnchor, queryFreeformCurves, StaleFreeformResponse } from './freeformProfile';
 import { compareProfileSamples } from './profileSamples';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
 describe('Custom profile curve client', () => {
+  it('converts only through the keyed server route, hydrates the candidate and counts stages', async () => {
+    const design = designForFamily('OSSE');
+    const converted = serializeDesign(designForFamily('FREEFORM'));
+    const report = { features: [], wall: { max_deviation_mm: .02 } };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({ content_key: 'convert-key', design: converted, report, verdict: 'approximate' }));
+    const result = await convertToCustomProfile(design, 'convert-key', fetcher);
+    expect(result).toMatchObject({ content_key: 'convert-key', design: { formula: 'FREEFORM' }, report, verdict: 'approximate' });
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe('/api/design/freeform/convert');
+    expect(new Headers(init?.headers).get('X-WG-Operation-Id')).toBeTruthy();
+    expect(JSON.parse(String(init?.body))).toEqual({ content_key: 'convert-key', design: serializeDesign(design) });
+  });
+
+  it('does not substitute endpoints for a refusal, failed request or stale conversion', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(json({ content_key: 'k', detail: 'This profile rolls back. Reduce truncation and try again.' }, 422))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(json({ content_key: 'old', design: {} }));
+    await expect(convertToCustomProfile(designForFamily('OSSE'), 'k', fetcher)).rejects.toThrow('Reduce truncation');
+    await expect(convertToCustomProfile(designForFamily('OSSE'), 'k', fetcher)).rejects.toThrow('Failed to fetch');
+    await expect(convertToCustomProfile(designForFamily('OSSE'), 'k', fetcher)).rejects.toBeInstanceOf(StaleFreeformResponse);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(3);
+  });
   it('posts the serialized design with its key and accepts only the matching answer', async () => {
     const design = designForFamily('FREEFORM');
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({ content_key: 'k1', H: {}, V: {}, warnings: [] }));

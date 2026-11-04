@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { activityStore, type ActivityKind } from '../shell/activity';
-import { buildGeometryExport, convertDesignToFreeform, exportGeometryToOutputFolder, exportProfileCsv, sendDesignToCad, serializeDesignDocument } from './designIo';
+import { buildGeometryExport, exportGeometryToOutputFolder, exportProfileCsv, sendDesignToCad, serializeDesignDocument } from './designIo';
+import { convertToCustomProfile } from './freeformProfile';
 import { ingestReturn } from './cadlink';
 import { readImportedModel, readRunWorkspace } from './importedModels';
 import { sendDesignToOnshape, returnOnshapeToWg } from './onshape';
@@ -17,7 +18,7 @@ const operations: Operation[] = [
   { name: 'STL build', kind: 'export', run: f => buildGeometryExport('stl', design, 0, 'horn', undefined, undefined, f) },
   { name: 'STEP output', kind: 'export', run: f => exportGeometryToOutputFolder('step', design, 0, 'horn', undefined, undefined, f) },
   { name: 'profile CSV', kind: 'export', run: f => exportProfileCsv(design, 0, undefined, undefined, f) },
-  { name: 'Freeform conversion', kind: 'export', run: f => convertDesignToFreeform(design, f) },
+  { name: 'Freeform conversion', kind: 'export', run: f => convertToCustomProfile(design, 'activity-key', f) },
   { name: 'Fusion send', kind: 'send-to-cad', run: f => sendDesignToCad(design, 0, 'horn', null, f) },
   { name: 'Onshape send', kind: 'send-to-cad', run: f => sendDesignToOnshape(design, 0, 'horn', null, {}, f) },
   { name: 'Onshape return', kind: 'cad-import', run: f => returnOnshapeToWg('design', f) },
@@ -31,6 +32,7 @@ const operations: Operation[] = [
   { name: 'frame preview mesh', kind: 'cad-import', run: f => loadCadFrameModel('prepared', f) },
 ];
 function answer(path: string): Response {
+  if (path === '/api/design/freeform/convert') return json({ content_key: 'activity-key', design: { formula: 'FREEFORM' }, verdict: 'match', report: {} });
   if (path === '/api/cad-workspace/path') return json({ selected: true });
   if (path === '/api/workspace/write-export') return json({ directory: 'out', files: ['out/horn.step'] });
   if (path === '/api/design/serialize') return json({ text: 'design', suggestedFilename: 'horn.cfg' });

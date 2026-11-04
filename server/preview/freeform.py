@@ -5,9 +5,10 @@ from __future__ import annotations
 from server.preview.errors import user_error_message
 
 from bisect import bisect_left
+import asyncio
 from typing import Any, Literal
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -16,6 +17,8 @@ from pydantic import Field
 
 from server.design.schema import DesignConfig, FreeformConfig, FreeformPoint, StrictModel
 from server.preview.translate import design_to_mesher_config
+from server.preview.freeform_conversion import ConvertResponse, convert_design
+from server.jobs.operation_progress import request_operation
 
 
 class FreeformError(StrictModel):
@@ -254,10 +257,25 @@ def insert(request: InsertRequest) -> InsertResponse:
         raise HTTPException(status_code=422, detail=user_error_message(exc)) from exc
 
 
+async def convert(request: CurvesRequest, http_request: Request, response: Response) -> ConvertResponse:
+    from hornlab_mesher.errors import UserRefusal
+
+    with request_operation(http_request, ('sample', 'fit', 'compare', 'ready')) as operation:
+        try:
+            result = await asyncio.to_thread(convert_design, request.design, request.content_key,
+                                             check=operation.check, progress=operation.progress)
+        except UserRefusal as exc:
+            raise HTTPException(status_code=422, detail=user_error_message(exc)) from exc
+        operation.check()
+        operation.attach(response)
+        return result
+
+
 def mount_freeform(application: FastAPI) -> None:
     router = APIRouter(prefix="/api/design/freeform", tags=["freeform"],
         route_class=_ContentKeyRoute, responses={422: {"model": FreeformError}})
     router.add_api_route("/curves", curves, methods=["POST"], response_model=CurvesResponse)
     router.add_api_route("/insert", insert, methods=["POST"], response_model=InsertResponse)
     router.add_api_route("/compare", compare, methods=["POST"], response_model=CompareResponse)
+    router.add_api_route("/convert", convert, methods=["POST"], response_model=ConvertResponse)
     application.include_router(router)

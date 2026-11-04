@@ -2,6 +2,7 @@ import { refusalText } from './httpError';
 import type { components } from './generated/openapi';
 import { hydrateDesignDocument } from './designIo';
 import { serializeDesign, type DesignDocument } from '../stores/design';
+import { stagedActivity } from '../shell/stagedActivity';
 
 /**
  * Typed client for the Custom profile (FREEFORM) curve service in
@@ -15,6 +16,9 @@ export type CurveAnchor = components['schemas']['CurveAnchor'];
 export type CurveDeviation = components['schemas']['Deviation'];
 export type CompareResponse = components['schemas']['CompareResponse'];
 type InsertWire = components['schemas']['InsertResponse'];
+type ConvertWire = components['schemas']['ConvertResponse'];
+export type ConversionReport = components['schemas']['GeneratedComparison'];
+export type ConversionVerdict = ConvertWire['verdict'];
 type FreeformErrorWire = components['schemas']['FreeformError'];
 export type ProfilePlane = components['schemas']['InsertRequest']['plane'];
 export type InsertMode = NonNullable<components['schemas']['InsertRequest']['mode']>;
@@ -23,6 +27,23 @@ export interface InsertResult {
   content_key: string;
   design: DesignDocument;
   deviation: CurveDeviation;
+}
+
+export interface ConversionResult {
+  content_key: string;
+  design: DesignDocument;
+  report: ConversionReport;
+  verdict: ConversionVerdict;
+}
+
+/** Explicit conversion only: the server fits and compares the complete generated wall. */
+export function convertToCustomProfile(
+  design: DesignDocument, contentKey: string, fetcher: typeof fetch = fetch, signal?: AbortSignal,
+): Promise<ConversionResult> {
+  return stagedActivity({ kind: 'export', label: 'Converting to Custom profile' }, fetcher, signal, async (scoped, signal) => {
+    const result = await post<ConvertWire>('convert', { design: serializeDesign(design) }, contentKey, signal, scoped);
+    return { ...result, design: hydrateDesignDocument(result.design as Record<string, unknown>) };
+  });
 }
 
 /** A request failed; only a keyed validation response proves the draft was refused. */

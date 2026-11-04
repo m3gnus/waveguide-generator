@@ -222,14 +222,27 @@ def _inner_grid(
         raise RuntimeError(
             "hornlab-waveguide-mesher viewport geometry is unavailable; install the pinned server requirements"
         ) from exc
-    geometry = build_viewport_geometry_from_config(
-        _bare_grid_config(
-            design,
-            grid=grid,
-            profile_sampling=profile_sampling,
+    if design.formula in NATIVE_FORMULAS:
+        from hornlab_mesher.config_builder import resolve_geometry
+        from hornlab_mesher.errors import UserRefusal
+
+        # Native constructions bypass the formula-only viewport grid API.
+        # Their own resolved wall is the same owner used by native exports.
+        # Resolve the complete authored construction: stripping its wall can
+        # invalidate a native roundover before its inner wall is sampled.
+        config = design_to_mesher_config(design)
+        config["mesh"].update({"vertical_offset_mm": 0.0, "scale_to_metres": False})
+        native = resolve_geometry(config).geometry
+        points = np.asarray(getattr(native, "inner_points", None), dtype=float)
+        if points.ndim != 3 or points.shape[2] != 3:
+            raise UserRefusal("Convert to Custom profile", "This construction has no complete inner-wall ring grid.",
+                              "Keep its original family, or remove closed-body features before converting.")
+        grid = {"inner_points": points, "grid_n_phi": points.shape[0], "grid_n_length": points.shape[1]-1}
+    else:
+        geometry = build_viewport_geometry_from_config(
+            _bare_grid_config(design, grid=grid, profile_sampling=profile_sampling)
         )
-    )
-    grid = geometry.get("grid") if isinstance(geometry, Mapping) else None
+        grid = geometry.get("grid") if isinstance(geometry, Mapping) else None
     if not isinstance(grid, Mapping):
         raise RuntimeError("HornLab mesher returned no inner point grid")
     n_phi = int(grid.get("grid_n_phi") or 0)

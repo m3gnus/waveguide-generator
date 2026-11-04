@@ -846,6 +846,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/design/freeform/convert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Convert */
+        post: operations["convert_api_design_freeform_convert_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/design/freeform/curves": {
         parameters: {
             query?: never;
@@ -3900,6 +3917,18 @@ export interface components {
              */
             mode: "controls";
         };
+        /** ConvertResponse */
+        ConvertResponse: {
+            /** Content Key */
+            content_key: string;
+            design: components["schemas"]["DesignConfig"];
+            report: components["schemas"]["GeneratedComparison"];
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "match" | "approximate";
+        };
         /**
          * CornerGrid
          * @description Optional per-ring corner samples used by advanced FREEFORM payloads.
@@ -4688,6 +4717,18 @@ export interface components {
             /** Xmax Mm */
             xmax_mm?: number | null;
         };
+        /** FeatureChange */
+        FeatureChange: {
+            /**
+             * Change
+             * @enum {string}
+             */
+            change: "removed" | "changed" | "baked";
+            /** Message */
+            message: string;
+            /** Name */
+            name: string;
+        };
         /** FemFieldPresentation */
         FemFieldPresentation: {
             /** Channel Id */
@@ -5101,6 +5142,43 @@ export interface components {
              * @enum {string}
              */
             mode?: "auto" | "manual" | "max";
+        };
+        /** GeneratedComparison */
+        GeneratedComparison: {
+            H: components["schemas"]["WallDeviation"];
+            V: components["schemas"]["WallDeviation"];
+            /** Axial Extent Deviation Mm */
+            axial_extent_deviation_mm: number;
+            /** Features */
+            features: components["schemas"]["FeatureChange"][];
+            method: components["schemas"]["GeneratedComparisonMethod"];
+            mouth: components["schemas"]["WallDeviation"];
+            /** Off Axis */
+            off_axis: components["schemas"]["WallDeviation"][];
+            /** Source Cap Angle After Deg */
+            source_cap_angle_after_deg: number;
+            /** Source Cap Angle Before Deg */
+            source_cap_angle_before_deg: number;
+            wall: components["schemas"]["WallDeviation"];
+        };
+        /** GeneratedComparisonMethod */
+        GeneratedComparisonMethod: {
+            /** Angular Samples */
+            angular_samples: number;
+            /** Angular Samples After */
+            angular_samples_after: number;
+            /** Angular Samples Before */
+            angular_samples_before: number;
+            /** Axial Segments After */
+            axial_segments_after: number;
+            /** Axial Segments Before */
+            axial_segments_before: number;
+            /** Azimuths Deg */
+            azimuths_deg: number[];
+            /** Grid */
+            grid: string;
+            /** Limits */
+            limits: string[];
         };
         /**
          * GroundPlaneConfig
@@ -7682,6 +7760,17 @@ export interface components {
              */
             kind: "wait";
         };
+        /** WallDeviation */
+        WallDeviation: {
+            /** Azimuth Deg */
+            azimuth_deg: number;
+            /** Max Deviation Mm */
+            max_deviation_mm: number;
+            /** Sample Count */
+            sample_count: number;
+            /** Z Mm */
+            z_mm: number;
+        };
         /** WgLinkExportRequest */
         WgLinkExportRequest: {
             /**
@@ -9189,6 +9278,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CompareResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FreeformError"];
+                };
+            };
+        };
+    };
+    convert_api_design_freeform_convert_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CurvesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConvertResponse"];
                 };
             };
             /** @description Unprocessable Content */

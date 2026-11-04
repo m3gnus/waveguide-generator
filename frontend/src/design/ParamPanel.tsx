@@ -18,7 +18,7 @@ import { outerBodyUpdates } from './outerBodyUpdates';
 import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOptions';
 import { ExteriorMmdSuggestion } from './ExteriorMmdSuggestion';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
-import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { previewSocket } from '../api/previewSocket';
 import type { CadRealizedDimensions, CadRealizedParameter, CadReturnIngestRecord } from '../api/cadlink';
@@ -50,8 +50,8 @@ import { SolveOptionsStoreProvider, useScopedSolveOptions } from '../stores/solv
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, solveOptionsSummary, polarSummary, ToggleRow } from './SolveOptionsSections';
 import { ExperimentalBadge } from './ExperimentalBadge';
-import { rememberUnseparatedVertical } from './customProfileEdit';
-import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableLookupTable, EditableStationTable, FREEFORM_POSITION_NOTE, freeformAngleDisabledReason, freeformAngleOverride } from './FreeformEditors';
+import { convertToCustomProfileBuilder, rememberUnseparatedVertical, useProfileEdit } from './customProfileEdit';
+import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableLookupTable, EditableStationTable, FREEFORM_POSITION_NOTE, freeformAngleDisabledReason, freeformAngleOverride, ProfileEditPreviewPanel } from './FreeformEditors';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
 import { MeshTriangleEstimate } from './MeshTriangleEstimate';
@@ -1188,8 +1188,11 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   const waveguideLinked = useWaveguideDefinitionApplies();
   const setFamily = useDesignStore((state) => state.setFamily);
   const [filterQuery, setQuery] = useState('');
+  const [pendingReveal, setPendingReveal] = useState<RevealRequest | null>(null);
+  const handledReveal = useRef<RevealRequest | null>(null);
   const query = workspaceMode === 'cad' && tab === 'geometry' && !waveguideLinked ? '' : filterQuery;
   const [freeformChoice, setFreeformChoice] = useState(false);
+  const conversionEdit = useProfileEdit();
   const [conversionNotice, setConversionNotice] = useState<string | null>(null);
   const searching = Boolean(query.trim());
   const definitions = useMemo(() => (workspaceMode === 'cad' ? CAD_PARAMETER_SECTION_DEFINITIONS : PARAMETER_SECTION_DEFINITIONS)
@@ -1222,29 +1225,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
       const detail = parameterRevealRequest.claim(tab);
       if (!detail) return;
       setQuery(detail.query);
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        const entries = detail.target === 'control'
-          ? document.querySelectorAll<HTMLElement>(`[data-param-tab="${tab}"] [data-control-reveal-id]`)
-          : document.querySelectorAll<HTMLElement>(`[data-param-tab="${tab}"] [data-parameter-id]`);
-        const revealIds = [detail.id, detail.fallbackId].filter((id): id is string => Boolean(id));
-        const candidates = [...entries];
-        // Prefer the leaf target. Conditional CAD controls (driver fields,
-        // crossover options) name their owning section as a fallback so a
-        // collapsed or currently disabled child still reveals useful context.
-        const entry = detail.target === 'control'
-          ? revealIds.map((id) => candidates.find((element) => element.dataset.controlRevealId === id)).find(Boolean)
-          : candidates.find((element) => element.dataset.parameterId === detail.id);
-        // Native disclosures keep their children mounted, so reveal can open
-        // every owner before scrolling and focusing the actual control.
-        for (let parent = entry?.parentElement; parent; parent = parent.parentElement) {
-          if (workspaceModeStore.getSnapshot().mode === 'cad' && parent instanceof HTMLDetailsElement) parent.open = true;
-        }
-        // jsdom has no scrollIntoView, and losing focus matters more than losing
-        // the scroll, so never let the nicety take the necessity down with it.
-        try { entry?.scrollIntoView({ block: 'center' }); } catch { /* not scrollable here */ }
-        const focusTarget = entry?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])') ?? entry;
-        focusTarget?.focus();
-      }));
+      setPendingReveal(detail);
     };
     // Claim on mount and on every later request; whichever comes second is a
     // no-op, so this panel gets its request regardless of the order.
@@ -1257,6 +1238,35 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
       window.removeEventListener(REVEAL_PARAMETER_EVENT, onEvent);
     };
   }, [tab]);
+
+  // Query and request commit together. Focus the mounted controls rather than
+  // guessing how many animation frames React needs to reveal them.
+  useLayoutEffect(() => {
+    const detail = pendingReveal;
+    if (!detail || detail === handledReveal.current || detail.tab !== tab) return;
+    handledReveal.current = detail;
+    const entries = detail.target === 'control'
+      ? document.querySelectorAll<HTMLElement>(`[data-param-tab="${tab}"] [data-control-reveal-id]`)
+      : document.querySelectorAll<HTMLElement>(`[data-param-tab="${tab}"] [data-parameter-id]`);
+    const revealIds = [detail.id, detail.fallbackId].filter((id): id is string => Boolean(id));
+    const candidates = [...entries];
+    // Prefer the leaf target. Conditional CAD controls (driver fields,
+    // crossover options) name their owning section as a fallback so a
+    // collapsed or currently disabled child still reveals useful context.
+    const entry = detail.target === 'control'
+      ? revealIds.map((id) => candidates.find((element) => element.dataset.controlRevealId === id)).find(Boolean)
+      : candidates.find((element) => element.dataset.parameterId === detail.id);
+    // Native disclosures keep their children mounted, so reveal can open
+    // every owner before scrolling and focusing the actual control.
+    for (let parent = entry?.parentElement; parent; parent = parent.parentElement) {
+      if (workspaceModeStore.getSnapshot().mode === 'cad' && parent instanceof HTMLDetailsElement) parent.open = true;
+    }
+    // jsdom has no scrollIntoView, and losing focus matters more than losing
+    // the scroll, so never let the nicety take the necessity down with it.
+    try { entry?.scrollIntoView({ block: 'center' }); } catch { /* not scrollable here */ }
+    const focusTarget = entry?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])') ?? entry;
+    focusTarget?.focus();
+  }, [pendingReveal, tab]);
 
   const renderField = (field: ParameterDefinition) => <div className="parameter-entry" data-parameter-id={field.id} data-parameter-key={field.legacyKey} tabIndex={field.kind === 'indicator' ? -1 : undefined} key={field.id}>
     <FieldControl field={field} design={design} serverError={previewErrorForParameter(field, currentPreviewFields)} />
@@ -1378,9 +1388,10 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
     {design.formula === 'LOOKUP' && <><ExperimentalBadge /><p className="section-note">A saved LOOKUP table: linear between its z, r samples, with its own morph, mouth, source-cap and sampling rules. It is not converted to a Custom profile.</p></>}
     {conversionNotice && <Notice tone="warning" className="conversion-notice" actions={<button className="btn" onClick={() => setConversionNotice(null)}>Dismiss</button>}>{conversionNotice}</Notice>}
     {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Start a Custom profile">
-      <b>Start a Custom profile</b><span>It starts blank, with one anchor table shaping both planes. Converting the current design is not available yet: an equivalence check of the generated wall, mouth and source cap is still to come.</span>
-      <div><button className="btn" onClick={() => { setFamily('FREEFORM'); rememberUnseparatedVertical(useDesignStore.getState().design); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button className="btn" onClick={() => setFreeformChoice(false)}>Cancel</button></div>
+      <b>Start a Custom profile</b><span>Start blank, or preview a conversion of the current design with its generated-wall, mouth and source-cap report.</span>
+      <div><button className="btn" onClick={() => { setFamily('FREEFORM'); rememberUnseparatedVertical(useDesignStore.getState().design); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button className="btn" onClick={() => { setFreeformChoice(false); conversionEdit.propose('Convert to Custom profile', convertToCustomProfileBuilder()); }}>Convert current design</button><button className="btn" onClick={() => setFreeformChoice(false)}>Cancel</button></div>
     </div>}
+    <ProfileEditPreviewPanel edit={conversionEdit} />
   </Section>;
 
   if (workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file') return <MeshImportPanel tab={tab} embedded={embedded}/>;

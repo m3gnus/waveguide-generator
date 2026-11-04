@@ -258,6 +258,16 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
     </Notice>;
   }
   const after = preview.after!;
+  if (preview.conversion) {
+    return <Notice title={`Preview: ${preview.label}`} className="profile-edit-preview" actions={<>
+      <button type="button" className="btn" disabled={!previewAcceptable(preview)} onClick={edit.accept}>Accept</button>
+      <button type="button" className="btn" onClick={edit.cancel}>Cancel</button>
+    </>}>
+      <ul className="profile-edit-notes">{preview.notes.map(note => <li key={note}>{note}</li>)}</ul>
+      {preview.validation.status === 'pending' && <p>Checking the fitted profile…</p>}
+      {preview.validation.status === 'error' && <p className="field-error" role="alert">Not valid: {preview.validation.message}</p>}
+    </Notice>;
+  }
   const planes = activePlanes(after);
   const { curve, generated } = preview;
   const shared = isSharedProfile(after);
