@@ -3,6 +3,7 @@ import { hydrateDesignDocument } from '../api/designIo';
 import {
   HF_RADIATOR_ID, addWoofer, commitAssembly, deleteWoofer, emptyAssembly, moveToGroup, setDriver,
   setMemberProcessing, setPlacement, setWooferEnabled, updateWoofer, type DesignAssembly,
+  setWiringGroup, removeWiringGroup,
 } from './assembly';
 import { designForFamily, mergeDesignForFamily, resetDesignStore, serializeDesign, useDesignStore } from './design';
 import { designContentKey } from './designContentKey';
@@ -20,6 +21,38 @@ function twoWoofers(): { assembly: DesignAssembly; first: string; second: string
 
 describe('assembly identity', () => {
   beforeEach(() => { counter = 0; resetDesignStore(); });
+
+  it('edits a nested wiring network by id with one Undo per edit and persists it', () => {
+    const { assembly, first, second } = twoWoofers();
+    const target = assembly.signal_groups!.find(group => group.members[0].radiator_id === first)!.id;
+    const joined = moveToGroup(setDriver(setDriver(assembly, first, driver), second, driver), second, target, ids);
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly: joined });
+    const network = { id: ids(), label: 'LF network', network: { kind: 'series' as const, children: [
+      { kind: 'parallel' as const, children: [{ kind: 'driver' as const, radiator_id: first }, { kind: 'driver' as const, radiator_id: second, invert: true }] },
+      { kind: 'L' as const, value: .001 },
+    ] } };
+    commitAssembly(setWiringGroup(joined, network));
+    const wired = useDesignStore.getState().design.assembly!;
+    expect(wired.wiring_groups).toEqual([network]);
+    const reopened = hydrateDesignDocument(JSON.parse(JSON.stringify(serializeDesign(useDesignStore.getState().design))));
+    expect(reopened.assembly!.wiring_groups).toEqual([network]);
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design.assembly).toEqual(joined);
+    useDesignStore.getState().redo();
+    expect(useDesignStore.getState().design.assembly).toEqual(wired);
+    commitAssembly(setWiringGroup(wired, { ...network, label: 'New label' }));
+    expect(useDesignStore.getState().design.assembly!.wiring_groups).toHaveLength(1);
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design.assembly).toEqual(wired);
+    expect(() => setMemberProcessing(wired, first, { delay_ms: 1 })).toThrow(/Wired woofers/);
+    expect(() => setDriver(wired, first, null)).toThrow(/Remove its wiring/);
+    expect(() => moveToGroup(wired, first, null, ids)).toThrow(/same signal group/);
+    expect(deleteWoofer(wired, first).wiring_groups).toBeUndefined();
+    commitAssembly(removeWiringGroup(wired, network.id));
+    expect(useDesignStore.getState().design.assembly!.wiring_groups).toBeUndefined();
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design.assembly).toEqual(wired);
+  });
 
   it('gives each new woofer a fresh UUID and its own signal group', () => {
     const { assembly, first, second } = twoWoofers();

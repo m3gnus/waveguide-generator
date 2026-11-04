@@ -2819,6 +2819,8 @@ export interface components {
             hf_source?: components["schemas"]["AssemblyHfSource"];
             /** Signal Groups */
             signal_groups?: components["schemas"]["AssemblySignalGroup"][];
+            /** Wiring Groups */
+            wiring_groups?: components["schemas"]["AssemblyWiringGroup"][];
             /** Woofers */
             woofers?: components["schemas"]["AssemblyWoofer"][];
         };
@@ -3009,6 +3011,52 @@ export interface components {
             distance_mm: number;
             /** Radiator Id */
             radiator_id: string;
+        };
+        /** AssemblyWiringBranch */
+        AssemblyWiringBranch: {
+            /** Children */
+            children: (components["schemas"]["AssemblyWiringDriver"] | components["schemas"]["AssemblyWiringPart"] | components["schemas"]["AssemblyWiringBranch"])[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "parallel" | "series";
+        };
+        /** AssemblyWiringDriver */
+        AssemblyWiringDriver: {
+            /**
+             * Invert
+             * @default false
+             */
+            invert?: boolean;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "driver";
+            /** Radiator Id */
+            radiator_id: string;
+        };
+        /** AssemblyWiringGroup */
+        AssemblyWiringGroup: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            network: components["schemas"]["AssemblyWiringBranch"];
+        };
+        /**
+         * AssemblyWiringPart
+         * @description SI component values: ohms, henry and farad, respectively.
+         */
+        AssemblyWiringPart: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "C" | "L" | "R";
+            /** Value */
+            value: number;
         };
         /** AssemblyWoofer */
         AssemblyWoofer: {
@@ -5241,6 +5289,8 @@ export interface components {
              * @enum {string}
              */
             type: "imported";
+            /** Wiring Groups */
+            wiring_groups?: components["schemas"]["AssemblyWiringGroup"][];
         };
         /** ImportedMeshRequest */
         ImportedMeshRequest: {

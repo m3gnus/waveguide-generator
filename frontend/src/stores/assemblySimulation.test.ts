@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CompiledAssembly } from '../api/assembly';
 import { hydrateDesignDocument } from '../api/designIo';
 import { resolveAssemblySetup } from '../jobs/importedSubmission';
-import { addWoofer, commitAssembly, emptyAssembly, setMemberProcessing, setWooferEnabled, type DesignAssembly } from './assembly';
+import { addWoofer, commitAssembly, emptyAssembly, moveToGroup, setDriver, setMemberProcessing, setWiringGroup, setWooferEnabled, type DesignAssembly } from './assembly';
 import { resetAssemblyBuild } from './assemblyBuild';
 import { adoptDesignBuild } from './importedModel';
 import { combineBaseSpec, combineEnabledEffective, combineWire } from './cadReturn';
@@ -50,6 +50,28 @@ function setup(): { first: string; second: string } {
 
 describe('assembly as the shared Simulation input', () => {
   beforeEach(() => { counter = 0; resetDesignStore(); resetAssemblyBuild(); });
+
+  it('projects passive wiring into the saved setup and refuses unsupported engines and partial networks', () => {
+    const { first, second } = setup();
+    let assembly = useDesignStore.getState().design.assembly!;
+    const target = assembly.signal_groups!.find(group => group.members[0].radiator_id === first)!.id;
+    assembly = moveToGroup(setDriver(setDriver(assembly, first, { exterior_transducer: DRIVER }), second, { exterior_transducer: DRIVER }), second, target, ids);
+    assembly = setWiringGroup(assembly, { id: ids(), label: 'LF', network: { kind: 'series', children: [
+      { kind: 'driver', radiator_id: first }, { kind: 'driver', radiator_id: second }, { kind: 'R', value: 1 },
+    ] } });
+    const design = { ...useDesignStore.getState().design, assembly };
+    const record = compiledFor([first, second]);
+    const data = assemblySimulationData(design, record);
+    const state = { ...data, sources: record.sources };
+    const resolved = resolveAssemblySetup(state, assembly, { engine: 'beat-cpu' } as never, design.simulation);
+    expect(resolved.setup.geometry.wiring_groups).toEqual(assembly.wiring_groups);
+    expect(applyAssemblySimulation(assembly, data).wiring_groups).toEqual(assembly.wiring_groups);
+    for (const engine of ['auto', 'metal', 'bempp']) {
+      expect(() => resolveAssemblySetup(state, assembly, { engine } as never, design.simulation)).toThrow('Wired woofers need BEAT CPU or BEAT Metal');
+    }
+    expect(() => resolveAssemblySetup({ ...state, driveChannels: state.driveChannels.filter(channel => channel.id !== first) },
+      assembly, { engine: 'beat-metal' } as never, design.simulation)).toThrow(/disabled or rigid/);
+  });
 
   it('reads one channel per compiled radiator, groups by identity and the design sweep', () => {
     const { first, second } = setup();

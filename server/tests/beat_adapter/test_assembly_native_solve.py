@@ -340,3 +340,58 @@ def test_an_all_driver_assembly_keeps_its_bases_and_a_driverless_one_uses_the_pr
     payload = request(combine=False).model_dump(mode="json")
     payload["geometry"]["drive_channels"][1].pop("exterior_transducer")
     assert not jobs.enabled(SolveRequest.model_validate(payload).geometry.drive_channels)
+
+
+@pytest.mark.parametrize("kind", ["series", "parallel"])
+@pytest.mark.parametrize("combine", [True, False])
+def test_wired_solve_and_stored_recombine_share_network_math(solid, record, monkeypatch, kind, combine):
+    from server.tests.beat_adapter.conftest import wire
+    from server.solver.driver_network import prepare_network_bases
+
+    network_id = "00000000-0000-4000-8000-0000000000c1"
+    solve_request = request(w2_driver=True, processing={W1: {}, W2: {}}, combine=combine,
+        wiring_groups=[dict(id=network_id, label="LF network", network=dict(kind=kind, children=[
+            dict(kind="driver", radiator_id=W1), dict(kind="driver", radiator_id=W2)]))])
+    original = distinct
+
+    def coupled(compiled, frequency):
+        data = original(compiled, frequency)
+        for item in data["quantities"]:
+            if item["quantity"] == "voice_coil_current":
+                item["values"] = wire([[.01+.02j, .02-.01j], [.3-.05j, .04+.02j], [.04+.02j, .2-.06j]])
+        return data
+
+    monkeypatch.setitem(globals(), "distinct", coupled)
+    result, _compiled, partial = _solve(solid, record, monkeypatch, solve_request)
+    assert all(network_id in frame["channel_order"] and "wiring" not in frame["channels"][network_id]["metadata"] for frame in partial)
+    network = result["channels"][network_id]
+    bundle = deserialize_channel_bases(result["_channel_bases_npz"])
+    prepared = prepare_network_bases(bundle["results_by_id"], solve_request.geometry)
+    diagnostics = prepared.diagnostics({W1: np.ones(3)})
+    assert network["impedance"]["real"] == diagnostics["networks"][network_id]["input_impedance_ohm"]["real"]
+    assert set(network["metadata"]["wiring"]["drivers"]) == {W1, W2}
+    spec = request(w2_driver=True, processing={W1: {}, W2: {}}).geometry.combine
+    stored = {key: value for key, value in result.items() if not key.startswith("_")}
+    replay = recombine_stored_results(stored, result["_channel_bases_npz"], spec, solve_request)
+    if combine:
+        assert replay["channels"]["combined"]["metadata"]["combine"]["wiring"] == result["channels"]["combined"]["metadata"]["combine"]["wiring"]
+        np.testing.assert_allclose(replay["channels"]["combined"]["spl_on_axis"]["spl"], result["channels"]["combined"]["spl_on_axis"]["spl"])
+    assert "max_output" not in replay["channels"]["combined"]["metadata"]["combine"]
+    spec.channels[G_LF].gain.db = -9
+    changed = recombine_stored_results(stored, result["_channel_bases_npz"], spec, solve_request)
+    assert changed["channels"]["combined"]["metadata"]["combine"]["wiring"] != replay["channels"]["combined"]["metadata"]["combine"]["wiring"]
+    from server.solver.errors import RecombineError
+
+    spec.channels[G_LF].gain.mode = "max"
+    with pytest.raises(RecombineError, match="choose Manual or Auto"):
+        recombine_stored_results(stored, result["_channel_bases_npz"], spec, solve_request)
+
+
+@pytest.mark.parametrize("engine", ["auto", "bempp", "metal"])
+def test_wired_submission_needs_a_coupled_beat_engine(engine):
+    payload = request(w2_driver=True, processing={W1: {}, W2: {}}).model_dump(mode="json")
+    payload["geometry"]["wiring_groups"] = [dict(id="00000000-0000-4000-8000-0000000000c1", label="LF", network=dict(
+        kind="series", children=[dict(kind="driver", radiator_id=W1), dict(kind="driver", radiator_id=W2)]))]
+    payload["options"]["engine"] = engine
+    with pytest.raises(ValidationError, match="Wired woofers need BEAT CPU or BEAT Metal"):
+        SolveRequest.model_validate(payload)

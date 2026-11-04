@@ -3,6 +3,7 @@ import { effectiveImportedSetup, importedModelBlocker } from '../stores/imported
 import { exteriorTransducerError } from '../stores/exteriorTransducer';
 import type { ImportedSolvePlan, ImportedSolveSubmission, ModelSolvePress } from './actions';
 import { bindImportedSetup, type ImportedSetup, type PreparedMeshIdentity } from './importedSetup';
+import { wiringDriverIds } from '../stores/assembly';
 import {
   blockingFindingWire,
   cadPassiveCardioidTopology,
@@ -493,12 +494,23 @@ export interface AssemblySetupResolution {
  */
 export function resolveAssemblySetup(
   state: Parameters<typeof combineWire>[0] & Pick<SimulationData, 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'> & { sources: readonly RoleSource[] },
-  assembly: { signal_groups?: Array<{ id: string; members: Array<{ radiator_id: string; weight?: number; delay_ms?: number; invert?: boolean }> }> },
+  assembly: { signal_groups?: Array<{ id: string; members: Array<{ radiator_id: string; weight?: number; delay_ms?: number; invert?: boolean }> }>;
+    wiring_groups?: import('../stores/assembly').AssemblyWiringGroup[] },
   options: ImportedSolveSubmission['options'],
   sweep: { f1: number; f2: number; num_frequencies: number },
   label?: (id: string) => string,
 ): AssemblySetupResolution {
   const policy = resolveExteriorDriverPolicy(state.driveChannels, options, 'fixed_velocity');
+  const wiring = assembly.wiring_groups ?? [];
+  if (wiring.length && !['beat-cpu', 'beat-metal'].includes(String(options.engine))) {
+    throw new Error('Wired woofers need BEAT CPU or BEAT Metal; choose one in Advanced, or remove the wiring.');
+  }
+  if (wiring.length) {
+    const active = new Set(state.driveChannels.map(channel => channel.id));
+    if (wiring.some(group => wiringDriverIds(group.network).some(id => !active.has(id)))) {
+      throw new Error('A wired woofer is disabled or rigid. Enable every woofer in the network, or remove the wiring.');
+    }
+  }
   const blocker = assemblyDriverBlocker(state, options, label);
   if (blocker) throw new Error(blocker);
   const physics = { ...state, driveChannels: policy.channels };
@@ -521,6 +533,7 @@ export function resolveAssemblySetup(
         ...drivers, required_features: ['wg-design-assembly-v1'],
         excitation_normalization: 'rms_velocity',
         excitation_normalization_by_engine: { bempp: 'acceleration_legacy' },
+        ...(wiring.length ? { wiring_groups: structuredClone(wiring) } : {}),
         driver_groups: groups, skipped_source_ids: [], exterior_only: false, ...effects,
       },
       options: resolvedOptions,

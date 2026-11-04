@@ -21,7 +21,7 @@ import numpy as np
 
 from server.contracts.conventions import PHASE_TIME_CONVENTION
 
-from .combine import combine_drive_channels
+from .combine import combine_drive_channels, member_processing_weights, normalize_channel, raw_channel_weights
 from .context import SolverContext
 from .driver_limits import MemberLimits, member_limits_from_channel, member_limit_ratings
 from .result_mapping import build_solver_response
@@ -98,6 +98,15 @@ def package_combined_channel(
 
     resolved = spec.resolved()
     coupled_exterior = any(getattr(channel, "exterior_transducer", None) is not None for channel in drive_channels)
+    network_bases = None
+    if getattr(request.geometry, "wiring_groups", None):
+        from .driver_network import prepare_network_bases
+        from .errors import RecombineError
+
+        if any(normalize_channel(value).gain_mode == "max" for value in resolved["channels"].values()):
+            raise RecombineError("Maximum output is unavailable for coupled wiring; choose Manual or Auto gain.")
+        network_bases = prepare_network_bases(results_by_id, request.geometry)
+        results_by_id = network_bases.results
     combined_result, combine_payload = combine_drive_channels(
         results_by_id,
         members=list(spec.members),
@@ -115,6 +124,14 @@ def package_combined_channel(
     if coupled_exterior:
         combine_payload["driver_basis_limits"] = {member: member_limit_ratings(limit) for member, limit in member_limits.items()}
         combine_payload["driver_limits_omitted"] = "Maximum output is unavailable for coupled assembly drives."
+    if network_bases is not None:
+        branch_weights = raw_channel_weights(frequencies, list(spec.members), None,
+            combine_payload["gains_db"], {name: delay / 1000 for name, delay in combine_payload["delays_ms"].items()},
+            channels=resolved["channels"], inverted={name: value["inverted"] for name, value in combine_payload["channels"].items()})
+        processing = member_processing_weights(frequencies, request.geometry.branch_processing(list(spec.members)) or {})
+        weights = {channel: branch_weights[member] * processing.get(channel, 1)
+                   for member in spec.members for channel in physical[member]}
+        combine_payload["wiring"] = network_bases.diagnostics(weights)
 
     metadata: dict[str, Any] = {
         "solver_mode": "full_3d",

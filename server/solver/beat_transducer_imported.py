@@ -397,8 +397,37 @@ def package_sweep(
     }
     bases = None
     if sweep.rows:
+        if geometry.wiring_groups:
+            from .driver_network import retain_native_tensors
+
+            retain_native_tensors(native_by_id, sweep, indices, geometry.drive_channels,
+                                  compiled.wire["solver_options"]["transducer_reference_voltage_v"])
         bases = serialize_channel_bases(native_by_id, metadata_by_id=_mixed_basis_metadata(
             compiled, geometry, record, indices))
+        if geometry.wiring_groups:
+            from .driver_network import prepare_network_bases
+
+            network_bases = prepare_network_bases(native_by_id, geometry)
+            for group in geometry.wiring_groups:
+                representative = network_bases.representatives[group.id]
+                weights = {representative: np.ones(len(frequencies), complex)}
+                diagnostics = network_bases.diagnostics(weights)
+                electrical = diagnostics["networks"][group.id]["input_impedance_ohm"]
+                response = build_solver_response(
+                    result=network_bases.results[representative], config=config, context=context,
+                    start_time=started, sound_speed_m_per_s=343.0,
+                    metadata={"solver_backend": solver_engine["engine"], "solver_engine": dict(solver_engine),
+                              "drive_channel_id": group.id, "label": group.label,
+                              "derived_from_channels": group.driver_ids(),
+                              "phase_time_convention": PHASE_TIME_CONVENTION, "wiring": diagnostics,
+                              "impedance_units": "ohms", "impedance_quantity": "electrical_input_impedance",
+                              "impedance_drive": "rms_voltage", "source_normalization": "native_rms_voltage",
+                              "drive": {"voltage_v": geometry.drive_voltage_v, "rg_ohm": 0.0},
+                              "impedance_phase_convention": ENGINEERING_PHASE_CONVENTION})
+                response["impedance"] = {"frequencies": frequencies.tolist(), **electrical}
+                response.pop("acoustic_impedance", None)
+                channels[group.id] = response
+                channel_order.append(group.id)
         if geometry.combine is not None and not sweep.cancelled:
             spec = geometry.combine
             channels[spec.id] = package_combined_channel(
@@ -516,7 +545,7 @@ def solve(
             if request.geometry.combine is not None:
                 # The crossover is the durable final's, from the whole sweep.
                 frame["channels"].pop(request.geometry.combine.id, None)
-                frame["channel_order"] = [c.id for c in request.geometry.drive_channels]
+                frame["channel_order"] = [c.id for c in request.geometry.drive_channels] + [g.id for g in request.geometry.wiring_groups]
             frame.pop("_field_trace_unavailable_reason", None)
             frame["metadata"]["provisional"] = {
                 "completed_frequency_count": len(sweep.rows),
@@ -528,6 +557,7 @@ def solve(
             for channel in frame["channels"].values():
                 channel["metadata"].pop("driver", None)
                 channel["metadata"].pop("beat_transducer", None)
+                channel["metadata"].pop("wiring", None)
             result_callback(len(sweep.rows) - 1, frame)
 
     native = solve_transducer_compiled(

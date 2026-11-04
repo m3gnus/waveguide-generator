@@ -1,0 +1,17 @@
+{
+  "description": "Real installed BEAT v3 CPU Float64 bases from the phase-1 mixed ideal HF and two exterior-transducer proof. Extracted without rescaling from system_result v2; solver exp(-i omega t), RMS quantities.",
+  "source": "scratchpads/261021-assembly-redesign/phase1/1g/stdout.jsonl",
+  "evidence": "scratchpads/261021-assembly-redesign/phase1/1g/REPORT-1g-coupled.md",
+  "mesh": "Three outward closed tetrahedra, 12 triangles, 12 vertices; not a production horn/cone mesh.",
+  "frequencies_hz": [100, 500],
+  "excitation_order": ["voltage:lf1", "voltage:lf2", "ideal:hf"],
+  "driver_order": ["transducer:lf1", "transducer:lf2"],
+  "voltage_reference_rms_v": 2.83,
+  "ideal_reference_velocity_rms_m_per_s": 1,
+  "arrays": {
+    "frequencies": "Hz, F",
+    "pressure": "Pa, F x excitation x horizontal observation",
+    "current": "A per physical driver, F x excitation x driver",
+    "velocity": "m/s, F x excitation x driver"
+  }
+}

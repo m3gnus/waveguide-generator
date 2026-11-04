@@ -108,6 +108,13 @@
             "title": "Signal Groups",
             "type": "array"
           },
+          "wiring_groups": {
+            "items": {
+              "$ref": "#/components/schemas/AssemblyWiringGroup"
+            },
+            "title": "Wiring Groups",
+            "type": "array"
+          },
           "woofers": {
             "items": {
               "$ref": "#/components/schemas/AssemblyWoofer"
@@ -624,6 +631,128 @@
           "distance_mm"
         ],
         "title": "AssemblySpacing",
+        "type": "object"
+      },
+      "AssemblyWiringBranch": {
+        "additionalProperties": false,
+        "properties": {
+          "children": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "C": "#/components/schemas/AssemblyWiringPart",
+                  "L": "#/components/schemas/AssemblyWiringPart",
+                  "R": "#/components/schemas/AssemblyWiringPart",
+                  "driver": "#/components/schemas/AssemblyWiringDriver",
+                  "parallel": "#/components/schemas/AssemblyWiringBranch",
+                  "series": "#/components/schemas/AssemblyWiringBranch"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/AssemblyWiringDriver"
+                },
+                {
+                  "$ref": "#/components/schemas/AssemblyWiringPart"
+                },
+                {
+                  "$ref": "#/components/schemas/AssemblyWiringBranch"
+                }
+              ]
+            },
+            "minItems": 2,
+            "title": "Children",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "series",
+              "parallel"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "children"
+        ],
+        "title": "AssemblyWiringBranch",
+        "type": "object"
+      },
+      "AssemblyWiringDriver": {
+        "additionalProperties": false,
+        "properties": {
+          "invert": {
+            "default": false,
+            "title": "Invert",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "driver",
+            "title": "Kind",
+            "type": "string"
+          },
+          "radiator_id": {
+            "title": "Radiator Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "radiator_id"
+        ],
+        "title": "AssemblyWiringDriver",
+        "type": "object"
+      },
+      "AssemblyWiringGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "network": {
+            "$ref": "#/components/schemas/AssemblyWiringBranch"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "network"
+        ],
+        "title": "AssemblyWiringGroup",
+        "type": "object"
+      },
+      "AssemblyWiringPart": {
+        "additionalProperties": false,
+        "description": "SI component values: ohms, henry and farad, respectively.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "R",
+              "L",
+              "C"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "value": {
+            "exclusiveMinimum": 0.0,
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "title": "AssemblyWiringPart",
         "type": "object"
       },
       "AssemblyWoofer": {
@@ -7770,6 +7899,13 @@
             "const": "imported",
             "title": "Type",
             "type": "string"
+          },
+          "wiring_groups": {
+            "items": {
+              "$ref": "#/components/schemas/AssemblyWiringGroup"
+            },
+            "title": "Wiring Groups",
+            "type": "array"
           }
         },
         "required": [

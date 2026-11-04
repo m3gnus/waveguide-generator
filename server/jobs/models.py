@@ -19,7 +19,7 @@ from server.contracts.observations import (
 
 from server.contracts import DriverSpec as DriverSpec, JobModel as JobModel
 from server.design.defaults import default_sweep_start_hz
-from server.design.schema import DesignConfig
+from server.design.schema import AssemblyWiringGroup, DesignConfig, validate_wiring_groups
 from server.design.uid import DesignUid
 from server.drivers.models import ExteriorDriverInputs
 
@@ -852,6 +852,7 @@ class ImportedGeometrySource(JobModel):
     artifact_sha256: str
     drive_channels: list[DriveChannel]
     driver_groups: list[DriverGroup] | None = None
+    wiring_groups: list[AssemblyWiringGroup] = Field(default_factory=list, exclude_if=lambda value: not value)
     combine: ChannelCombineSpec | None = None
     drive_voltage_v: float = Field(default=2.83, gt=0, allow_inf_nan=False)
     rg_ohm: float = Field(default=0.0, ge=0, allow_inf_nan=False)
@@ -967,6 +968,15 @@ class ImportedGeometrySource(JobModel):
 
     @model_validator(mode="after")
     def validate_channels_and_sizes(self) -> "ImportedGeometrySource":
+        if self.wiring_groups:
+            if not self.design_assembly:
+                raise ValueError("Wiring requires a design assembly; open Sources and baffle to configure it.")
+            if self.combine is not None and self.combine.id in {group.id for group in self.wiring_groups}:
+                raise ValueError("The combined result and wiring networks need distinct ids; rename the combined result.")
+            validate_wiring_groups(self.wiring_groups, {
+                channel.id for channel in self.drive_channels if channel.exterior_transducer is not None
+            }, {group.id: {name: (group.member_processing or {}).get(name, {}) for name in group.channel_ids}
+                for group in self.driver_groups or []}, {channel.id for channel in self.drive_channels})
         if any(c.patch_weights is not None or c.physical_source_id is not None for c in self.drive_channels) and "native-source-contour-v1" not in self.required_features:
             raise ValueError("weighted/grouped patches require native-source-contour-v1 negotiation")
         channel_ids = [channel.id for channel in self.drive_channels]
@@ -1197,6 +1207,8 @@ class SolveRequest(JobDesignIdentity):
     @model_validator(mode="after")
     def validate_exterior_transducer_mode(self) -> Self:
         geometry = self.geometry
+        if isinstance(geometry, ImportedGeometrySource) and geometry.wiring_groups and self.options.engine not in {"beat-cpu", "beat-metal"}:
+            raise ValueError("Wired woofers need BEAT CPU or BEAT Metal; choose one in Advanced, or remove the wiring.")
         if not isinstance(geometry, ImportedGeometrySource) or not any(c.exterior_transducer for c in geometry.drive_channels):
             return self
         # The ingestion record determines whether a mixed system uses FEM.

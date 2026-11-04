@@ -131,6 +131,7 @@ export interface ImportedGeometrySubmission {
    * assemblies) states each member's weight, delay and polarity before its sum. */
   driver_groups?: Array<{ id: string; channel_ids: string[]; label?: string | null;
     member_processing?: Record<string, { weight: number; delay_ms: number; invert: boolean }> }>;
+  wiring_groups?: import('../stores/assembly').AssemblyWiringGroup[];
   /** The per-channel v2 crossover (CADLINK-CROSSOVER-DRIVERS.md §2). The
    * legacy `crossovers_hz`/`level_match`/`align` triple is still accepted by
    * the server and still appears on jobs submitted before this, which is why
