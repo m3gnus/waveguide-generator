@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mesh } from '../shell/cadlink/selection.fixtures';
 import { FRONT_CONTEXT_LIMIT_MS } from '../api/assembly';
-import { addWoofer, emptyAssembly, setDriver, setMemberProcessing, setWooferDrive } from '../stores/assembly';
-import { assemblyContentKey, designModelCurrent, resetAssemblyBuild } from '../stores/assemblyBuild';
+import { addWoofer, emptyAssembly, setDriver, setWooferDrive } from '../stores/assembly';
+import { assemblyContentKey, resetAssemblyBuild } from '../stores/assemblyBuild';
 import { currentDocumentLoad, designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { adoptDesignBuild } from '../stores/importedModel';
 import { designAssemblySnapshot, NEEDS_BUILD, prepareDesignAssembly } from './assemblySolve';
@@ -39,42 +39,6 @@ describe('assembly Solve press', () => {
   it('requires a current build for a synchronous snapshot', () => {
     useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly: emptyAssembly(ids) });
     expect(designAssemblySnapshot).toThrow(NEEDS_BUILD);
-  });
-
-  it('checks reuse on the backend after setup edits and sends the updated setup without transferring the mesh again', async () => {
-    const { assembly, id } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
-    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });
-    useSolveOptionsStore.getState().setEngine('beat-cpu');
-    const record = { msh_text: mesh, source_tags: {}, ingest_id: 'wgi_setup', model_id: 'design-assembly:wgu_x',
-      sources: [{ id: 'horn-throat', role: 'HF' }, { id: `${id}/piston`, role: 'LF' }],
-      excitations: [{ id: 'horn-throat', source_ids: ['horn-throat'], motion: 'normal' },
-        { id, source_ids: [`${id}/piston`], motion: 'axial' }] };
-    const fetcher = vi.fn<typeof fetch>(async (url, init) => {
-      if (String(url).endsWith('/context')) return Response.json({ minimum_clearance_mm: 0.1, clearances: {} });
-      const body = JSON.parse(String(init?.body));
-      const { msh_text: _mesh, ...metadata } = record;
-      return Response.json({ status: 'published', reused: !!body.known_prepared_id,
-        prepared: body.known_prepared_id === record.ingest_id ? metadata : record,
-        model: { model_id: 'design-assembly:wgu_x', producer: 'design-assembly', display_name: 'x' } });
-    });
-    await prepareDesignAssembly(fetcher);
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    const driver = { version: 1, re_ohm: 6, le_h: 0.0005, bl_n_per_a: 7, mmd_kg: 0.02, cms_m_per_n: 0.001, rms_n_s_per_m: 1.5 };
-    const processed = setMemberProcessing(setDriver(assembly, id, { exterior_transducer: driver }), id,
-      { delay_ms: 1.5, weight: 0.7, invert: true });
-    useDesignStore.getState().commitEmbedded({ assembly: { ...processed, crossover: { enabled: false } } }, 'step');
-    useDesignStore.getState().updateValue('simulation.f1', 100);
-    expect(designModelCurrent(useDesignStore.getState().design)).toBe(false);
-    const next = await prepareDesignAssembly(fetcher);
-    expect(fetcher).toHaveBeenCalledTimes(4);
-    expect(JSON.parse(String(fetcher.mock.calls[3][1]?.body)).known_prepared_id).toBe(record.ingest_id);
-    expect(designModelCurrent(useDesignStore.getState().design)).toBe(true);
-    expect(next.prepared.ingest_id).toBe('wgi_setup');
-    expect(next.setup.geometry.driver_groups?.find(group => group.channel_ids.includes(id))?.member_processing?.[id])
-      .toEqual({ delay_ms: 1.5, weight: 0.7, invert: true });
-    expect(next.setup.geometry.drive_channels.find(channel => channel.id === id)?.exterior_transducer).toMatchObject(driver);
-    expect(next.setup.options.frequency_range?.[0]).toBe(100);
-    expect(next.design).toEqual(serializeDesign(useDesignStore.getState().design));
   });
 
   it.each(['context', 'compile'].flatMap(stage => ['uid', 'load', 'revision'].map(identity => [stage, identity])))

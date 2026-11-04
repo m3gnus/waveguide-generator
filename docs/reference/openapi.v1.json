@@ -48,18 +48,6 @@
             "pattern": "^wgu_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
             "title": "Design Uid",
             "type": "string"
-          },
-          "known_prepared_id": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Known Prepared Id"
           }
         },
         "required": [
@@ -19367,7 +19355,7 @@
     },
     "/api/models/assembly/compile": {
       "post": {
-        "description": "Compile the design's assembly and publish it as its design model's prepared mesh.\n\n``superseded``: a newer revision of the design was asked for meanwhile,\nand this one was not published. If compilation selects\n``known_prepared_id``, the prepared metadata omits ``msh_text``: the\nclient already holds that immutable mesh. Eligibility still comes\nexclusively from the compiler's backend-owned identity contract.",
+        "description": "Compile the design's assembly and publish it as its design model's prepared mesh.\n\n``superseded``: a newer revision of the design was asked for meanwhile,\nand this one was not published.",
         "operationId": "assembly_compile_api_models_assembly_compile_post",
         "requestBody": {
           "content": {

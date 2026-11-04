@@ -7,13 +7,10 @@ bounded so a series of large designs cannot grow server memory indefinitely.
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import sys
 import threading
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,37 +43,6 @@ class SolverMeshArtifactCache:
         self._entries: OrderedDict[str, tuple[dict[str, Any], int]] = OrderedDict()
         self._bytes = 0
         self._lock = threading.RLock()
-        self._builds: dict[str, tuple[threading.Lock, int]] = {}
-
-    @asynccontextmanager
-    async def build_slot(self, key: str, check: Callable[[], None]) -> AsyncIterator[None]:
-        """Serialize cache misses across requests, threads and event loops.
-
-        Waiters keep their own cancellation checkpoints. A cancelled builder
-        releases ownership so another request can retry using its own callback.
-        """
-        with self._lock:
-            lock, users = self._builds.get(key, (threading.Lock(), 0))
-            self._builds[key] = lock, users + 1
-        acquired = False
-        try:
-            while True:
-                check()
-                acquired = lock.acquire(blocking=False)
-                if acquired:
-                    break
-                await asyncio.sleep(0.05)
-            check()
-            yield
-        finally:
-            if acquired:
-                lock.release()
-            with self._lock:
-                _, users = self._builds[key]
-                if users == 1:
-                    del self._builds[key]
-                else:
-                    self._builds[key] = lock, users - 1
 
     @staticmethod
     def _estimated_size(result: dict[str, Any]) -> int:

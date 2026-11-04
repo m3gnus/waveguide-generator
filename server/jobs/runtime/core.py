@@ -4626,13 +4626,12 @@ class JobRuntime:
     async def _fail_job(self, job_id: str, message: str) -> None:
         if not message.strip():
             message = FAILED_WITHOUT_DETAIL_MESSAGE
-        # Transient results belong to the finished worker, even if SQLite cannot
-        # record its failure or the row has already reached a terminal state.
         self._partial_results.pop(job_id, None)
-        cleanup = False
-        event = None
+        await self._discard_channel_bases(job_id)
+        await self._discard_radiation_impedance(job_id)
+        await self._discard_fem_field(job_id)
         try:
-            changed, event = self.store.update_job_with_event(
+            event = self._transition(
                 job_id,
                 {
                     "status": "error",
@@ -4643,25 +4642,10 @@ class JobRuntime:
                 },
                 "failed",
                 {"message": message},
-                allowed_statuses=ACTIVE_STATUSES,
             )
         except Exception:
             logger.exception("Could not persist failure state for job %s", job_id)
-            try:
-                state = self.store.cancellation_state(job_id)
-                cleanup = state is not None and state[0] != "complete"
-            except Exception:
-                # If even a read fails, preserve artifacts whose completion we
-                # cannot establish. Transient results have still been released.
-                logger.exception("Could not check artifact cleanup for job %s", job_id)
         else:
-            cleanup = changed
-
-        if cleanup:
-            await self._discard_channel_bases(job_id)
-            await self._discard_radiation_impedance(job_id)
-            await self._discard_fem_field(job_id)
-        if event is not None:
             self.events.publish(event)
 
         try:

@@ -368,32 +368,23 @@ def _current(fence: AssemblyBuildFence, token: tuple[str, str, int], cancel_cb: 
     return fence.current(token)
 
 
-def _commit_current(fence: AssemblyBuildFence, token: tuple[str, str, int],
-                    cancel_cb: Any, commit_cb: Any) -> bool:
-    if not _current(fence, token, cancel_cb):
-        return False
-    if commit_cb is not None:
-        commit_cb()
-    return True
-
-
 def _select_reused(store: Any, model_id: str, ingest_id: str, fence: AssemblyBuildFence,
-                   token: tuple[str, str, int], cancel_cb: Any = None, commit_cb: Any = None) -> bool:
+                   token: tuple[str, str, int], cancel_cb: Any = None) -> bool:
     """Make a reused record the model's latest again, only while this compile is current."""
 
     try:
-        store.select_model_ingest(model_id, ingest_id, commit_guard=lambda _conn: _commit_current(fence, token, cancel_cb, commit_cb))
+        store.select_model_ingest(model_id, ingest_id, commit_guard=lambda _conn: _current(fence, token, cancel_cb))
     except StaleAttempt:
         return False
     return True
 
 
 def _reuse_and_select(store: Any, model_id: str, spec_digest: str, fence: AssemblyBuildFence,
-                      token: tuple[str, str, int], cancel_cb: Any = None, commit_cb: Any = None) -> tuple[dict[str, Any] | None, list[str], bool]:
+                      token: tuple[str, str, int], cancel_cb: Any = None) -> tuple[dict[str, Any] | None, list[str], bool]:
     """Lookup and selection share one collection hold; a hit cannot disappear between them."""
 
     reused, known = _reuse(store, model_id, spec_digest)
-    selected = reused is not None and _select_reused(store, model_id, str(reused["ingest_id"]), fence, token, cancel_cb, commit_cb)
+    selected = reused is not None and _select_reused(store, model_id, str(reused["ingest_id"]), fence, token, cancel_cb)
     return reused, known, selected
 
 
@@ -401,7 +392,7 @@ def _publish_record(
     store: Any, data_dir: Path, design: DesignConfig, built: Mapping[str, Any], *,
     design_uid: str, design_name: str, design_revision: int, spec_digest: str,
     model_id: str, known: list[str], fence: AssemblyBuildFence, token: tuple[str, str, int],
-    cancel_cb: Any = None, progress_cb: Any = None, commit_cb: Any = None,
+    cancel_cb: Any = None, progress_cb: Any = None,
 ) -> dict[str, Any] | None:
     parent = data_dir / "imports" / "files"
     parent.mkdir(parents=True, exist_ok=True)
@@ -409,28 +400,28 @@ def _publish_record(
     created_at = utc_now()
     destination = parent / ingest_id
     try:
-        record, solver_text = compose_record(
-            design, built, ingest_id=ingest_id, created_at=created_at, design_uid=design_uid,
-            design_name=design_name, design_revision=design_revision, spec_digest=spec_digest,
-            archive_stem="", destination=destination,
-        )
-        if progress_cb is not None:
-            progress_cb("check")
-        _publish(parent, destination, solver_text, cancel_cb)
-        # Mesh validation and fsync precede the registry transaction. The
-        # collection hold protects the file until its record is inserted.
-        # Folder allocation and the final seal still commit with that record.
+        # Claim and ingest commit together. The geometry is already built; a
+        # late Stop or superseded revision rolls back the first folder claim
+        # along with the record, while the exception handler removes its file.
         with store._lock, store._transaction():
             model = store.get_model(model_id) or {}
-            record["archive_stem"] = model.get("archive_stem") or claim_project_folder(
+            archive_stem = model.get("archive_stem") or claim_project_folder(
                 store, f"model:{model_id}", design_name or "Design assembly"
             )
+            record, solver_text = compose_record(
+                design, built, ingest_id=ingest_id, created_at=created_at, design_uid=design_uid,
+                design_name=design_name, design_revision=design_revision, spec_digest=spec_digest,
+                archive_stem=archive_stem, destination=destination,
+            )
             record_json = seal_prepared_record(record, producer=PRODUCER)
+            if progress_cb is not None:
+                progress_cb("check")
+            _publish(parent, destination, solver_text, cancel_cb)
             row, created = store.insert_file_ingest(
                 ingest_id=ingest_id, created_at=created_at, manifest_sha256=spec_digest,
                 artifact_sha256=record["artifact_sha256"], record_json=record_json,
                 known_ingest_ids=known, model_id=model_id,
-                commit_guard=lambda _conn: _commit_current(fence, token, cancel_cb, commit_cb),
+                commit_guard=lambda _conn: _current(fence, token, cancel_cb),
             )
     except StaleAttempt:
         shutil.rmtree(destination, ignore_errors=True)
@@ -446,7 +437,7 @@ def _publish_record(
 async def compile_design_assembly(
     store: Any, data_dir: Path, design_dump: Mapping[str, Any], *,
     design_uid: str, design_name: str, design_revision: int, build_session: str = "",
-    fence: AssemblyBuildFence = FENCE, cancel_cb: Any = None, progress_cb: Any = None, commit_cb: Any = None,
+    fence: AssemblyBuildFence = FENCE, cancel_cb: Any = None, progress_cb: Any = None,
 ) -> dict[str, Any]:
     """Compile and publish the design's assembly, or report it superseded.
 
@@ -470,7 +461,7 @@ async def compile_design_assembly(
     if progress_cb is not None:
         progress_cb("resolve")
     reused, known, selected = await asyncio.to_thread(
-        _held, _reuse_and_select, store, model_id, spec_digest, fence, token, cancel_cb, commit_cb)
+        _held, _reuse_and_select, store, model_id, spec_digest, fence, token, cancel_cb)
     if reused is not None:
         if progress_cb is not None:
             for stage in (("mesh", "check", "publish") if selected else ("mesh", "check")):
@@ -484,7 +475,7 @@ async def compile_design_assembly(
     record = await asyncio.to_thread(
             _held, _publish_record, store, data_dir, design, built, design_uid=design_uid,
             design_name=design_name, design_revision=design_revision, spec_digest=spec_digest,
-            model_id=model_id, known=known, fence=fence, token=token, cancel_cb=cancel_cb, progress_cb=progress_cb, commit_cb=commit_cb,
+            model_id=model_id, known=known, fence=fence, token=token, cancel_cb=cancel_cb, progress_cb=progress_cb,
         )
     if record is None:
         return {"status": "superseded"}

@@ -45,68 +45,6 @@ ARTIFACT_SHA = "sha256:" + "2" * 64
 REPORT_SHA = "sha256:" + "3" * 64
 
 
-def test_late_imported_read_failure_preserves_acknowledged_stop(tmp_path, monkeypatch, caplog):
-    import threading
-    from server.jobs.runtime import core
-    from server.tests.test_jobs_store import _job
-
-    entered, release = threading.Event(), threading.Event()
-
-    def read(*_args):
-        entered.set()
-        assert release.wait(5)
-        raise RuntimeError("retained mesh read failed")
-
-    monkeypatch.setattr(core, "get_ingestion_record", read)
-
-    async def scenario():
-        runtime = JobRuntime(JobStore(tmp_path / "late-failure.db"), cadlink_store=object())
-        runtime.store.initialize()
-        row = _job("late-import")
-        row["config_json"] = _request("wgi_" + "0" * 26).model_dump(mode="json")
-        runtime.store.create_job(row)
-
-        async def started():
-            pass
-
-        monkeypatch.setattr(runtime, "start", started)
-        running = asyncio.create_task(runtime._run_job(row["id"], runtime.store.get_job_row(row["id"])))
-        try:
-            assert await asyncio.to_thread(entered.wait, 5)
-            assert (await runtime.stop(row["id"]))["status"] == "cancelled"
-            cancelled = runtime.store.get_job_row(row["id"])
-            release.set()
-            await running
-            assert runtime.store.get_job_row(row["id"]) == cancelled
-            assert [event["type"] for event in runtime.store.replay_events(0)] == ["cancelled"]
-        finally:
-            release.set()
-            await running
-
-    asyncio.run(scenario())
-    assert "retained mesh read failed" in caplog.text
-
-
-@pytest.mark.parametrize("status", ["cancelled", "complete", "error"])
-def test_failure_settlement_does_not_replace_terminal_rows(tmp_path, status):
-    from server.tests.test_jobs_store import _job
-
-    async def scenario():
-        store = JobStore(tmp_path / "terminal.db")
-        store.initialize()
-        store.create_job(_job("terminal", status))
-        before = store.get_job_row("terminal")
-        runtime = JobRuntime(store)
-        try:
-            await runtime._fail_job("terminal", "late preparation failure")
-            assert store.get_job_row("terminal") == before
-            assert store.replay_events(0) == []
-        finally:
-            store.close()
-
-    asyncio.run(scenario())
-
-
 def _geometry(ingest_id: str) -> dict[str, Any]:
     return {
         "type": "imported",

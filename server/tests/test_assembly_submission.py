@@ -308,48 +308,6 @@ def test_cone_excitation_cannot_be_redefined_by_a_solve_setup(compiled_app, cont
 
 
 
-def test_compile_omits_only_a_mesh_the_client_already_holds(compiled_app, monkeypatch):
-    from server.jobs import models_api
-
-    app, runtime, _store = compiled_app
-
-    async def scenario():
-        try:
-            first = await call(app, "POST", "/api/models/assembly/compile", compile_body())
-            known = first["prepared"]
-            original_with_mesh = models_api._prepared_with_mesh
-
-            def no_transfer(*_args):
-                pytest.fail("An unchanged mesh must not be read for retransmission")
-
-            monkeypatch.setattr(models_api, "_prepared_with_mesh", no_transfer)
-            offset = compile_body(2)
-            offset["design"]["mesh"]["vertical_offset"] = 80
-            offset["known_prepared_id"] = known["ingest_id"]
-            reused = await call(app, "POST", "/api/models/assembly/compile", offset)
-            assert reused["reused"]
-            assert "msh_text" not in reused["prepared"]
-            # The hydrated record is byte-for-byte the same geometry and metadata.
-            assert {**reused["prepared"], "msh_text": known["msh_text"]} == known
-
-            monkeypatch.setattr(models_api, "_prepared_with_mesh", original_with_mesh)
-            unknown = {**offset, "design_revision": 3, "known_prepared_id": "wgi_unknown"}
-            retransmitted = await call(app, "POST", "/api/models/assembly/compile", unknown)
-            assert retransmitted["prepared"] == known
-
-            moved = compile_body(4)
-            moved["known_prepared_id"] = known["ingest_id"]
-            moved["design"]["assembly"]["woofers"][0]["placement"]["gap_mm"] = 20
-            changed = await call(app, "POST", "/api/models/assembly/compile", moved)
-            assert not changed["reused"]
-            assert changed["prepared"]["ingest_id"] != known["ingest_id"]
-            assert changed["prepared"]["msh_text"] != known["msh_text"]
-        finally:
-            await runtime.shutdown()
-
-    asyncio.run(scenario())
-
-
 def test_a_stale_record_is_never_reused_after_the_geometry_changes(compiled_app):
     app, runtime, _store = compiled_app
 

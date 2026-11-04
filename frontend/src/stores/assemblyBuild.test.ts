@@ -211,46 +211,6 @@ describe('assembly background build', () => {
     expect(designModelCurrent(useDesignStore.getState().design)).toBe(true);
   });
 
-  it('asks the backend about export placement and retains an unchanged mesh without retransmission', async () => {
-    const prepared = record('wgi_offset');
-    const model = { model_id: 'design-assembly:x', producer: 'design-assembly', display_name: 'x' };
-    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
-      const body = JSON.parse(String(init?.body));
-      if (body.design_revision === useDesignStore.getState().designRevision && body.design.mesh.vertical_offset === 80) {
-        expect(body.known_prepared_id).toBe(prepared.ingest_id);
-        const { msh_text: _mesh, ...metadata } = prepared;
-        return Response.json({ status: 'published', reused: true, model, prepared: metadata });
-      }
-      return Response.json({ status: 'published', reused: false, model, prepared });
-    });
-    const first = await prepareDesignModel(fetcher);
-    const scene = importedMeshStore.getSnapshot().solver;
-    useDesignStore.getState().updateValue('mesh.vertical_offset', 80);
-    expect(designModelCurrent(useDesignStore.getState().design)).toBe(false);
-    const next = await prepareDesignModel(fetcher);
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(next).toEqual({ ...first, reused: true });
-    expect(designModelCurrent(useDesignStore.getState().design)).toBe(true);
-    expect(importedMeshStore.getSnapshot().solver).toBe(scene);
-    expect(await prepareDesignModel(fetcher)).toEqual(next);
-    expect(fetcher).toHaveBeenCalledTimes(2);
-  });
-
-  it('refuses a meshless answer for a different prepared record', async () => {
-    const { fetcher, answer } = deferredFetcher();
-    const first = requestAssemblyBuild(fetcher);
-    answer(0, record('wgi_held'));
-    await first;
-    const previous = useDesignModelStore.getState();
-    useDesignStore.getState().updateValue('mesh.vertical_offset', 80);
-    const next = prepareDesignModel(fetcher);
-    const { msh_text: _mesh, ...wrong } = record('wgi_not_held');
-    answer(1, wrong);
-    await expect(next).rejects.toThrow('The assembly mesh was not returned. Build the assembly again, then press Solve.');
-    expect(useDesignModelStore.getState()).toBe(previous);
-    expect(designModelCurrent(useDesignStore.getState().design)).toBe(false);
-  });
-
   it('drops an answer for a document that was replaced, and forgets the build on open', async () => {
     const { fetcher, answer } = deferredFetcher();
     const build = requestAssemblyBuild(fetcher);

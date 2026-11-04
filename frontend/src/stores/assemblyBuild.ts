@@ -33,7 +33,7 @@ const PAGE_SESSION = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now()}-${
 
 export const useAssemblyBuildStore = create<AssemblyBuildState>(() => ({ ...IDLE }));
 
-/** The full captured document, used by run freshness independently of mesh reuse. */
+/** What a build is keyed by: the portable design, without directivity or solve settings. */
 export function assemblyContentKey(design: DesignDocument): string | null {
   return designContentKey(design, '', { polar: { config: null }, solve: null });
 }
@@ -96,9 +96,6 @@ async function compileRequested(design: DesignDocument, requested: NonNullable<A
   fetcher: typeof fetch): Promise<AssemblyCompileResult | null> {
   const { designUid, designName } = useDocumentStore.getState();
   const { revision: designRevision, load } = requested;
-  // Eligibility belongs to compile_spec on the server. Tell it which immutable
-  // record this document already holds so a reused mesh need not travel again.
-  const knownPrepared = useDesignModelStore.getState().authoring?.load === load ? designPreparedRecord() : null;
   const owns = () => {
     const current = useAssemblyBuildStore.getState().requested;
     return isCurrentDocumentLoad(load) && current?.revision === requested.revision && current.load === load;
@@ -110,7 +107,7 @@ async function compileRequested(design: DesignDocument, requested: NonNullable<A
       return compileAssembly({
         design: serializeDesign(design), design_uid: designUid ?? '', design_name: designName, design_revision: designRevision,
         build_session: `${PAGE_SESSION}:${load}`,
-      }, fetcher, signal, knownPrepared);
+      }, fetcher, signal);
     }).catch(error => {
       if (!isAbortError(error)) throw error;
       // An older build can settle while this one runs; its busy snapshot is

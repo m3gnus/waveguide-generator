@@ -180,8 +180,6 @@ class AssemblyCompileRequest(AssemblyContextRequest):
     design_revision: int = Field(ge=1)
     #: The client's build session: its revisions are ordered within it only.
     build_session: str = Field(default="", max_length=128)
-    #: Omit mesh text only if compilation selects this immutable prepared record.
-    known_prepared_id: str | None = Field(default=None, min_length=1)
 
 
 class ModelRefusal(ValueError):
@@ -892,10 +890,7 @@ def mount_models_api(application: FastAPI) -> None:
         """Compile the design's assembly and publish it as its design model's prepared mesh.
 
         ``superseded``: a newer revision of the design was asked for meanwhile,
-        and this one was not published. If compilation selects
-        ``known_prepared_id``, the prepared metadata omits ``msh_text``: the
-        client already holds that immutable mesh. Eligibility still comes
-        exclusively from the compiler's backend-owned identity contract.
+        and this one was not published.
         """
 
         if (blocked := restart_pending()) is not None:
@@ -906,7 +901,6 @@ def mount_models_api(application: FastAPI) -> None:
                     store, data_dir, body.design, design_uid=body.design_uid,
                     design_name=body.design_name, design_revision=body.design_revision,
                     build_session=body.build_session, cancel_cb=operation.check, progress_cb=operation.progress,
-                    commit_cb=operation.begin_commit,
                 )
                 operation.attach(http_response)
         except HTTPException:
@@ -934,9 +928,7 @@ def mount_models_api(application: FastAPI) -> None:
                 "status": "published",
                 "reused": outcome["reused"],
                 "model": _model_summary(store.get_model(model_id)),
-                "prepared": (public_record(record, model_id)
-                             if body.known_prepared_id == record["ingest_id"]
-                             else _prepared_with_mesh(record, model_id)),
+                "prepared": _prepared_with_mesh(record, model_id),
             }
 
         return await read(published)

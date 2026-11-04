@@ -11,7 +11,6 @@ import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -83,32 +82,6 @@ def compile_(store, tmp_path, dump, *, revision=1, fence=None, name="Front horn"
         store, tmp_path, dump, design_uid=UID, design_name=name, design_revision=revision,
         fence=fence or AssemblyBuildFence(),
     ))
-
-
-@pytest.mark.parametrize("phase", ["compose_record", "_publish"])
-def test_mesh_finalization_does_not_hold_registry_lock_or_transaction(phase, store, tmp_path, monkeypatch):
-    from concurrent.futures import ThreadPoolExecutor
-    import sqlite3
-
-    original = getattr(design_assembly, phase)
-
-    def other_registry_work():
-        acquired = store._lock.acquire(blocking=False)
-        assert acquired, "mesh preparation held the registry lock"
-        try:
-            with sqlite3.connect(store.db_path, timeout=0) as conn:
-                conn.execute("BEGIN IMMEDIATE")
-        finally:
-            store._lock.release()
-
-    def observed(*args, **kwargs):
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            executor.submit(other_registry_work).result(timeout=2)
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(design_assembly, phase, observed)
-    result = compile_(store, tmp_path, design(assembly=assembly(woofer(enabled=False))))
-    assert result["status"] == "published"
 
 
 # -- the one finalization, byte for byte for every producer ---------------------------
@@ -310,20 +283,6 @@ def test_identical_geometry_reuses_and_processing_changes_never_rebuild(store, t
     assert other["ingest_id"] != first["ingest_id"]
     assert other["manifest_sha256"] != first["manifest_sha256"]
     assert other["design"]["revision"] == 3
-
-
-@pytest.mark.parametrize("edit", json.loads((Path(__file__).parent / "fixtures/assembly_preparation_edits.json").read_text()),
-                         ids=lambda edit: edit["path"])
-def test_compile_identity_reuses_only_backend_equivalent_edits(edit):
-    base = design(assembly=assembly(woofer(shape="ath_cone")))
-    changed = copy.deepcopy(base)
-    parts = edit["path"].split(".")
-    target = changed
-    for part in parts[:-1]:
-        target = target[int(part)] if isinstance(target, list) else target.setdefault(part, {})
-    target[parts[-1]] = edit["value"]
-    assert (design_assembly.compile_spec_digest(DesignConfig.model_validate(base))
-            == design_assembly.compile_spec_digest(DesignConfig.model_validate(changed))) == edit["reuses"]
 
 
 def test_a_superseded_build_publishes_nothing(store, tmp_path, monkeypatch):
