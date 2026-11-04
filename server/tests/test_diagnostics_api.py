@@ -172,7 +172,52 @@ def test_the_bundle_downloads_as_a_named_zip(tmp_path: Path) -> None:
     # Already deflated. Declaring identity is what stops GZipMiddleware
     # spending event-loop CPU compressing it a second time.
     assert headers["content-encoding"] == "identity"
-    assert "manifest.json" in zipfile.ZipFile(io.BytesIO(payload)).namelist()
+    members = zipfile.ZipFile(io.BytesIO(payload)).namelist()
+    assert "manifest.json" in members
+    assert "description.txt" not in members
+
+
+def test_a_posted_description_keeps_the_tail_beyond_the_issue_url_budget(tmp_path: Path) -> None:
+    description = "Reproduction step\n" * 1500 + "UNIQUE FINAL MARKER"
+    rows = [{"id": "run-1", "status": "error", "config_json": {"throat": 25.4}}]
+    client = client_for(tmp_path, jobs=FakeRuntime(FakeStore(rows)))
+    status, headers, payload = client.request(
+        "POST", "/api/diagnostics/bundle", query="job=run-1&design=true",
+        body=json.dumps({"description": description}).encode(),
+    )
+    assert status == 200
+    assert headers["content-type"] == "application/zip"
+    assert 'filename="wg-report-' in headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        assert archive.read("description.txt").decode() == description
+        assert "logs/job-run-1.log" in archive.namelist()
+        assert json.loads(archive.read("design/job-run-1.request.json")) == {"throat": 25.4}
+        manifest = json.loads(archive.read("manifest.json"))
+        assert any(member["name"] == "description.txt" for member in manifest["members"])
+
+
+@pytest.mark.parametrize(
+    "description", ["", "Short reproduction.", "å" * 64_000, "🦉" * 64_000],
+    ids=["empty", "short", "maximum", "maximum-surrogate-pairs"],
+)
+def test_post_accepts_empty_short_and_maximum_length_descriptions(tmp_path, description):
+    status, _headers, payload = client_for(tmp_path).request(
+        "POST", "/api/diagnostics/bundle", body=json.dumps({"description": description}).encode(),
+    )
+    assert status == 200
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        assert archive.read("description.txt").decode() == description
+        assert not any(name.startswith("design/") for name in archive.namelist())
+
+
+@pytest.mark.parametrize("body", [[], {"description": 3}, {"description": "x" * 64_001}])
+def test_invalid_descriptions_are_refused_with_a_remedy(tmp_path, body):
+    status, _headers, payload = client_for(tmp_path).request(
+        "POST", "/api/diagnostics/bundle", body=json.dumps(body).encode(),
+    )
+    assert status in (400, 413)
+    assert "description" in json.loads(payload)["detail"].lower()
+    assert "then save" in json.loads(payload)["detail"].lower()
 
 
 def test_a_selected_run_adds_its_log(tmp_path: Path) -> None:
@@ -318,7 +363,7 @@ def test_the_client_log_body_is_capped_by_the_application(tmp_path: Path) -> Non
     """
 
     from server.app import create_app
-    from server.diagnostics.api import CLIENT_LOG_PATH, MAX_CLIENT_LOG_BODY_BYTES
+    from server.diagnostics.api import BUNDLE_PATH, CLIENT_LOG_PATH, MAX_CLIENT_LOG_BODY_BYTES, MAX_REPORT_BODY_BYTES
 
     application = create_app(data_dir=tmp_path)
     limits = [
@@ -327,3 +372,17 @@ def test_the_client_log_body_is_capped_by_the_application(tmp_path: Path) -> Non
         if "path_limits" in getattr(middleware, "kwargs", {})
     ]
     assert limits and limits[0][CLIENT_LOG_PATH] == MAX_CLIENT_LOG_BODY_BYTES
+    assert limits[0][BUNDLE_PATH] == MAX_REPORT_BODY_BYTES
+
+
+def test_the_report_body_is_capped_before_parsing(tmp_path):
+    from server.app import _RequestBodyLimitMiddleware
+    from server.diagnostics.api import BUNDLE_PATH, MAX_REPORT_BODY_BYTES
+
+    client = Client(_RequestBodyLimitMiddleware(
+        client_for(tmp_path).app, max_body_bytes=64 * 1024 * 1024,
+        path_limits={BUNDLE_PATH: MAX_REPORT_BODY_BYTES},
+    ))
+    status, _headers, payload = client.request("POST", BUNDLE_PATH, body=b" " * (MAX_REPORT_BODY_BYTES + 1))
+    assert status == 413
+    assert "limit" in json.loads(payload)["detail"]

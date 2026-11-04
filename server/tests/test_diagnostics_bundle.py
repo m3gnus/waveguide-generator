@@ -196,6 +196,30 @@ def test_the_design_is_included_when_the_box_is_ticked(paths) -> None:
     assert json.loads(members["manifest.json"])["includesDesign"] is True
 
 
+def test_description_adds_only_scrubbed_text_and_its_manifest_entry(paths, monkeypatch) -> None:
+    monkeypatch.setattr("server.diagnostics.bundle._now_iso", lambda: "2026-11-04T00:00:00Z")
+    arguments = {
+        "include_design": True,
+        "design_draft": json.dumps({"throat": 25.4, "samples": [0.0, 1.23456789012345]}),
+        "job_id": "run-7", "job_log": "log\n",
+        "job_request": {"design": {"throat": 25.4}, "results": [0.0, 1.23456789012345]},
+    }
+    original = build(paths, **arguments)
+    description = "Read /home/ada/Documents/repro.cfg\n" + "step\n" * 4000 + "FINAL MARKER\n"
+    described = build(paths, description=description, **arguments)
+    text = described.pop("description.txt")
+    assert text == description.replace("/home/ada", "~").encode()
+    assert text.endswith(b"FINAL MARKER\n")
+    manifest = json.loads(described.pop("manifest.json"))
+    entry = next(member for member in manifest["members"] if member["name"] == "description.txt")
+    assert entry["bytes"] == len(text)
+    assert "what happened" in entry["note"].lower()
+    manifest["members"].remove(entry)
+    assert manifest == json.loads(original.pop("manifest.json"))
+    # Every pre-existing member, including saved designs and numbers, is byte-identical.
+    assert described == original
+
+
 def test_an_unrecognised_settings_namespace_is_withheld(paths) -> None:
     """A namespace added later must not ship itself into every report."""
 

@@ -995,7 +995,8 @@ export interface paths {
         /** Download Bundle */
         get: operations["download_bundle_api_diagnostics_bundle_get"];
         put?: never;
-        post?: never;
+        /** Download Described Bundle */
+        post: operations["download_described_bundle_api_diagnostics_bundle_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9483,6 +9484,42 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_described_bundle_api_diagnostics_bundle_post: {
+        parameters: {
+            query?: {
+                job?: string | null;
+                design?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

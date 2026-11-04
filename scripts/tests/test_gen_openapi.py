@@ -16,6 +16,19 @@ def test_committed_directivity_request_documents_display_range() -> None:
     assert "display_range_db" not in request["required"]
 
 
+def test_committed_diagnostics_bundle_documents_described_downloads() -> None:
+    schema = json.loads(gen_openapi.OUTPUT.read_text(encoding="utf-8"))
+    bundle = schema["paths"]["/api/diagnostics/bundle"]
+    described = bundle["post"]
+    assert described["operationId"] == "download_described_bundle_api_diagnostics_bundle_post"
+    assert described["parameters"] == bundle["get"]["parameters"]
+    assert {parameter["name"] for parameter in described["parameters"]} == {"job", "design"}
+    assert described["requestBody"]["required"] is True
+    assert "application/json" in described["requestBody"]["content"]
+    assert "requestBody" not in bundle["get"]
+    assert "200" in described["responses"]
+
+
 def test_committed_openapi_matches_the_live_application() -> None:
     rendered = gen_openapi.render()
     assert gen_openapi.OUTPUT.read_text(encoding="utf-8") == rendered

@@ -56,6 +56,10 @@ RECENT_JOB_COUNT = 10
 #: limit stops the log itself from filling.
 MAX_CLIENT_ERRORS = 50
 MAX_CLIENT_ERROR_BYTES = 8 * 1024
+MAX_REPORT_DESCRIPTION_CHARS = 64_000
+BUNDLE_PATH = "/api/diagnostics/bundle"
+# Enough for 64,000 characters even when JSON uses escaped surrogate pairs.
+MAX_REPORT_BODY_BYTES = 1024 * 1024
 
 #: The client-log path and its own body ceiling.
 #:
@@ -170,6 +174,29 @@ def create_diagnostics_router(
         job: str | None = Query(default=None),
         design: bool = Query(default=False),
     ) -> Response:
+        # Crash reporting still needs a description-free ordinary GET.
+        return await _bundle(job=job, design=design)
+
+    @router.post("/bundle")
+    async def download_described_bundle(
+        entry: Any = Body(...),
+        job: str | None = Query(default=None),
+        design: bool = Query(default=False),
+    ) -> Response:
+        description = entry.get("description", "") if isinstance(entry, Mapping) else None
+        if not isinstance(description, str):
+            raise HTTPException(
+                status_code=400,
+                detail="WG could not read the report description. Enter text in What happened, then save again.",
+            )
+        if len(description) > MAX_REPORT_DESCRIPTION_CHARS:
+            raise HTTPException(
+                status_code=413,
+                detail=f"The report description is too long. Keep What happened to at most {MAX_REPORT_DESCRIPTION_CHARS:,} characters, then save again.",
+            )
+        return await _bundle(job=job, design=design, description=description)
+
+    async def _bundle(*, job: str | None, design: bool, description: str | None = None) -> Response:
         capabilities = await capabilities_or_none(engine_registry, timeout=probe_timeout)
         rules = scrub_rules()
         system = collect_system()
@@ -219,6 +246,7 @@ def create_diagnostics_router(
             include_design=design,
             frontend_errors=errors.snapshot(),
             incidents=incidents,
+            description=description,
         )
         log.info(
             "Problem report built: %d bytes, job=%s, design=%s", len(payload), job or "-", design
@@ -342,11 +370,14 @@ def mount_diagnostics(
 
 
 __all__ = [
+    "BUNDLE_PATH",
     "CLIENT_ERROR_RATE",
     "CLIENT_LOG_PATH",
     "MAX_CLIENT_LOG_BODY_BYTES",
     "MAX_CLIENT_ERRORS",
     "MAX_CLIENT_ERROR_BYTES",
+    "MAX_REPORT_BODY_BYTES",
+    "MAX_REPORT_DESCRIPTION_CHARS",
     "ClientErrorLog",
     "create_diagnostics_router",
     "mount_diagnostics",

@@ -777,6 +777,11 @@ export function downloadBlob(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+/** Save server bytes under the attachment name supplied by their owner. */
+export async function downloadResponse(response: Response, fallback: string): Promise<void> {
+  downloadBlob(await response.blob(), responseFilename(response, fallback));
+}
+
 export function downloadText(text: string, filename: string, type = 'text/plain;charset=utf-8'): void {
   downloadBlob(new Blob([text], { type }), filename);
 }

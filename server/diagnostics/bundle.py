@@ -81,6 +81,7 @@ SETTINGS_ALLOWLIST = (
 DESIGN_NAMESPACES = ("designDraft",)
 
 _MEMBER_NOTES = {
+    "description.txt": "What happened, as entered in the report dialog; home and data paths rewritten.",
     "manifest.json": "This file: what the report contains and what was rewritten.",
     "summary.json": "Build, platform, solver availability, recent runs.",
     "system.json": "Operating system, Python, WG2_* environment variables.",
@@ -440,6 +441,7 @@ def build_bundle(
     include_design: bool = False,
     frontend_errors: Sequence[Mapping[str, Any]] = (),
     incidents: Sequence[Mapping[str, Any]] = (),
+    description: str | None = None,
 ) -> bytes:
     """Zip every available member, and never fail because one was missing.
 
@@ -450,6 +452,8 @@ def build_bundle(
     """
 
     members: dict[str, bytes] = {}
+    if description is not None:
+        members["description.txt"] = scrub_text(description, rules).encode("utf-8")
 
     def add_json(name: str, value: Any) -> None:
         members[name] = (

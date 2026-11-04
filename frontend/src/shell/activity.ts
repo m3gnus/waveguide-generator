@@ -26,7 +26,9 @@ export type ActivityKind =
   | 'folder-select'
   | 'settings-read'
   | 'settings-write'
-  | 'onshape-check';
+  | 'onshape-check'
+  | 'diagnostics-bundle'
+  | 'diagnostics-summary';
 
 export interface ActivityProgress {
   done: number;

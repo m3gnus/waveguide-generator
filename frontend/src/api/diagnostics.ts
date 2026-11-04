@@ -1,5 +1,6 @@
 import { httpErrorMessage } from './httpError';
 import { deadlineFetch } from './deadlineFetch';
+import { activityOperation } from '../shell/activityOperation';
 import type { JobStatus } from './jobsSocket';
 /**
  * The problem-report surface.
@@ -61,9 +62,11 @@ export interface DiagnosticsReport {
 }
 
 export async function getDiagnosticsReport(fetcher: typeof fetch = fetch): Promise<DiagnosticsReport> {
-  const response = await deadlineFetch(fetcher, '/api/diagnostics/summary');
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not gather the report details. Try again.'));
-  return response.json() as Promise<DiagnosticsReport>;
+  return activityOperation({ kind: 'diagnostics-summary', label: 'Collecting problem report details' }, fetcher, async (fetcher) => {
+    const response = await deadlineFetch(fetcher, '/api/diagnostics/summary');
+    if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not gather the report details. Try again.'));
+    return response.json() as Promise<DiagnosticsReport>;
+  });
 }
 
 export async function openLogsFolder(fetcher: typeof fetch = fetch): Promise<void> {
@@ -71,13 +74,30 @@ export async function openLogsFolder(fetcher: typeof fetch = fetch): Promise<voi
   if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not open the logs folder. Download a problem report instead.'));
 }
 
-/** A plain URL, so the download can be an anchor rather than a fetch. */
+/** The description-free download URL retained for crash reporting. */
 export function bundleUrl({ job, design }: { job?: string; design?: boolean } = {}): string {
   const query = new URLSearchParams();
   if (job) query.set('job', job);
   if (design) query.set('design', 'true');
   const suffix = query.toString();
   return `/api/diagnostics/bundle${suffix ? `?${suffix}` : ''}`;
+}
+
+/** Keep the full description out of URLs and save the existing bundle's bytes. */
+export async function saveDiagnosticsReport(
+  { job, design, description }: { job?: string; design?: boolean; description: string },
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  return activityOperation({ kind: 'diagnostics-bundle', label: 'Saving problem report' }, fetcher, async (fetcher) => {
+    const response = await fetcher(bundleUrl({ job, design }), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description }),
+    });
+    if (response.status === 413) throw new Error('The report description is too long. Keep What happened to at most 64,000 characters, then save again.');
+    if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not save the report. Try again.'));
+    const { downloadResponse } = await import('./designIo');
+    await downloadResponse(response, 'wg-report.zip');
+  });
 }
 
 /** The dropdown value in `.github/ISSUE_TEMPLATE/bug.yml`, matched exactly. */

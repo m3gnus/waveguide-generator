@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bundleUrl, issueUrl, platformOption, MAX_ISSUE_URL_BYTES, type DiagnosticsSummary } from '../api/diagnostics';
 import { JOB_STATUSES } from '../api/jobsSocket';
 import { ReportDialog, defaultJob, type ReportJob } from './ReportDialog';
+import { activityStore } from './activity';
 
 const SUMMARY: DiagnosticsSummary = {
   schema: 1,
@@ -120,6 +121,11 @@ describe('ReportDialog', () => {
   let root: Root;
 
   beforeEach(() => {
+    vi.stubGlobal('URL', class extends URL {
+      static createObjectURL = vi.fn(() => 'blob:report');
+      static revokeObjectURL = vi.fn();
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
       JSON.stringify({ summary: SUMMARY, text: 'Waveguide Generator 0.3.0 (0.3.0+gabcd1234)' }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -132,12 +138,26 @@ describe('ReportDialog', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    activityStore.reset();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
   async function render(open = true) {
     await act(async () => {
       root.render(<ReportDialog open={open} jobs={JOBS} onClose={() => undefined}/>);
+    });
+  }
+
+  function button(label: string): HTMLButtonElement {
+    return [...host.querySelectorAll('button')].find((entry) => entry.textContent === label)!;
+  }
+
+  async function describeProblem(text: string) {
+    await act(async () => {
+      const textarea = host.querySelector('textarea')!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
     });
   }
 
@@ -177,11 +197,63 @@ describe('ReportDialog', () => {
     expect(document.querySelector<HTMLInputElement>('.report-design-toggle input')!.checked).toBe(false);
   });
 
-  it('points the download at the selected run without the design', async () => {
+  it('keeps saving available without requiring a diagnostic summary', async () => {
     await render();
-    const link = document.querySelector<HTMLAnchorElement>('.report-dialog-actions a.primary')!;
-    expect(link.getAttribute('href')).toBe('/api/diagnostics/bundle?job=run-b');
-    expect(link.hasAttribute('download')).toBe(true);
+    expect(button('Save report').disabled).toBe(false);
+  });
+
+  it('saves the current complete description, run and design choice through the bundle owner', async () => {
+    await render();
+    const description = 'Reproduction step\n'.repeat(1500) + 'UNIQUE FINAL MARKER';
+    await describeProblem('Earlier draft');
+    await describeProblem(description);
+    await act(async () => {
+      host.querySelector<HTMLInputElement>('.report-design-toggle input')!.click();
+      const select = host.querySelector('select')!;
+      select.value = 'run-a';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const zip = new Uint8Array([80, 75, 3, 4, 0, 255]);
+    const fetcher = vi.mocked(fetch).mockResolvedValue(new Response(zip, {
+      headers: { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="wg-report-test.zip"' },
+    }));
+    const issue = new URL(host.querySelector<HTMLAnchorElement>('a[target="_blank"]')!.href);
+    expect(issue.href.length).toBeLessThanOrEqual(MAX_ISSUE_URL_BYTES);
+    expect(issue.searchParams.get('what-happened')).not.toContain('UNIQUE FINAL MARKER');
+    await act(async () => {
+      button('Save report').click();
+      await vi.waitFor(() => expect(URL.createObjectURL).toHaveBeenCalled());
+    });
+    expect(fetcher).toHaveBeenLastCalledWith('/api/diagnostics/bundle?job=run-a&design=true', expect.objectContaining({
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description }),
+    }));
+    const saved = vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob;
+    expect(new Uint8Array(await saved.arrayBuffer())).toEqual(zip);
+    const anchor = vi.mocked(HTMLAnchorElement.prototype.click).mock.instances[0] as HTMLAnchorElement;
+    expect(anchor.download).toBe('wg-report-test.zip');
+  });
+
+  it('registers saving in the status bar and offers an actionable failure without starting a download', async () => {
+    await render();
+    let resolve!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation(() => new Promise((done) => { resolve = done; }));
+    await act(async () => { button('Save report').click(); });
+    expect(button('Saving report…').disabled).toBe(true);
+    expect(activityStore.getSnapshot()).toEqual([expect.objectContaining({ label: 'Saving problem report' })]);
+    await act(async () => { resolve(new Response(JSON.stringify({ detail: 'This run no longer exists. Choose another run for the report.' }), { status: 404 })); });
+    expect(host.textContent).toContain('This run no longer exists. Choose another run for the report.');
+    expect(button('Save report').disabled).toBe(false);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(activityStore.getSnapshot()).toEqual([]);
+  });
+
+  it('explains how to recover when the request body exceeds the report limit', async () => {
+    await render();
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ detail: 'Request body exceeds the 1 MB limit.' }), { status: 413 }));
+    await act(async () => { button('Save report').click(); });
+    expect(host.textContent).toContain('Keep What happened to at most 64,000 characters, then save again.');
+    expect(button('Save report').disabled).toBe(false);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
   it('reports a backend that cannot answer instead of showing an empty box', async () => {
@@ -193,6 +265,66 @@ describe('ReportDialog', () => {
     expect(document.querySelector('.report-dialog-body')?.textContent)
       .toContain('WG could not gather the report details. Try again.');
     // The report itself is still reachable: the summary is a convenience.
-    expect(document.querySelector<HTMLAnchorElement>('.report-dialog-actions a.primary')).not.toBeNull();
+    expect(button('Save report').disabled).toBe(false);
+  });
+
+  it('cannot copy until the current diagnostics and their response body arrive', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    let resolve!: (value: { summary: DiagnosticsSummary; text: string }) => void;
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: () => new Promise((done) => { resolve = done; }) } as Response);
+    await render();
+    expect(button('Copy summary').disabled).toBe(true);
+    expect(host.querySelector('pre')?.textContent).toBe('Collecting…');
+    expect(activityStore.getSnapshot()).toEqual([expect.objectContaining({ label: 'Collecting problem report details' })]);
+    await act(async () => { button('Copy summary').click(); });
+    expect(writeText).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain('Summary copied.');
+
+    await act(async () => { resolve({ summary: SUMMARY, text: 'Current summary' }); });
+    expect(button('Copy summary').disabled).toBe(false);
+    expect(activityStore.getSnapshot()).toEqual([]);
+    await describeProblem('New reproduction');
+    await act(async () => { button('Copy summary').click(); });
+    expect(writeText).toHaveBeenCalledWith('Current summary\n\nNew reproduction');
+    expect(host.textContent).toContain('Summary copied.');
+  });
+
+  it('invalidates a previous summary on reopening, keeps Copy disabled after failure and retries', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    await render();
+    await render(false);
+    let reject!: (reason: Error) => void;
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    await render();
+    expect(host.querySelector('pre')?.textContent).toBe('Collecting…');
+    expect(button('Copy summary').disabled).toBe(true);
+    await act(async () => { reject(new Error('WG could not gather the report details. Try again.')); });
+    expect(host.querySelector('pre')?.textContent).toBe('Unavailable.');
+    expect(button('Copy summary').disabled).toBe(true);
+    await act(async () => { button('Copy summary').click(); });
+    expect(writeText).not.toHaveBeenCalled();
+    expect(activityStore.getSnapshot()).toEqual([]);
+
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ summary: SUMMARY, text: 'Retried summary' })));
+    await act(async () => { button('Retry').click(); });
+    expect(host.querySelector('pre')?.textContent).toBe('Retried summary');
+    expect(host.querySelector('.notice-error')).toBeNull();
+    expect(button('Copy summary').disabled).toBe(false);
+    await act(async () => { button('Copy summary').click(); });
+    expect(writeText).toHaveBeenCalledWith('Retried summary');
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('ignores an older response that arrives after reopening has loaded a fresh summary', async () => {
+    let resolve!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    await render();
+    await render(false);
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ summary: SUMMARY, text: 'Fresh summary' })));
+    await render();
+    await act(async () => { resolve(new Response(JSON.stringify({ summary: SUMMARY, text: 'Stale summary' }))); });
+    expect(host.querySelector('pre')?.textContent).toBe('Fresh summary');
   });
 });

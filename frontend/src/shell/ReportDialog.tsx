@@ -1,7 +1,7 @@
 import { Notice } from './Notice';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  bundleUrl,
+  saveDiagnosticsReport,
   getDiagnosticsReport,
   issueUrl,
   openLogsFolder,
@@ -59,11 +59,14 @@ export function ReportDialog({ open, jobs, onClose }: {
 }) {
   const dialog = useModalDialogFocus<HTMLDivElement>({ open, onClose });
   const [report, setReport] = useState<DiagnosticsReport>();
+  const [loading, setLoading] = useState(true);
+  const [readAttempt, setReadAttempt] = useState(0);
   const [error, setError] = useState<string>();
   const [feedback, setFeedback] = useState<string>();
   const [details, setDetails] = useState('');
   const [includeDesign, setIncludeDesign] = useState(false);
   const [job, setJob] = useState<string>();
+  const [saving, setSaving] = useState(false);
 
   // Read through a ref so the effect below can seed itself from the current
   // run list without re-running whenever that list changes: a solve finishing
@@ -82,31 +85,43 @@ export function ReportDialog({ open, jobs, onClose }: {
   }, [open]);
 
   useEffect(() => {
+    setReport(undefined);
     if (!open) return;
     let current = true;
+    setLoading(true);
     setError(undefined);
     getDiagnosticsReport()
       .then((value) => { if (current) setReport(value); })
       .catch((reason: unknown) => {
         if (current) setError(failureWords(reason));
-      });
+      })
+      .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [open]);
+  }, [open, readAttempt]);
 
-  const downloadUrl = useMemo(
-    () => bundleUrl({ job, design: includeDesign }),
-    [includeDesign, job],
-  );
+  const saveReport = useCallback(async () => {
+    if (saving) return;
+    setSaving(true);
+    setFeedback(undefined);
+    try {
+      await saveDiagnosticsReport({ job, design: includeDesign, description: details });
+    } catch (reason) {
+      setFeedback(failureWords(reason));
+    } finally {
+      setSaving(false);
+    }
+  }, [details, includeDesign, job, saving]);
 
   const copySummary = useCallback(async () => {
-    const text = [report?.text, details.trim()].filter(Boolean).join('\n\n');
+    if (loading || !report) return;
+    const text = [report.text, details.trim()].filter(Boolean).join('\n\n');
     try {
       await navigator.clipboard.writeText(text);
       setFeedback('Summary copied.');
     } catch {
       setFeedback('Copying is unavailable here — select the text above instead.');
     }
-  }, [details, report?.text]);
+  }, [details, loading, report]);
 
   const openFolder = useCallback(async () => {
     try {
@@ -156,15 +171,15 @@ export function ReportDialog({ open, jobs, onClose }: {
 
         <section className="report-summary" aria-labelledby="report-summary-title">
           <h3 id="report-summary-title">What this report says about your machine</h3>
-          {error && <Notice tone="error" role="status">{error}</Notice>}
+          {error && <Notice tone="error" role="status" actions={<button className="btn" onClick={() => setReadAttempt((attempt) => attempt + 1)}>Retry</button>}>{error}</Notice>}
           <pre tabIndex={0}>{report?.text ?? (error ? 'Unavailable.' : 'Collecting…')}</pre>
           <p className="cad-settings-note report-summary-scope">This text is exactly what Copy summary puts on the clipboard. WG replaces the names and ids of the models it knows in it; read it before you paste it anywhere. The GitHub issue starts with only the build, the platform and what you write above.</p>
-          <p className="cad-settings-note report-file-scope">The saved file adds the application log, the selected run&rsquo;s log, WG&rsquo;s records of its own recent internal problems (what failed, the versions, run and request ids, error stacks, and the last lines of the logs of the runs they name), and a <code>manifest.json</code> listing everything in it. Model and part names may appear in it. Your user name is rewritten out of every path.</p>
+          <p className="cad-settings-note report-file-scope">The saved file adds what you wrote in What happened, the application log, the selected run&rsquo;s log, WG&rsquo;s records of its own recent internal problems (what failed, the versions, run and request ids, error stacks, and the last lines of the logs of the runs they name), and a <code>manifest.json</code> listing everything in it. Model and part names may appear in it. Your user name is rewritten out of every path.</p>
         </section>
 
         <div className="report-dialog-actions">
-          <a className="btn-primary primary" href={downloadUrl} download>Save report</a>
-          <button className="btn" onClick={() => void copySummary()}>Copy summary</button>
+          <button className="btn-primary primary" onClick={() => void saveReport()} disabled={saving}>{saving ? 'Saving report…' : 'Save report'}</button>
+          <button className="btn" onClick={() => void copySummary()} disabled={loading || !report}>Copy summary</button>
           <button className="btn" onClick={() => void openFolder()}>Open logs folder</button>
           <a href={issueUrl(report?.summary, details)} target="_blank" rel="noreferrer">Open a GitHub issue</a>
         </div>

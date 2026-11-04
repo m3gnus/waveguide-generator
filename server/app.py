@@ -22,7 +22,7 @@ from server.engines.registry import EngineRegistry, detect_engines
 from server.design.schema import DesignConfig
 from server.charts import mount_charts
 from server.diagnostics import mount_diagnostics
-from server.diagnostics.api import CLIENT_LOG_PATH, MAX_CLIENT_LOG_BODY_BYTES
+from server.diagnostics.api import BUNDLE_PATH, CLIENT_LOG_PATH, MAX_CLIENT_LOG_BODY_BYTES, MAX_REPORT_BODY_BYTES
 from server.diagnostics.capabilities import capabilities_payload
 from server.cadlink import mount_cadlink, mount_onshape
 from server.cadlink.build_flags import onshape_enabled
@@ -518,6 +518,7 @@ def create_app(
         path_limits={
             _WORKSPACE_EXPORT_PATH: MAX_EXPORT_REQUEST_BODY_BYTES,
             CLIENT_LOG_PATH: MAX_CLIENT_LOG_BODY_BYTES,
+            BUNDLE_PATH: MAX_REPORT_BODY_BYTES,
         },
     )
     # One persistent owner thread services every gmsh call.  Prewarming here
