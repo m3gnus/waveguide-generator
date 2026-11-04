@@ -1,24 +1,17 @@
 import { showsRetainedMesh, type CurrentModel } from '../model/currentModel';
 import { designAssemblySnapshot, NEEDS_BUILD } from './assemblySolve';
 import { useDesignStore } from '../stores/design';
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMemo, useSyncExternalStore } from 'react';
 import {
   importedSolvePlanRequestBody,
   postImportedSolvePlan,
-  SolvePlanRefused,
   type ImportedSolvePlan,
   type ImportedSolveSubmission,
 } from './actions';
 import { buildImportedSubmission, type PreparedSubmission } from './importedSubmission';
 import { capabilityFingerprint } from './capabilityFingerprint';
 import { useCapabilities } from './useCapabilities';
-import {
-  SOLVE_PLAN_DEBOUNCE_MS,
-  SOLVE_PLAN_FAULT_RETRIES,
-  SOLVE_PLAN_GC_MS,
-  SOLVE_PLAN_RECOVERY_MS,
-} from './planQueryPolicy';
+import { usePlanQuery } from './usePlanQuery';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { fileMeshSubmission, fileSubmissionSnapshot, useMeshImportStore } from '../stores/meshImport';
@@ -43,11 +36,6 @@ export interface ImportedSolvePlanSnapshot {
   plan: ImportedSolvePlan | null;
   error: string | null;
   isPending: boolean;
-}
-
-/** A refusal is the server's answer and stands; anything else is worth asking again. */
-function isFault(error: unknown): boolean {
-  return !(error instanceof SolvePlanRefused);
 }
 
 /**
@@ -91,36 +79,9 @@ export function useImportedSolvePlan(enabled: boolean, preparedSubmission?: Impo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, cadReturn, solveOptions, preparedSubmission, workspace.importedInput, file, viewport, opened]);
   const capabilityKey = capabilityFingerprint(engines);
-  const [settledBody, setSettledBody] = useState<string | null>(currentBody);
-
-  useEffect(() => {
-    if (currentBody === null) {
-      setSettledBody(null);
-      return undefined;
-    }
-    if (currentBody === settledBody) return undefined;
-    const timer = window.setTimeout(() => setSettledBody(currentBody), SOLVE_PLAN_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [currentBody, settledBody]);
-
-  const query = useQuery({
-    queryKey: ['imported-solve-plan', settledBody, capabilityKey],
-    queryFn: ({ signal }) => postImportedSolvePlan(settledBody!, fetch, signal),
-    enabled: settledBody !== null,
-    staleTime: Infinity,
-    gcTime: SOLVE_PLAN_GC_MS,
-    retry: (failureCount, error) => failureCount < SOLVE_PLAN_FAULT_RETRIES && isFault(error),
-    refetchInterval: (entry) =>
-      entry.state.status === 'error' && isFault(entry.state.error)
-        ? SOLVE_PLAN_RECOVERY_MS
-        : false,
-  });
-  const currentIsSettled = currentBody !== null && currentBody === settledBody;
+  const query = usePlanQuery(currentBody, 'imported-solve-plan', postImportedSolvePlan, [capabilityKey]);
   return {
-    plan: currentIsSettled ? query.data ?? null : null,
-    error: currentIsSettled && query.error
-      ? failureWords(query.error)
-      : null,
-    isPending: currentBody !== null && (!currentIsSettled || query.isPending),
+    ...query,
+    error: query.error ? failureWords(query.error) : null,
   };
 }

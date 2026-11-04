@@ -1,5 +1,6 @@
 from pathlib import Path
 from importlib.metadata import PackageNotFoundError, distribution
+import json
 from types import SimpleNamespace
 
 from packaging.markers import default_environment
@@ -114,7 +115,16 @@ def test_hash_refresh_invalidates_runtime_recipe(tmp_path: Path) -> None:
     assert initial != build_bundle.runtime_recipe(tmp_path)
 
 
-def test_force_inventory_accepts_generated_hash_continuations() -> None:
-    # Inventory must parse generated pins, never treat --hash as a package.
-    names = bootstrap._declared_distribution_names()
-    assert "numpy" in names and "colorama" in names and "pytest" in names
+def test_force_inventory_uses_metadata_closure_without_parsing_hash_continuations(monkeypatch) -> None:
+    # The root-only parser must not become a second cleanup inventory again.
+    assert not hasattr(bootstrap, "_declared_distribution_names")
+    retained = ["numpy", "colorama", "pytest", "required-transitive"]
+
+    def probe(command, **kwargs):
+        assert "module['_required_distribution_closure']" in command[2]
+        roots = [Requirement(raw).name.lower() for raw in json.loads(command[-1])]
+        assert {"pip", "numpy", "colorama", "pytest"} <= set(roots)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(retained))
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", probe)
+    assert bootstrap._retained_distribution_names(Path("target-python")) == set(retained)

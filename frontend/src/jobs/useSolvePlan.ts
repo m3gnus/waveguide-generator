@@ -1,23 +1,15 @@
-import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { postSolvePlan, SolvePlanRefused, solvePlanRequestBody, type SolvePlan, type SolveBlocker } from './actions';
 import type { DesignDocument } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
-
-import {
-  SOLVE_PLAN_DEBOUNCE_MS,
-  SOLVE_PLAN_FAULT_RETRIES,
-  SOLVE_PLAN_GC_MS,
-  SOLVE_PLAN_RECOVERY_MS,
-} from './planQueryPolicy';
 import { failureWords } from '../api/httpError';
+import { usePlanQuery } from './usePlanQuery';
 
 export {
   SOLVE_PLAN_DEBOUNCE_MS,
   SOLVE_PLAN_FAULT_RETRIES,
   SOLVE_PLAN_GC_MS,
   SOLVE_PLAN_RECOVERY_MS,
-};
+} from './planQueryPolicy';
 
 export interface SolvePlanSnapshot {
   plan: SolvePlan | null;
@@ -36,11 +28,6 @@ function requestBody(
   return solvePlanRequestBody(design, options);
 }
 
-/** A refusal is the server's answer and stands; anything else is worth asking again. */
-function isFault(error: unknown): boolean {
-  return !(error instanceof SolvePlanRefused);
-}
-
 /** Resolve the server's actual plan for the current parametric submission. */
 export function useSolvePlan(
   design: DesignDocument,
@@ -48,41 +35,10 @@ export function useSolvePlan(
   enabled = true,
 ): SolvePlanSnapshot {
   const currentBody = requestBody(design, options, enabled);
-  const [settledBody, setSettledBody] = useState<string | null>(currentBody);
-
-  useEffect(() => {
-    if (currentBody === null) {
-      setSettledBody(null);
-      return undefined;
-    }
-    if (currentBody === settledBody) return undefined;
-    const timer = window.setTimeout(
-      () => setSettledBody(currentBody),
-      SOLVE_PLAN_DEBOUNCE_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, [currentBody, settledBody]);
-
-  const query = useQuery({
-    queryKey: ['solve-plan', settledBody],
-    queryFn: ({ signal }) => postSolvePlan(settledBody!, fetch, signal),
-    enabled: settledBody !== null,
-    staleTime: Infinity,
-    gcTime: SOLVE_PLAN_GC_MS,
-    retry: (failureCount, error) =>
-      failureCount < SOLVE_PLAN_FAULT_RETRIES && isFault(error),
-    refetchInterval: (entry) =>
-      entry.state.status === 'error' && isFault(entry.state.error)
-        ? SOLVE_PLAN_RECOVERY_MS
-        : false,
-  });
-  const currentIsSettled = currentBody !== null && currentBody === settledBody;
+  const query = usePlanQuery(currentBody, 'solve-plan', postSolvePlan);
   return {
-    readiness: currentIsSettled && query.error instanceof SolvePlanRefused ? query.error.readiness : null,
-    plan: currentIsSettled ? query.data ?? null : null,
-    error: currentIsSettled && query.error
-      ? failureWords(query.error)
-      : null,
-    isPending: currentBody !== null && (!currentIsSettled || query.isPending),
+    ...query,
+    readiness: query.error instanceof SolvePlanRefused ? query.error.readiness : null,
+    error: query.error ? failureWords(query.error) : null,
   };
 }

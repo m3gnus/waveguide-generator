@@ -327,6 +327,7 @@ def test_bootstrap_force_reinstalls_all_declared_packages_and_removes_extras(
     python.touch()
     validations = iter(((True, "ready"), (True, "ready")))
     commands: list[list[str]] = []
+    retained = {"pip", "numpy", "pytest", "required-transitive"}
 
     monkeypatch.setattr(bootstrap, "_require_supported_python", lambda: None)
     monkeypatch.setattr(bootstrap, "_bootstrap_lock", lambda _environment: nullcontext())
@@ -335,7 +336,7 @@ def test_bootstrap_force_reinstalls_all_declared_packages_and_removes_extras(
     monkeypatch.setattr(
         bootstrap,
         "_installed_distribution_names",
-        lambda _python: bootstrap._declared_distribution_names() | {"obsolete-package"},
+        lambda _python: retained | {"obsolete-package"},
     )
     monkeypatch.setattr(
         bootstrap,
@@ -343,7 +344,7 @@ def test_bootstrap_force_reinstalls_all_declared_packages_and_removes_extras(
         lambda command, **_kwargs: commands.append(command) or SimpleNamespace(returncode=0),
     )
 
-    monkeypatch.setattr(bootstrap, "_retained_distribution_names", lambda _python: bootstrap._declared_distribution_names())
+    monkeypatch.setattr(bootstrap, "_retained_distribution_names", lambda _python: retained)
     bootstrap.bootstrap(environment, force=True)
 
     install_commands = [command for command in commands if "install" in command]
@@ -364,10 +365,8 @@ def test_bootstrap_force_reinstalls_all_declared_packages_and_removes_extras(
     assert "--no-deps" in forced_tools
     assert "mypy==2.4.0" in forced_tools
     assert not any(argument.startswith("pytest") for argument in forced_tools)
-    assert [
-        command
-        for command in commands
-        if "uninstall" in command and "obsolete-package" in command
+    assert [command for command in commands if "uninstall" in command] == [
+        [str(python), "-m", "pip", "uninstall", "--yes", "obsolete-package"],
     ]
 
 

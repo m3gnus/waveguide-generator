@@ -4,7 +4,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from urllib.parse import quote
 
 from fastapi import FastAPI
@@ -13,12 +13,37 @@ import pytest
 from server.cadlink.roles import inventory_sha256, prepared_inventory_sha256
 from server.cadlink.store import CadLinkStore
 from server.jobs.imported_setup import setup_content, setup_digest, validate_setup
-from server.jobs.models_api import mount_models_api, public_record
+from server.jobs.models_api import model_summary, mount_models_api, public_record, read_model
 from server.jobs.runtime import ImportedSolveRefusal, JobRuntime
 from server.jobs.store import JobStore
 from test_imported_jobs import _AlwaysRegistry
 from test_jobs_api import _request
 from test_mesh_import import register_mesh, registration, request
+
+
+@pytest.mark.parametrize("has_latest", [False, True])
+def test_model_summary_preserves_all_public_values_from_a_stored_mapping(tmp_path, has_latest):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    try:
+        record = register_mesh(store, tmp_path, registration())
+        model_id = "mesh-file:" + record["artifact_sha256"]
+        if not has_latest:
+            with store._lock, store._transaction() as conn:
+                conn.execute("UPDATE imported_models SET latest_ingest_id = NULL WHERE model_id = ?", (model_id,))
+        stored = store.get_model(model_id)
+        before = json.dumps(stored)
+        summary = model_summary(MappingProxyType(stored))
+        assert summary == {
+            "model_id": model_id, "producer": stored["producer"],
+            "display_name": stored["display_name"], "archive_stem": stored["archive_stem"],
+            "latest_prepared_id": record["ingest_id"] if has_latest else None,
+            "created_at": stored["created_at"], "updated_at": stored["updated_at"],
+        }
+        assert read_model(store, model_id, None)["model"] == summary
+        assert json.dumps(stored) == before
+        assert store.get_model(model_id) == stored
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize("producer", [None, "cad", "native", "mesh-file", "design-assembly"])

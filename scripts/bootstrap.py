@@ -341,31 +341,6 @@ def _canonical_distribution_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).casefold()
 
 
-def _declared_distribution_names() -> set[str]:
-    """Return every distribution intentionally present in the WG environment."""
-
-    names = {
-        _canonical_distribution_name(name)
-        for name in (*_locked_versions(), *_locked_git_commits())
-    }
-    for path in REQUIREMENT_FILES:
-        if path.name == "pins.json":
-            continue
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith(("#", "--hash=")):
-                continue
-            git_requirement = GIT_REQUIREMENT_RE.fullmatch(line)
-            if git_requirement is not None:
-                names.add(_canonical_distribution_name(git_requirement.group("name")))
-                continue
-            match = re.match(r"(?P<name>[A-Za-z0-9_.-]+)", line)
-            if match is None:
-                raise RuntimeError(f"Invalid requirement in {path}: {raw_line!r}")
-            names.add(_canonical_distribution_name(match.group("name")))
-    return names
-
-
 def _installed_distribution_names(python: Path) -> set[str]:
     probe = (
         "import json; from importlib.metadata import distributions; "
