@@ -11,6 +11,7 @@ import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeSymmetryLimitation } from './nativeFamilies';
 import { EnclosureResolutionField } from './EnclosureResolutionField';
 import { FrontWorkspaceLauncher } from './FrontWorkspace';
+import { SourceContourEditor } from './SourceContourEditor';
 import { AssemblyDriverStatus } from './WooferDrivers';
 import { HF_RADIATOR_ID } from '../stores/assembly';
 import { outerBodyUpdates } from './outerBodyUpdates';
@@ -1300,7 +1301,9 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
       {slots.map((id) => {
         if (id === 'control.solveDomain') return showSolveDomain ? <SolveDomainControl key={id} design={design} /> : null;
         const field = fields.find((candidate) => candidate.id === id);
-        return field && !parameterGroup(field, design) && (workspaceMode === 'cad' || id !== 'simulation.sim_type') ? <Fragment key={id}>{renderField(field)}</Fragment> : null;
+        if (!field || parameterGroup(field, design) || (workspaceMode !== 'cad' && id === 'simulation.sim_type')) return null;
+        // The Experimental source contour editor sits under the source surface it can replace.
+        return <Fragment key={id}>{renderField(field)}{showCustom && id === 'source.shape' && <SourceContourEditor row />}</Fragment>;
       })}
       {definition.groups?.filter((group) => !group.visibleWhen || group.visibleWhen(design)).map((group) => {
         const groupFields = fields.filter((field) => parameterGroup(field, design) === group.title);

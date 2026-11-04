@@ -2820,28 +2820,37 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-parameter-id="enclosure.depth"] input')?.hasAttribute('disabled')).toBe(false);
   });
 
-  it.each(['parametric', 'cad'] as const)('hides later-phase launchers from the %s rail, search and palette', (mode) => {
+  it.each(['parametric', 'cad'] as const)('shows the Experimental source contour launcher only under Source surface in the %s rail', (mode) => {
     act(() => {
       if (mode === 'cad') setCadReady();
       workspaceModeStore.setMode(mode);
     });
-    const assertHidden = () => {
+    const assertLaunchers = () => {
       expect(host.querySelector('[data-section="Experimental"]')).toBeNull();
-      expect(host.querySelector('[data-control-reveal-id="source-contour-launch"], [data-control-reveal-id="assembly-launch"]')).toBeNull();
-      expect(host.textContent).not.toContain('Edit source contour');
+      expect(host.querySelector('[data-control-reveal-id="assembly-launch"]')).toBeNull();
       expect(host.textContent).not.toContain('Edit horn + woofer assembly');
+      const launchers = host.querySelectorAll('[data-control-reveal-id="source-contour-launch"]');
+      if (mode === 'cad') { expect(launchers).toHaveLength(0); return; }
+      expect(launchers).toHaveLength(1);
+      const launcher = launchers[0];
+      expect(launcher.closest('[data-section]')?.getAttribute('data-section')).toBe('Throat');
+      expect(launcher.textContent).toContain('Source contour');
+      expect(launcher.textContent).toContain('Edit source contour…');
+      expect(launcher.querySelector('.experimental-badge, [class*="experimental"]')).not.toBeNull();
+      expect(launcher.previousElementSibling?.getAttribute('data-parameter-id')).toBe('source.shape');
     };
-    assertHidden();
+    assertLaunchers();
     for (const query of ['source contour', 'assembly', 'sketch']) {
       act(() => requestParameterReveal({ id: '', tab: 'geometry', query }));
-      assertHidden();
+      expect(host.querySelector('[data-section="Experimental"]')).toBeNull();
+      expect(host.querySelector('[data-control-reveal-id="assembly-launch"]')).toBeNull();
+      expect(host.textContent).not.toContain('Edit horn + woofer assembly');
     }
     const design = useDesignStore.getState().design;
     const entries = buildParameterPaletteEntries(design.formula, { mode, design, cadReturnReady: true });
-    expect(entries.some((entry) => ['parametric-control-source-contour', 'parametric-control-assembly'].includes(entry.id))).toBe(false);
-    expect(entries.some((entry) => /Edit source contour|Edit horn \+ woofer assembly/.test(entry.label))).toBe(false);
+    expect(entries.some((entry) => entry.id === 'parametric-control-assembly' || /Edit horn \+ woofer assembly/.test(entry.label))).toBe(false);
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    assertHidden();
+    expect(host.querySelector('[data-control-reveal-id="source-contour-launch"]')).toBeNull();
   });
 
   it('keeps Export collapsed by default', () => {
