@@ -2743,7 +2743,7 @@ describe('ParamPanel inventory UX', () => {
       useDesignStore.getState().setFamily('FREEFORM');
       root.render(withQueryClient(<ParamPanel tab="geometry" />));
     });
-    expect(host.querySelector('[aria-label="Generated bore profile"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Custom profile canvas"]')).not.toBeNull();
     // A new Custom profile has one table for both planes, plus the stations.
     expect(host.querySelectorAll('.editable-parameter-table')).toHaveLength(2);
     expect(host.querySelectorAll('.custom-profile-table')).toHaveLength(1);
@@ -2756,7 +2756,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('input[aria-label$=" strength"]')).toBeNull();
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="Station 1 shape"]')?.value).toBe('ellipse');
     act(() => useDesignStore.getState().setFamily('OSSE'));
-    expect(host.querySelector('[aria-label="Generated bore profile"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Custom profile canvas"]')).toBeNull();
   });
 
   it('groups FREEFORM controls in order, summarizes each plane and leaves saved designs unchanged', () => {
@@ -2768,7 +2768,7 @@ describe('ParamPanel inventory UX', () => {
     const before = serializeDesign(useDesignStore.getState().design);
     const profile = host.querySelector('[data-section="Profile"]')!;
     expect([...profile.querySelectorAll('[data-section]')].map((group) => group.getAttribute('data-section'))).toEqual([
-      'Throat and length', 'Horizontal profile', 'Vertical profile', 'Cross-section', 'Import points', 'Generated profile',
+      'Throat and length', 'Horizontal profile', 'Vertical profile', 'Cross-section', 'Import points', 'Profile canvas',
     ]);
     expect(profile.querySelectorAll('[role="group"][data-section]')).toHaveLength(6);
     for (const [group, ids] of [
@@ -2782,9 +2782,9 @@ describe('ParamPanel inventory UX', () => {
     expect(profile.querySelector('[data-section="Horizontal profile"] .section-summary')?.textContent).toBe('140 mm · 2 anchors');
     expect(profile.querySelector('[data-section="Vertical profile"] .section-summary')?.textContent).toBe('matches horizontal');
     expect(profile.querySelectorAll('.position-note')).toHaveLength(1);
-    expect(profile.querySelector('.profile-inspection > p')).toBeNull();
-    act(() => host.querySelector<HTMLButtonElement>('[data-section="Generated profile"] .section-head')!.click());
-    expect(profile.querySelector('.profile-inspection')).toBeNull();
+    expect(profile.querySelector('.profile-canvas')).not.toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>('[data-section="Profile canvas"] .section-head')!.click());
+    expect(profile.querySelector('.profile-canvas')).toBeNull();
     expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
     act(() => useDesignStore.getState().updateValue('profile_v.points', [{ t: 0, r: 12.7 }, { t: .5, r: 60 }, { t: 1, r: 100 }]));
     expect(profile.querySelector('[data-section="Vertical profile"] .section-summary')?.textContent).toBe('100 mm · 3 anchors');

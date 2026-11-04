@@ -67,6 +67,7 @@ import { SolverMeshTooLarge } from '../api/solverMesh';
 import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
 import { activityStore } from './activity';
+import { setProfileDraft } from '../sketch/profileDraft';
 
 // Exercise the toolbar alongside the same solve status that Results owns.
 function SolveActions() {
@@ -312,8 +313,18 @@ describe('solve invocation mutex', () => {
   } satisfies Pick<RegisteredMesh, 'summary' | 'source_file'>);
   let host: HTMLDivElement;
   let root: Root;
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const realTimeouts = new Set<ReturnType<typeof setTimeout>>();
 
   beforeEach(async () => {
+    // clearAllTimers only clears fake timers. Track real debounced settings
+    // writes too, so an earlier Solve cannot reach the next test's fetch stub.
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) => {
+      const timer = realSetTimeout(callback, delay, ...args);
+      realTimeouts.add(timer);
+      return timer;
+    });
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     mocks.refreshCapabilities.mockReset().mockResolvedValue(undefined);
     mocks.prewarmSelectedEngine.mockReset().mockResolvedValue(undefined);
@@ -378,18 +389,48 @@ describe('solve invocation mutex', () => {
   });
 
   afterEach(() => {
+    setProfileDraft(null);
     act(() => root.unmount());
     host.remove();
     publishJobs([]);
     compareSelection.clear();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    vi.clearAllMocks();
     workspaceModeStore.setImportedInput('cad');
     workspaceModeStore.setMode('parametric');
     vi.clearAllTimers();
     vi.useRealTimers();
     meshCeilingChoice.clear();
+    realTimeouts.forEach(timer => realClearTimeout(timer));
+    realTimeouts.clear();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it.each(['unfinished', 'invalid'])('blocks a Custom profile %s draft before Solve and recovers after Revert', async status => {
+    await act(async () => {
+      useDesignStore.getState().replaceDocument(designForFamily('FREEFORM'));
+      setProfileDraft({ message: `Custom profile ${status}. Open sketch or Revert to last valid before Solve.`, open: vi.fn(), revert: () => setProfileDraft(null) });
+    });
+    expect(solveControlStore.getSnapshot()!.disabled).toBe(true);
+    expect(solveControlStore.getSnapshot()!.title).toContain(status);
+    await act(async () => { expect(await solveControlStore.getSnapshot()!.solve()).toBe('blocked'); });
+    expect(mocks.submitDesign).not.toHaveBeenCalled(); expect(mocks.postSolverMesh).not.toHaveBeenCalled();
+    await act(async () => setProfileDraft(null));
+    expect(solveControlStore.getSnapshot()!.disabled).toBe(false);
+  });
+
+  it('blocks a Custom profile draft opened while the mesh request was in flight', async () => {
+    let finishMesh!: (value: object) => void;
+    mocks.postSolverMesh.mockReturnValue(new Promise(resolve => { finishMesh = resolve; }));
+    await act(async () => useDesignStore.getState().replaceDocument(designForFamily('FREEFORM')));
+    let request!: Promise<unknown>;
+    await act(async () => { request = solveControlStore.getSnapshot()!.solve(); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => {
+      setProfileDraft({ message: 'Custom profile is unfinished. Open sketch or Revert to last valid before Solve.', open: vi.fn(), revert: vi.fn() });
+      finishMesh({}); await request;
+    });
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    expect(solveControlStore.getSnapshot()!.disabled).toBe(true);
   });
 
   it.each(['parametric', 'expression', 'file', 'cad'] as const)('%s: shows a completed solve with the exact submitted snapshot', async kind => {

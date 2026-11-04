@@ -1,10 +1,11 @@
-import { Fragment, useEffect, useId, useMemo, useState } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { setProfileDraft } from '../sketch/profileDraft';
 import { useDesignStore, type CrossSectionStation, type DesignDocument, type FreeformPoint } from '../stores/design';
 import type { CurveAnchor, CurveDeviation, InsertMode } from '../api/freeformProfile';
 import type { GeneratedPlaneChange } from '../api/profileSamples';
 import { Notice } from '../shell/Notice';
 import {
-  activePlanes, angleField, commitProfileEdit, currentEditOrigin, deleteAnchor, formatAngle, formatMm, horizontalThroatForVertical, insertAnchorBuilder,
+  activePlanes, angleField, commitProfileEdit, currentEditOrigin, deleteAnchor, editLookupAnchor, formatAngle, formatMm, horizontalThroatForVertical, insertAnchorBuilder, lookupPositionError,
   isSharedProfile, isUnseparatedVertical, MAX_FREEFORM_ANCHORS, moveMouthBuilder, previewAcceptable, separateVerticalBlocker, setAnchorAngle, setAnchorJoin,
   pasteBuilder, setAnchorValue, setSeparateVertical, spliceCrossSectionStations, stretchLengthBuilder, useCurrentProfileCurves, useProfileEdit, type Plane,
 } from './customProfileEdit';
@@ -125,15 +126,12 @@ export function EditableLookupTable({ field, points }: { field: ParameterDefinit
     try { return text.trim() ? parseLookupPasteRows(text).pairs : null; }
     catch (reason) { return reason instanceof Error ? reason : new Error(String(reason)); }
   }, [text]);
-  const positionError = (index: number, z: number) =>
-    (index > 0 && z <= points[index - 1][0]) || (index < points.length - 1 && z >= points[index + 1][0])
-      ? LOOKUP_ORDER_MESSAGE : undefined;
+  const positionError = (index: number, z: number) => lookupPositionError(points, index, z);
   const write = (index: number, axis: 0 | 1, value: number) => {
     // A label scrub bypasses `validate`, so the order rule is enforced here too.
     if (axis === 0 && positionError(index, value)) return;
-    const next = structuredClone(points);
-    next[index][axis] = value;
-    updateValue('lookup_profile', next);
+    const result = editLookupAnchor(useDesignStore.getState().design, { kind: 'move', index, [axis === 0 ? 'z' : 'r']: value });
+    updateValue('lookup_profile', result.after.lookup_profile!);
   };
   const tableWarning = lookupRadiusWarning(points.map(([, r]) => r));
   const pasteWarning = parsed && !(parsed instanceof Error) ? lookupRadiusWarning(parsed.map(({ r }) => r), parsed.map(({ line }) => line)) : undefined;
@@ -142,9 +140,8 @@ export function EditableLookupTable({ field, points }: { field: ParameterDefinit
     for (let index = 1; index < points.length - 1; index += 1) {
       if (points[index + 1][0] - points[index][0] > points[gap + 1][0] - points[gap][0]) gap = index;
     }
-    const left = points[gap]; const right = points[gap + 1];
-    const pair: [number, number] = [(left[0] + right[0]) / 2, (left[1] + right[1]) / 2];
-    updateValue('lookup_profile', [...points.slice(0, gap + 1), pair, ...points.slice(gap + 1)]);
+    const result = editLookupAnchor(useDesignStore.getState().design, { kind: 'insert', z: (points[gap][0] + points[gap + 1][0]) / 2 });
+    updateValue('lookup_profile', result.after.lookup_profile!);
   };
   return <div className="editable-parameter-table" role="group" aria-label={field.label}>
     <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{points.length} points</span></div>
@@ -155,7 +152,7 @@ export function EditableLookupTable({ field, points }: { field: ParameterDefinit
           formatRangeError={() => LOOKUP_ORDER_MESSAGE}
           validate={(value) => positionError(index, value)} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => write(index, 0, value)} /></td>
         <td><NumberField label={`Lookup point ${index + 1} radius`} value={r} step={.1} precision={4} unit="mm" onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => write(index, 1, value)} /></td>
-        <td><button className="icon-button" type="button" aria-label={`Remove lookup point ${index + 1}`} disabled={points.length <= 2} onClick={() => updateValue('lookup_profile', points.filter((_point, item) => item !== index))}>−</button></td>
+        <td><button className="icon-button" type="button" aria-label={`Remove lookup point ${index + 1}`} disabled={points.length <= 2} onClick={() => updateValue('lookup_profile', editLookupAnchor(useDesignStore.getState().design, { kind: 'delete', index }).after.lookup_profile!)}>−</button></td>
       </tr>)}
     </tbody></table>
     {tableWarning && <div className="field-warning" role="status">{tableWarning}</div>}
@@ -242,11 +239,23 @@ function generatedLine(plane: string, change: GeneratedPlaneChange): string {
 /** The before/after feedback of one proposed edit, with Accept and Cancel. */
 export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
   const { preview, notice } = edit;
+  const id = useId(), draftOwner = useRef(Symbol('profile-preview'));
+  useLayoutEffect(() => {
+    setProfileDraft(preview ? {
+      message: `Custom profile ${preview.status === 'refused' || preview.validation.status === 'error' ? 'has an invalid draft' : 'is unfinished'}. Open sketch or Revert to last valid before Solve.`,
+      open: () => {
+        const panel = document.getElementById(id);
+        const drawing = panel?.closest('.param-panel')?.querySelector<SVGSVGElement>('svg[aria-label="Custom profile drawing"]');
+        (drawing ?? panel)?.scrollIntoView?.({ block: 'nearest' }); (drawing ?? panel)?.focus();
+      }, revert: edit.cancel,
+    } : null, draftOwner.current);
+    return () => setProfileDraft(null, draftOwner.current);
+  }, [preview, edit.cancel, id]);
   if (!preview) {
     return notice ? <Notice className="profile-edit-notice" actions={<button type="button" className="btn" onClick={edit.dismissNotice}>Dismiss</button>}>{notice}</Notice> : null;
   }
   if (preview.status !== 'ready') {
-    return <Notice tone={preview.status === 'refused' ? 'error' : 'info'} title={preview.label} className="profile-edit-preview"
+    return <Notice id={id} tabIndex={-1} tone={preview.status === 'refused' ? 'error' : 'info'} title={preview.label} className="profile-edit-preview"
       actions={<button type="button" className="btn" onClick={edit.cancel}>{preview.status === 'refused' ? 'Close' : 'Cancel'}</button>}>
       {preview.status === 'refused' ? `Not applied: ${preview.message}` : 'Preparing the edit…'}
     </Notice>;
@@ -259,7 +268,7 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
   const blocked = preview.validation.status === 'error' ? 'The edited profile is not valid, so the current design is kept.'
     : preview.validation.status === 'pending' || preview.curve.status === 'pending' || preview.generated.status === 'pending' ? 'Waiting for the curve and generated-profile measurements.'
       : preview.curve.status === 'error' || preview.generated.status === 'error' ? 'WG is still measuring this change. Wait a moment, then accept it.' : undefined;
-  return <Notice tone={preview.validation.status === 'error' ? 'error' : 'info'} title={`Preview: ${preview.label}`} className="profile-edit-preview"
+  return <Notice id={id} tabIndex={-1} tone={preview.validation.status === 'error' ? 'error' : 'info'} title={`Preview: ${preview.label}`} className="profile-edit-preview"
     actions={<>
       <button type="button" className="btn" disabled={!previewAcceptable(preview)} title={blocked} onClick={edit.accept}>Accept</button>
       <button type="button" className="btn" onClick={edit.cancel}>Cancel</button>

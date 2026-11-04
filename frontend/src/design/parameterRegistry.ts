@@ -579,7 +579,7 @@ const PROFILE_GROUPS: readonly ParameterGroupDefinition[] = [
   { title: 'Vertical profile', visibleWhen: (design) => freeformOnly(design) && !design.shared_profile, summary: (design) => freeformSummary(design, 'V') },
   { title: 'Cross-section', visibleWhen: freeformOnly },
   FREEFORM_IMPORT_GROUP,
-  { title: 'Generated profile', visibleWhen: freeformOnly, fieldOrder: ['control.freeformInspection'], description: 'Generated bore profile — scaling, morph and supported extensions applied. Inspection only.' },
+  { title: 'Profile canvas', visibleWhen: design => freeformOnly(design) || design.formula === 'LOOKUP', fieldOrder: ['control.freeformInspection'], description: 'Edit the authored profile and inspect the generated profile, including scaling, morph and supported extensions.' },
 ];
 
 /** The Mesh section reads in the order a person works: how big the elements are,

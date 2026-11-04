@@ -47,6 +47,7 @@ import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { buildCadProjectSetup } from './cadSetupPublisher';
 import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crossoverDrafts';
+import { assertProfileFinished, useProfileDraftBlocker } from '../sketch/profileDraft';
 import { solveAttention, useJobAttention, useRecoveryNoticeAttention } from './solveAttention';
 import { navigationGeneration, workspaceNavigation } from './workspaceNavigation';
 import { solvedCadModels } from './cadlink/solvedModel';
@@ -448,7 +449,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       ? importedSubmissionBlocker(cadReturn, solveOptions)
       : null;
   const directivityError = polarValidationError(solveOptions.polar);
-  const solveBlocker = readyMeshActive ? readyMeshBlocker : (cadGeometryActive ? crossoverDraftError : null) ?? cadSolveBlocker ?? directivityError;
+  const profileDraftError = useProfileDraftBlocker();
+  const solveBlocker = (model.kind === 'parametric' ? profileDraftError : null)
+    ?? (readyMeshActive ? readyMeshBlocker : (cadGeometryActive ? crossoverDraftError : null) ?? cadSolveBlocker ?? directivityError);
   useEffect(() => {
     if (crossoverDraftError) setActionError(crossoverDraftError);
     else setActionError((current) => current?.includes('frequency must be greater than 0 Hz') ? null : current);
@@ -546,6 +549,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const { beforePost } = requested;
 
   const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision, continuation: ModelSolveContinuation | null = null) => {
+    assertProfileFinished();
     let designName = '';
     const jobId = await acceptSubmission(async () => {
       // Solve leaves the live document alone. The server applies BEMPP's
@@ -566,12 +570,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         if (!(error instanceof SolverMeshTooLarge)) throw error;
         if (!beforePost(continuation)) return null;
         askMeshSolveChoice(designName, error.triangles, error.limit, () => solveCancellationReason(choiceInputs) === null, async () => {
+          assertProfileFinished();
           await acceptSubmission(() => submitDesign(snapshot, { ...options, mesh_limit_override: true, mesh_limit_override_key: error.meshCacheKey }, fetch, metadata),
             { onAccepted: () => acceptSubmittedLabel(designName), arm: true });
         });
         return null;
       }
       if (!beforePost(continuation)) return null;
+      assertProfileFinished();
       return submitDesign(snapshot, options, fetch, metadata);
     }, { onAccepted: () => acceptSubmittedLabel(designName), attention: continuation?.attention });
     return jobId === null ? 'pending' as const : 'submitted' as const;
@@ -582,12 +588,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     acceptance: { onAccepted?: () => void; arm?: boolean }, { restored = false, onAsked = () => {} } = {}) => {
     const choiceInputs = captureSolveInputs();
     try {
+      if (currentModel().kind === 'parametric') assertProfileFinished();
       return await solveModel(modelId, press);
     } catch (error) {
       if (error instanceof SolveSubmissionRefused && error.code === 'mesh_too_large'
         && typeof error.details?.triangles === 'number' && typeof error.details.limit === 'number') {
         onAsked();
         askMeshSolveChoice(name, error.details.triangles, error.details.limit, () => solveCancellationReason(choiceInputs) === null, async () => {
+          if (currentModel().kind === 'parametric') assertProfileFinished();
           await acceptSubmission(() => solveModel(modelId, { ...press, mesh_limit_override: true }), { ...acceptance, arm: true });
         });
         return null;
@@ -609,6 +617,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     };
     const jobId = await acceptSubmission(async () => {
       const live = currentModel().kind === 'parametric';
+      if (live) assertProfileFinished();
       const needsBuild = live && activeReadyMeshSubmission(currentModel()) === 'needs-build';
       const captured = live
         ? await awaitSolveStep(prepareDesignAssembly().catch(error => { throw importedSolveError(error); }), continuation)
@@ -624,6 +633,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       notice = captured.notice;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       if (!beforePost(continuation)) return null;
+      if (live) assertProfileFinished();
       return pressModelSolve(captured.modelId, modelSolvePress(captured, label, crypto.randomUUID()), designName,
         { onAccepted },
         { restored: captured.replay !== null, onAsked: () => { asked = true; } });
@@ -826,6 +836,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     ?? (solvePlanPending ? 'Planning solve for the current design…' : 'WG could not plan this solve. Change a setting, or press Solve to try again.');
   const requestCurrent = requested.state.active !== null;
   const performRequestedSolve = async (continuation: ModelSolveContinuation) => {
+    if (currentModel().kind === 'parametric') assertProfileFinished();
     if (readyMeshActive) return solveReadyMesh(continuation);
     if (cadGeometryActive) {
       const draftError = getCrossoverDraftError();

@@ -1,0 +1,20 @@
+.profile-canvas { grid-column: 1 / -1; min-width: 0; margin: 6px 0; }
+.profile-canvas-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--text-micro); }
+.profile-canvas-options label { display: flex; align-items: center; gap: 4px; }
+.profile-canvas select { min-width: 0; font-size: 11px; }
+.profile-canvas-caption, .profile-canvas-freshness { color: var(--fg3); font-size: var(--text-micro); margin: 5px 0; }
+.profile-canvas .profile-H { stroke: var(--blue); }
+.profile-canvas .profile-V { stroke: var(--amber); }
+.profile-canvas .profile-authored { stroke-width: 2; }
+.profile-canvas .profile-generated { stroke-width: 1; opacity: .6; }
+.profile-canvas .profile-generated.stale { opacity: .3; }
+.profile-canvas .ghost { stroke-width: 1.5; opacity: .65; }
+.profile-canvas .profile-refusal { stroke: var(--red); stroke-width: 4; }
+.profile-canvas .sketch-point.selected { stroke: var(--sketch-selected); stroke-width: 3.5; }
+.profile-canvas .profile-axis-label text { font-size: 10px; fill: var(--fg3); }
+.profile-canvas .profile-label text { font-size: 10px; fill: var(--fg2); }
+.profile-canvas .role-station > path { stroke-dasharray: 3 3; opacity: .45; }
+.profile-anchor-properties { border: 1px solid var(--hair); background: var(--surface-raised); border-radius: 4px; padding: 8px; font-size: 11px; }
+.profile-anchor-fields { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.profile-anchor-fields > label, .profile-anchor-fields > div { display: grid; gap: 4px; width: 110px; }
+.profile-canvas .sketch-conflict-banner { flex-wrap: wrap; font-size: 11px; }

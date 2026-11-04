@@ -6,7 +6,7 @@ import { sourceRoleLabel } from '../model/cadLabels';
 import { useDeveloperDetails } from '../prefs/preferences';
 import { osseFeatures, OSSE_SWITCH_NOTICE } from './osseFeatures';
 import { OsseFeatureChoices } from './OsseFeatureChoices';
-import { FreeformProfileInspection } from './ProfileInspection';
+import { ProfileCanvas } from '../sketch/ProfileCanvas';
 import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeSymmetryLimitation } from './nativeFamilies';
 import { EnclosureResolutionField } from './EnclosureResolutionField';
@@ -1348,7 +1348,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           {groupSlots.map((id) => {
             if (id === 'control.meshValidation') return hasCustomSlot ? <MeshValidationControl key={id} /> : null;
             if (id === 'control.freeformImport') return hasCustomSlot ? <CustomProfilePaste key={id} /> : null;
-            if (id === 'control.freeformInspection') return hasCustomSlot ? <FreeformProfileInspection key={id} /> : null;
+            if (id === 'control.freeformInspection') return hasCustomSlot ? <ProfileCanvas key={id} /> : null;
             const field = groupFields.find((candidate) => candidate.id === id);
             return field ? renderField(field) : null;
           })}
