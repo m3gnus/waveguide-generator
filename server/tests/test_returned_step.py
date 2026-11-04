@@ -6,6 +6,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import os
 import shutil
 from types import SimpleNamespace
 
@@ -190,18 +191,35 @@ def test_cancellation_stops_before_reading_or_publishing(source):
         read(source, cancel_cb=cancelled)
 
 
-def test_export_uses_the_bytes_it_verified_if_the_path_is_replaced(source, monkeypatch):
+@pytest.mark.parametrize("replacement_allowed", [
+    pytest.param(True, id="posix", marks=pytest.mark.skipif(
+        os.name != "posix", reason="POSIX allows unlinking an open file",
+    )),
+    pytest.param(False, id="windows", marks=pytest.mark.skipif(
+        os.name != "nt", reason="Windows refuses unlinking an ordinary open file",
+    )),
+])
+def test_export_uses_the_bytes_it_verified_if_the_path_is_replaced(source, monkeypatch, replacement_allowed):
     from server.cadlink import retained_files
 
+    original = source.bundle / "assembly.step"
+    replacement_attempted = False
     real_read = retained_files.os.fdopen
     def replacing(descriptor, *args, **kwargs):
+        nonlocal replacement_attempted
         opened = real_read(descriptor, *args, **kwargs)
-        original = source.bundle / "assembly.step"
-        original.unlink()
-        original.write_bytes(b"replacement")
+        replacement_attempted = True
+        if replacement_allowed:
+            original.unlink()
+            original.write_bytes(b"replacement")
+        else:
+            with pytest.raises(PermissionError):
+                original.unlink()
         return opened
     monkeypatch.setattr(retained_files.os, "fdopen", replacing)
     assert read(source) == source.content
+    assert replacement_attempted
+    assert original.read_bytes() == (b"replacement" if replacement_allowed else source.content)
 
 
 @pytest.mark.parametrize("pruned", ["step", "bundle", "bundle-and-record"])
