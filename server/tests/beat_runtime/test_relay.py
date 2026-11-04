@@ -2,12 +2,11 @@
 
 import copy
 import json
-import struct
 
 import pytest
 
 from server.solver.beat_runtime import ipc, paths, relay
-from server.tests.beat_runtime.test_ipc import FragmentedPeer
+from server.tests.beat_runtime.test_ipc import FragmentedPeer, frame
 
 
 def roundtrip(payload):
@@ -54,19 +53,15 @@ def test_missing_reference_is_refused():
 def test_decode_rejects_nonfinite_everywhere(token, wrapper):
     body = (wrapper % token).encode()
     with pytest.raises(ipc.FrameError):
-        ipc.receive_frame(FragmentedPeer(struct.pack("!I", len(body)) + body))
+        ipc.receive_frame(FragmentedPeer(frame(body)))
 
 
-def test_finite_arrays_ragged_lists_big_integers_and_strings_survive(monkeypatch):
-    loads = ipc.json.loads
-    def decode(*args, **kwargs):
-        assert "parse_float" not in kwargs
-        return loads(*args, **kwargs)
-    monkeypatch.setattr(ipc.json, "loads", decode)
+def test_finite_arrays_ragged_lists_big_integers_and_strings_survive():
     payload = {"array": [[1.2, 3.4], [5., 6.]], "ragged": [[1.], [2., 3.]],
-               "big": 10**100, "text": ["NaN", "Infinity"]}
-    assert roundtrip(payload) == payload
-    assert json.dumps(payload, allow_nan=False)
+               "big": 10**100, "text": ["NaN", "Infinity"], "zero": -0.0}
+    decoded = roundtrip(payload)
+    assert decoded == payload
+    assert json.dumps(decoded, allow_nan=False).encode() == json.dumps(payload, allow_nan=False).encode()
 
 
 @pytest.mark.parametrize("result", [None, [], "invalid", 1])
@@ -84,15 +79,11 @@ def test_nondict_provenance_result_becomes_host_error(result):
             next(stream)
 
 
-def test_finite_walk_uses_numpy_only_for_long_numeric_lists(monkeypatch):
-    original = ipc.np.asarray
-    calls = []
-    monkeypatch.setattr(ipc.np, "asarray", lambda value: (calls.append(value), original(value))[1])
-    long_numbers = list(range(100))
+def test_long_mixed_lists_preserve_json_values():
     mixed = {"text": ["x"] * 100, "shape": [2, 3], "dicts": [{"x": 1.}] * 100,
-             "nested": [[1., 2.]] * 100, "numbers": long_numbers}
-    ipc._check_finite(mixed)
-    assert calls == [long_numbers]
+             "nested": [[1., 2.]] * 100, "numbers": list(range(100)),
+             "literals": [True, False, None] * 100}
+    assert roundtrip(mixed) == mixed
 
 
 @pytest.mark.parametrize("overflow", [False, True])
@@ -100,12 +91,19 @@ def test_long_homogeneous_arrays_keep_nonfinite_strictness(overflow):
     body = ('{"x":[' + ','.join(["1"] * 65 + (["1e999"] if overflow else ["2"])) + ']}').encode()
     if overflow:
         with pytest.raises(ipc.FrameError):
-            ipc.receive_frame(FragmentedPeer(struct.pack("!I", len(body)) + body))
+            ipc.receive_frame(FragmentedPeer(frame(body)))
     else:
-        assert ipc.receive_frame(FragmentedPeer(struct.pack("!I", len(body)) + body))["x"][-1] == 2
+        assert ipc.receive_frame(FragmentedPeer(frame(body)))["x"][-1] == 2
 
 
-def test_long_numeric_lists_preserve_large_integer_and_overflow_parity():
-    ipc._check_finite([10**1000, 1.] * 40)
-    with pytest.raises(ipc.FrameError):
-        ipc._check_finite([10**1000, float("inf")] * 40)
+@pytest.mark.parametrize("token", ["1.0", "NaN", "Infinity", "-Infinity", "1e999", "-1e999"])
+def test_long_numeric_lists_preserve_large_integer_and_overflow_parity(token):
+    body = ('{"x":[' + ','.join([str(10**1000), token] * 40) + ']}').encode()
+    peer = FragmentedPeer(frame(body))
+    if token == "1.0":
+        decoded = ipc.receive_frame(peer)
+        assert decoded == {"x": [10**1000, 1.] * 40}
+        assert json.dumps(decoded, separators=(",", ":"), allow_nan=False).encode() == body
+    else:
+        with pytest.raises(ipc.FrameError):
+            ipc.receive_frame(peer)
