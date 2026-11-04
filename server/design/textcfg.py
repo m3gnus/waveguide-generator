@@ -23,6 +23,7 @@ from server.contracts.canonical import canonical_ascii_json
 from .uid import validate_design_uid
 from .ath_import_defaults import apply_ath_import_defaults
 from .migrate import MigrationApplication, apply_migrations
+from .native import OSSE_BODY_KEYS
 from .text_import import (
     AthImportError, ath_import_failure, validate_ath_mesher_config,
     GEOMETRY_STAMP_LABEL, NATIVE_GEOMETRY_VERSION, TEXT_IMPORT_VERSION, TEXT_IMPORT_VERSIONS,
@@ -1913,8 +1914,16 @@ def _parse(text: str, *, migrate: bool = True, import_payload: PayloadImporter =
             raise TextConfigError("WG.Geometry requires a stamped WG design and exactly one JSON Payload")
         try:
             controls = json.loads(geometry_controls.items["Payload"])
-            if not isinstance(controls, dict) or set(controls) - {"cross_section", "depth_margin_mm", "icw", "assembly", "surface_deviation_mm"}:
+            if not isinstance(controls, dict) or set(controls) - {"cross_section", "depth_margin_mm", "icw", "assembly", "surface_deviation_mm", "osse_expression_dialects"}:
                 raise ValueError("unknown WG.Geometry controls")
+            if "osse_expression_dialects" in controls:
+                dialects = controls["osse_expression_dialects"]
+                if payload["formula"] != "OSSE" or not isinstance(dialects, dict) or set(dialects) - OSSE_BODY_KEYS.keys():
+                    raise ValueError("OSSE expression dialects require shared OSSE body fields")
+                for name, expression_dialect in dialects.items():
+                    if expression_dialect not in {"ath", "wg-v1"} or not isinstance(payload.get(name), str):
+                        raise ValueError("OSSE expression dialects require an expression and ath or wg-v1")
+                    payload[name] = {"raw": payload[name], "dialect": expression_dialect}
             if "icw" in controls:
                 advanced = controls["icw"]
                 if payload["formula"] != "ICW":
@@ -2263,6 +2272,14 @@ def _serialize_canonical(
         _block(lines, "WG.NativeDesign", [("Payload", encoded.replace(";", "\\u003b"))])
         return _with_design_uid_stamp("\n".join(lines) + "\n", design_uid)
     controls: dict[str, Any] = {}
+    if isinstance(config, OSSEConfig) and config.text_import_version is None:
+        # CFG spells expressions as raw text. Keep explicit native semantics
+        # alongside it when the last feature has returned to plain OSSE.
+        dialects = {name: "ath" for name in OSSE_BODY_KEYS
+                    if isinstance(expression := getattr(config, name), Expr)
+                    and expression.model_dump().get("dialect") == "ath"}
+        if dialects:
+            controls["osse_expression_dialects"] = dialects
     if config.mesh.surface_deviation_mm is not None:
         controls["surface_deviation_mm"] = config.mesh.surface_deviation_mm
     if config.cross_section.exponent != 2 or config.cross_section.aspect_ratio != 1:

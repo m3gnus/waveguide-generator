@@ -697,7 +697,13 @@ function mergeFamilyParameters(current: DesignDocument, family: DesignFamily, op
       }
       for (const key of OSSE_MERIDIAN_FIELDS) {
         const expression = expressionAtPath(current, key);
-        if (expression) next._expressions = { ...next._expressions, [key]: structuredClone(expression) };
+        if (expression) {
+          const carried = structuredClone(expression);
+          if (carried.raw && /\b(?:log|ln)\s*\(/.test(carried.raw)) {
+            carried.dialect ??= current.formula === 'OSSE' && !current.text_import_version ? 'wg-v1' : 'ath';
+          }
+          next._expressions = { ...next._expressions, [key]: carried };
+        }
       }
       // Native bodies require s=0; plain-only termination/shape values remain
       // retrievable in the store's existing complete-document undo snapshot.

@@ -1,4 +1,5 @@
 """Native body expressions survive file, preview and solve-mesh boundaries."""
+import math
 from copy import deepcopy
 
 import numpy as np
@@ -6,6 +7,7 @@ import pytest
 
 from hornlab_mesher.config_builder import resolve_geometry
 from hornlab_mesher.preview import build_preview_geometry, PreviewOptionsV1
+from hornlab_mesher.profile_common import eval_param
 from server.design.schema import DesignConfig
 from server.design.textcfg import parse, serialize
 from server.jobs.models import SolveRequest
@@ -82,6 +84,49 @@ def test_native_ath_expression_keeps_natural_log_after_losing_the_import_stamp()
     assert design_to_mesher_config(design)["profile"]["a_deg"] == raw
     reopened = parse(serialize(design)).design
     assert design_to_mesher_config(reopened)["profile"]["a_deg"] == raw
+
+
+@pytest.mark.parametrize("dialect", [None, "ath", "wg-v1"])
+def test_last_native_feature_off_reload_and_back_keeps_body_numbers(dialect):
+    payload = design_payload("OSSE-AXIAL")
+    payload["a"] = {"raw": "40 + log(10) + sin(p)", "value": None}
+    if dialect is not None:
+        payload["a"]["dialect"] = dialect
+    native = DesignConfig.model_validate(payload)
+    before = design_to_mesher_config(native)
+    angles = [0, math.pi/2, math.pi, 3*math.pi/2]
+    expected = [40 + (1 if dialect == "wg-v1" else math.log(10)) + math.sin(p) for p in angles]
+
+    plain_payload = native.model_dump(mode="json")
+    plain_payload["formula"] = "OSSE"
+    plain_payload.pop("axial_scale")
+    plain = DesignConfig.model_validate(plain_payload)
+    # Exercise both the API JSON boundary and the actual saved plain CFG.
+    for design in (plain, DesignConfig.model_validate_json(plain.model_dump_json()),
+                   parse(serialize(plain)).design):
+        expression = design.root.a.execution_text()
+        np.testing.assert_allclose([eval_param(expression, p) for p in angles], expected, rtol=0, atol=1e-14)
+        assert design.root.a.raw == native.root.a.raw
+        restored = deepcopy(payload)
+        restored["a"] = design.root.a.model_dump(mode="json")
+        back = DesignConfig.model_validate(restored)
+        assert design_to_mesher_config(back) == before
+        assert resolve_geometry(design_to_mesher_config(back)).geometry.inner_points.tobytes() == resolve_geometry(before).geometry.inner_points.tobytes()
+
+
+@pytest.mark.parametrize("field", ["L", "r0", "a", "a0", "k"])
+def test_plain_body_dialect_survives_json_and_cfg_without_changing_legacy_logs(field):
+    base = design_payload("OSSE-AXIAL")[field]
+    raw = f"{base} + .01*log(10) + .01*sin(p)"
+    design = DesignConfig.model_validate({"formula": "OSSE", field: {"raw": raw, "dialect": "ath"}})
+    for reopened in (DesignConfig.model_validate_json(design.model_dump_json()), parse(serialize(design)).design):
+        expression = getattr(reopened.root, field)
+        assert expression.dialect == "ath"
+        for phi in (0, math.pi/2):
+            assert eval_param(expression.execution_text(), phi) == base + .01*math.log(10) + .01*math.sin(phi)
+    legacy = DesignConfig.model_validate({"formula": "OSSE", field: raw})
+    assert getattr(legacy.root, field).dialect == "wg-v1"
+    assert eval_param(getattr(legacy.root, field).execution_text(), 0) == base + .01
 
 
 def test_native_expression_stl_and_step_exports(tmp_path):

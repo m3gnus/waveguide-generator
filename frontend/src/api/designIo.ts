@@ -270,7 +270,7 @@ function unwrapExpressions(value: unknown, path = '', expressions: Record<string
       expressions[path] = {
         value: typeof record.value === 'number' ? record.value : null,
         raw: record.raw,
-        ...(record.dialect === 'wg-v1' ? { dialect: 'wg-v1' as const } : {}),
+        ...(record.dialect === 'wg-v1' || record.dialect === 'ath' ? { dialect: record.dialect } : {}),
       };
     }
     return record.value ?? null;

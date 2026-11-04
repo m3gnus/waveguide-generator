@@ -9,6 +9,7 @@ NATIVE_FORMULAS = frozenset({
     "OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL",
     "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC", "OSSE-NATIVE", "SOURCE-DISK",
 })
+OSSE_BODY_KEYS = {"L": "L_mm", "r0": "r0_mm", "a": "a_deg", "a0": "a0_deg", "k": "k"}
 
 
 def controls_import_payload(config: dict[str, Any]) -> dict[str, Any]:
@@ -152,7 +153,7 @@ def native_mesher_config(root: Any) -> dict[str, Any]:
         "mode": "freestanding" if roundover else "bare",
         "scale": number(root.scale, "scale", 1),
         "profile": {key: body(getattr(root, field), field) for field, key in
-                    (("L", "L_mm"), ("r0", "r0_mm"), ("a", "a_deg"), ("a0", "a0_deg"), ("k", "k"), ("s", "s"))},
+                    (*OSSE_BODY_KEYS.items(), ("s", "s"))},
         "source": {"source_shape": 0},
     })
     config["mesh"]["wall_thickness_mm"] = number(mesh.wall_thickness, "mesh.wall_thickness", 5 if roundover else 0)

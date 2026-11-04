@@ -123,6 +123,22 @@ describe('OSSE feature choices', () => {
     expect(useDesignStore.getState().design).toEqual(original);
   });
 
+  it.each(['OSSE-AXIAL', 'OSSE-ARC', 'OSSE-ROUNDOVER'] as const)('keeps ATH expression semantics when the last %s feature is toggled off and back', (family) => {
+    const original = designForFamily(family);
+    original._expressions = { a: { value: 40 + Math.log(10), raw: '40 + log(10) + sin(p)' } };
+    useDesignStore.getState().replaceDocument(original);
+    useDesignStore.getState().setOsseFeatures({ throat: 'none', mouth: 'plain', axial: 'off' });
+    const plain = useDesignStore.getState().design;
+    expect(plain.formula).toBe('OSSE');
+    const expression = { ...original._expressions.a, dialect: 'ath' };
+    expect(serializeDesign(plain).a).toEqual(expression);
+    useDesignStore.getState().replaceDocument(hydrateDesignDocument(serializeDesign(plain)));
+    expect(useDesignStore.getState().design._expressions?.a).toEqual(expression);
+    useDesignStore.getState().setOsseFeatures(osseFeatures(family)!);
+    expect(useDesignStore.getState().design.formula).toBe(family);
+    expect(serializeDesign(useDesignStore.getState().design).a).toEqual(expression);
+  });
+
   it.each([
     ['none', 'arc', 'on'], ['authored', 'arc', 'off'], ['authored', 'arc', 'on'],
     ['none', 'roundover', 'on'], ['authored', 'roundover', 'off'], ['authored', 'roundover', 'on'],

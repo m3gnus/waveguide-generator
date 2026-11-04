@@ -129,6 +129,9 @@ documented base-10 `log` and natural `ln` meanings. Their raw spelling survives
 save/reopen; execution uses unambiguous `log10` and `log` names. The native
 rewrite applies only to expression fields, never filenames or passthrough text,
 and legacy axis migration evaluates expressions in the document's dialect.
+Native OSSE feature body expressions default to ATH semantics. Turning the last
+feature off preserves that explicit dialect on the shared `L`, `r0`, `a`, `a0`
+and `k` expressions; unstamped legacy expressions still use WG's old meanings.
 
 The root design is discriminated as `OSSE`, `R-OSSE`, `ICW`, `FREEFORM`, or a [bounded native family](native-formulas.md). Common
 sections cover scale, throat, morphing, mesh/sizing, sampling, enclosure, source,
@@ -487,6 +490,11 @@ WG stores additional geometry controls in a `WG.Geometry` block in stamped
 WG design files, including rewritten ATH imports. The block has exactly one
 JSON `Payload`, supporting `cross_section`, `depth_margin_mm`, and native-only
 `icw` advanced inputs:
+
+Plain OSSE files can also carry `osse_expression_dialects`, a mapping from shared
+body field names (`L`, `r0`, `a`, `a0`, `k`) to `ath` or `wg-v1`. WG writes this
+when a native feature expression with natural `log` returns to plain OSSE. It
+retains the raw formula text while preserving its numerical interpretation.
 
 ATH ignores `WG.Geometry`. Opening a saved WG `.cfg` in ATH therefore uses
 the default circular base section and default rear clearance, even when WG

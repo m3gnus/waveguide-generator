@@ -30,9 +30,11 @@ from pydantic import (
     StrictInt,
     ValidationInfo,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
+from .native import OSSE_BODY_KEYS
 
 from server.design.text_syntax import (
     LINE_BREAK as _LINE_BREAK,
@@ -421,6 +423,15 @@ class Expr(StrictModel):
     dialect: Literal["ath", "wg-v1"] = Field(
         default="ath", exclude_if=lambda value: value == "ath"
     )
+
+    @model_serializer(mode="wrap")
+    def _serialize_dialect(self, handler):
+        result = handler(self)
+        # Unstamped legacy designs interpret log as base ten. Carry the ATH
+        # marker when omitting the default would make this source ambiguous.
+        if self.dialect == "ath" and self.raw is not None and re.search(r"\b(?:log|ln)\s*\(", self.raw):
+            result["dialect"] = "ath"
+        return result
 
     @model_validator(mode="before")
     @classmethod
@@ -1628,7 +1639,7 @@ class NativeOSSEConfig(NativeDesignCommon):
     axial_scale: NativeNumber | None = Field(default=None, ge=0.01, le=10, exclude_if=lambda v: v is None, description="Absolute axial factor; scale controls X/Y")
     terminating_arc: TerminatingArc | None = Field(default=None, exclude_if=lambda v: v is None)
 
-    @field_validator("L", "r0", "a", "a0", "k", mode="before")
+    @field_validator(*OSSE_BODY_KEYS, mode="before")
     @classmethod
     def _body_number_or_expression(cls, value: Any) -> Any:
         if type(value) is bool:
@@ -1672,12 +1683,14 @@ class DesignConfig(RootModel[DesignVariant]):
             # Old WG files documented base-10 log and natural ln. Retain the
             # exact source while sending unambiguous function names downstream.
             def native_logs(item: Any, path: tuple[str, ...] = ()) -> Any:
-                if native_body and path in {("L",), ("r0",), ("a",), ("a0",), ("k",)}:
+                if native_body and len(path) == 1 and path[0] in OSSE_BODY_KEYS:
                     # These expressions were previously refused. Their new
                     # native contract uses ATH syntax; an explicit wg-v1
                     # dialect still delegates legacy log/ln translation to Expr.
                     return item
                 if _is_known_numeric_path(path):
+                    if isinstance(item, Mapping) and "dialect" in item:
+                        return item
                     raw = item.get("raw") if isinstance(item, Mapping) else item
                     if isinstance(raw, str) and re.search(r"\b(?:log|ln)\s*\(", raw):
                         return {**item, "dialect": "wg-v1"} if isinstance(item, Mapping) else {"raw": item, "dialect": "wg-v1"}
