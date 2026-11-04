@@ -6792,6 +6792,8 @@ export interface components {
             ath_nac?: number | null;
             /** Ath Nac Present */
             ath_nac_present?: boolean | null;
+            /** Ath Rosse Trunc Mm */
+            ath_rosse_trunc_mm?: number | null;
             b?: components["schemas"]["Expr"] | null;
             /** Coverage Mode */
             coverage_mode?: string | null;

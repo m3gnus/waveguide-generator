@@ -78,6 +78,7 @@ export interface DesignDocument {
   /** Persisted geometry interpretation for imported ATH documents. */
   text_import_version?: AthImportVersion;
   ath_axial_scale?: number;
+  ath_rosse_trunc_mm?: number;
   ath_axial_sampling_rule?: 'ath-v2025-06' | 'ath-v2025-12+';
   ath_nac_present?: boolean;
   ath_nac?: number;
@@ -400,7 +401,7 @@ const FAMILY_SPECIFIC_FIELDS = {
     'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h', 's1', 's2', 'throat_profile',
     'rotation', 'guiding_curve', 'circ_arc_radius', 'circ_arc_term_angle',
   ],
-  'R-OSSE': ['s1', 's2', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax', 'rotation'],
+  'R-OSSE': ['s1', 's2', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax', 'rotation', 'ath_rosse_trunc_mm'],
   ICW: [
     'R', 'L', 'r0', 'a0', 'a', 'k', 'q', 'coverage_angle', 'hold_start',
     'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth', 'curl',

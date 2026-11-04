@@ -12767,6 +12767,18 @@
             ],
             "title": "Ath Nac Present"
           },
+          "ath_rosse_trunc_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ath Rosse Trunc Mm"
+          },
           "b": {
             "anyOf": [
               {

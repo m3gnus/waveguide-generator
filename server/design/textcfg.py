@@ -888,7 +888,6 @@ _UNSUPPORTED_ATH_REASONS: dict[str, str] = {
 # Applied by ATH only inside the R-OSSE block; a top-level copy is ignored by ATH.
 _ATH_ROSSE_BLOCK_ONLY = {
     "arcterm": "the arc termination changes ATH's geometry and is not implemented",
-    "trunc": "throat truncation changes ATH's geometry and is not implemented",
 }
 _ATH_ENCLOSURE_MEMBERS = frozenset(
     {"Depth", "EdgeRadius", "EdgeType", "FrontResolution", "BackResolution", "Spacing"}
@@ -907,7 +906,7 @@ def _ath_enclosure_member(member: str) -> bool:
 # refused.
 _ATH_ROSSE_MEMBERS = frozenset(
     {"R", "r0", "a", "Coverage.Angle", "a0", "Throat.Angle", "k", "OS.k", "Term.k",
-     "r", "m", "b", "q", "Term.q", "tmax", "s1", "s2",
+     "r", "m", "b", "q", "Term.q", "tmax", "s1", "s2", "trunc",
      "Throat.Diameter", "Throat.Profile", "Rot", "Length", "Scale",
      "Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length"}
 )
@@ -1149,7 +1148,7 @@ def _refuse_unread_ath_items(
     # judged below.
     read = ({*_COMMON_MAP, *_OSSE_MAP, *_ATH_ROSSE_MEMBERS, "Coverage.Angle", "Throat.Diameter",
              "Throat.Angle", "Length", "Term.n", "Term.s", "Term.k", "Term.q", "OS.k", "OS.h", "n", "s", "h"}
-            - {"Rot"})
+            - {"Rot", *_ATH_BLOCK_ONLY_AT_TOP})
     candidates = sorted(read)
     found: list[tuple[str, str | None]] = []
     for key, value in extra_keys.items():
@@ -1218,6 +1217,7 @@ def _build_payload(
     refuse_unsupported: bool = False,
     v2: bool = False,
     v3: bool = False,
+    truncation_enabled: bool = False,
 ) -> dict[str, Any]:
     from .throat_stretch import coefficient, text_number, validate_composition
 
@@ -1352,6 +1352,10 @@ def _build_payload(
         if formula_block:
             consumed_blocks.add(block_name)
             for key, value in formula_block.items.items():
+                if key == 'trunc' and formula == 'R-OSSE' and dialect == 'ath' and truncation_enabled:
+                    # The mesher owns the bounded construction and validates
+                    # this member below before it becomes persisted data.
+                    continue
                 if v2 and formula == "OSSE" and key == "Rot":
                     ignored_profile.append(IgnoredSetting(
                         key="OSSE.Rot", value=value,
@@ -1541,6 +1545,8 @@ def _build_payload(
         if key in flat:
             payload[target] = flat[key]
             consumed_keys.add(key)
+    if truncation_enabled:
+        consumed_keys.add('_athRosseTrunc')
 
     payload["extra_keys"] = {key: value for key, value in flat.items() if key not in consumed_keys}
     payload["extra_blocks"] = {
@@ -1862,6 +1868,11 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             raise TextConfigError(ath_import_failure(exc, setting="Throat.Ext.Ctrl")) from exc
         flat = dict(flat)
         flat.pop("Throat.Ext.Ctrl")
+    truncation_enabled = version is None and dialect == 'ath'
+    if '_athRosseTrunc' in flat:
+        if flat['_athRosseTrunc'].strip() != '1' or not uses_ath_v3_import(import_version):
+            raise TextConfigError('R-OSSE.trunc needs a current import and _athRosseTrunc = 1. Re-import a copy of the original file.')
+        truncation_enabled = True
     # Refuse only files that are ATH by their own text and carry no WG stamp. A WG-saved file that
     # carries the text-import geometry stamp is read with ATH geometry but keeps
     # native passthrough semantics, so it never becomes unopenable.
@@ -1870,6 +1881,7 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         refuse_unsupported=dialect == "ath" and version is None,
         v2=uses_current_ath_import(import_version),
         v3=uses_ath_v3_import(import_version),
+        truncation_enabled=truncation_enabled,
     )
     if controls_config is not None:
         from .native import controls_import_payload
@@ -1963,6 +1975,8 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         except (ConfigError, ValueError) as exc:
             raise TextConfigError(ath_import_failure(exc)) from exc
         if uses_ath_v3_import(import_version):
+            if 'athRosseTruncMm' in mesher_config:
+                payload['ath_rosse_trunc_mm'] = mesher_config['athRosseTruncMm']
             if "athAxialScale" in mesher_config:
                 payload["ath_axial_scale"] = mesher_config["athAxialScale"]
             if "athThroatExtSegments" in mesher_config.get("mesh", {}):
@@ -2271,6 +2285,8 @@ def _serialize_canonical(
     if isinstance(config, ROSSEConfig):
         _line(lines, "Rot", config.rotation)
     _line(lines, "_athAxialSamplingRule", config.ath_axial_sampling_rule)
+    if isinstance(config, ROSSEConfig) and config.ath_rosse_trunc_mm is not None:
+        _line(lines, '_athRosseTrunc', '1')
     if config.ath_nac_present is not None:
         _line(lines, "_athNacPresent", "1" if config.ath_nac_present else "0")
     if config.ath_nac is not None:
@@ -2282,7 +2298,8 @@ def _serialize_canonical(
         _block(
             lines,
             "R-OSSE",
-            [(key, getattr(config, key)) for key in ("R", "a", "a0", "b", "k", "m", "q", "r", "r0", "tmax", "s1", "s2")],
+            [(key, getattr(config, key)) for key in ("R", "a", "a0", "b", "k", "m", "q", "r", "r0", "tmax", "s1", "s2")]
+            + ([('trunc', str(config.ath_rosse_trunc_mm))] if config.ath_rosse_trunc_mm is not None else []),
             emit_empty=True,
         )
     elif isinstance(config, ICWConfig):

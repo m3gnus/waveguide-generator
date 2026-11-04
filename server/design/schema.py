@@ -1235,6 +1235,14 @@ class ROSSEConfig(StretchDesign):
     r0: Expr | None = None
     tmax: Expr | None = None
     rotation: Expr | None = Field(default=None, exclude_if=lambda value: value is None)
+    ath_rosse_trunc_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False, strict=True,
+                                             exclude_if=lambda value: value is None)
+
+    @model_validator(mode='after')
+    def _truncation_version(self) -> 'ROSSEConfig':
+        if self.ath_rosse_trunc_mm is not None and not uses_ath_v3_import(self.text_import_version):
+            raise ValueError('R-OSSE.trunc needs a current ATH import. Re-import a copy of the original file.')
+        return self
 
 
 ICW_ADVANCED_KEYS = (

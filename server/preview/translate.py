@@ -521,6 +521,8 @@ def _common_mesher_config(root: Any, *, profile: dict[str, Any] | None = None) -
     }
     if root.ath_axial_scale is not None:
         config["athAxialScale"] = root.ath_axial_scale
+    if isinstance(root, ROSSEConfig) and root.ath_rosse_trunc_mm is not None:
+        config['athRosseTruncMm'] = root.ath_rosse_trunc_mm
     if current_import or active_stretch:
         config["scale"] = scale
     if active_stretch:
@@ -598,6 +600,7 @@ def _common_mesher_config(root: Any, *, profile: dict[str, Any] | None = None) -
     if uses_ath_v3_import(root.text_import_version) and (
         root.ath_axial_scale is not None or mesh.ath_throat_ext_segments is not None
         or (isinstance(root, ROSSEConfig) and root.rotation is not None)
+        or (isinstance(root, ROSSEConfig) and root.ath_rosse_trunc_mm is not None)
         or mesh.ath_roundover is not None or mesh.ath_rear_shape == 3
     ):
         validate_ath_mesher_config(config)

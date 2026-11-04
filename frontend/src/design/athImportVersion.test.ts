@@ -4,6 +4,15 @@ import { mergeDesignForFamily, mergeDesignForOsseFeatures, serializeDesign, type
 import { isCurrentAthImport } from './athImportControls';
 
 describe('ATH import interpretation', () => {
+  it('keeps the imported R-OSSE throat cut through hydration and save', () => {
+    const design = hydrateDesignDocument({
+      formula: 'R-OSSE', text_import_version: 'ath-2026-09a-v3', ath_rosse_trunc_mm: 10,
+    });
+    const saved = serializeDesign(design);
+    expect(saved.ath_rosse_trunc_mm).toBe(10);
+    expect(serializeDesign(hydrateDesignDocument(saved))).toEqual(saved);
+    expect(serializeDesign(mergeDesignForFamily(design, 'OSSE'))).not.toHaveProperty('ath_rosse_trunc_mm');
+  });
   it.each(['ath-2026-08c-v1', 'ath-2026-09a-v2', 'ath-2026-09a-v3'])('keeps %s through reopen and save', (version) => {
     const wire = {
       formula: 'R-OSSE', text_import_version: version, enclosure: null,
