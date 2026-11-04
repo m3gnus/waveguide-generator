@@ -70,8 +70,6 @@ export interface FrameHeader {
 }
 
 export interface DecodedFrame {
-  /** Client monotonic timestamp from the actual socket send. */
-  requestStartedAt?: number | null;
   /** Client-only document identity; revision counters reset on New/Open. */
   documentLoad?: number;
   /** Client-only socket identity; server epochs can repeat after a restart. */

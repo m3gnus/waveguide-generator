@@ -61,16 +61,6 @@ beforeEach(() => {
   }));
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     requested.push(String(url));
-    if (String(url).startsWith('/api/export/step?')) {
-      return new Response(JSON.stringify({
-        artifactId: 'retained-step', filename: 'untitled.step', sizeBytes: 13,
-      }), { headers: { 'Content-Type': 'application/json' } });
-    }
-    if (String(url) === '/api/workspace/write-export') {
-      return new Response(JSON.stringify({
-        directory: '/chosen', files: ['/chosen/untitled.step'], replaced: [],
-      }), { headers: { 'Content-Type': 'application/json' } });
-    }
     return new Response('ISO-10303-21;', {
       status: 200,
       headers: { 'Content-Type': 'model/step' },
@@ -354,21 +344,16 @@ describe('design file export menu', () => {
     expect(labels.some((label) => label.startsWith('STEP solid'))).toBe(true);
   });
 
-  it.each([
-    { label: 'STEP solid', body: 'solid' },
-    { label: 'STEP inner surface', body: 'surface' },
-  ])('writes the $body from the $label item', async ({ label, body }) => {
-    const item = itemNamed(label);
+  it('requests the solid from the plain STEP item', async () => {
+    const item = itemNamed('STEP solid');
     await act(async () => { item.click(); });
-    expect(requested.filter((path) => path.startsWith('/api/export/') || path === '/api/workspace/write-export'))
-      .toEqual([`/api/export/step?body=${body}&delivery=staged`, '/api/workspace/write-export']);
-    const write = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === '/api/workspace/write-export')!;
-    expect(JSON.parse(String(write[1]?.body))).toEqual({
-      subdirectory: '', existing: 'confirm', destination: 'destination-handle',
-      members: [{ relative_path: 'untitled.step', artifact_id: 'retained-step' }],
-    });
-    expect(container.querySelector('[role="status"]')?.textContent)
-      .toBe('Exported STEP from revision 1 to /chosen.');
+    expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=solid']);
+  });
+
+  it('requests the inner surface from the surface item', async () => {
+    const item = itemNamed('STEP inner surface');
+    await act(async () => { item.click(); });
+    expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=surface']);
   });
 
   it('says at a STEP export that enabled woofers are not in the file', async () => {
@@ -436,9 +421,10 @@ describe('design file export menu', () => {
           replaced: ['/exports/horn.step'],
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
-      return new Response(JSON.stringify({
-        artifactId: 'retained-step', filename: 'horn.step', sizeBytes: 13,
-      }), { headers: { 'Content-Type': 'application/json' } });
+      // jsdom's Response.blob() does not return a Blob this FormData accepts.
+      return Object.assign(new Response('ISO-10303-21;', { status: 200 }), {
+        blob: async () => new Blob(['ISO-10303-21;'], { type: 'model/step' }),
+      });
     });
     const item = itemNamed('STEP solid');
 
@@ -446,11 +432,10 @@ describe('design file export menu', () => {
 
     const write = vi.mocked(fetch).mock.calls
       .find(([url]) => String(url) === '/api/workspace/write-export')!;
-    const body = JSON.parse(String(write[1]?.body));
-    expect(body.destination).toBe('destination-handle');
+    const form = write[1]?.body as FormData;
+    expect(form.get('destination')).toBe('destination-handle');
     // The chosen folder receives the file, not a design-named folder under it.
-    expect(body.subdirectory).toBe('');
-    expect(body.members).toEqual([{ relative_path: 'horn.step', artifact_id: 'retained-step' }]);
+    expect(form.get('subdirectory')).toBe('');
     // Replacing a file in a folder that is the user's own is worth saying.
     expect(container.querySelector('[role="status"]')?.textContent)
       .toContain('Replaced 1 existing file.');
@@ -460,10 +445,9 @@ describe('design file export menu', () => {
     // No dialog is mounted here, so the replace question answers "no" -- which
     // is the point: an unanswerable question must not become an overwrite of
     // files WG never wrote.
-    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const path = String(input);
       requested.push(path);
-      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
       if (path === '/api/workspace/write-export') {
         return new Response(JSON.stringify({
           code: 'export_collision',
@@ -472,9 +456,9 @@ describe('design file export menu', () => {
           paths: ['/chosen/horn.step'],
         }), { status: 409, headers: { 'Content-Type': 'application/json' } });
       }
-      return new Response(JSON.stringify({
-        artifactId: 'retained-step', filename: 'horn.step', sizeBytes: 13,
-      }), { headers: { 'Content-Type': 'application/json' } });
+      return Object.assign(new Response('ISO-10303-21;', { status: 200 }), {
+        blob: async () => new Blob(['ISO-10303-21;'], { type: 'model/step' }),
+      });
     });
     const item = itemNamed('STEP solid');
 
@@ -482,7 +466,6 @@ describe('design file export menu', () => {
 
     // One attempt, refused: no second request repeating it as an overwrite.
     expect(requested.filter((path) => path === '/api/workspace/write-export')).toHaveLength(1);
-    expect(requested).toContain('/api/export/artifacts/retained-step');
     expect(container.querySelector('[role="status"]')?.textContent)
       .toBe('Export cancelled. No files were written.');
   });
@@ -598,7 +581,7 @@ describe('design file export menu', () => {
       .toBe('Export cancelled. No files were written.');
   });
 
-  it.each(['solid', 'surface'])('surfaces a %s-STEP sizing warning after reporting the successful write', async body => {
+  it('surfaces a surface-STEP sizing warning after reporting the successful write', async () => {
     // The inner-surface STEP sizes itself and can ship a grid that missed its
     // target or was never measured against one. That used to reach the log and
     // stop there; this is the whole path, from the response header the route
@@ -606,17 +589,16 @@ describe('design file export menu', () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const path = String(input);
       requested.push(path);
-      if (path === `/api/export/step?body=${body}&delivery=staged`) {
-        return new Response(JSON.stringify({
-          artifactId: 'retained-step', filename: 'horn.step', sizeBytes: 13,
-          warning: 'This geometry did not reach its 0.1 mm target before the refinement budget ran out.',
-        }), {
+      if (path === '/api/export/step?body=surface') {
+        const response = new Response('ISO-10303-21;', {
           status: 200,
           headers: {
-            'Content-Type': 'application/json',
             'X-Export-Warning':
               'This geometry did not reach its 0.1 mm target before the refinement budget ran out.',
           },
+        });
+        return Object.assign(response, {
+          blob: async () => new Blob(['ISO-10303-21;'], { type: 'model/step' }),
         });
       }
       if (path === '/api/workspace/write-export') {
@@ -627,7 +609,7 @@ describe('design file export menu', () => {
       return new Response('not found', { status: 404 });
     });
 
-    const item = itemNamed(body === 'solid' ? 'STEP solid' : 'STEP inner surface');
+    const item = itemNamed('STEP inner surface');
     await act(async () => { item.click(); });
 
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
@@ -640,13 +622,13 @@ describe('design file export menu', () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const path = String(input);
       requested.push(path);
-      if (path === '/api/export/stl?delivery=staged') {
-        return new Response(JSON.stringify({
-          artifactId: 'retained-stl', filename: 'horn.stl', sizeBytes: 3,
-          warning: 'fine detail was coarsened',
-        }), {
+      if (path === '/api/export/stl') {
+        const response = new Response('stl', {
           status: 200,
-          headers: { 'Content-Type': 'application/json', 'X-Export-Warning': 'fine detail was coarsened' },
+          headers: { 'X-Export-Warning': 'fine detail was coarsened' },
+        });
+        return Object.assign(response, {
+          blob: async () => new Blob(['stl'], { type: 'application/sla' }),
         });
       }
       if (path === '/api/workspace/write-export') {

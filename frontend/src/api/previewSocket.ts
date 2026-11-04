@@ -2,7 +2,6 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { viewerPreferences } from '../viewerprefs/viewerPreferences';
 import { fieldSentence, validationSentence, failureWords, PLAIN_VALIDATION_FAILURE, readsPlain } from './httpError';
 import { decodeFrame, type DecodedFrame, type FrameHeader } from './frame';
-import { ClientLatencyClock } from '../viewport/clientLatency';
 import { selectPreferredFrame } from '../viewport/lodPolicy';
 import {
   currentDocumentLoad,
@@ -107,7 +106,6 @@ export class PreviewSocketManager {
   private socket: WebSocketLike | null = null;
   private connectionGeneration = 0;
   private seq = 0;
-  private readonly latencyClock = new ClientLatencyClock();
   /** Newest request outcome seen on this connection, across coarse/fine lanes. */
   private latestOutcomeSeq = 0;
   private helloSeen = false;
@@ -255,7 +253,6 @@ export class PreviewSocketManager {
     this.socket = socket;
     this.armHeartbeat();
     this.connectionGeneration += 1;
-    this.latencyClock.beginConnection(this.connectionGeneration);
     this.seq = 0;
     this.latestOutcomeSeq = 0;
     this.loadFloorSeq = 0;
@@ -397,7 +394,6 @@ export class PreviewSocketManager {
     );
     this.latestOutcomeSeq = Math.max(this.latestOutcomeSeq, frameSeq);
     frame.connectionGeneration = this.connectionGeneration;
-    frame.requestStartedAt = this.latencyClock.requestStartedAt(this.connectionGeneration, frameSeq);
     if (supported) frame.documentLoad = this.documentLoad;
     const retained = this.snapshot.dimensionsFrame ?? this.snapshot.frame;
     const sameOwner = retained?.documentLoad === frame.documentLoad
@@ -511,7 +507,6 @@ export class PreviewSocketManager {
     if (!socket || socket.readyState !== OPEN || !this.helloSeen || this.snapshot.epoch === null) return;
     const { design, designRevision } = useDesignStore.getState();
     this.seq += 1;
-    this.latencyClock.recordRequest(this.connectionGeneration, this.seq, performance.now());
     socket.send(JSON.stringify({
       v: 1,
       kind: 'preview',

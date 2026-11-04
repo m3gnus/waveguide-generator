@@ -12,7 +12,7 @@ import { oneLineRow } from './oneLineFit';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecodedFrame } from '../api/frame';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
-import { previewSocket } from '../api/previewSocket';
+import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection, provisionalResults } from '../api/results';
 import { currentModel, currentModelScene, currentCadScenes, shownResult, showsRetainedMesh, spatialResult, useCurrentModel, type CurrentModel } from '../model/currentModel';
 import { postSymmetry, toSolveDesign } from '../jobs/actions';
@@ -24,7 +24,7 @@ import { assemblyPreviewLabel, useAssemblyBuildStore } from '../stores/assemblyB
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { cadCameraAxes } from './cadCamera';
-import { currentDocumentLoad, subscribeRevision, useDesignStore } from '../stores/design';
+import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { useScopedSolveOptions } from '../stores/solveOptionsContext';
@@ -71,7 +71,7 @@ import { MeshReportCard, previewSurfaceNote } from './MeshReport';
 import { importedMeshStore, type ImportedMeshShowing } from './importedMeshStore';
 import { prepareDesignSolverMesh, SolverMeshRefreshController, type SolverMeshRefreshState } from './solverMeshRefresh';
 import type { CameraDirection } from './cameraMath';
-import { formatClientLatency } from './clientLatency';
+import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
 import { DeveloperDetails } from '../shell/DeveloperDetails';
 import { previewBadge, previewErrorKey, previewErrorMessage, staleReason } from './presentation';
@@ -465,24 +465,26 @@ export function Viewport() {
     [femField.field, fieldPlane, femQuantity]);
   const selectedRef = useRef<DecodedFrame | null>(null);
   const solveWasRunningOrQueued = useRef(solveRunningOrQueued);
+  const latencyClock = useRef(new ClientLatencyClock());
+  const currentEpoch = useRef<number | null>(preview.epoch);
+  const queuedFineRevision = useRef<number | null>(null);
+  const fineRequestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  currentEpoch.current = preview.epoch;
+  if (preview.epoch === null) latencyClock.current.disconnect();
+  else latencyClock.current.beginEpoch(preview.epoch, designRevision, performance.now());
   const selected = selectPreferredFrame(selectedRef.current, preview.frame);
   if (selected !== selectedRef.current) {
     selectedRef.current = selected;
   }
   const previewScene = useMemo(() => selected ? frameToScene(selected) : null, [selected]);
   const [autoQuadrants, setAutoQuadrants] = useState<DisplayQuadrants>(() => displayQuadrants(design.mesh.quadrants));
-  const previewReady = previewScene !== null;
-  const symmetryDocument = currentDocumentLoad();
   const symmetryBody = useMemo(() => JSON.stringify(toSolveDesign(design)), [design]);
   useEffect(() => {
-    if (workspaceMode !== 'parametric' || solveSymmetry !== 'auto' || !previewReady
-      || preview.connection !== 'connected') return undefined;
+    if (workspaceMode !== 'parametric' || solveSymmetry !== 'auto' || previewScene === null) return undefined;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void postSymmetry(symmetryBody, fetch, controller.signal)
-        .then((resolution) => {
-          if (!controller.signal.aborted) setAutoQuadrants(resolution.quadrants);
-        })
+        .then((resolution) => setAutoQuadrants(resolution.quadrants))
         .catch(() => {
           if (!controller.signal.aborted) setAutoQuadrants(displayQuadrants(design.mesh.quadrants));
         });
@@ -491,22 +493,17 @@ export function Viewport() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [design.mesh.quadrants, workspaceMode, previewReady, solveSymmetry, symmetryBody, symmetryDocument,
-    preview.connection, preview.epoch]);
+  }, [design.mesh.quadrants, workspaceMode, previewScene, solveSymmetry, symmetryBody]);
   const recordedQuadrants = resultRun?.symmetry?.resolved_quadrants;
   const resultQuadrants = recordedQuadrants === 1 || recordedQuadrants === 12
     || recordedQuadrants === 14 || recordedQuadrants === 1234 ? recordedQuadrants : null;
   const solvedQuadrants = resultQuadrants ?? quadrantsForSolveMode(solveSymmetry, autoQuadrants);
+  const scene = useMemo(
+    () => previewScene ? markParametricSolvedDomain(previewScene, solvedQuadrants) : null,
+    [previewScene, solvedQuadrants],
+  );
   const [mode, setMode] = useState<DisplayMode>('clay');
   const [clipMode, setClipMode] = useState<ModelClipMode>('off');
-  // These opaque modes have identical solved/display materials without tint.
-  // Edge extraction and transparent passes keep their established partition.
-  const partitionSolvedDomain = preferences.tintSolvedRegion || clipMode !== 'off'
-    || !(['clay', 'zebra', 'curvature', 'normals'] as DisplayMode[]).includes(mode);
-  const scene = useMemo(
-    () => previewScene ? markParametricSolvedDomain(previewScene, solvedQuadrants, partitionSolvedDomain) : null,
-    [previewScene, solvedQuadrants, partitionSolvedDomain],
-  );
   const [sectionAxis, setSectionAxis] = useState<SectionAxis>(SECTION_AXES[0]);
   const [invertFieldClip, setInvertFieldClip] = useState(false);
   const [showEnclosure, setShowEnclosure] = useState(true);
@@ -603,8 +600,8 @@ export function Viewport() {
   // Solver artifacts reconstruct the whole physical model too. A displayed
   // result owns its domain even if live options have since rebuilt that mesh.
   const resultMeshScene = useMemo(() => workspaceMode === 'parametric' && importedMesh && resultQuadrants !== null
-    ? markParametricSolvedDomain(importedMesh.scene, resultQuadrants, partitionSolvedDomain) : importedMesh?.scene,
-  [workspaceMode, importedMesh, resultQuadrants, partitionSolvedDomain]);
+    ? markParametricSolvedDomain(importedMesh.scene, resultQuadrants) : importedMesh?.scene,
+  [workspaceMode, importedMesh, resultQuadrants]);
   const activeScene = workspaceMode === 'cad' ? importedMesh?.scene ?? null : resultMeshScene ?? scene;
   const fieldColormap = useMemo(() => readChartTokens().colormap, [theme]);
   const activeFieldColormap = useMemo(
@@ -626,7 +623,7 @@ export function Viewport() {
     ? `msh:${importedMesh.artifactToken}:${workspaceMode === 'parametric' ? resultQuadrants ?? 'artifact' : 'cad'}`
     : workspaceMode === 'cad'
       ? 'cad:empty'
-      : `${selected?.connectionGeneration ?? 0}:${selected?.header.epoch ?? 0}:${selected?.header.seq ?? 0}:${selected?.header.designRevision ?? 0}:${selected?.header.lod ?? ''}:${preferences.tintSolvedRegion ? solvedQuadrants : 'same'}`;
+      : `${selected?.header.epoch ?? 0}:${selected?.header.seq ?? 0}:${selected?.header.designRevision ?? 0}:${selected?.header.lod ?? ''}:${preferences.tintSolvedRegion ? solvedQuadrants : 'same'}`;
   const surfaces = activeScene?.surfaces ?? [];
   const domainLabel = activeScene ? solvedDomainLabel(activeScene) : null;
   const previewNote = workspaceMode === 'parametric' && !importedMesh ? previewSurfaceNote(selected?.header.previewMetadata?.tessellation?.['horn.inner']) : null;
@@ -986,6 +983,26 @@ export function Viewport() {
     preferences.fieldPlaneRangeLocked,
   ]);
 
+  useEffect(() => subscribeRevision((event) => {
+    // Design revisions replace geometry inside the current view. Keeping the
+    // exact framing is what makes undo/redo and parameter changes comparable.
+    // A new imported source still gets an initial fit in the store effect above.
+    const epoch = currentEpoch.current;
+    if (epoch === null) return;
+    if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
+    queuedFineRevision.current = event.revision;
+    latencyClock.current.recordRequest(epoch, event.revision, 'coarse', performance.now());
+    fineRequestTimer.current = setTimeout(() => {
+      fineRequestTimer.current = null;
+      const revision = queuedFineRevision.current;
+      queuedFineRevision.current = null;
+      const activeEpoch = currentEpoch.current;
+      if (revision !== null && activeEpoch !== null) {
+        latencyClock.current.recordRequest(activeEpoch, revision, 'fine', performance.now());
+      }
+    }, PREVIEW_FINE_IDLE_MS);
+  }), []);
+
   useEffect(() => {
     setClientFrameMs(null);
   }, [preview.epoch]);
@@ -1022,6 +1039,10 @@ export function Viewport() {
     return () => clearTimeout(timer);
   }, [behindDesign, designRevision]);
 
+  useEffect(() => () => {
+    if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
+  }, []);
+
   return <div className="viewport-panel wg2-viewport">
     {activeScene && hasSurfaces && webgl && <ViewportCanvas
       scene={activeScene}
@@ -1036,7 +1057,7 @@ export function Viewport() {
       zoomRequest={zoomRequest}
       cameraProjection={cameraProjection}
       preferences={preferences}
-      frameStartedAt={workspaceMode === 'cad' || importedMesh || !selected ? null : selected.requestStartedAt ?? null}
+      frameStartedAt={workspaceMode === 'cad' || importedMesh || !selected ? null : latencyClock.current.requestStartedAt(selected.header)}
       onClientFrame={reportClientFrame}
       theme={theme}
       onRenderFailure={setRenderFailure}
@@ -1065,7 +1086,7 @@ export function Viewport() {
         </span>}
         {developerDetails && workspaceMode === 'parametric' && !solverViewSelected && <span className="viewport-fact-group viewport-timing" data-drop={FACT_DROP.timing}>
           <ViewportFact label="Geometry" unit="ms">{selected?.header.evalMs?.toFixed(1) ?? '—'}</ViewportFact>
-          <ViewportFact label="To render">{formatClientLatency(clientFrameMs)}</ViewportFact>
+          <ViewportFact label="On screen">{formatClientLatency(clientFrameMs)}</ViewportFact>
         </span>}
       </div>
       <div className="viewport-live">

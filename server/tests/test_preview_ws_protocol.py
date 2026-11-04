@@ -977,8 +977,14 @@ def test_angular_segments_size_the_export_mesh_and_not_the_preview() -> None:
     assert translated[1]["mesh"]["angularSegments"] == 400
 
 
-def test_sampling_fields_invalidate_whole_preview_but_exact_repeats_hit() -> None:
-    """Dimensions and validation consume the authored sampling configuration."""
+def test_export_only_sampling_fields_do_not_invalidate_the_preview_cache() -> None:
+    """The other half of the contract above: identical output, one build.
+
+    The sampling controls sit beside the solve settings, so a user adjusting
+    them is usually looking straight at the viewport. Keying the geometry cache
+    on a field the builder overwrites charged a full rebuild for a frame that
+    was already going to come out byte-identical.
+    """
 
     async def scenario() -> int:
         builds = 0
@@ -1001,7 +1007,7 @@ def test_sampling_fields_invalidate_whole_preview_but_exact_repeats_hit() -> Non
         await task
         return builds
 
-    assert asyncio.run(scenario()) == 2
+    assert asyncio.run(scenario()) == 1
 
 
 def test_preview_relevant_config_keeps_every_field_the_builder_reads() -> None:
@@ -1020,7 +1026,7 @@ def test_preview_relevant_config_keeps_every_field_the_builder_reads() -> None:
         },
     }
     relevant = _cache_relevant_config(config)
-    assert relevant["mesh"] == config["mesh"]
+    assert relevant["mesh"] == {"wallThickness": 3.0, "quadrants": 1234}
     assert relevant["profile"] == {"a": 45.0}
     # Never mutate the config handed to the builder.
     assert config["mesh"]["angularSegments"] == 40.0
