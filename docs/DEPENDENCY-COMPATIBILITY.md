@@ -114,7 +114,7 @@ a separate choice. Existing power, surface traces, drive ports and observation
 conventions are retained. Results record observed source/version/commit and
 helper/shader identity; unavailable identity remains unknown.
 
-The BEM++ pin `8e69106` retains its opt-in prescribed-source exterior-pressure
+The BEM++ pin `5d82a93` retains its opt-in prescribed-source exterior-pressure
 `solve_compiled` facade and native orders 4/4. Same-backend pressure comparisons
 establish input-translation equivalence; they do not establish numerical
 equivalence between Metal, BEM++ and BEAT. See
@@ -147,3 +147,5 @@ the exact installed pin. Hosted platform and installed-candidate evidence
 remain separate from these source comparisons.
 
 The plots pin `9462f4b` preserves unavailable samples as chart gaps, keeps the signed phase grid and on-axis reference, and supports explicit directivity display ranges. Partial-cap plots state their coverage. These renderer contracts are available to WG export consumers.
+
+The BEM++ pin `5d82a93` serializes overlapping BLAS limit scopes, refuses unsupported baffle combinations, releases streamed traces and retains unavailable directivity samples as unavailable. The existing opt-in compiled facade and native quadrature orders remain.
