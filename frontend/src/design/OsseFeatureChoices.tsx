@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { serializeDesignDocument } from '../api/designIo';
-import { mergeDesignForOsseFeatures, useDesignStore, type DesignDocument } from '../stores/design';
+import { resolveDesignExpressions, serializeDesignDocument } from '../api/designIo';
+import { mergeDesignForOsseFeatures, osseInputsRequiringNumbers, osseNumberLabel, resolveOsseBodyExpressions, useDesignStore, type DesignDocument } from '../stores/design';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, type OsseFeatures } from './osseFeatures';
 import { PARAMETRIC_CONTROLS } from './parametricControlRegistry';
 import { SelectRow } from './SelectRow';
@@ -23,12 +23,22 @@ export function OsseFeatureChoices({ design, onChanged }: { design: DesignDocume
     setError(null);
     setPending(true);
     try {
-      const candidate = mergeDesignForOsseFeatures(current, nextFeatures);
+      const isCurrent = () => useDesignStore.getState().designRevision === state.designRevision
+        && useDesignStore.getState().loadGeneration === state.loadGeneration;
+      const inputs = osseInputsRequiringNumbers(current);
+      const paths = Object.keys(inputs);
+      const resolved = paths.length ? await resolveDesignExpressions(current, paths) : {};
+      if (!isCurrent()) return;
+      const candidate = mergeDesignForOsseFeatures(resolveOsseBodyExpressions(current, resolved), nextFeatures);
       // The existing read-only serializer validates the complete mesher contract.
       await serializeDesignDocument(candidate, 'OSSE', fetch, undefined, null);
-      if (useDesignStore.getState().designRevision !== state.designRevision
-        || useDesignStore.getState().loadGeneration !== state.loadGeneration) return;
-      useDesignStore.getState().setOsseFeatures(nextFeatures);
+      if (!isCurrent()) return;
+      const replacements = paths.map((path) => inputs[path]?.raw != null
+        ? `${osseNumberLabel(path)}: ${path} = ${inputs[path]!.raw} will become ${resolved[path]}.`
+        : `${osseNumberLabel(path)} is unset; its current default will become ${resolved[path]}.`);
+      if (paths.length && !window.confirm(`Switching will use these plain numbers:\n\n${replacements.join('\n')}\n\nUndo restores the complete previous design and its expressions. Continue?`)) return;
+      if (!isCurrent()) return;
+      useDesignStore.getState().setOsseFeatures(nextFeatures, resolved);
       onChanged();
     } catch (cause) {
       if (cause instanceof Error && cause.message.startsWith('Native features require')) setError(cause.message);

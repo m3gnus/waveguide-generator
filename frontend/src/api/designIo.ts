@@ -175,6 +175,21 @@ export async function serializeDesignDocument(
   });
 }
 
+/** Ask the geometry owner for constants/defaults; angular expressions return null. */
+export async function resolveDesignExpressions(
+  design: DesignDocument,
+  paths: string[],
+  fetcher: typeof fetch = fetch,
+): Promise<Record<string, number | null>> {
+  const response = await fetcher('/api/design/resolve-expressions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ design: serializeDesign(design), paths }),
+  });
+  if (!response.ok) throw new Error(await errorMessage(response));
+  return response.json() as Promise<Record<string, number | null>>;
+}
+
 export async function sendDesignToCad(
   design: DesignDocument,
   designRevision: number,

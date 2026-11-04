@@ -914,6 +914,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/design/resolve-expressions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Expressions
+         * @description Resolve OSSE constants/defaults without trusting editor samples.
+         */
+        post: operations["resolve_expressions_api_design_resolve_expressions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/design/save": {
         parameters: {
             query?: never;
@@ -3100,6 +3120,12 @@ export interface components {
         Body_choose_update_channel_api_updates_channel_put: {
             /** Channel */
             channel: string;
+        };
+        /** Body_resolve_expressions_api_design_resolve_expressions_post */
+        Body_resolve_expressions_api_design_resolve_expressions_post: {
+            design: components["schemas"]["DesignConfig"];
+            /** Paths */
+            paths: string[];
         };
         /** CadApprovalsRequest */
         CadApprovalsRequest: {
@@ -9288,6 +9314,41 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_expressions_api_design_resolve_expressions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Body_resolve_expressions_api_design_resolve_expressions_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number | null;
                     };
                 };
             };

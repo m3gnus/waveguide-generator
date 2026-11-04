@@ -904,6 +904,26 @@
         "title": "Body_choose_update_channel_api_updates_channel_put",
         "type": "object"
       },
+      "Body_resolve_expressions_api_design_resolve_expressions_post": {
+        "properties": {
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "design",
+          "paths"
+        ],
+        "title": "Body_resolve_expressions_api_design_resolve_expressions_post",
+        "type": "object"
+      },
       "CadApprovalsRequest": {
         "additionalProperties": false,
         "properties": {
@@ -17862,6 +17882,59 @@
           }
         },
         "summary": "Open Endpoint",
+        "tags": [
+          "design-io"
+        ]
+      }
+    },
+    "/api/design/resolve-expressions": {
+      "post": {
+        "description": "Resolve OSSE constants/defaults without trusting editor samples.",
+        "operationId": "resolve_expressions_api_design_resolve_expressions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_resolve_expressions_api_design_resolve_expressions_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "title": "Response Resolve Expressions Api Design Resolve Expressions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve Expressions",
         "tags": [
           "design-io"
         ]

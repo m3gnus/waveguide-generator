@@ -2,7 +2,7 @@ import { activityStore } from '../shell/activity';
 import { readFileSync } from 'node:fs';
 import { failureWords, keepRefusalOriginals, PLAIN_REQUEST_FAILURE } from './httpError';
 import { describe, expect, it, vi } from 'vitest';
-import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, openDesignText, sendDesignToCad, serializeDesignDocument } from './designIo';
+import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, openDesignText, resolveDesignExpressions, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { setAnchorAngle } from '../design/customProfileEdit';
 import { expectNoJargon } from '../testing/expectNoJargon';
@@ -10,6 +10,20 @@ import { expectNoJargon } from '../testing/expectNoJargon';
 const athRefusalCases: { name: string; text: string; message: string }[] = JSON.parse(
   new TextDecoder().decode(readFileSync('../shared/ath-refusal-fixtures.json')),
 );
+
+it('requests constants using the complete saved source and dialect without changing it', async () => {
+  const design = designForFamily('OSSE');
+  design._expressions = { a0: { raw: '10 + log(100)', value: null, dialect: 'wg-v1' } };
+  design._absent = ['scale'];
+  const before = JSON.stringify(serializeDesign(design));
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ a0: 12, scale: 1 }), { status: 200 }));
+  expect(await resolveDesignExpressions(design, ['a0', 'scale'], fetcher)).toEqual({ a0: 12, scale: 1 });
+  expect(fetcher).toHaveBeenCalledExactlyOnceWith('/api/design/resolve-expressions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ design: JSON.parse(before), paths: ['a0', 'scale'] }),
+  });
+  expect(JSON.stringify(serializeDesign(design))).toBe(before);
+});
 
 async function untouchedRoundTrip(original: Record<string, unknown>): Promise<Record<string, unknown>> {
   let saved: Record<string, unknown> | undefined;

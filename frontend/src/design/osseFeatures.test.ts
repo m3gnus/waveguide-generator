@@ -75,7 +75,20 @@ describe('OSSE feature choices', () => {
     const original = designForFamily('OSSE');
     original._expressions = { L: { value: null, raw: '120 + sin(p)', dialect: 'ath' } };
     useDesignStore.getState().replaceDocument(original);
-    expect(() => useDesignStore.getState().setFamily('OSSE-ROUNDOVER', { preserveOsseBody: true })).toThrow('Replace those expressions');
+    expect(() => useDesignStore.getState().setFamily('OSSE-ROUNDOVER', { preserveOsseBody: true })).toThrow('Horn length (L) uses the expression “120 + sin(p)”');
+    expect(useDesignStore.getState().design).toEqual(original);
+  });
+
+  it.each([
+    'L', 'r0', 'a', 'a0', 'k', 'scale', 'mesh.throat_resolution', 'mesh.mouth_resolution',
+    'mesh.rear_resolution', 'mesh.angular_segments', 'mesh.length_segments',
+    'mesh.max_triangles', 'mesh.allow_large_mesh', 'mesh.vertical_offset',
+  ])('names %s when the native contract cannot carry its expression', (path) => {
+    const original = designForFamily('OSSE');
+    original._expressions = { [path]: { value: 1, raw: '1 + sin(p)' } };
+    useDesignStore.getState().replaceDocument(original);
+    expect(() => useDesignStore.getState().setOsseFeatures({ throat: 'none', mouth: 'arc', axial: 'off' }))
+      .toThrow(`(${path}) uses the expression “1 + sin(p)”`);
     expect(useDesignStore.getState().design).toEqual(original);
   });
 

@@ -14,7 +14,7 @@ from server.cadlink.identity import SaveIdentity, classify_open, design_hash
 from server.cadlink.store import CadLinkStore
 from server.workspace.api import select_workspace_path
 from server.design.uid import validate_design_uid
-from server.design.schema import DesignConfig
+from server.design.schema import DesignConfig, Expr, OSSEConfig
 from server.design.textcfg import ParsedDesign, TextConfigError, parse, serialize
 
 
@@ -229,6 +229,99 @@ def create_design_io_router(store: CadLinkStore) -> APIRouter:
     @router.post("/serialize")
     async def serialize_endpoint(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return await serialize_design(payload)
+
+    @router.post("/resolve-expressions")
+    async def resolve_expressions(design: DesignConfig, paths: list[str]) -> dict[str, float | None]:
+        """Resolve OSSE constants/defaults without trusting editor samples."""
+        from hornlab_mesher.config_builder import build_geometry_params
+        from hornlab_mesher.profile_common import eval_param
+        from server.preview.translate import design_to_mesher_config
+
+        # Validate the wire document through the preview's migration owner before
+        # resolving anything: unversioned WG log/ln differ from ATH expressions.
+        if not isinstance(design.root, OSSEConfig):
+            raise HTTPException(
+                status_code=422,
+                detail="Expression resolution requires an OSSE design. Choose OSSE under Family and try again.",
+            )
+        root = design.root
+
+        # Expr owns constant detection and dialect translation. Use the geometry
+        # evaluator for the final value so freezing cannot change its last bits.
+        def number(value):
+            if not isinstance(value, Expr) and type(value) not in (int, float):
+                return None
+            expression = value if isinstance(value, Expr) else Expr.model_validate(value)
+            return eval_param(expression.execution_text()) if expression.constant_value() is not None else None
+
+        def same_numbers(before, after):
+            if isinstance(before, dict) and isinstance(after, dict):
+                return before.keys() == after.keys() and all(same_numbers(value, after[key]) for key, value in before.items())
+            if isinstance(before, list) and isinstance(after, list):
+                return len(before) == len(after) and all(same_numbers(a, b) for a, b in zip(before, after))
+            if before == after:
+                return True
+            try:
+                return eval_param(before) == eval_param(after)
+            except (TypeError, ValueError):
+                return False
+
+        def config(root):
+            return design_to_mesher_config(DesignConfig(root=root))
+
+        inputs = {}
+        for path in paths:
+            value = root
+            for part in path.split('.'):
+                value = getattr(value, part, None)
+            inputs[path] = value
+        result = {path: number(value) for path, value in inputs.items()}
+        if 'scale' in inputs and isinstance(inputs['scale'], Expr):
+            # Scale is structural: its existing owner uses constant_value(),
+            # whose bounded arithmetic can differ from profile evaluation.
+            result['scale'] = inputs['scale'].constant_value()
+        missing = [path for path, value in inputs.items() if value is None and '.' not in path]
+        # Let the existing field error name unresolved expressions before trying
+        # to construct defaults (a parameterized Scale cannot build a profile).
+        if any(value is not None and result[path] is None for path, value in inputs.items()):
+            return result
+
+        def parameters(root):
+            return build_geometry_params(config(root))[0]
+
+        try:
+            original_config = config(root)
+            for path, value in inputs.items():
+                if not isinstance(value, Expr) or result[path] is None:
+                    continue
+                explicit = root.model_copy(deep=True)
+                target = explicit
+                parts = path.split('.')
+                for part in parts[:-1]:
+                    target = getattr(target, part)
+                setattr(target, parts[-1], Expr(value=result[path]))
+                # Legacy scaling formats expression multipliers differently
+                # from literal multiplication. Refuse even a last-bit change.
+                if not same_numbers(original_config, config(explicit)):
+                    result[path] = None
+            if not missing:
+                return result
+            # Read absent dimensions from the owner that builds the current horn,
+            # never from the editor's new-design template.
+            defaults = parameters(root)
+            for path in missing:
+                resolved = number(defaults.get(path))
+                if resolved is None:
+                    continue
+                updated = parameters(root.model_copy(update={path: Expr(value=resolved)}))
+                # Older saved imports leave omitted dimensions unscaled, while
+                # explicit dimensions receive Scale. Keep the guard when making
+                # a default explicit would change its effective geometry.
+                if updated.get(path) == defaults.get(path):
+                    result[path] = resolved
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=_parse_detail(exc)) from exc
+        return result
 
     @router.post("/open")
     async def open_endpoint(

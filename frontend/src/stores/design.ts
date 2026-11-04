@@ -626,15 +626,45 @@ const OSSE_LITERAL_BODY_FIELDS = OSSE_BODY_FIELDS.filter((field) => field !== 's
 const OSSE_MESH_FIELDS = ['throat_resolution', 'mouth_resolution', 'rear_resolution',
   'angular_segments', 'length_segments', 'max_triangles', 'allow_large_mesh', 'vertical_offset'] as const;
 
-function requireLiteralOsseBody(current: DesignDocument): void {
+/** Only dimensions and mesh controls actually carried to the native builder. */
+export function osseInputsRequiringNumbers(current: DesignDocument): Record<string, ExprNumber | null> {
+  if (current.formula !== 'OSSE') return {};
   const carriedPaths = new Set<string>([...OSSE_LITERAL_BODY_FIELDS, ...OSSE_MESH_FIELDS.map((field) => `mesh.${field}`)]);
-  if (Object.entries(current._expressions ?? {})
-    .some(([path, expression]) => carriedPaths.has(path) && expression.raw != null)) {
-    throw new Error('Native features require plain numbers for the shared OSSE dimensions and mesh settings. Replace those expressions before switching.');
+  return {
+    ...Object.fromEntries((current._absent ?? [])
+      .filter((path) => (OSSE_LITERAL_BODY_FIELDS as readonly string[]).includes(path))
+      .map((path) => [path, null])),
+    ...Object.fromEntries(Object.entries(current._expressions ?? {})
+      .filter(([path, expression]) => carriedPaths.has(path) && expression.raw != null)),
+  };
+}
+
+export function osseNumberLabel(path: string): string {
+  return `${findParameterByPath(path, 'OSSE')?.label ?? path} (${path})`;
+}
+
+function requireLiteralOsseBody(current: DesignDocument): void {
+  const expressions = Object.entries(osseInputsRequiringNumbers(current)).filter((entry) => entry[1]?.raw != null);
+  if (expressions.length) {
+    const fields = expressions.map(([path, expression]) => `${osseNumberLabel(path)} uses the expression “${expression!.raw}”.`).join(' ');
+    throw new Error(`Native features require plain numbers. ${fields} Enter a number in each listed field before choosing OSSE features. Only expressions that preserve the current geometry can be converted.`);
   }
-  if ((current._absent ?? []).some((path) => (OSSE_LITERAL_BODY_FIELDS as readonly string[]).includes(path))) {
-    throw new Error('Native features require explicit shared OSSE dimensions and scale. Enter the missing numbers before switching.');
+  const missing = (current._absent ?? []).filter((path) => (OSSE_LITERAL_BODY_FIELDS as readonly string[]).includes(path));
+  if (missing.length) {
+    throw new Error(`Native features require explicit numbers for ${missing.map(osseNumberLabel).join(', ')}. Enter the missing numbers before choosing OSSE features.`);
   }
+}
+
+/** Apply server-resolved constants to a copy, retaining unresolved expressions. */
+export function resolveOsseBodyExpressions(current: DesignDocument, values: Record<string, number | null>): DesignDocument {
+  let next = current;
+  for (const path of Object.keys(osseInputsRequiringNumbers(current))) {
+    const value = values[path];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      next = withoutPreservedMetadata(setAtPath(next, path, value), path);
+    }
+  }
+  return next;
 }
 
 /** Merge a family template with the current document's non-formula state. */
@@ -828,7 +858,7 @@ interface DesignStore {
   setQuadrants: (quadrants: number[]) => void;
   setSourceConvention: (convention: DesignDocument['source']['velocity_convention']) => void;
   setFamily: (family: DesignFamily, options?: { preserveOsseBody: boolean }) => void;
-  setOsseFeatures: (features: OsseFeatures) => void;
+  setOsseFeatures: (features: OsseFeatures, resolvedExpressions?: Record<string, number | null>) => void;
   /**
    * The one whole-document replacement: cancels pending revisions, bumps the
    * load generation, announces a `load` revision, and (unless `keepHistory`)
@@ -1031,10 +1061,10 @@ export const useDesignStore = create<DesignStore>()(
         set((state) => ({ design: mergeDesignForFamily(state.design, family, options), designRevision: state.designRevision + 1 }));
         bump('family', true);
       },
-      setOsseFeatures: (features) => {
+      setOsseFeatures: (features, resolvedExpressions = {}) => {
         cancelRevisionTimers();
         get().endDrag();
-        set((state) => ({ design: mergeDesignForOsseFeatures(state.design, features), designRevision: state.designRevision + 1 }));
+        set((state) => ({ design: mergeDesignForOsseFeatures(resolveOsseBodyExpressions(state.design, resolvedExpressions), features), designRevision: state.designRevision + 1 }));
         bump('family', true);
       },
       replaceDocument: (design, options) => {
