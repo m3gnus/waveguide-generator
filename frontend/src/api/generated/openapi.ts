@@ -4016,6 +4016,17 @@ export interface components {
             directivity: {
                 [key: string]: unknown;
             };
+            /**
+             * Display Range Db
+             * @default [
+             *       -30,
+             *       0
+             *     ]
+             */
+            display_range_db?: [
+                number,
+                number
+            ];
             /** Frequencies */
             frequencies: number[];
             /** Reference Directivity */

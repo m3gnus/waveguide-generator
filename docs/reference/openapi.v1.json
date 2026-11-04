@@ -3783,6 +3783,24 @@
             "title": "Directivity",
             "type": "object"
           },
+          "display_range_db": {
+            "default": [
+              -30.0,
+              0.0
+            ],
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Display Range Db",
+            "type": "array"
+          },
           "frequencies": {
             "items": {
               "type": "number"

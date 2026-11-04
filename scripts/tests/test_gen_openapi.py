@@ -5,6 +5,17 @@ import json
 from scripts import gen_openapi
 
 
+def test_committed_directivity_request_documents_display_range() -> None:
+    schema = json.loads(gen_openapi.OUTPUT.read_text(encoding="utf-8"))
+    request = schema["components"]["schemas"]["DirectivityRenderRequest"]
+    display_range = request["properties"]["display_range_db"]
+    assert display_range["default"] == [-30.0, 0.0]
+    assert display_range["type"] == "array"
+    assert display_range["minItems"] == display_range["maxItems"] == 2
+    assert display_range["prefixItems"] == [{"type": "number"}, {"type": "number"}]
+    assert "display_range_db" not in request["required"]
+
+
 def test_committed_openapi_matches_the_live_application() -> None:
     rendered = gen_openapi.render()
     assert gen_openapi.OUTPUT.read_text(encoding="utf-8") == rendered
