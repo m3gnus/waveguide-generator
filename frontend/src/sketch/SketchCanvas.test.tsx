@@ -5,11 +5,14 @@ import { SketchCanvas } from './SketchCanvas';
 import { SketchController } from './controller';
 import { applyCommand, importedSketch } from './ops';
 import type { Sketch } from './model';
-import { SketchSession, type Diagnosis } from './session';
+import { SketchSession, type Diagnosis, type DragResult } from './session';
 import { initialDiagnosis, realSessionReady } from './testSupport';
 import { readFileSync } from 'node:fs';
 import { seed } from './adapters/sourceContour';
 import { sketchViewKey } from './viewPreferences';
+import { arcGeometry, distance } from './geometry';
+import { sourceInitialView } from './adapters/sourceDisplay';
+import { worldToScreen } from './view';
 import { INITIAL_SOURCE } from '../design/sourceContourEditing';
 
 let host: HTMLDivElement, root: Root;
@@ -970,14 +973,14 @@ describe('navigation and line legend', () => {
     expect(host.querySelectorAll('.sketch-entity.selected')).toHaveLength(2);
     expect(new TextDecoder().decode(readFileSync('src/sketch/sketchCanvas.css'))).toContain('.sketch-marquee.crossing { stroke-dasharray: 5 4; }');
   });
-  it('click jitter never starts a solve drag; a body drag translates both ends and is undone once', async () => {
+  it.each([false, true])('click jitter never starts a solve drag; a line body translates and undoes once (Shift=%s)', async shiftKey => {
     const initial = base(); initial.constraints.push({id:'horizontal',kind:'horizontal',line:'line'},{id:'length',kind:'distance',a:'p',b:'q',value:10,driving:true});
     await mount(initial);
     const p = coordinate('p'), q = coordinate('q'), x = (p.x+q.x)/2, y = p.y;
     const curve = host.querySelector('.sketch-entity[data-id="line"]')!, begin = vi.spyOn(SketchController.prototype,'beginDrag');
     await pointer(curve,'pointerdown',x,y); await pointer(svg(),'pointermove',x+3,y); await pointer(svg(),'pointerup',x+3,y);
     expect(begin).not.toHaveBeenCalled(); expect(coordinate('p').x).toBe(p.x);
-    await pointer(curve,'pointerdown',x,y); await pointer(svg(),'pointermove',x+24,y-20);
+    await pointer(curve,'pointerdown',x,y,{shiftKey}); await pointer(svg(),'pointermove',x+24,y-20,{shiftKey});
     await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); });
     await pointer(svg(),'pointerup',x+24,y-20);
     expect(begin).toHaveBeenCalledWith(['p','q']);
@@ -1006,18 +1009,130 @@ describe('navigation and line legend', () => {
     await pointer(svg(),'pointerdown',600,320); await pointer(svg(),'pointerup',600,320);
     expect(host.querySelectorAll('.sketch-entity.selected, .sketch-point.selected')).toHaveLength(0);
   });
-  it('translates an arc body with its centre and ends in one undo gesture', async () => {
+  it('Shift translates an arc body with its centre and ends in one undo gesture', async () => {
     const initial = importedSketch([{id:'center',x:0,y:0},{id:'start',x:2,y:0},{id:'end',x:0,y:2}], [{id:'arc',kind:'arc',center:'center',start:'start',end:'end',ccw:true}]);
     initial.constraints.push({id:'radius',kind:'radius',arc:'arc',value:2,driving:true});
     await mount(initial);
     const a = coordinate('start'), b = coordinate('end');
     const x = b.x+(a.x-b.x)/Math.sqrt(2), y = a.y-(a.y-b.y)/Math.sqrt(2);
     const begin = vi.spyOn(SketchController.prototype,'beginDrag');
-    await pointer(host.querySelector('.sketch-entity[data-id="arc"]')!,'pointerdown',x,y);
-    await pointer(svg(),'pointermove',x+18,y-12); await pointer(svg(),'pointerup',x+18,y-12);
+    await pointer(host.querySelector('.sketch-entity[data-id="arc"]')!,'pointerdown',x,y,{shiftKey:true});
+    await pointer(svg(),'pointermove',x+18,y-12,{shiftKey:true}); await pointer(svg(),'pointerup',x+18,y-12);
     expect(begin).toHaveBeenCalledWith(['center','start','end']);
     expect(coordinate('start').x).toBeCloseTo(a.x+18,6); expect(coordinate('end').y).toBeCloseTo(b.y-12,6);
     await key('z',{ctrlKey:true}); expect(coordinate('start').x).toBeCloseTo(a.x,6);
+  });
+  const bendSketch = () => importedSketch([{id:'center',x:0,y:0},{id:'start',x:5,y:0},{id:'end',x:0,y:5}], [{id:'arc',kind:'arc',center:'center',start:'start',end:'end',ccw:true}]);
+  function arcBody() {
+    const a = coordinate('start'), b = coordinate('end');
+    return { element: host.querySelector('.sketch-entity[data-id="arc"]')!, x:b.x+(a.x-b.x)/Math.sqrt(2), y:a.y-(a.y-b.y)/Math.sqrt(2) };
+  }
+  const frame = async () => act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); });
+  it('bends an arc through the pointer live, holds endpoints, and undoes the whole drag once', async () => {
+    await mount(bendSketch()); const a = coordinate('start'), b = coordinate('end'), body = arcBody();
+    const begin = vi.spyOn(SketchController.prototype,'beginDrag'), move = vi.spyOn(SketchController.prototype,'dragTo');
+    const full = vi.spyOn(SketchSession.prototype,'solveFull');
+    await pointer(body.element,'pointerdown',body.x,body.y);
+    await pointer(svg(),'pointermove',body.x+16,body.y-16); await frame();
+    await pointer(svg(),'pointermove',body.x+24,body.y-24); await frame();
+    expect(begin).toHaveBeenCalledExactlyOnceWith(['center','start','end']);
+    expect(move).toHaveBeenCalledTimes(2); expect(full).not.toHaveBeenCalled();
+    const result: DragResult = await move.mock.results.at(-1)!.value;
+    const arc = result.sketch.entities.find(e => e.id === 'arc')!;
+    if (arc.kind !== 'arc') throw new Error('Expected arc');
+    const g = arcGeometry(result.sketch,arc), cursor = move.mock.calls.at(-1)![1];
+    expect(Math.abs(distance(g.center,cursor)-g.radius)).toBeLessThan(1e-3);
+    for (const [id,p] of [['start',a],['end',b]] as const) {
+      expect(coordinate(id).x).toBeCloseTo(p.x,2); expect(coordinate(id).y).toBeCloseTo(p.y,2);
+    }
+    await pointer(svg(),'pointerup');
+    expect(coordinate('center').x).not.toBeCloseTo(b.x,2);
+    await key('z',{ctrlKey:true});
+    expect(coordinate('center').x).toBeCloseTo(b.x,6); expect(coordinate('start').x).toBeCloseTo(a.x,6);
+    expect((begin.mock.contexts[0] as SketchController<null>).history.canUndo).toBe(false);
+  });
+  it('Alt changes radius about the fixed centre and preserves endpoint rays', async () => {
+    await mount(bendSketch()); const body = arcBody(), a = coordinate('start'), b = coordinate('end');
+    await pointer(body.element,'pointerdown',body.x,body.y,{altKey:true});
+    await pointer(svg(),'pointermove',body.x+24,body.y-24,{altKey:true}); await pointer(svg(),'pointerup');
+    expect(coordinate('center').x).toBeCloseTo(b.x,6); expect(coordinate('center').y).toBeCloseTo(a.y,6);
+    expect(coordinate('start').y).toBeCloseTo(a.y,6); expect(coordinate('end').x).toBeCloseTo(b.x,6);
+    expect(coordinate('start').x).toBeCloseTo(a.x+24*Math.sqrt(2),5);
+    expect(coordinate('end').y).toBeCloseTo(b.y-24*Math.sqrt(2),5);
+  });
+  it('includes an endpoint shared with fixed reference geometry in the bend session', async () => {
+    const initial = bendSketch(); initial.points.push({id:'external',x:10,y:0});
+    initial.entities.push({id:'reference',kind:'line',p1:'start',p2:'external',reference:true});
+    await mount(initial);
+    const body = worldToScreen(sourceInitialView(initial,640,360),{x:5/Math.sqrt(2),y:5/Math.sqrt(2)});
+    const begin = vi.spyOn(SketchController.prototype,'beginDrag'), move = vi.spyOn(SketchController.prototype,'dragTo');
+    await pointer(host.querySelector('.sketch-entity[data-id="arc"]')!,'pointerdown',body.x,body.y);
+    await pointer(svg(),'pointermove',body.x+16,body.y-16); await frame(); await pointer(svg(),'pointerup');
+    expect(begin).toHaveBeenCalledExactlyOnceWith(['center','start','end']);
+    const result: DragResult = await move.mock.results.at(-1)!.value;
+    expect(result.stopped).toBe(false);
+    expect(distance(result.sketch.points.find(p => p.id === 'start')!,{x:5,y:0})).toBeLessThan(1e-3);
+    expect(distance(result.sketch.points.find(p => p.id === 'end')!,{x:0,y:5})).toBeLessThan(1e-3);
+  });
+  it.each([false,true])('Esc restores an arc drag without an undo entry (Alt=%s)', async altKey => {
+    await mount(bendSketch()); const body = arcBody(), a = coordinate('start'), b = coordinate('end');
+    const begin = vi.spyOn(SketchController.prototype,'beginDrag');
+    await pointer(body.element,'pointerdown',body.x,body.y,{altKey});
+    await pointer(svg(),'pointermove',body.x+24,body.y-24,{altKey}); await frame();
+    await key('Escape'); await pointer(svg(),'pointerup');
+    expect(coordinate('start').x).toBeCloseTo(a.x,6); expect(coordinate('end').y).toBeCloseTo(b.y,6);
+    expect((begin.mock.contexts[0] as SketchController<null>).history.canUndo).toBe(false);
+    await pointer(host.querySelector('.sketch-entity[data-id="arc"]')!,'pointermove',body.x,body.y,{buttons:0});
+    expect(coordinate('center').x).toBeCloseTo(b.x,6);
+  });
+  it('switches Alt in both directions from the solved shape without a jump', async () => {
+    await mount(bendSketch()); const body = arcBody(), move = vi.spyOn(SketchController.prototype,'dragTo');
+    await pointer(body.element,'pointerdown',body.x,body.y);
+    await pointer(svg(),'pointermove',body.x+16,body.y-16); await frame();
+    for (const altKey of [true,false]) {
+      const before: Sketch = (await move.mock.results.at(-1)!.value).sketch;
+      await pointer(svg(),'pointermove',body.x+16,body.y-16,{altKey}); await frame();
+      const after: Sketch = (await move.mock.results.at(-1)!.value).sketch;
+      for (const p of before.points) expect(distance(p,after.points.find(q => q.id === p.id)!)).toBeLessThan(1e-3);
+      await pointer(svg(),'pointermove',body.x+24,body.y-24,{altKey}); await frame();
+      const next: Sketch = (await move.mock.results.at(-1)!.value).sketch;
+      const fixedIds = altKey ? ['center'] : ['start','end'];
+      for (const id of fixedIds) expect(distance(after.points.find(p => p.id === id)!,next.points.find(p => p.id === id)!)).toBeLessThan(1e-3);
+      expect(next.points.some(p => distance(p,after.points.find(q => q.id === p.id)!) > .01)).toBe(true);
+      // Return to the switch coordinate in the current mode for the next transition.
+      await pointer(svg(),'pointermove',body.x+16,body.y-16,{altKey}); await frame();
+    }
+    await pointer(svg(),'pointerup'); await key('z',{ctrlKey:true}); expect((move.mock.contexts[0] as SketchController<null>).history.canUndo).toBe(false);
+  });
+  it('keeps a selected arc and line translating as a group', async () => {
+    const initial = bendSketch(); initial.points.push({id:'p',x:-5,y:0},{id:'q',x:-5,y:5}); initial.entities.push({id:'line',kind:'line',p1:'p',p2:'q'});
+    await mount(initial); const a = coordinate('start'), b = coordinate('end'), p = coordinate('p'), q = coordinate('q');
+    await pointer(svg(),'pointerdown',p.x-20,b.y-20); await pointer(svg(),'pointermove',a.x+20,a.y+20); await pointer(svg(),'pointerup');
+    const body = arcBody(); await pointer(body.element,'pointerdown',body.x,body.y);
+    await pointer(svg(),'pointermove',body.x+18,body.y-12,{altKey:true}); await pointer(svg(),'pointerup');
+    for (const [id,before] of [['start',a],['end',b],['p',p],['q',q]] as const) {
+      expect(coordinate(id).x).toBeCloseTo(before.x+18,6); expect(coordinate(id).y).toBeCloseTo(before.y-12,6);
+    }
+  });
+  it('reports the bend hint and cursor on an arc body, while endpoints keep point drag', async () => {
+    await mount(bendSketch()); const body = arcBody();
+    await pointer(body.element,'pointermove',body.x,body.y,{buttons:0});
+    expect(host.querySelector('.sketch-status')!.textContent).toContain('Drag to bend · Alt: radius · Shift: move');
+    expect(svg().classList.contains('sketch-bend')).toBe(true);
+    const a = coordinate('start'), begin = vi.spyOn(SketchController.prototype,'beginDrag');
+    await pointer(a.element,'pointermove',a.x,a.y,{buttons:0});
+    expect(svg().classList.contains('sketch-bend')).toBe(false);
+    await pointer(a.element,'pointerdown',a.x,a.y); await pointer(svg(),'pointermove',a.x+24,a.y); await pointer(svg(),'pointerup');
+    expect(begin).toHaveBeenCalledExactlyOnceWith('start');
+  });
+  it('keeps constraints authoritative and displays the existing limited message', async () => {
+    const initial = bendSketch();
+    initial.constraints.push(...initial.points.map(p => ({id:`fixed-${p.id}`,kind:'fix' as const,point:p.id})));
+    await mount(initial); const body = arcBody(), a = coordinate('start'), b = coordinate('end');
+    await pointer(body.element,'pointerdown',body.x,body.y); await pointer(svg(),'pointermove',body.x+24,body.y-24); await frame();
+    expect(host.querySelector('.sketch-status')!.textContent).toContain('Limited by constraints');
+    expect(coordinate('start').x).toBeCloseTo(a.x,6); expect(coordinate('end').y).toBeCloseTo(b.y,6);
+    await pointer(svg(),'pointerup');
   });
   it('cycles overlapping points and curves and reports the candidate index', async () => {
     await mount(); const p = coordinate('p');

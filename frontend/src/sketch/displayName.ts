@@ -1,5 +1,5 @@
 import { contextData } from './context';
-import { constraintRefs, type Sketch } from './model';
+import { constraintRefs, type Constraint, type Sketch } from './model';
 
 const names: Record<string, string> = {
   'dust-cap': 'Dust cap', cone: 'Cone', dome: 'Dome', surround: 'Surround', land: 'Land', piston: 'Piston',
@@ -8,12 +8,19 @@ const names: Record<string, string> = {
   'surround.rim': 'Surround edge', rim: 'Rim',
 };
 
+/** Short names shared by dimension labels, lists and edit notices. */
+export function constraintName(c: Constraint): string {
+  const names: Record<string, string> = { distance: 'Distance', distanceX: 'Horizontal distance', distanceY: 'Vertical distance',
+    radius: c.diameter ? 'Diameter' : 'Radius', angle: 'Angle', pointLineDistance: 'Point-line distance' };
+  const words = c.kind.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+  return c.label?.trim() || names[c.kind] || words[0].toUpperCase() + words.slice(1);
+}
+
 /** Stable labels follow authoring order; identifiers remain available in tooltips. */
 export function displayName(sketch: Sketch, id: string): string {
   const constraint = sketch.constraints.find(c => c.id === id);
   if (constraint) {
-    const kind = constraint.kind.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
-    return `${constraint.label?.trim() || kind[0].toUpperCase() + kind.slice(1)} (${constraintRefs(constraint).map(ref => displayName(sketch, ref)).join(', ')})`;
+    return `${constraintName(constraint)} (${constraintRefs(constraint).map(ref => displayName(sketch, ref)).join(', ')})`;
   }
   const entity = sketch.entities.find(e => e.id === id);
   const reference = entity ?? sketch.entities.find(e => e.reference && e.kind === 'line' && [e.p1, e.p2].includes(id));

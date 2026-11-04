@@ -5,7 +5,7 @@ import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import type { SketchViewPreferences } from '../viewPreferences';
 import type { ViewControls } from './types';
 
-export const drawingIcons = { select: 'M4 2 13 10 8 10 6 14Z', hand: 'M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z', line: 'M3 13 13 3', arc: 'M2 13Q2 2 14 3', dimension: 'M2 5V13M14 5V13M2 9H14M5 6 2 9 5 12M11 6 14 9 11 12', split: 'M2 12 7 7M10 4 14 0M6 2 14 10' };
+export const drawingIcons = { fillet: 'M2 14V7a5 5 0 0 1 5-5h7M2 2h3M2 2v3', trim: 'M2 4h12M2 12h12M5 2v12M11 2v12M7 8h2', extend: 'M2 12h5M7 12h6M10 9l3 3-3 3M13 1v7', select: 'M4 2 13 10 8 10 6 14Z', hand: 'M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z', line: 'M3 13 13 3', arc: 'M2 13Q2 2 14 3', dimension: 'M2 5V13M14 5V13M2 9H14M5 6 2 9 5 12M11 6 14 9 11 12', split: 'M2 12 7 7M10 4 14 0M6 2 14 10' };
 export function NavigateTools({ tool, choose }: { tool: string; choose(tool: 'select' | 'hand'): void }) {
   return <div className="sketch-toolbar-group" role="group" aria-label="Navigate"><span className="sketch-group-caption">Navigate</span><div className="sketch-tool-segment">{(['select', 'hand'] as const).map(t => {
     const label = t === 'select' ? 'Select (Esc)' : 'Pan (hold Space)';

@@ -7,6 +7,7 @@ import type { Diagnosis } from './session';
 import { openSketchHandle, type SketchSolveHandle } from './workspace/sketchSolver';
 import { materialiseContext, referencePointIds, type SketchContext } from './context';
 import type { XY } from './solver/types';
+import { commandNotice } from './notices';
 import { displayName } from './displayName';
 
 import { constraintError, isConstraintConflict, type Authoring } from './workspace/sketchSolvePolicy';
@@ -81,15 +82,15 @@ export class SketchController<T> {
   }
   /** A function is resolved against the state the queued command actually runs on, so fields
    *  it does not change (e.g. the other coordinate of a point) are never stale. */
-  command(commands: Command | Command[] | ((state: Authoring<T>) => Command | Command[]), dimensions?: { length?: number; angle?: number }) {
+  command(commands: Command | Command[] | ((state: Authoring<T>) => Command | Command[]), dimensions?: { length?: number; angle?: number }, mergePlacement = false) {
     return this.core.enqueue(session => this.transaction(session, 'Edit sketch', async () => {
       let state = this.current;
-      const removed = new Set<string>();
+      const notices: string[] = [];
       const resolved = typeof commands === 'function' ? commands(state) : commands;
       for (const command of Array.isArray(resolved) ? resolved : [resolved]) {
         if (command.kind === 'movePoint' && state.sketch.constraints.some(c => c.kind === 'fix' && c.point === command.id)) throw new Error('Point is held by constraints; remove its fix before editing coordinates.');
         const next = this.config.apply(state, command); if ('error' in next) throw new Error(next.error);
-        if (['splitAt', 'deleteEntity', 'deletePoint', 'convertEntity'].includes(command.kind)) for (const c of state.sketch.constraints) if (!next.sketch.constraints.some(v => v.id === c.id)) removed.add(c.id);
+        const notice = commandNotice(state.sketch, next.sketch, command.kind); if (notice) notices.push(notice);
         if (command.kind === 'setDriving') {
           const result = await session.checkConstraintChange(state.sketch, next.sketch, command.id);
           if (!result.ok) throw constraintError(next.sketch, result);
@@ -104,7 +105,7 @@ export class SketchController<T> {
       }
       // Names and dimension positions are authoring metadata. Solving them could perturb exact imported coordinates
       // or refuse a rename on a sketch that is already in conflict.
-      const annotationsOnly = (Array.isArray(resolved) ? resolved : [resolved]).every(c => c.kind === 'setConstraintLabel' || c.kind === 'setEntityName' || c.kind === 'setDimensionPlacement');
+      const annotationsOnly = (Array.isArray(resolved) ? resolved : [resolved]).every(c => c.kind === 'setConstraintLabel' || c.kind === 'setEntityName' || c.kind === 'setDimensionPlacement' || c.kind === 'setDiameter');
       if (annotationsOnly) session.sketch = state.sketch;
       else state = await this.diagnose(session, state);
       if (dimensions) {
@@ -140,9 +141,10 @@ export class SketchController<T> {
           }
         }
       }
-      this.notice = removed.size ? `Removed constraints: ${[...removed].join(', ')}.` : undefined;
+      this.notice = notices.join(' ') || undefined;
       return state;
-    }));
+    }, mergePlacement && typeof commands !== 'function' && !Array.isArray(commands) && commands.kind === 'setDimensionExpression'
+      && this.placedDimension?.id === commands.id && this.placedDimension.state === this.current));
   }
   /** A placed dimension can merge its first submitted value into the add's undo step. */
   constraint(constraint: NewConstraint, reference = false, placement = false) {
@@ -170,7 +172,7 @@ export class SketchController<T> {
     });
   }
   /** Resolve offers when queued work starts, so intervening edits can invalidate them. */
-  adopt(state: Authoring<T> | ((current: Authoring<T>) => Authoring<T> | undefined), label = 'Load contour', requireSolved = false) {
+  adopt(state: Authoring<T> | ((current: Authoring<T>) => Authoring<T> | undefined), label = 'Load contour', requireSolved = false, resolveExpressionGeometry = false) {
     return this.core.enqueue(async session => {
       const candidate = typeof state === 'function' ? state(this.current) : state;
       if (!candidate) return;
@@ -178,7 +180,9 @@ export class SketchController<T> {
         const next = await openSketchHandle<T>(candidate.sketch, { references: this.getReferences(candidate) }, this.config.dimensionProblem);
         try { const diagnosis = await next.solveFull(); if (requireSolved && diagnosis.status !== 'ok') throw constraintError(candidate.sketch, diagnosis); this.diagnosis = diagnosis; }
         catch (e) { next.destroy(); throw e; }
-        next.sketch = candidate.sketch; session.destroy(); this.core.session = next; return candidate;
+        // Formula offsets can change the shape during scaling; ordinary imports keep their exact coordinates.
+        const adopted = resolveExpressionGeometry && candidate.sketch.constraints.some(c => c.expression) ? { ...candidate, sketch: next.sketch } : candidate;
+        next.sketch = adopted.sketch; session.destroy(); this.core.session = next; return adopted;
       });
     });
   }

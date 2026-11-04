@@ -1235,6 +1235,90 @@ describe('source editor interactions', () => {
     expect(properties.textContent).toContain('Remaining freedom not analysed');
     expect(input('Point 2 radius').disabled).toBe(false);
   });
+  async function mountExpressionRows() {
+    const { seedPreset } = await import('../sketch/adapters/sourcePreset');
+    const { serializeSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
+    let state = seedPreset(expandedPreset('cone'), 'cone', presetDefaults.cone);
+    const depth = state.meta.preset!.dimensions.depth_mm, radius = state.meta.preset!.dimensions.cap_radius_mm;
+    for (const command of [{ kind: 'setDiameter', id: radius, diameter: true },
+      { kind: 'setDimensionExpression', id: depth, expression: '[Dust-cap radius] / 2 + 1' }] as const) {
+      const result = sourceAdapter.applySourceCommand(state.sketch, state.meta, command);
+      if ('error' in result) throw new Error(result.error);
+      state = result;
+    }
+    storage.setItem('', JSON.stringify({ ...serializeSourceAuthoring(state, false), document: expandedPreset('cone') }));
+    await mount();
+    const all = host.querySelector<HTMLDetailsElement>('.source-dimensions')!;
+    await act(async () => { all.open = true; all.dispatchEvent(new Event('toggle')); });
+    const saved = () => readSourceAuthoring(readSourceDraft()).sketch.constraints;
+    return { depth, radius, all, saved };
+  }
+
+  it('uses diameter display values for expression inputs and lets a plain number replace a formula in All dimensions', async () => {
+    const { depth, radius, saved } = await mountExpressionRows();
+    expect(input(`Dimension ${depth} value`).value).toBe('[Dust-cap radius] / 2 + 1');
+    expect(host.querySelector(`[data-row-id="${depth}"] .sketch-expression-marker`)!.textContent).toBe('ƒ');
+    expect(Number(input(`Dimension ${radius} value`).value)).toBe(6);
+    await enter(`Dimension ${radius} value`, '8'); await settle();
+    expect(saved().find(c => c.id === radius)).toMatchObject({ value: 4, diameter: true });
+    expect(saved().find(c => c.id === depth)).toMatchObject({ value: 5, expression: '[Dust-cap radius] / 2 + 1' });
+    await enter(`Dimension ${depth} value`, '7'); await settle();
+    expect(saved().find(c => c.id === depth)).toMatchObject({ value: 7 });
+    expect(saved().find(c => c.id === depth)!.expression).toBeUndefined();
+    await act(async () => button('Undo').click()); await settle();
+    expect(saved().find(c => c.id === depth)).toMatchObject({ value: 5, expression: '[Dust-cap radius] / 2 + 1' });
+  });
+
+  it('edits a selected dimension expression and persists undo/redo on reopen', async () => {
+    const { depth, all, saved } = await mountExpressionRows();
+    await act(async () => { all.open = false; all.dispatchEvent(new Event('toggle')); });
+    await act(async () => host.querySelector(`[data-row-id="${depth}"]`)!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(host.querySelector('[aria-label="Dimension properties"]')).not.toBeNull();
+    await enter(`Dimension ${depth} value`, 'Dust-cap radius / 2 + 2'); await settle();
+    expect(saved().find(c => c.id === depth)).toMatchObject({ value: 5, expression: '[Dust-cap radius] / 2 + 2' });
+    await act(async () => button('Undo').click()); await settle();
+    expect(saved().find(c => c.id === depth)).toMatchObject({ value: 4, expression: '[Dust-cap radius] / 2 + 1' });
+    await act(async () => button('Redo').click()); await settle();
+    await act(async () => root.render(null)); await mount();
+    expect(input(`Dimension ${depth} value`).value).toBe('[Dust-cap radius] / 2 + 2');
+    expect(host.querySelector(`[data-row-id="${depth}"] .sketch-expression-marker`)!.textContent).toBe('ƒ');
+  });
+
+  it.each([false, true])('scales loaded expressions atomically or refuses their resolve error (invalid: %s)', async invalid => {
+    const { seedPreset } = await import('../sketch/adapters/sourcePreset');
+    const { serializeSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
+    let state = seedPreset(expandedPreset('cone'), 'cone', presetDefaults.cone);
+    const depth = state.meta.preset!.dimensions.depth_mm;
+    const expression = invalid ? '1 / ([Dust-cap radius] - 6) + 13 / 3' : '[Dust-cap radius] + 1';
+    const applied = sourceAdapter.applySourceCommand(state.sketch, state.meta, { kind: 'setDimensionExpression', id: depth, expression });
+    if ('error' in applied) throw new Error(applied.error);
+    state = applied;
+    const document = expandedPreset('cone');
+    vi.mocked(sourceEditorApi.presets).mockResolvedValue([{ id: 'expression', revision: 'r1', name: 'Expression shape', document, authoring: serializeSourceAuthoring(state, false) }]);
+    const changed = vi.fn();
+    await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} limit={{ kind: 'throat', radius: 26, hard: true }}
+      host={{ commit: record => changed(record) }}/>)); await settle();
+    const before = changed.mock.calls.at(-1)![0];
+    await act(async () => button('Load Expression shape').click()); await settle();
+    expect(host.querySelector('.source-load-offer')).not.toBeNull();
+    await act(async () => button('Scale it to fit').click()); await settle();
+    if (invalid) {
+      expect(host.querySelector('[role="alert"]')!.textContent).toContain('Expression gives an invalid dimension value');
+      expect(changed.mock.calls.at(-1)![0]).toEqual(before);
+      expect(host.querySelector('.source-load-offer')).not.toBeNull();
+    } else {
+      const scaled = changed.mock.calls.at(-1)![0];
+      expect(scaled.authoring.sketch.constraints.find((c: { id: string }) => c.id === depth)).toMatchObject({ value: 7, expression });
+      expect(scaled.document.contour.points.find((p: { id: string }) => p.id === 'cap.rim').z_mm).toBeCloseTo(-7, 9);
+      expect(scaled.document.contour.points.at(-1).r_mm).toBe(26);
+      expect(host.querySelector('.source-load-offer')).toBeNull();
+      await act(async () => button('Undo').click()); await settle();
+      expect(changed.mock.calls.at(-1)![0].document).toEqual(before.document);
+      await act(async () => button('Redo').click()); await settle();
+      expect(changed.mock.calls.at(-1)![0].document).toEqual(scaled.document);
+    }
+  });
+
   it('switches the properties panel by selection and edits through the existing point, metadata and dimension commands', async () => {
     const doc = expandedPreset('cone', presetDefaults.cone);
     const state = sourceAdapter.fitSourcePreset((await import('../sketch/adapters/sourcePreset')).seedPreset(doc,'cone',presetDefaults.cone), {kind:'aperture',radius:14});
@@ -1243,7 +1327,11 @@ describe('source editor interactions', () => {
     const panel = host.querySelector('[aria-label="Sketch properties"]')!;
     expect(panel.querySelector('.source-summary')).not.toBeNull();
     expect(panel.querySelector('[aria-label="Point properties"]')).toBeNull();
-    for (const section of panel.querySelectorAll<HTMLDetailsElement>('details')) expect(section.open).toBe(false);
+    expect(panel.querySelector('.constraint-inspector')).not.toBeNull();
+    for (const section of panel.querySelectorAll<HTMLDetailsElement>('details')) {
+      // Constraints starts open; the source forms and All tables stay collapsed.
+      expect(section.open).toBe(section.classList.contains('constraint-inspector'));
+    }
     await act(async () => button('Select point 2').click());
     expect(panel.querySelector('[aria-label="Point properties"]')).not.toBeNull();
     expect(panel.querySelector('[aria-label="Constraints on selection"]')?.textContent).toContain('Dust-cap radius');

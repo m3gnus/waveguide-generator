@@ -62,3 +62,35 @@ describe('shared source authoring envelope', () => {
     expect(parseSourceAuthoring(raw, INITIAL_SOURCE)).toBeNull();
   });
 });
+
+it('preserves expressions and diameter in the authoring envelope while lowering to identical document bytes', () => {
+  const state = seed(INITIAL_SOURCE), oldBytes = JSON.stringify(lower(state.sketch, state.meta));
+  const axis = state.sketch.entities.find(e => e.id === 'axis'); if (axis?.kind !== 'line') throw new Error('axis');
+  state.sketch.constraints.push({ id: 'size', kind: 'distanceX', a: axis.p1, b: 'rim', value: 8, driving: true, expression: '8 * 2', diameter: true });
+  const envelope = JSON.parse(JSON.stringify(serializeSourceAuthoring(state)));
+  const restored = parseSourceAuthoring(envelope, INITIAL_SOURCE)!;
+  expect(restored).toEqual(state); expect(restored.sketch.constraints.at(-1)).toMatchObject({ expression: '8 * 2', diameter: true, value: 8 });
+  expect(JSON.stringify(lower(restored.sketch, restored.meta))).toBe(oldBytes);
+});
+
+it('accepts diameter dimensions measured from the source pole on the axis', async () => {
+  const { seedPreset, presetDefaults } = await import('./sourcePreset');
+  const { expandedPreset } = await import('./presetTestSupport');
+  const { applySourceCommand } = await import('./sourceContour');
+  const state = seedPreset(expandedPreset('flat'), 'flat', presetDefaults.flat), id = state.meta.preset!.dimensions.radius_mm;
+  const result = applySourceCommand(state.sketch, state.meta, { kind: 'setDiameter', id, diameter: true });
+  if ('error' in result) throw new Error(result.error);
+  expect(result.sketch.constraints.find(c => c.id === id)).toMatchObject({ diameter: true, value: presetDefaults.flat.radius_mm });
+});
+
+it('freezes expressions when source preset cleanup removes an invalidated mapped dimension', async () => {
+  const { seedPreset, presetDefaults } = await import('./sourcePreset');
+  const { expandedPreset } = await import('./presetTestSupport');
+  const { applySourceCommand } = await import('./sourceContour');
+  const state = seedPreset(expandedPreset('flat'), 'flat', presetDefaults.flat), input = state.meta.preset!.dimensions.radius_mm;
+  state.sketch.constraints.push({ id: 'dependent', kind: 'distanceX', a: 'pole', b: 'rim', value: 8, driving: true, expression: `[${input}]` });
+  const result = applySourceCommand(state.sketch, state.meta, { kind: 'splitAt', entity: 'piston', x: 4, y: 0 });
+  if ('error' in result) throw new Error(result.error);
+  expect(result.sketch.constraints.find(c => c.id === 'dependent')).not.toHaveProperty('expression');
+  expect(result.notice).toContain('Split kept Horizontal distance at its last value because Radius was removed; its expression was cleared.');
+});

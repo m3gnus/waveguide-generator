@@ -13,7 +13,7 @@ export function toSolverSketch(sketch: Sketch, references: Reference[]): SolverS
     ...sketch.entities.map(e => e.kind === 'arc' ? { kind: 'arc' as const, id: e.id, center: e.center,
       start: e.ccw ? e.start : e.end, end: e.ccw ? e.end : e.start, direction: 'ccw' as const }
       : e.kind === 'line' ? { kind: 'line' as const, id: e.id, p1: e.p1, p2: e.p2 } : { kind: e.kind, id: e.id }),
-  ], constraints: sketch.constraints.map(({ placement, supplementary, ...c }) => c.kind === 'angle' && supplementary ? { ...c, value: Math.PI - c.value } : c) };
+  ], constraints: sketch.constraints.map(({ placement, supplementary, expression, diameter, ...c }) => c.kind === 'angle' && supplementary ? { ...c, value: Math.PI - c.value } : c) };
 }
 export interface Diagnosis extends SolveResult {
   sketch: Sketch; constraintStates: Record<string, 'ok' | 'redundant' | 'conflicting'>;
@@ -161,19 +161,21 @@ export class SketchSession {
     }
     return .25 * Math.min(...values.filter(v => v > 1e-9), 100);
   }
-  private guarded(before: Sketch, after: Sketch, dimension = false): boolean {
+  private guarded(before: Sketch, after: Sketch, dimension = false, bendingArc?: string): boolean {
     const oldPoints = new Map(before.points.map(p => [p.id, p])), newPoints = new Map(after.points.map(p => [p.id, p]));
     if (after.points.some(p => !Number.isFinite(p.x + p.y))) return false;
     for (const a of before.entities) if (a.kind === 'arc') {
       const previous = arcGeometry(before, a, oldPoints).sweep, g = arcGeometry(after, a, newPoints);
-      const next = g.sweep + tau * Math.round((previous - g.sweep) / tau);
+      // A body bend specifies the directed arc through the cursor, even when
+      // the first visible frame already lies beyond a semicircle.
+      const next = a.id === bendingArc ? g.sweep : g.sweep + tau * Math.round((previous - g.sweep) / tau);
       // A driving dimension may reach an exact semicircle (e.g. surround depth =
       // half its width), while continuing through it to a major arc still flips branch.
       const branchChanged = dimension
         ? Math.abs(previous) <= Math.PI + 1e-9 ? Math.abs(next) > Math.PI + 1e-9 : Math.abs(next) < Math.PI - 1e-9
         : Math.abs(previous) < Math.PI && Math.abs(next) >= Math.PI || Math.abs(previous) > Math.PI && Math.abs(next) <= Math.PI;
       if (g.radius <= 1e-9 || Math.abs(g.radius - g.endRadius) > 1e-9 * Math.max(1, g.radius)
-        || previous * next <= 0 || branchChanged
+        || previous * next <= 0 || branchChanged && a.id !== bendingArc
         || Math.abs(next) >= tau || Math.abs(next) <= 1e-12) return false;
     }
     if (!dimension) return true;
@@ -245,8 +247,19 @@ export class SketchSession {
       || targets.some(t => !this.dragIds!.includes(t.pointId) || !Number.isFinite(t.x + t.y))) throw new Error('Targets must name every dragged point once with finite coordinates.');
     return targets;
   }
+  /** Only explicit arc-body targets may bend continuously through a semicircle. */
+  private bendArc(targets: DragTarget[]) {
+    if (targets.length !== 3) return undefined;
+    return this.sketch.entities.find(e => {
+      if (e.kind !== 'arc') return false;
+      const center = targets.find(t => t.pointId === e.center), start = targets.find(t => t.pointId === e.start), end = targets.find(t => t.pointId === e.end);
+      return center && start && end && [start, end].every(t => distance(t, this.sketch.points.find(p => p.id === t.pointId)!) <= 1e-8)
+        && Math.abs(distance(center, start) - distance(center, end)) <= 1e-8;
+    });
+  }
   private async performDrag(target: DragTarget | DragTarget[]): Promise<DragResult> {
     const requested = this.targets(target), targets = this.projectTargets(requested); this.lastTargets = targets;
+    const bendingArc = this.bendArc(targets)?.id;
     const tolerance = this.dragTolerance;
     const maxStep = this.stepSize(); let steps = 0, result: SolveResult | undefined;
     while (steps < 64) {
@@ -256,8 +269,12 @@ export class SketchSession {
         const stopped = requested.some((t, i) => distance(t, targets[i]) > tolerance);
         return { sketch: this.sketch, stopped, steps, result, ...(stopped ? { reason: 'Cursor is outside the reachable locus.' } : {}) };
       }
-      const before = this.sketch; let accepted = false, fraction = Math.min(1, maxStep / remaining);
-      for (let half = 0; half <= 6; half++, fraction /= 2) {
+      // Bending holds both endpoints and moves the centre on their perpendicular
+      // bisector. That target is already on the equal-radius manifold: a tiny
+      // bulge change can put the centre arbitrarily far away. Try it directly
+      // rather than spending the cursor's continuation budget on centre travel.
+      const before = this.sketch; let accepted = false, fraction = bendingArc ? 1 : Math.min(1, maxStep / remaining);
+      for (let half = 0; half <= (bendingArc ? 7 : 6); half++, fraction /= 2) {
         const part = this.projectTargets(targets.map((t, i) => ({ pointId: t.pointId, x: from[i].x + (t.x - from[i].x) * fraction, y: from[i].y + (t.y - from[i].y) * fraction })));
         result = await this.call(() => this.solver.dragTo(part, { tolerance }));
         let next = this.read(result, before);
@@ -270,7 +287,7 @@ export class SketchSession {
           const second = await this.call(() => this.solver.dragTo(reached, { tolerance }));
           if (second.status === 'ok') { result = second; next = this.read(second, before); }
         }
-        if (result.status === 'ok' && this.guarded(before, next) && this.driftGuard(before, next, part, tolerance) && part.every((t, i) => {
+        if (result.status === 'ok' && this.guarded(before, next, false, bendingArc) && this.driftGuard(before, next, part, tolerance) && part.every((t, i) => {
           const error = distance(next.points.find(p => p.id === t.pointId)!, t);
           return error <= Math.max(1e-6, tolerance) || error <= distance(from[i], t) + 1e-12;
         })) {
@@ -283,6 +300,7 @@ export class SketchSession {
           this.sketch = next; accepted = true; break;
         }
         await this.call(() => this.restartDrag(), false, false);
+        if (bendingArc && half === 0) fraction = 2 * Math.min(1, maxStep / remaining);
         if (this.pendingDrag) break;
       }
       steps++;
@@ -298,12 +316,13 @@ export class SketchSession {
   }
   private async performEndDrag(): Promise<Diagnosis> {
     this.alive(); if (!this.dragIds) throw new Error('No active drag.');
+    const bendingArc = this.lastTargets && this.bendArc(this.lastTargets)?.id;
     // Interactive frames accept dragTolerance; refine the release at the last target to exact.
     if (this.lastTargets && this.dragTolerance > 1e-8 && this.lastTargets.every(t => distance(t, this.sketch.points.find(p => p.id === t.pointId)!) <= this.dragTolerance)) {
       const targets = this.lastTargets, at = this.sketch;
       const exact = await this.call(() => this.solver.dragTo(targets, { tolerance: 0 }));
       const next = this.read(exact, at);
-      if (exact.status === 'ok' && this.guarded(at, next) && this.driftGuard(at, next, targets, 1e-8)) this.sketch = next;
+      if (exact.status === 'ok' && this.guarded(at, next, false, bendingArc) && this.driftGuard(at, next, targets, 1e-8)) this.sketch = next;
       // A rejected refinement must not leave its solution as the solver's seed.
       else await this.call(() => this.restartDrag(), false, false);
     }
@@ -311,7 +330,7 @@ export class SketchSession {
     const before = this.sketch;
     const result = await this.call(() => this.solver.endDrag()); this.dragIds = undefined;
     const next = this.read(result);
-    if (result.status === 'ok' && this.guarded(before, next)) this.sketch = next;
+    if (result.status === 'ok' && this.guarded(before, next, false, bendingArc)) this.sketch = next;
     else { this.load(); return this.diagnosis({ ...result, status: 'failed', reason: result.reason ?? 'Release would change branch.' }); }
     return this.diagnosis(result);
   }
@@ -324,6 +343,11 @@ export class SketchSession {
     const original = this.sketch;
     const maxStep = .25 * Math.max(Math.abs(c.value), Math.abs(value - c.value));
     const refuse = (reason: string) => { this.sketch = original; this.load(); return { ok: false, sketch: original, reason }; };
+    if (c.expression) {
+      const cleared = applyCommand(this.sketch, { kind: 'setDimension', id, value: c.value });
+      if ('error' in cleared) return refuse(cleared.error);
+      this.sketch = cleared.sketch;
+    }
     let current = c.value;
     for (let step = 0; current !== value && step < 64; step++) {
       const before = this.sketch, remaining = value - current;

@@ -6,7 +6,7 @@ import { numericSuffix, type Arc, type Entity, type Sketch } from './model';
 import type { Command } from './commands';
 import { branchCases } from './solver/corpus';
 import { createSolver, type Sketch as SolverSketch } from './solver/types';
-import { createSession, toSolverSketch } from './session';
+import { createSession, SketchSession, toSolverSketch } from './session';
 import { arcGeometry } from './geometry';
 import { INITIAL_SOURCE } from '../design/sourceContourEditing';
 import { seed } from './adapters/sourceContour';
@@ -228,4 +228,12 @@ describe('drag tolerance', () => {
       expect(Math.hypot(released.x - 6, released.y - 8)).toBeLessThan(1e-6);
     } finally { session.destroy(); }
   });
+});
+
+it('typing the current numeric value over an expression clears it through dimension continuation', async () => {
+  const sketch = importedSketch([{ id: 'p1', x: 0, y: 0 }, { id: 'p2', x: 10, y: 0 }], [{ id: 'l3', kind: 'line', p1: 'p1', p2: 'p2' }]);
+  sketch.constraints = [{ id: 'c4', kind: 'distance', a: 'p1', b: 'p2', value: 10, driving: true, expression: '5+5' }]; sketch.nextId = 5;
+  const session = await SketchSession.create(sketch, { references: [] });
+  try { expect((await session.setDimensionContinuation('c4', 10)).ok).toBe(true); expect(session.sketch.constraints[0]).not.toHaveProperty('expression'); }
+  finally { session.destroy(); }
 });

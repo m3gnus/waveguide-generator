@@ -73,3 +73,13 @@ it('names materialised context lines and the host rim plane', () => {
   if (line.kind !== 'line') throw new Error('Expected line');
   expect(displayName(picked.sketch, line.p1)).toBe('Enclosure back');
 });
+
+
+it('names an unnamed radius shown as diameter while keeping explicit labels', () => {
+  const sketch = importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 1, y: 0 }, { id: 'r', x: 0, y: 1 }],
+    [{ id: 'arc', kind: 'arc', center: 'p', start: 'q', end: 'r', ccw: true }]);
+  sketch.constraints.push({ id: 'diameter', kind: 'radius', arc: 'arc', value: 1, driving: true, diameter: true });
+  expect(displayName(sketch, 'diameter')).toBe('Diameter (Arc 1)');
+  sketch.constraints[0].label = 'Radius';
+  expect(displayName(sketch, 'diameter')).toBe('Radius (Arc 1)');
+});

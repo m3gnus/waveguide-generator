@@ -7,6 +7,7 @@ import { useModalDialogFocus } from '../shell/dialogFocus';
 import { NumberField } from './NumberField';
 import { SketchNameCell } from './SketchNameCell';
 import { dimensionName } from '../sketch/dimensionGraphics';
+import { DimensionPropertyValue } from '../sketch/kit/DimensionPropertyValue';
 import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, removePoint } from './sourceContourEditing';
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
@@ -110,6 +111,7 @@ type ContourLoad = {
   shape?: { shape: 'flat' | 'dome' | 'cone'; dimensions: Record<string, number> };
   preset?: SourcePreset;
   restored: boolean;
+  notice?: string;
 };
 type View = { r: number; low: number; high: number };
 function fit(points: SourcePoint[], meridian: SourceValidation['meridian'] = {}): View {
@@ -295,7 +297,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
         load = fromLoad ? pendingLoad.current : undefined;
         const source = fromLoad ? load?.authoring : current;
         return source && withSourceContext(scaleSourceToLimit(source, limitRef.current), contextRef.current);
-      }, 'Scale to fit throat', true);
+      }, 'Scale to fit throat', true, true);
       if (!adopted) return;
       if (load) completeLoad(load, controller.current.current);
       else clearLoadOffer();
@@ -369,7 +371,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
     }
     else if (next.meta.preset) { setShape(next.meta.preset.shape); setDimensions({ ...defaults[next.meta.preset.shape], ...next.meta.preset.values }); }
     setTopologyDimensions({});
-    setFitRequest(v => v + 1); setNotice(load.restored ? 'Restored source preset authoring.' : next.meta.preset ? 'Named dimensions drive this shape.' : 'Constraints were reset for the loaded contour.');
+    setFitRequest(v => v + 1); setNotice([load.restored ? 'Restored source preset authoring.' : next.meta.preset ? 'Named dimensions drive this shape.' : 'Constraints were reset for the loaded contour.', load.notice].filter(Boolean).join(' '));
     const unchanged = sameSourceDocument(document, value.document);
     setView(fit(document.contour.points, unchanged ? value.meridian : {}));
     setAccepted(unchanged ? { key: JSON.stringify(document), value } : undefined);
@@ -379,7 +381,9 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
     const restored = parseSourceAuthoring(savedAuthoring, value.document);
     const loaded = preset ? seedPreset(value.document, preset.shape, preset.dimensions) : restored ? portableSourcePreset(restored) : seed(value.document);
     const load: ContourLoad = { authoring: loaded, validation: value, shape: preset, preset: identity, restored: !!restored };
-    const next = withSourceContext(preset ? fitSourcePreset(loaded, limitRef.current) : withSourceLimit(loaded, limitRef.current), contextRef.current);
+    const fitted: Authoring<SourceMeta> & { notice?: string } = preset ? fitSourcePreset(loaded, limitRef.current) : withSourceLimit(loaded, limitRef.current);
+    load.notice = fitted.notice;
+    const next = withSourceContext(fitted, contextRef.current);
     if (!classic && controller.current) {
       try { await controller.current.adopt(next, 'Load contour', true); }
       catch (reason) {
@@ -465,9 +469,8 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
                   const parameter = Object.entries(state.meta.preset?.dimensions ?? {}).find(([, id]) => id === c.id)?.[0];
                   return { kind: 'setConstraintLabel', id: c.id, label: label.trim() || (parameter ? presetLabels[parameter] ?? '' : '') };
                 })}/></td>
-              <td><NumberField label={`Dimension ${c.id} value`} value={c.kind === 'angle' ? c.value * 180 / Math.PI : c.value} unit={c.kind === 'angle' ? '°' : 'mm'}
-                precision={9} displayPrecision={2} step={.1} disabled={!sketchReady || !c.driving} disabledReason={!c.driving ? 'Reference dimension' : undefined}
-                onCommit={value => void controller.current?.dimension(c.id, value * (c.kind === 'angle' ? Math.PI / 180 : 1)).catch(reason => setError(failureWords(reason)))}/></td>
+              <td><DimensionPropertyValue sketch={author.sketch} dimension={c} disabled={!sketchReady || sketchPending || !c.driving}
+                onCommit={async command => { if (command.kind === 'setDimension') await controller.current?.dimension(c.id, command.value); else await controller.current?.command(command); }}/></td>
               <td><button className="btn" type="button" aria-label={`${c.driving ? 'Make reference' : 'Make driving'} ${dimensionName(c)}`} disabled={!sketchReady || sketchPending} onClick={() => sketchCommand({ kind: 'setDriving', id: c.id, driving: !c.driving })}>{c.driving ? 'Make reference' : 'Make driving'}</button></td>
             </tr>;
   const patchRow = (patch: SourcePatch, i: number) => <tr key={patch.id} data-row-id={patch.id} aria-selected={canvasSelection.includes(patch.id)} className={hoverId === patch.id ? 'hovered' : ''}

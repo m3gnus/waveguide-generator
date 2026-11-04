@@ -2,7 +2,7 @@ import { SETTINGS_NAMESPACES, namespaceStorage } from '../stores/durableSettings
 
 const storage = namespaceStorage('sketchView');
 export const sketchViewKey = SETTINGS_NAMESPACES.sketchView;
-export const defaultSketchView = { dimensions: true, names: false, constraints: true };
+export const defaultSketchView = { dimensions: true, names: false, constraints: true, inspectorOpen: true };
 export type SketchViewPreferences = typeof defaultSketchView;
 export function readSketchView(): SketchViewPreferences {
   try {

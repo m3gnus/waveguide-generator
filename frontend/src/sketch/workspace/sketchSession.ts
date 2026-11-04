@@ -14,7 +14,7 @@ export interface SketchWorkspaceSession extends WorkspaceHistory {
   readonly lastSolveMs?: number;
   dismissRejection?(): void;
   materialiseContext?(context: SketchContext, itemId: string): Promise<{ sketch: Sketch; id: string }>;
-  command(command: Command | Command[], dimensions?: { length?: number; angle?: number }): Promise<Sketch>;
+  command(command: Command | Command[], dimensions?: { length?: number; angle?: number }, mergePlacement?: boolean): Promise<Sketch>;
   constraint(constraint: NewConstraint, reference?: boolean, placement?: boolean): Promise<Sketch>;
   dimension(id: string, value: number, mergePlacement?: boolean): Promise<Sketch>;
   beginDrag(id: string | string[]): Promise<void>;

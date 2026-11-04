@@ -1250,6 +1250,8 @@ exports[`W0 workspace DOM at 77c641c8 > HF contour 1`] = `
 <title>pointOnLine c12</title>⊙</text>
 </g>
 </g>
+<g class="sketch-modify-graphics" pointer-events="none">
+</g>
 </svg>",
   "toolbar": "<div role="toolbar" aria-label="Sketch tools" class="sketch-toolbar">
 <div class="sketch-toolbar-group" role="group" aria-label="Navigate">
@@ -1304,6 +1306,32 @@ exports[`W0 workspace DOM at 77c641c8 > HF contour 1`] = `
 </path>
 </svg>
 <span class="sketch-tool-label">Split</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Modify">
+<span class="sketch-group-caption">Modify</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Fillet (G)" title="Fillet (G)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 14V7a5 5 0 0 1 5-5h7M2 2h3M2 2v3">
+</path>
+</svg>
+<span class="sketch-tool-label">Fillet</span>
+</button>
+<button type="button" aria-label="Trim (T)" title="Trim (T)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 4h12M2 12h12M5 2v12M11 2v12M7 8h2">
+</path>
+</svg>
+<span class="sketch-tool-label">Trim</span>
+</button>
+<button type="button" aria-label="Extend (E)" title="Extend (E)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 12h5M7 12h6M10 9l3 3-3 3M13 1v7">
+</path>
+</svg>
+<span class="sketch-tool-label">Extend</span>
 </button>
 </div>
 </div>
@@ -1660,6 +1688,8 @@ exports[`W0 workspace DOM at 77c641c8 > conflict state 1`] = `
 <title>pointOnLine c10 (implied)</title>⊙</text>
 </g>
 </g>
+<g class="sketch-modify-graphics" pointer-events="none">
+</g>
 </svg>",
   "toolbar": "<div role="toolbar" aria-label="Sketch tools" class="sketch-toolbar">
 <div class="sketch-toolbar-group" role="group" aria-label="Navigate">
@@ -1714,6 +1744,32 @@ exports[`W0 workspace DOM at 77c641c8 > conflict state 1`] = `
 </path>
 </svg>
 <span class="sketch-tool-label">Split</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Modify">
+<span class="sketch-group-caption">Modify</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Fillet (G)" title="Fillet (G)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 14V7a5 5 0 0 1 5-5h7M2 2h3M2 2v3">
+</path>
+</svg>
+<span class="sketch-tool-label">Fillet</span>
+</button>
+<button type="button" aria-label="Trim (T)" title="Trim (T)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 4h12M2 12h12M5 2v12M11 2v12M7 8h2">
+</path>
+</svg>
+<span class="sketch-tool-label">Trim</span>
+</button>
+<button type="button" aria-label="Extend (E)" title="Extend (E)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 12h5M7 12h6M10 9l3 3-3 3M13 1v7">
+</path>
+</svg>
+<span class="sketch-tool-label">Extend</span>
 </button>
 </div>
 </div>
@@ -2142,6 +2198,8 @@ exports[`W0 workspace DOM at 77c641c8 > dimension editing with the value box ope
 <title>Horizontal distance 8.00 mm c10</title>8.00 mm</text>
 </g>
 </g>
+<g class="sketch-modify-graphics" pointer-events="none">
+</g>
 </svg>",
   "toolbar": "<div role="toolbar" aria-label="Sketch tools" class="sketch-toolbar">
 <div class="sketch-toolbar-group" role="group" aria-label="Navigate">
@@ -2196,6 +2254,32 @@ exports[`W0 workspace DOM at 77c641c8 > dimension editing with the value box ope
 </path>
 </svg>
 <span class="sketch-tool-label">Split</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Modify">
+<span class="sketch-group-caption">Modify</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Fillet (G)" title="Fillet (G)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 14V7a5 5 0 0 1 5-5h7M2 2h3M2 2v3">
+</path>
+</svg>
+<span class="sketch-tool-label">Fillet</span>
+</button>
+<button type="button" aria-label="Trim (T)" title="Trim (T)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 4h12M2 12h12M5 2v12M11 2v12M7 8h2">
+</path>
+</svg>
+<span class="sketch-tool-label">Trim</span>
+</button>
+<button type="button" aria-label="Extend (E)" title="Extend (E)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 12h5M7 12h6M10 9l3 3-3 3M13 1v7">
+</path>
+</svg>
+<span class="sketch-tool-label">Extend</span>
 </button>
 </div>
 </div>
@@ -2652,6 +2736,8 @@ exports[`W0 workspace DOM at 77c641c8 > woofer with aperture context 1`] = `
 <title>pointOnLine c8</title>⊙</text>
 </g>
 </g>
+<g class="sketch-modify-graphics" pointer-events="none">
+</g>
 </svg>",
   "toolbar": "<div role="toolbar" aria-label="Sketch tools" class="sketch-toolbar">
 <div class="sketch-toolbar-group" role="group" aria-label="Navigate">
@@ -2706,6 +2792,32 @@ exports[`W0 workspace DOM at 77c641c8 > woofer with aperture context 1`] = `
 </path>
 </svg>
 <span class="sketch-tool-label">Split</span>
+</button>
+</div>
+</div>
+<div class="sketch-toolbar-group" role="group" aria-label="Modify">
+<span class="sketch-group-caption">Modify</span>
+<div class="sketch-tool-segment">
+<button type="button" aria-label="Fillet (G)" title="Fillet (G)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 14V7a5 5 0 0 1 5-5h7M2 2h3M2 2v3">
+</path>
+</svg>
+<span class="sketch-tool-label">Fillet</span>
+</button>
+<button type="button" aria-label="Trim (T)" title="Trim (T)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 4h12M2 12h12M5 2v12M11 2v12M7 8h2">
+</path>
+</svg>
+<span class="sketch-tool-label">Trim</span>
+</button>
+<button type="button" aria-label="Extend (E)" title="Extend (E)" aria-pressed="false">
+<svg aria-hidden="true" viewBox="0 0 16 16">
+<path d="M2 12h5M7 12h6M10 9l3 3-3 3M13 1v7">
+</path>
+</svg>
+<span class="sketch-tool-label">Extend</span>
 </button>
 </div>
 </div>

@@ -21,9 +21,9 @@ describe('authoring session transactions', () => {
     }, changed: () => {} });
     try {
       await controller.constraint({ kind: 'horizontal', line: 'piston' });
-      const before = controller.current, horizontal = before.sketch.constraints.at(-1)!.id;
+      const before = controller.current;
       await controller.command({ kind: 'convertEntity', id: 'piston', to: 'arc' });
-      expect(controller.notice).toContain(horizontal);
+      expect(controller.notice).toBe('Make arc removed 1 relation: Horizontal.');
       expect(controller.current.meta.weights).toEqual({ piston: -.5 });
       const arcState = controller.current, arc = arcState.sketch.entities.find(e => e.id === 'piston')!;
       expect(arc.kind).toBe('arc');
@@ -32,9 +32,9 @@ describe('authoring session transactions', () => {
       if (arc.kind !== 'arc') throw new Error('Expected arc');
       const a = arcState.sketch.points.find(p => p.id === arc.start)!, c = arcState.sketch.points.find(p => p.id === arc.center)!;
       await controller.constraint({ kind: 'radius', arc: arc.id, value: Math.hypot(a.x - c.x, a.y - c.y), driving: true });
-      const withRadius = controller.current, radius = withRadius.sketch.constraints.at(-1)!.id;
+      const withRadius = controller.current;
       await controller.command({ kind: 'convertEntity', id: arc.id, to: 'line' });
-      expect(controller.notice).toContain(radius);
+      expect(controller.notice).toBe('Make line removed 1 dimension: Radius.');
       expect(controller.current.sketch.entities[0]).toEqual(initial.sketch.entities[0]);
       expect(controller.current.meta.weights).toEqual({ piston: -.5 });
       expect(controller.current.sketch.points.some(p => p.id === arc.center)).toBe(false);
@@ -126,7 +126,7 @@ describe('authoring session transactions', () => {
       await controller.constraint({ kind: 'fix', point: join });
       await controller.command({ kind: 'deletePoint', id: join });
       expect(controller.current.sketch.entities.filter(e => !e.construction)).toEqual([initial.sketch.entities[0]]);
-      expect(controller.notice).toContain('Removed constraints');
+      expect(controller.notice).toBe('Delete removed 1 relation: Fix.');
       expect(controller.current.meta.weights).toEqual({ piston: 1 });
       await controller.undo(); expect(controller.current.sketch.points.some(p => p.id === join)).toBe(true);
     } finally { controller.destroy(); }
@@ -308,4 +308,17 @@ it('rehydrates an external conflicting state without refusing it or publishing a
     expect(changed).not.toHaveBeenCalled(); expect(controller.history.canUndo).toBe(false);
     expect(preview).toHaveBeenLastCalledWith(state, controller.diagnosis);
   } finally { controller.destroy(); }
+});
+
+it('surfaces the shared constraint and expression-loss notice through the canvas-facing controller property', async () => {
+  const s = importedSketch([{ id: 'p1', x: 0, y: 0 }, { id: 'p2', x: 10, y: 0 }, { id: 'p3', x: 0, y: 20 }],
+    [{ id: 'l4', kind: 'line', p1: 'p1', p2: 'p2' }, { id: 'l5', kind: 'line', p1: 'p1', p2: 'p3' }]);
+  s.constraints = [{ id: 'c6', kind: 'distance', a: 'p1', b: 'p2', value: 10, driving: true, label: 'Throat radius' },
+    { id: 'c7', kind: 'distance', a: 'p1', b: 'p3', value: 20, driving: true, label: 'Rim radius', expression: 'c6*2' }]; s.nextId = 8;
+  const c = generic(s);
+  try { await c.command({ kind: 'removeConstraint', id: 'c6' }); expect(c.notice).toContain('Throat radius');
+    expect(c.notice).toContain('Delete kept Rim radius at its last value because Throat radius was removed; its expression was cleared.'); expect(c.current.sketch.constraints[0]).not.toHaveProperty('expression');
+    await c.undo(); expect(c.current.sketch).toBe(s); expect(c.notice).toBeUndefined();
+    await c.undo(true); expect(c.current.sketch.constraints[0]).not.toHaveProperty('expression');
+  } finally { c.destroy(); }
 });

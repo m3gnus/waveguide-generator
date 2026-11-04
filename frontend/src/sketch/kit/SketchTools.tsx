@@ -1,10 +1,11 @@
+import { modifyEntries } from './ModifyTools';
 import type { WorkspaceHistory } from '../workspace/historyAuthority';
 import { Fragment, useEffect, useState } from 'react';
 import { WorkspaceToolbar, NavigateTools, drawingIcons } from '../workspace/WorkspaceToolbar';
 import type { SketchViewPreferences } from '../viewPreferences';
 import type { constraintPalette, SelectionConstraint } from '../tools/constraints';
 
-export type Tool = 'select' | 'hand' | 'line' | 'tangent' | 'arc3' | 'dimension' | 'split' | 'constraint';
+export type Tool = 'select' | 'hand' | 'line' | 'tangent' | 'arc3' | 'dimension' | 'split' | 'constraint' | 'fillet' | 'trim' | 'extend';
 
 type PaletteEntry = ReturnType<typeof constraintPalette>[number] & { disabled: boolean; title?: string };
 interface Props {
@@ -26,6 +27,7 @@ export function SketchToolbar({ tool, arcTool, enabled, palette, activeConstrain
   return <WorkspaceToolbar tool={tool} enabled={enabled} historyKind={historyKind} viewOptions={viewOptions} toggle={toggle} undo={undo} zoom={zoom} fit={fit}
     onEscape={() => setArcMenu(false)} navigation={<NavigateTools tool={tool} choose={next => { setArcMenu(false); choose(next); }}/>}>
     <div className="sketch-toolbar-group" role="group" aria-label="Sketch"><span className="sketch-group-caption">Sketch</span><div className="sketch-tool-segment">{(['line', 'arc', 'dimension', 'split'] as const).map(drawingButton)}</div></div>
+    <div className="sketch-toolbar-group" role="group" aria-label="Modify"><span className="sketch-group-caption">Modify</span><div className="sketch-tool-segment">{modifyEntries.map(({ tool: next, label }) => <button type="button" key={next} aria-label={label} title={label} aria-pressed={tool === next} disabled={!enabled} onClick={() => choose(next)}><svg aria-hidden="true" viewBox="0 0 16 16"><path d={drawingIcons[next]}/></svg><span className="sketch-tool-label">{next[0].toUpperCase() + next.slice(1)}</span></button>)}</div></div>
     <div className="sketch-toolbar-group" role="group" aria-label="Constraints"><span className="sketch-group-caption">Constraints</span><div className="sketch-tool-segment">{palette.map(entry => <button type="button" key={entry.kind} aria-label={entry.label} title={entry.disabled && entry.title ? entry.title : entry.key ? `${entry.label} (${entry.key.toUpperCase()})` : entry.label} aria-pressed={tool === 'constraint' && activeConstraint === entry.kind} disabled={entry.disabled} onClick={() => constrain(entry)}><span aria-hidden="true" className="sketch-constraint-icon">{entry.symbol}</span></button>)}</div></div>
   </WorkspaceToolbar>;
 }

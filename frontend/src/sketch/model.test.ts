@@ -47,3 +47,21 @@ describe('sketch JSON and integrity', () => {
     expect(validateSketch({ ...s, data: cyclic }).ok).toBe(false);
   });
 });
+
+it('round trips optional dimension fields and validates their allowed kinds without rewriting old sketches', () => {
+  const s: Sketch = { version: 'wg-sketch-v1', nextId: 10,
+    points: [{ id: 'p1', x: 0, y: 0 }, { id: 'p2', x: 0, y: 1 }, { id: 'p3', x: 5, y: 0 }, { id: 'p4', x: 0, y: 5 }],
+    entities: [{ id: 'axis', kind: 'line', p1: 'p1', p2: 'p2', reference: true, construction: true }, { id: 'a5', kind: 'arc', center: 'p1', start: 'p3', end: 'p4', ccw: true }],
+    constraints: [{ id: 'c6', kind: 'radius', arc: 'a5', value: 5, driving: true, diameter: true, expression: '2*5' },
+      { id: 'c7', kind: 'distanceX', a: 'p1', b: 'p3', value: 5, driving: true, diameter: true },
+      { id: 'c8', kind: 'pointLineDistance', point: 'p4', line: 'axis', value: 0, driving: true, diameter: true }],
+  };
+  expect(parseSketch(toJSON(s))).toEqual({ ok: true, sketch: s });
+  const invalid = (fields: Record<string, unknown>) => validateSketch({ ...s, constraints: [{ ...s.constraints[0], ...fields }] });
+  expect(invalid({ expression: 'x'.repeat(201) }).ok).toBe(false); expect(invalid({ driving: false }).ok).toBe(false);
+  expect(invalid({ diameter: false }).ok).toBe(false); expect(invalid({ expression: 5 }).ok).toBe(false);
+  expect(invalid({ kind: 'distanceY', a: 'p1', b: 'p3' }).ok).toBe(false);
+  expect(invalid({ kind: 'fix', point: 'p1' }).ok).toBe(false);
+  const old = { ...s, constraints: s.constraints.map(({ expression: _e, diameter: _d, ...c }) => c) }, bytes = JSON.stringify(old);
+  const parsed = parseSketch(bytes); expect(parsed.ok && toJSON(parsed.sketch)).toBe(bytes);
+});

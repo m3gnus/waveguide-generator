@@ -1,4 +1,5 @@
-import type { Arc, Line, Point, Sketch } from './model';
+import { coincidentPoints } from './coincidence';
+import type { Arc, Constraint, Line, Point, Sketch } from './model';
 export const tau = 2 * Math.PI;
 export const positiveAngle = (a: number) => ((a % tau) + tau) % tau;
 export const distance = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -12,14 +13,7 @@ export function arcThrough(a: XY, b: XY, p: XY) {
 }
 /** A tangent start is an open, directed chain end, including coincident aliases. */
 export function tangentIncoming(s: Sketch, id: string): Line | Arc {
-  const equivalent = new Set([id]); let changed = true;
-  while (changed) {
-    changed = false;
-    for (const c of s.constraints) if (c.kind === 'coincident' && (equivalent.has(c.a) || equivalent.has(c.b))) {
-      if (!equivalent.has(c.a) || !equivalent.has(c.b)) changed = true;
-      equivalent.add(c.a); equivalent.add(c.b);
-    }
-  }
+  const equivalent = coincidentPoints(s, id);
   const curves = s.entities.filter((e): e is Line | Arc => !e.construction && !e.reference && (e.kind === 'line' || e.kind === 'arc'));
   const incoming = curves.filter(e => equivalent.has(e.kind === 'line' ? e.p2 : e.end));
   if (!incoming.length) throw new Error(curves.some(e => e.kind === 'arc' && equivalent.has(e.center))
@@ -139,4 +133,72 @@ export function refreshReferenceDimensions(s: Sketch): Sketch {
     }
     return Number.isFinite(value) ? { ...c, value } : c;
   }) };
+}
+
+export function onSegment(a: XY, b: XY, p: XY, interior = false): boolean {
+  const length = distance(a, b);
+  return Math.abs(distance(a, p) + distance(p, b) - length) <= 1e-9 * Math.max(1, length)
+    && (!interior || distance(a, p) > 1e-9 && distance(b, p) > 1e-9);
+}
+export function curveEnds(s: Sketch, e: Line | Arc): [Point, Point] {
+  return [e.kind === 'line' ? e.p1 : e.start, e.kind === 'line' ? e.p2 : e.end].map(id => s.points.find(p => p.id === id)!) as [Point, Point];
+}
+export function curveLocus(s: Sketch, e: Line | Arc): Locus {
+  const [a, b] = curveEnds(s, e);
+  return e.kind === 'line' ? { kind: 'line', origin: a, direction: { x: b.x - a.x, y: b.y - a.y } }
+    : { kind: 'circle', center: s.points.find(p => p.id === e.center)!, radius: distance(s.points.find(p => p.id === e.center)!, a) };
+}
+export function curveContains(s: Sketch, e: Line | Arc, p: XY): boolean {
+  const [a, b] = curveEnds(s, e);
+  return e.kind === 'line' ? onSegment(a, b, p) : onArc(s, e, p);
+}
+/** Parameter increases from the first endpoint to the second, along the arc's sweep. */
+export function curveParameter(s: Sketch, e: Line | Arc, p: XY): number {
+  const [a, b] = curveEnds(s, e);
+  if (e.kind === 'line') return ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / distance(a, b) ** 2;
+  const g = arcGeometry(s, e), angle = Math.atan2(p.y - g.center.y, p.x - g.center.x);
+  return positiveAngle(e.ccw ? angle - g.start : g.start - angle) / Math.abs(g.sweep);
+}
+/** Shared finite/supporting intersections for trim and extend. Coincident supports have no isolated cut. */
+export function curveIntersections(s: Sketch, a: Line | Arc, b: Line | Arc, supportingA = false, supportingB = false): XY[] {
+  const x = curveLocus(s, a), y = curveLocus(s, b);
+  if (x.kind === 'line' && y.kind === 'line') {
+    const cross = x.direction.x * y.direction.y - x.direction.y * y.direction.x;
+    if (Math.abs(cross) <= 1e-12 * Math.hypot(x.direction.x, x.direction.y) * Math.hypot(y.direction.x, y.direction.y)) return [];
+  }
+  if (x.kind === 'circle' && y.kind === 'circle' && distance(x.center, y.center) <= 1e-12 && Math.abs(x.radius - y.radius) <= 1e-12) return [];
+  const out: XY[] = [];
+  for (const p of intersectLoci(x, y, curveEnds(s, a)[0])) if ((supportingA || curveContains(s, a, p)) && (supportingB || curveContains(s, b, p))
+    && !out.some(q => distance(p, q) < 1e-8)) out.push(p);
+  return out;
+}
+
+
+/** Point edits retain equations that still hold; dimension measurement has one owner above. */
+export function constraintSurvivesPointMove(s: Sketch, c: Constraint): boolean {
+  const p = (id: string) => s.points.find(p => p.id === id)!;
+  const ends = (id: string): [Point, Point] => {
+    const line = s.entities.find(e => e.id === id);
+    if (line?.kind !== 'line') throw new Error('A point relation needs a line. Select an existing line.');
+    return [p(line.p1), p(line.p2)];
+  };
+  const tolerance = 1e-7;
+  if ('value' in c) {
+    const measured = refreshReferenceDimensions({ ...s, constraints: [{ ...c, driving: false }] }).constraints[0];
+    return 'value' in measured && Math.abs(measured.value - c.value) <= tolerance;
+  }
+  switch (c.kind) {
+    case 'fix': return false;
+    case 'coincident': return distance(p(c.a), p(c.b)) <= tolerance;
+    case 'horizontal': case 'vertical': {
+      const [a, b] = 'line' in c ? ends(c.line) : [p(c.a), p(c.b)];
+      return Math.abs(c.kind === 'horizontal' ? a.y - b.y : a.x - b.x) <= tolerance;
+    }
+    case 'midpoint': {
+      const [a, b] = ends(c.line); return distance(p(c.point), { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }) <= tolerance;
+    }
+    case 'pointOnLine': { const [a, b] = ends(c.line); return distance(p(c.point), projectToLine(p(c.point), a, b)) <= tolerance; }
+    case 'pointOnArc': { const arc = s.entities.find(e => e.id === c.arc); return arc?.kind === 'arc' && onArc(s, arc, p(c.point)); }
+    default: return true;
+  }
 }

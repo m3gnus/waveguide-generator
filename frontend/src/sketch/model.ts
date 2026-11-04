@@ -1,3 +1,5 @@
+import { supportsDiameter } from './dimensionValue';
+import { expressionLength } from './expressions';
 import { constraintKinds, type Constraint as SolverConstraint } from './solver/types';
 
 export type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
@@ -11,7 +13,7 @@ export type Entity = Line | Arc | (Base & { kind: 'circle' | 'ellipse' | 'bsplin
 export type DimensionPlacement = { offset: number; along: number } | { offset: number; angle: number };
 export type Constraint = SolverConstraint & { label?: string; placement?: DimensionPlacement;
   /** Selected acute branch against a reference: the directed solver angle is pi - value. */
-  supplementary?: boolean };
+  supplementary?: boolean; expression?: string; diameter?: true };
 export type NewConstraint = Constraint extends infer C ? C extends Constraint ? Omit<C, 'id'> : never : never;
 export interface Sketch {
   version: 'wg-sketch-v1'; points: Point[]; entities: Entity[]; constraints: Constraint[]; nextId: number;
@@ -49,6 +51,8 @@ export function constraintProblem(s: Sketch, c: Constraint | NewConstraint): str
     case 'pointOnArc': valid = point(c.point) && kind(c.arc) === 'arc'; break;
     case 'radius': valid = kind(c.arc) === 'arc'; break;
   }
+  if (c.expression !== undefined && (!('value' in c) || !c.driving || typeof c.expression !== 'string' || expressionLength(c.expression) > 200)) return 'Expressions need a driving dimension and at most 200 characters. Enter an expression on a driving dimension.';
+  if (c.diameter !== undefined && (c.diameter !== true || !supportsDiameter(s, c as Constraint))) return 'Diameter needs a radius or radial dimension to the axis. Select a radial dimension.';
   if (c.label !== undefined && typeof c.label !== 'string') return 'Constraint labels must be strings.';
   if (c.supplementary !== undefined && (c.kind !== 'angle' || typeof c.supplementary !== 'boolean')) return 'Invalid angle branch.';
   if (c.placement !== undefined) {

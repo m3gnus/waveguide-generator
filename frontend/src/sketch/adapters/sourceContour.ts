@@ -1,10 +1,13 @@
+import { displayName } from '../displayName';
+import { freezeRemovedExpressionReferences, resolveExpressions } from '../expressions';
+import { commandNotice } from '../notices';
 import type { SourceDocument, SourcePatch } from '../../api/sourceEditor';
 import { uniqueProblems } from '../adapter';
 import type { DomainProblem, Lowered, Reference } from '../adapter';
 import { constraintRefs, entityPoints, validateSketch, type Entity, type Sketch } from '../model';
 import { applyCommand, importedSketch, removeEntity } from '../ops';
 import type { Command } from '../commands';
-import { arcGeometry, onArc } from '../geometry';
+import { arcGeometry, onArc, refreshReferenceDimensions } from '../geometry';
 import { contextData, moveReferenceLine, referencePointIds, refreshContext, type SketchContext } from '../context';
 import { SOURCE_CLEARANCE_MM, SOURCE_LIMIT_INSET_MM, contextClearances, type SourceClearances } from './sourceContext';
 import { formatValue } from '../formatValue';
@@ -88,17 +91,27 @@ export function scaleSourceToLimit(state: { sketch: Sketch; meta: SourceMeta }, 
   const scale = sourceLimitTarget(limit) / radius, referencePoints = referencePointIds(state.sketch);
   const sketch = { ...state.sketch,
     points: state.sketch.points.map(p => referencePoints.has(p.id) ? p : { ...p, x: p.x * scale, y: p.y * scale }),
-    constraints: state.sketch.constraints.map(c => 'value' in c && c.kind !== 'angle' ? { ...c, value: c.value * scale } : c),
+    constraints: state.sketch.constraints.map(c => 'value' in c && c.driving && !c.expression && c.kind !== 'angle' ? { ...c, value: c.value * scale } : c),
   };
+  const resolved = resolveExpressions(sketch);
+  if (resolved.errors.length) throw new Error(resolved.errors.map(e => e.message).join(' '));
   const preset = state.meta.preset;
   const meta = preset?.values ? { ...state.meta, preset: { ...preset, values: scaleSourceDimensions(preset.values, scale) } } : state.meta;
-  return withSourceLimit({ ...state, sketch, meta }, limit);
+  if (meta.preset?.values) for (const [parameter, id] of Object.entries(meta.preset.dimensions)) {
+    const c = resolved.sketch.constraints.find(c => c.id === id);
+    if (c && 'value' in c && c.driving) meta.preset.values[parameter] = c.value;
+  }
+  return withSourceLimit({ ...state, sketch: refreshReferenceDimensions(resolved.sketch), meta }, limit);
 }
 /** No typed intent exists when a preset is first seeded, so this is the only automatic fit. */
-export function fitSourcePreset(state: { sketch: Sketch; meta: SourceMeta }, limit: SourceLimit) {
+export function fitSourcePreset(state: Authoring<SourceMeta>, limit: SourceLimit): Authoring<SourceMeta> & { notice?: string } {
   if (!limit.hard) return withSourceLimit(state, limit);
   const radius = state.meta.preset?.dimensions.radius_mm;
-  return scaleSourceToLimit({ ...state, sketch: { ...state.sketch, constraints: state.sketch.constraints.map(c => c.id === radius && 'driving' in c ? { ...c, driving: false } : c) } }, limit);
+  const dimension = state.sketch.constraints.find(c => c.id === radius);
+  const released = dimension && 'value' in dimension ? applyCommand(state.sketch, { kind: 'setDriving', id: dimension.id, driving: false }) : { sketch: state.sketch };
+  if ('error' in released) throw new Error(released.error);
+  const fitted = scaleSourceToLimit({ ...state, sketch: released.sketch }, limit);
+  return { ...fitted, ...(dimension?.expression ? { notice: `Cleared the ${dimension.label || dimension.id} expression (${dimension.expression}) because fitting to the throat makes its radius a reference dimension.` } : {}) };
 }
 /** Domain codes come from chain()/rules(); unfinished drafts are neutral, finished failures are errors. */
 export function sourceProgress(sketch: Sketch, meta: SourceMeta, problems = rules(sketch, meta)) {
@@ -220,6 +233,8 @@ export function contourPointOrder(sketch: Sketch, meta: SourceMeta): string[] {
 export function rules(sketch: Sketch, meta: SourceMeta): DomainProblem[] {
   const valid = validateSketch(sketch); if (!valid.ok) return [{ code: 'schema', ids: [], message: valid.reason }];
   const problems: DomainProblem[] = (meta.missingContext ?? []).map(({ id, label }) => ({ code: 'missing-context', ids: sketch.entities.filter(e => contextData(e)?.context === id).map(e => e.id), severity: 'warning', message: `${label} no longer exists. Re-attach or delete the constraint` }));
+  problems.push(...resolveExpressions(sketch).errors.map(({ id, message }) => ({ code: 'expression', ids: [id],
+    message: `Expression for ${displayName(sketch, id)} ${message.includes('Unknown dimension reference') ? 'uses an unknown name' : 'is broken'}; edit or clear it.` })));
   const ordered = chain(sketch, meta); if ('code' in ordered) return [...problems, ordered];
   if (meta.limit && !validLimit(meta.limit)) problems.push({ code: 'limit', ids: [], message: 'Limit radius must be positive' });
   const add = (code: string, ids: string[], message: string) => problems.push({ code, ids, message });
@@ -375,6 +390,7 @@ export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Co
         result.removedConstraints.push(id);
       }
     }
+    result.sketch = freezeRemovedExpressionReferences(sketch, result.sketch);
     if (!dimensions.surround_depth_mm) {
       const helpers = result.sketch.entities.filter(e => e.data && typeof e.data === 'object' && !Array.isArray(e.data) && e.data.dimensionHelper === true);
       for (const helper of helpers) {
@@ -386,10 +402,13 @@ export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Co
     preset = { ...preset, dimensions, values };
   }
   const weights = { ...meta.weights };
-  if (command.kind === 'splitAt' && Object.hasOwn(weights, command.entity)) {
-    const right = result.created.find(id => result.sketch.entities.some(e => e.id === id));
-    if (right) weights[right] = weights[command.entity];
+  const parent = command.kind === 'splitAt' || command.kind === 'trim' ? command.entity
+    : command.kind === 'fillet' ? sketch.entities.find(e => e.kind === 'line' && [e.p1, e.p2].includes(command.point))?.id : undefined;
+  if (parent && Object.hasOwn(weights, parent)) for (const id of result.created) {
+    if (result.sketch.entities.some(e => e.id === id)) weights[id] = weights[parent];
   }
+  result.sketch = freezeRemovedExpressionReferences(sketch, result.sketch);
+  result.notice = commandNotice(sketch, result.sketch, command.kind);
   const moving = result.sketch.entities.filter(e => !e.construction && role(e) === 'moving');
   for (const id of Object.keys(weights)) if (!moving.some(e => e.id === id)) delete weights[id];
   for (const e of moving) if (!Object.hasOwn(weights, e.id)) weights[e.id] = 1;

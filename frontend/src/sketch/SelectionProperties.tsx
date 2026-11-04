@@ -1,3 +1,4 @@
+import { supportsDiameter } from './dimensionValue';
 import type { Command } from './commands';
 import type { Reference } from './adapter';
 import type { Sketch } from './model';
@@ -14,6 +15,7 @@ export function SelectionProperties({ sketch, references, selection, enabled, pe
     && !references.some(r => r.id === e.id) && (e.kind === 'line' || e.kind === 'arc')) : undefined;
   const selectedDimension = selection.length === 1 ? sketch.constraints.find(c => c.id === selection[0] && 'value' in c) : undefined;
   return <>
+      {selectedDimension && supportsDiameter(sketch, selectedDimension) && <button className="btn" type="button" disabled={!enabled || pending} onClick={() => void command({ kind: 'setDiameter', id: selectedDimension.id, diameter: !selectedDimension.diameter })}>{selectedDimension.diameter ? 'Show as radius' : 'Show as diameter'}</button>}
       {showDriving && selectedDimension && 'driving' in selectedDimension && <button className="btn" type="button" disabled={!enabled || pending} onClick={() => void command({ kind: 'setDriving', id: selectedDimension.id, driving: !selectedDimension.driving })}>{selectedDimension.driving ? 'Make reference' : 'Make driving'}</button>}
       {sketch.entities.some(e => selection.includes(e.id) && !e.reference && !references.some(r => r.id === e.id)) && <button className="btn" type="button" disabled={!enabled} onClick={() => void command(sketch.entities.filter(e => selection.includes(e.id) && !e.reference).map(e => ({ kind: 'setConstruction', id: e.id, construction: !e.construction })))}>Construction (X)</button>}
       {convertible && <button className="btn" type="button" disabled={!enabled} onClick={() => void command({ kind: 'convertEntity', id: convertible.id, to: convertible.kind === 'line' ? 'arc' : 'line' })}>{convertible.kind === 'line' ? 'Make arc' : 'Make line'}</button>}

@@ -8,8 +8,8 @@ export { combineSelection, startSelect, moveSelect, cycleHit, coalesceTargets, s
 export type { Modifiers, SelectState, Cycle } from '../workspace/selection';
 import { combineSelection, finishWorkspaceSelection, type SelectState } from '../workspace/selection';
 /** Preserve a group while dragging a member; a plain click resolves to just that member. */
-export function finishSelect(state: SelectState, sketch: Sketch, start: XY, end: XY, hidden: string[] = []): string[] {
-  return finishWorkspaceSelection(state, () => combineSelection(state.selection, marqueeSelection(sketch, start, end, hidden), state.modifiers));
+export function finishSelect(state: SelectState, sketch: Sketch, start: XY, end: XY, hidden: string[] = [], dimensions: string[] = []): string[] {
+  return finishWorkspaceSelection(state, () => combineSelection(state.selection, [...marqueeSelection(sketch, start, end, hidden), ...dimensions], state.modifiers));
 }
 /** Geometry candidates are ordered by kind, then distance, independently of SVG paint order. */
 export function selectHits(sketch: Sketch, at: XY, tolerance: number, hidden: string[] = [], dimensions: string[] = []): string[] {

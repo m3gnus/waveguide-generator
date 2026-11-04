@@ -81,3 +81,21 @@ it('shares point priority, nearest curves, and hidden centres with dimension and
   const gesture = moveSelect(startSelect({x:-3,y:-3},undefined,[],{}),{x:3,y:3});
   expect(finishSelect(gesture,s,gesture.start,gesture.current,hidden)).not.toContain('center');
 });
+
+it('uses the same hidden-centre, helper and reference exclusions for windows, crossings and click hits', () => {
+  const s = importedSketch([
+    {id:'center',x:0,y:0},{id:'start',x:2,y:0},{id:'end',x:0,y:2},
+    {id:'ref.a',x:1,y:1},{id:'ref.b',x:1,y:2},
+    {id:'helper.a',x:.5,y:.5},{id:'helper.b',x:.5,y:1},
+  ], [
+    {id:'arc',kind:'arc',center:'center',start:'start',end:'end',ccw:true},
+    {id:'ref',kind:'line',p1:'ref.a',p2:'ref.b',reference:true},
+    {id:'helper',kind:'line',p1:'helper.a',p2:'helper.b',data:{dimensionHelper:true}},
+  ]);
+  for (const [start, end] of [[{x:-3,y:-3},{x:3,y:3}], [{x:3,y:3},{x:-3,y:-3}]]) {
+    expect(marqueeSelection(s,start,end,['center'])).toEqual(['start','end','arc']);
+    expect(marqueeSelection(s,start,end)).toEqual(['center','start','end','arc']);
+  }
+  expect(selectHits(s,{x:0,y:0},10,['center'])).toEqual(['start','end','arc']);
+  expect(selectHits(s,{x:0,y:0},10)).toEqual(['center','start','end','arc']);
+});

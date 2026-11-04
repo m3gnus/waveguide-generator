@@ -1,3 +1,4 @@
+import { modifyContextSegments } from './tools/modifyContext';
 import type { Reference } from './adapter';
 import { entityPoints, type Line, type Sketch } from './model';
 import { applyCommand } from './ops';
@@ -64,7 +65,7 @@ export function refreshContext(sketch: Sketch, context: SketchContext): { sketch
   for (const e of sketch.entities) {
     const data = contextData(e);
     if (!data || e.kind !== 'line') continue;
-    let target = context.items.find(i => i.id === data.context && i.kind === 'segment');
+    let target = modifyContextSegments(context).find(i => i.id === data.context);
     if (!target && data.context.endsWith('/support')) {
       const point = context.items.find(i => `${i.id}/support` === data.context);
       if (point) target = { ...point, ...ownedSegment(point, context), kind: 'segment' };

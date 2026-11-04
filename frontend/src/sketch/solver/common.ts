@@ -1,3 +1,5 @@
+import { equivalent } from '../coincidence';
+export { equivalent } from '../coincidence';
 import { Unsupported, constraintKinds, type Arc, type Capabilities, type Capability, type Entity,
   type DragTarget, type Point, type Sketch, type SketchSolver, type SolveOptions, type SolveResult, type XY } from './types';
 export const native = (detail = ''): Capability => ({ support: 'native', detail });
@@ -148,15 +150,6 @@ export abstract class Adapter implements SketchSolver {
 /** Internal equations map to public constraint IDs, or to the arc entity that owns arc rules. */
 export function publicIds(ids: string[], map: Map<string, string>): string[] {
   return [...new Set(ids.flatMap(id => map.has(id) ? [map.get(id)!] : []))];
-}
-/** Endpoint equivalence is established by topology or explicit coincidences, never a distance tolerance. */
-export function equivalent(s: Sketch, a: string, b: string): boolean {
-  const reached = new Set([a]); let changed = true;
-  while (changed) { changed = false; for (const c of s.constraints) if (c.kind === 'coincident') {
-    if (reached.has(c.a) && !reached.has(c.b)) { reached.add(c.b); changed = true; }
-    if (reached.has(c.b) && !reached.has(c.a)) { reached.add(c.a); changed = true; }
-  } }
-  return reached.has(b);
 }
 /** Exact endpoint-tangent composition: perpendicular line/radius, or parallel radii. */
 export function tangentRadii(s: Sketch, aId: string, bId: string) {

@@ -152,3 +152,15 @@ describe('immutable sketch commands', () => {
     expect(applyCommand(s, { kind: 'addTangentArc', from: 'p3', to: { x: 25, y: 4 } })).toHaveProperty('error');
   });
 });
+
+it('diameter toggles keep solver values, omit false flags, and validate axis radial dimensions', () => {
+  let s = importedSketch([{ id: 'p1', x: 0, y: 0 }, { id: 'p2', x: 0, y: 1 }, { id: 'p3', x: 5, y: 0 }],
+    [{ id: 'axis', kind: 'line', p1: 'p1', p2: 'p2', reference: true, construction: true }]);
+  s = run(s, { kind: 'addConstraint', constraint: { kind: 'distanceX', a: 'p1', b: 'p3', value: 5, driving: true } }).sketch;
+  const id = s.constraints[0].id;
+  s = run(s, { kind: 'setDiameter', id, diameter: true }).sketch; expect(s.constraints[0]).toMatchObject({ value: 5, diameter: true });
+  s = run(s, { kind: 'setDimensionExpression', id, expression: '20' }).sketch; expect(s.constraints[0]).toMatchObject({ value: 10 });
+  s = run(s, { kind: 'setDiameter', id, diameter: false }).sketch; expect(s.constraints[0]).toMatchObject({ value: 10 }); expect(s.constraints[0]).not.toHaveProperty('diameter');
+  const other = run(base(), { kind: 'addConstraint', constraint: { kind: 'distance', a: 'p1', b: 'p2', value: 10, driving: true } });
+  expect(applyCommand(other.sketch, { kind: 'setDiameter', id: other.created[0], diameter: true })).toHaveProperty('error', expect.stringContaining('radial'));
+});

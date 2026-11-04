@@ -123,3 +123,69 @@
 .workspace-item.ghost { stroke-dasharray: 5 3; pointer-events: none; }
 .workspace-item.display-only { pointer-events: none; cursor: default; }
 .sketch-tangent-handle { fill: none; stroke: var(--fg3); stroke-width: 1; }
+/* Select other */
+.sketch-menu.sketch-select-other { position: fixed; right: auto; z-index: 1000; min-width: 220px; max-width: min(420px, calc(100vw - 8px)); max-height: calc(100vh - 8px); overflow: auto; }
+.sketch-select-other .btn { display: flex; align-items: center; gap: 8px; text-align: left; white-space: normal; }
+.sketch-select-other .btn:hover, .sketch-select-other .btn:focus-visible { background: var(--surface-raised); outline: 1px solid var(--sketch-selected); outline-offset: -1px; }
+.sketch-select-other-glyph { width: 16px; flex: none; color: var(--sketch-selected); text-align: center; }
+.sketch-select-other-kind { opacity: .65; }
+
+/* Constraint inspector */
+.constraint-inspector { min-width: 0; margin: 6px 0; color: var(--fg); font-size: 11px; }
+.constraint-inspector > summary { cursor: pointer; padding: 6px 0; font-weight: 600; }
+.constraint-inspector-count, .constraint-inspector h4 span { color: var(--fg3); font-weight: normal; }
+.constraint-inspector-groups { max-height: 380px; overflow: auto; }
+.constraint-inspector h4 { margin: 10px 0 4px; color: var(--fg3); font-size: 10px; }
+.constraint-inspector ul { list-style: none; margin: 0; padding: 0; }
+.constraint-inspector-row { display: flex; align-items: flex-start; gap: 6px; padding: 7px 4px; border-bottom: 1px solid var(--hair); cursor: pointer; }
+.constraint-inspector-row:hover, .constraint-inspector-row:focus-within { background: var(--surface-raised); }
+.constraint-inspector-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.constraint-inspector-row.selected { box-shadow: inset 2px 0 var(--blue); }
+.constraint-inspector-kind { width: 14px; flex-shrink: 0; font-size: 14px; text-align: center; }
+.constraint-inspector-description { flex: 1; min-width: 0; }
+.constraint-inspector-label { display: flex; align-items: center; gap: 4px; }
+.constraint-inspector-label > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.constraint-inspector-expression { color: var(--blue); border: 1px solid var(--border-control); border-radius: 3px; padding: 0 3px; }
+.constraint-inspector-refs { display: flex; gap: 3px; flex-wrap: wrap; margin: 4px 0; }
+.constraint-inspector-chip.btn { padding: 1px 4px; font-size: 10px; color: var(--fg3); }
+.constraint-inspector-value { font-variant-numeric: tabular-nums; }
+.constraint-inspector-status { width: 10px; flex-shrink: 0; text-align: center; }
+.constraint-inspector-row.conflicting .constraint-inspector-status, .constraint-inspector-row.conflicting .constraint-inspector-kind { color: var(--red); }
+.constraint-inspector-row.redundant .constraint-inspector-status, .constraint-inspector-row.redundant .constraint-inspector-kind { color: var(--amber); }
+.constraint-inspector-row.reference, .constraint-inspector-row.notAnalysed .constraint-inspector-status { color: var(--fg3); }
+.constraint-inspector-actions { display: flex; gap: 2px; opacity: 0; }
+.constraint-inspector-actions .btn { padding: 0 3px; min-width: 20px; font-size: 14px; }
+.constraint-inspector-row:hover .constraint-inspector-actions, .constraint-inspector-row:focus-within .constraint-inspector-actions { opacity: 1; }
+.constraint-inspector-empty { color: var(--fg3); line-height: 1.5; }
+.sketch-surface > .constraint-inspector { position: absolute; z-index: 1; top: 8px; right: 8px; width: min(300px, 45%); max-height: calc(100% - 16px); overflow: auto; margin: 0; padding: 0 8px; border: 1px solid var(--hair); border-radius: 4px; background: var(--surface-floating); }
+@media (hover: none) { .constraint-inspector-actions { opacity: 1; } }
+/* arc body bend */
+.sketch-surface svg.sketch-bend, .sketch-bend .sketch-curve-hit, .sketch-bend .sketch-entity {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke='%23101824' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 24Q16 3 27 24M16 4v15m-4-11 4-4 4 4m-8 7 4 4 4-4'/%3E%3C/g%3E%3Cg fill='none' stroke='%23e8f2ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 24Q16 3 27 24M16 4v15m-4-11 4-4 4 4m-8 7 4 4 4-4'/%3E%3C/g%3E%3C/svg%3E") 16 16, crosshair;
+}
+
+/* Dimension expressions */
+.sketch-expression-entry { position: relative; display: grid; gap: 4px; min-width: 0; }
+.sketch-expression-entry label { display: grid; gap: 3px; }
+.sketch-expression-entry input { width: 100%; box-sizing: border-box; }
+.sketch-expression-result { color: var(--fg3); font-size: 11px; white-space: nowrap; }
+.sketch-expression-names { left: 0; right: auto; min-width: 100%; max-width: 240px; max-height: 180px; overflow: auto; z-index: 5; }
+.sketch-expression-names [role="option"] { padding: 5px 7px; cursor: pointer; white-space: nowrap; }
+.sketch-expression-names [aria-selected="true"] { background: var(--surface-raised); color: var(--blue); }
+.sketch-expression-entry [role="alert"] { color: var(--red); font-size: 11px; }
+.sketch-inline:has(.sketch-expression-entry) { width: 230px; }
+.sketch-expression-marker { font-size: 9px; }
+
+/* Modify tools */
+.sketch-trim-preview { stroke: var(--red); stroke-width: 3; }
+.sketch-modify-corner { fill: none; stroke: var(--blue); stroke-width: 2; }
+.sketch-fillet-prompt { width: 200px; z-index: 3; }
+.sketch-fillet-prompt label { display: grid; gap: 4px; }
+.sketch-fillet-prompt [role="alert"] { display: block; color: var(--red); margin: 6px 0; }
+.sketch-fillet-prompt > div { display: flex; gap: 6px; margin-top: 6px; }
+
+/* Dimension property expressions */
+.sketch-dimension-property-value { position: relative; min-width: 90px; margin: 0; }
+.sketch-dimension-property-value .sketch-expression-entry label > span { display: none; }
+.sketch-dimension-property-value input { padding-right: 20px; }
+.sketch-dimension-property-value > .sketch-expression-marker { position: absolute; top: 7px; right: 7px; color: var(--fg3); pointer-events: none; }

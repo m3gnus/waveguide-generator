@@ -128,8 +128,8 @@ async function previewPlace(at: XY, kind: string) {
   expect(current.constraints.at(-1)!.placement).toBeDefined();
   // Labels and the editor open at the chosen position, subject to edge clamping.
   const form = host.querySelector<HTMLElement>('[aria-label="Edit dimension"]')!;
-  expect(parseFloat(form.style.left)).toBeCloseTo(Math.max(4, Math.min(x, 460)));
-  expect(parseFloat(form.style.top)).toBeCloseTo(Math.max(4, Math.min(y, 260)));
+  expect(parseFloat(form.style.left)).toBeCloseTo(Math.max(4, Math.min(x, 390)));
+  expect(parseFloat(form.style.top)).toBeCloseTo(Math.max(4, Math.min(y, 170)));
 }
 
 describe('dimension pick → preview → place → type with the real solver', () => {
@@ -553,4 +553,136 @@ it('offers the axis as an angle second pick when moving a single-line distance p
   await pointer('pointermove', screen({ x: 18, y: 16 }));
   expect(host.querySelector('.sketch-dimension-preview')?.getAttribute('aria-label')).toBe('Preview angle');
   expect(current).toBe(before); expect(field()).toBeNull();
+});
+
+describe('dimension expressions and diameter UI', () => {
+  function namedFixture() {
+    const s = fixture('line');
+    const result = applyCommand(s, { kind: 'addConstraint', constraint: { kind: 'distanceX', a: 'r', b: 's', value: 10, driving: true, label: 'Throat radius' } });
+    if ('error' in result) throw new Error(result.error);
+    return result.sketch;
+  }
+  it('submits a placement expression, previews it, marks its label, pre-fills on edit and undoes the placement', async () => {
+    const initial = namedFixture();
+    await mount(initial); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
+    await input('Throat radius * 2');
+    expect(host.querySelector('output')?.textContent).toBe('= 20.00 mm');
+    await key('Enter', field()!);
+    const c = current.constraints.at(-1)!;
+    expect(c).toMatchObject({ expression: '[Throat radius] * 2', value: 20 });
+    const label = host.querySelector(`[data-constraint-id="${c.id}"] text`)!;
+    expect(label.textContent).toContain('ƒ');
+    expect(label.querySelector('title')?.textContent).toContain('= [Throat radius] * 2');
+    await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    expect(field()?.value).toBe('[Throat radius] * 2');
+    await key('Escape', field()!); await act(async () => button('Undo').click());
+    expect(current).toEqual(initial);
+    await act(async () => button('Redo').click());
+    expect(current.constraints.at(-1)).toMatchObject({ expression: '[Throat radius] * 2', value: 20 });
+  });
+  it('keeps parse and command errors inline and applies a corrected expression', async () => {
+    await mount(namedFixture()); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
+    const before = current;
+    await input('sqrt('); await key('Enter', field()!);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('expression');
+    expect(current).toBe(before); expect(field()).not.toBeNull();
+    await input('Missing*2'); await key('Enter', field()!);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Unknown');
+    await input('25.4mm / 2'); await key('Enter', field()!);
+    expect(current.constraints.at(-1)).toMatchObject({ expression: '25.4mm / 2', value: 12.7 });
+    expect(field()).toBeNull();
+  });
+  it.each(['Tab', 'Enter'])('completes a dimension name after an operator with %s without submitting', async accept => {
+    await mount(namedFixture()); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
+    await input('2 * Th');
+    expect(host.querySelector('[role="option"]')?.textContent).toBe('Throat radius');
+    await key(accept, field()!);
+    expect(field()?.value).toBe('2 * [Throat radius]');
+    expect(host.querySelector('[role="listbox"]')).toBeNull();
+    expect(host.querySelector('output')?.textContent).toBe('= 20.00 mm');
+    await key('Enter', field()!);
+    expect(current.constraints.at(-1)).toMatchObject({ expression: '2 * [Throat radius]', value: 20 });
+  });
+  it.each(['Shift', 'O', 'Ø'])('places a diameter using %s, types a diameter and undoes add plus value', async shortcut => {
+    const initial = fixture('arc'); await mount(initial); await pick('arc');
+    await key(shortcut);
+    const at = screen({ x: 15, y: 21 }); await pointer('pointermove', at);
+    expect(host.querySelector('.sketch-dimension-preview')?.textContent).toContain('Ø 10.00');
+    await act(async () => svg().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: at.x, clientY: at.y, shiftKey: shortcut === 'Shift' })));
+    await act(async () => svg().dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: at.x, clientY: at.y, shiftKey: shortcut === 'Shift' })));
+    expect(field()?.value).toBe('10');
+    await input('24'); await key('Enter', field()!);
+    expect(current.constraints.at(-1)).toMatchObject({ kind: 'radius', diameter: true, value: 12 });
+    await act(async () => button('Undo').click()); expect(current).toEqual(initial);
+  });
+  it.each(['arc', 'axis'])('toggles %s between radius and diameter and undoes each toggle', async kind => {
+    await mount(fixture(kind));
+    if (kind === 'arc') { await pick('arc'); await previewPlace({ x: 15, y: 21 }, 'radius'); }
+    else { await pick('q'); await pick('axis'); await previewPlace({ x: 8, y: 20 }, 'distanceX'); }
+    await key('Escape', field()!); await key('Escape');
+    const c = current.constraints.at(-1)!;
+    const label = host.querySelector(`[data-constraint-id="${c.id}"] text`)!;
+    await pointer('pointerdown', { x: 500, y: 100 }, label); await pointer('pointerup', { x: 500, y: 100 });
+    await act(async () => button('Show as diameter').click());
+    expect(current.constraints.at(-1)).toMatchObject({ diameter: true });
+    expect(host.querySelector(`[data-constraint-id="${c.id}"] text`)?.lastChild?.textContent).toMatch(/^([rz] )?Ø /);
+    if (kind === 'arc') expect(host.querySelector(`[data-constraint-id="${c.id}"] text`)?.lastChild?.textContent).toBe('Ø 10.00 mm');
+    await act(async () => button('Undo').click()); expect(current.constraints.at(-1)?.diameter).toBeUndefined();
+    await act(async () => button('Redo').click());
+    await act(async () => button('Show as radius').click()); expect(current.constraints.at(-1)?.diameter).toBeUndefined();
+    await act(async () => button('Undo').click()); expect(current.constraints.at(-1)?.diameter).toBe(true);
+  });
+  it('shows the rename notice and preserves rewritten dependencies through undo', async () => {
+    await mount(namedFixture()); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
+    await input('[Throat radius] * 2'); await key('Enter', field()!);
+    const source = current.constraints.find(c => c.label === 'Throat radius')!;
+    await act(async () => { await controller.command({ kind: 'setConstraintLabel', id: source.id, label: 'New throat' }); });
+    expect(current.constraints.at(-1)?.expression).toBe('[New throat] * 2');
+    expect(controller.notice).toContain('Updated expressions');
+    await act(async () => button('Undo').click());
+    expect(current.constraints.at(-1)?.expression).toBe('[Throat radius] * 2');
+  });
+});
+
+it('edits an expression to a plain number and restores the expression with one undo', async () => {
+  await mount(fixture('line')); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
+  await input('25.4mm / 2'); await key('Enter', field()!);
+  const id = current.constraints.at(-1)!.id;
+  const label = () => host.querySelector(`[data-constraint-id="${id}"] text`)!;
+  await act(async () => label().dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+  expect(field()?.value).toBe('25.4mm / 2');
+  await input('18'); await key('Enter', field()!);
+  expect(current.constraints.at(-1)).toMatchObject({ value: 18 });
+  expect(current.constraints.at(-1)?.expression).toBeUndefined();
+  await act(async () => button('Undo').click());
+  expect(current.constraints.at(-1)).toMatchObject({ expression: '25.4mm / 2', value: 12.7 });
+});
+it('treats a diameter expression result as a diameter and undoes the whole placement', async () => {
+  const initial = fixture('arc'); await mount(initial); await pick('arc'); await key('o');
+  await previewPlace({ x: 15, y: 21 }, 'radius');
+  await input('24mm / 2');
+  expect(host.querySelector('output')?.textContent).toBe('= 12.00 mm');
+  await key('Enter', field()!);
+  expect(current.constraints.at(-1)).toMatchObject({ expression: '24mm / 2', diameter: true, value: 6 });
+  await act(async () => button('Undo').click()); expect(current).toEqual(initial);
+});
+it('returns the preview to radius after Shift is released or O is toggled twice', async () => {
+  await mount(fixture('arc')); await pick('arc'); await key('Shift');
+  await pointer('pointermove', screen({ x: 15, y: 21 }));
+  expect(host.querySelector('.sketch-dimension-preview')?.textContent).toContain('Ø');
+  await act(async () => svg().dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Shift' })));
+  expect(host.querySelector('.sketch-dimension-preview')?.textContent).toContain('R 5.00');
+  await key('o'); await key('o');
+  expect(host.querySelector('.sketch-dimension-preview')?.textContent).toContain('R 5.00');
+});
+
+it('keeps a previously dismissed placement when undoing a later expression edit', async () => {
+  await mount(fixture('line')); await pick('line'); await previewPlace({ x: -4, y: 16 }, 'distance');
+  const measured = current;
+  await key('Escape', field()!);
+  const label = host.querySelector(`[data-constraint-id="${current.constraints.at(-1)!.id}"] text`)!;
+  await act(async () => label.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+  await input('25.4mm / 2'); await key('Enter', field()!);
+  expect(current.constraints.at(-1)).toMatchObject({ expression: '25.4mm / 2', value: 12.7 });
+  await act(async () => button('Undo').click()); expect(current).toEqual(measured);
 });

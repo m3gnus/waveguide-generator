@@ -1,17 +1,15 @@
 import type { Constraint, DimensionPlacement, Sketch } from './model';
 import { arcGeometry } from './geometry';
 import type { XY } from './solver/types';
+import { displayValue } from './dimensionValue';
 import { formatValue } from './formatValue';
+import { constraintName as dimensionName } from './displayName';
+export { constraintName as dimensionName } from './displayName';
 
 export const internalHelper = (e: Sketch['entities'][number]) => !!e.data && typeof e.data === 'object' && !Array.isArray(e.data) && (e.data.dimensionHelper === true || e.data.angleBaseline === true);
-export function dimensionName(c: Constraint): string {
-  const names: Record<string, string> = { distance: 'Distance', distanceX: 'Horizontal distance', distanceY: 'Vertical distance',
-    radius: 'Radius', angle: 'Angle', pointLineDistance: 'Point-line distance' };
-  return c.label?.trim() || names[c.kind] || c.kind;
-}
 export function dimensionLabel(c: Constraint & { value: number; driving: boolean }, mode: 'value' | 'name' = 'value') {
-  const value = formatValue(c.kind === 'angle' ? c.value * 180 / Math.PI : c.value);
-  return `${c.driving ? '' : '('}${mode === 'name' || c.label === 'r' || c.label === 'z' ? `${dimensionName(c)} ` : ''}${c.kind === 'radius' ? 'R ' : ''}${value}${c.kind === 'angle' ? '°' : ' mm'}${c.driving ? '' : ')'}`;
+  const value = formatValue(displayValue(c));
+  return `${c.driving ? '' : '('}${mode === 'name' || c.label === 'r' || c.label === 'z' ? `${dimensionName(c)} ` : ''}${c.diameter ? 'Ø ' : c.kind === 'radius' ? 'R ' : ''}${value}${c.kind === 'angle' ? '°' : ' mm'}${c.driving ? '' : ')'}${c.expression ? ' ƒ' : ''}`;
 }
 export interface LabelBox { x: number; y: number; width: number; height: number }
 export interface DimensionLayout {

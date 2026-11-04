@@ -1,5 +1,6 @@
 import type { DimensionPlacement, JSONValue, NewConstraint } from './model';
 import type { SnapResult } from './snap';
+import type { SketchContext } from './context';
 
 export type PointRef = string | { x: number; y: number; snap?: SnapResult | null };
 export type Command =
@@ -9,6 +10,11 @@ export type Command =
   | { kind: 'addArc3'; start: PointRef; end: PointRef; through: { x: number; y: number } }
   | { kind: 'addConstraint'; constraint: NewConstraint }
   | { kind: 'removeConstraint'; id: string }
+  | { kind: 'setDimensionExpression'; id: string; expression: string }
+  | { kind: 'setDiameter'; id: string; diameter: boolean }
+  | { kind: 'fillet'; point: string; radius: number }
+  | { kind: 'trim'; entity: string; x: number; y: number; context?: SketchContext; unbounded?: string[] }
+  | { kind: 'extend'; entity: string; x: number; y: number; context?: SketchContext; unbounded?: string[] }
   | { kind: 'setDimension'; id: string; value: number }
   | { kind: 'setDimensionPlacement'; id: string; placement?: DimensionPlacement }
   | { kind: 'setConstraintLabel'; id: string; label: string }

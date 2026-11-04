@@ -1,3 +1,4 @@
+import { modifyHints } from '../kit/ModifyTools';
 import type { Command } from '../commands';
 import type { Authoring } from '../controller';
 import type { Reference } from '../adapter';
@@ -11,12 +12,13 @@ import { constraintToolEntries } from './constraints';
 import { constraintTool, pickConstraint, escapeConstraint, type ConstraintToolState } from './constraintTool';
 
 export const sketchToolHints: Record<Tool, string> = {
+  ...modifyHints,
   select: 'Select or drag · Shift adds · Delete removes · Esc cancels',
   hand: 'Drag to pan · Esc: Select', constraint: '',
   line: 'Click to chain lines · type length, Tab angle · double-click ends · Ctrl/Cmd suppresses snaps',
   tangent: 'Choose a highlighted chain end, or click empty space to start a 3-point arc · A: 3-point arc',
   arc3: 'Click start, end, then a point on the arc · A: tangent arc',
-  dimension: 'Click a line, arc or point; click a second item if needed; move to choose; click to place; type the value', split: 'Click inside a curve to split',
+  dimension: 'Click a line, arc or point; click a second item if needed; move to choose; click to place; type the value or an expression · Shift / O / Ø: diameter', split: 'Click inside a curve to split',
 };
 
 /** Thin descriptors over the existing pure Sketch tool reducers. */
