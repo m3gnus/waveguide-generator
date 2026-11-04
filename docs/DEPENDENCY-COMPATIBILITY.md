@@ -1,7 +1,7 @@
 # Dependency compatibility
 
-The mesher pin `983f5a39` declares version 0.2.9. Its only change from
-`b6f2b743` is the package version; geometry and mesh behavior are unchanged.
+The mesher pin `63b62c22` declares version 0.2.9. It retains the released
+`983f5a39` geometry contracts while reusing existing sampling and preview owners.
 It includes version-gated ATH v3 controls and typed public refusals with
 a shipped, checked control-label catalog. Saved v1/v2 retain their prior geometry.
 It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
@@ -151,3 +151,8 @@ The plots pin `9462f4b` preserves unavailable samples as chart gaps, keeps the s
 The BEM++ pin `5d82a93` serializes overlapping BLAS limit scopes, refuses unsupported baffle combinations, releases streamed traces and retains unavailable directivity samples as unavailable. The existing opt-in compiled facade and native quadrature orders remain.
 
 The Metal pin `80a2d5e` rejects false GMRES success and degenerate geometry and reuses Jacobi factors. Its active tree includes only those solver changes over version 0.2.2. Native process ownership and shader aggregation changes remain excluded; persistent-helper and Metal gap features are not enabled by this pin.
+
+Sampling reuses the existing profile cache and array evaluator, and preview
+resolution reuses already prepared geometry. The retained tree excludes the
+unqualified session-ownership and STEP fitting changes. No new geometry
+construction, meshing tolerance or refusal relaxation is claimed.
