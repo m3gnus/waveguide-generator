@@ -1,14 +1,16 @@
 import type { Command, PointRef } from './commands';
-import { constraintProblem, constraintRefs, entityPoints, isJSON, numericSuffix, validateSketch, type Arc, type NewConstraint, type Constraint, type Entity, type Point, type Sketch } from './model';
+import { constraintProblem, constraintRefs, entityPoints, isJSON, numericSuffix, parameterNameProblem, validateSketch, type Arc, type NewConstraint, type Constraint, type Entity, type Point, type Sketch } from './model';
 import { arcThrough, distance, onArc, onSegment, constraintSurvivesPointMove, curveContains, curveEnds, tangentArc } from './geometry';
 
 import { parseDecimalInput } from '../design/decimalInput';
-import { freezeRemovedExpressionReferences, expressionDependents, renameExpressionReferences, rescaleDiameterExpressions, resolveExpressions } from './expressions';
+import { renameParameterReferences, freezeRemovedExpressionReferences, expressionDependents, renameExpressionReferences, rescaleDiameterExpressions, resolveExpressions } from './expressions';
 import { internalValue } from './dimensionValue';
 import { commandNotice } from './notices';
-import { filletGeometry, trimGeometry, extendGeometry, type Cut } from './topology';
+import { trimGeometry, extendGeometry, type Cut } from './topology';
 import { equivalent } from './coincidence';
 import { modifyContext } from './tools/modifyContext';
+import { applyFillet } from './virtualSharpFillet';
+import { isVirtualSharpHelper, pruneVirtualSharps, virtualSharpConstraintIds } from './virtualSharp';
 
 /** Low-level removal shared by user deletion and reference lifecycle cleanup. */
 export function removeEntity(sketch: Sketch, id: string): { sketch: Sketch; removedConstraints: string[] } {
@@ -31,18 +33,25 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
   const used = new Set([...s.points, ...s.entities, ...s.constraints].map(e => e.id));
   function allocate(prefix: string) {
     let id = `${prefix}${s.nextId++}`;
-    while (used.has(id)) id = `${prefix}${s.nextId++}`;
+    while (used.has(id) || prefix === 'c' && s.parameters?.some(p => p.name === id)) id = `${prefix}${s.nextId++}`;
     if (used.has(id) || !id || id.trim() !== id) throw new Error(`Duplicate or invalid ID: ${id}.`);
     s.nextId = Math.max(s.nextId, numericSuffix(id) + 1);
     if (!Number.isSafeInteger(s.nextId)) throw new Error('ID suffix exceeds the safe integer range.');
     used.add(id); created.push(id); return id;
+  }
+  function checkParameterName(name: string, except?: string) {
+    const problem = parameterNameProblem(name, [
+      ...s.constraints.filter(c => 'value' in c).flatMap(c => [c.id, c.label?.trim()]),
+      ...(s.parameters ?? []).filter(p => p.name !== except).map(p => p.name),
+    ]);
+    if (problem) throw new Error(problem);
   }
   function point(id: string) { const p = s.points.find(p => p.id === id); if (!p) throw new Error(`Unknown point: ${id}.`); return p; }
   function entity(id: string) { const e = s.entities.find(e => e.id === id); if (!e) throw new Error(`Unknown entity: ${id}.`); return e; }
   function addConstraint(c: NewConstraint) {
     const constraint = c as Constraint, problem = constraintProblem(s, constraint);
     if (problem) throw new Error(problem);
-    s.constraints.push({ ...constraint, id: allocate('c') });
+    const id = allocate('c'); s.constraints.push({ ...constraint, id }); return id;
   }
   function addPoint(x: number, y: number) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('Point coordinates must be finite.');
@@ -114,19 +123,7 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
     if ((command.kind === 'addPoint' || command.kind === 'addLine') && 'id' in command) throw new Error('Caller-supplied IDs are reserved for imports.');
     switch (command.kind) {
       case 'fillet': {
-        const g = filletGeometry(s, command.point, command.radius), [a, b] = g.curves;
-        const center = addPoint(g.center.x, g.center.y), start = addPoint(g.start.x, g.start.y), end = addPoint(g.end.x, g.end.y);
-        const arc: Arc = { kind: 'arc', id: allocate('a'), center: center.id, start: start.id, end: end.id, ccw: g.ccw,
-          ...(a.construction === undefined ? {} : { construction: a.construction }), ...(a.data === undefined ? {} : { data: a.data }) };
-        const shorten = (e: typeof a, to: string) => ({ ...e, p1: g.cornerPoints.has(e.p1) ? to : e.p1, p2: g.cornerPoints.has(e.p2) ? to : e.p2 });
-        s.entities = s.entities.map(e => e.id === a.id ? shorten(a, start.id) : e.id === b.id ? shorten(b, end.id) : e);
-        s.entities.splice(s.entities.findIndex(e => e.id === a.id) + 1, 0, arc);
-        cleanConstraints(c => constraintRefs(c).some(id => g.cornerPoints.has(id))
-          || c.kind === 'pointOnLine' && [a.id, b.id].includes(c.line) && !curveContains(s, entity(c.line) as typeof a, point(c.point)));
-        const retained = new Set(s.entities.flatMap(entityPoints));
-        s.points = s.points.filter(p => !g.cornerPoints.has(p.id) || retained.has(p.id));
-        addConstraint({ kind: 'tangent', a: a.id, b: arc.id }); addConstraint({ kind: 'tangent', a: arc.id, b: b.id });
-        addConstraint({ kind: 'radius', arc: arc.id, value: command.radius, driving: true }); break;
+        applyFillet(s, command.point, command.radius, { allocate, addPoint, addConstraint, cleanConstraints }); break;
       }
       case 'trim': {
         const g = trimGeometry(s, command.entity, command, command.unbounded);
@@ -149,6 +146,27 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         cleanConstraints(c => constraintRefs(c).includes(g.from.id) && !constraintSurvivesPointMove(s, c));
         attach(g.from.id, { point: g.to, cutter: g.cutter }); break;
       }
+      case 'addParameter': {
+        checkParameterName(command.name);
+        s.parameters = [...(s.parameters ?? []), { name: command.name, expression: command.expression.trim(), unit: command.unit, value: 0 }]; break;
+      }
+      case 'setParameter': {
+        if (!s.parameters?.some(p => p.name === command.name)) throw new Error(`Unknown parameter "${command.name}". Select an existing parameter.`);
+        s.parameters = s.parameters.map(p => p.name === command.name ? { ...p, expression: command.expression.trim(), ...(command.unit === undefined ? {} : { unit: command.unit }) } : p); break;
+      }
+      case 'renameParameter': {
+        if (!s.parameters?.some(p => p.name === command.from)) throw new Error(`Unknown parameter "${command.from}". Select an existing parameter.`);
+        checkParameterName(command.to, command.from);
+        Object.assign(s, renameParameterReferences(s, command.from, command.to)); break;
+      }
+      case 'removeParameter': {
+        if (!s.parameters?.some(p => p.name === command.name)) throw new Error(`Unknown parameter "${command.name}". Select an existing parameter.`);
+        const users = expressionDependents(s, command.name);
+        if (users.length) throw new Error(`Parameter "${command.name}" is used by ${users.map(id => s.constraints.find(c => c.id === id)?.label || id).join(', ')}. Clear those expressions before deleting it.`);
+        const parameters = s.parameters.filter(p => p.name !== command.name);
+        if (parameters.length) s.parameters = parameters; else delete s.parameters;
+        break;
+      }
       case 'setDimensionExpression': {
         const c = s.constraints.find(c => c.id === command.id);
         if (!c || !('value' in c) || !c.driving) throw new Error('Expressions need a driving dimension. Select a driving dimension first.');
@@ -166,6 +184,7 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         const { diameter: _old, ...base } = rewritten.constraints.find(n => n.id === c.id)!;
         const next = command.diameter ? { ...base, diameter: true as const } : base;
         const problem = constraintProblem(s, next); if (problem) throw new Error(problem);
+        Object.assign(s, rewritten);
         s.constraints = rewritten.constraints.map(c => c.id === command.id ? next : c); break;
       }
       case 'addPoint': addPoint(command.x, command.y); break;
@@ -188,6 +207,7 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
       }
       case 'addConstraint': addConstraint(command.constraint); break;
       case 'removeConstraint': {
+        if (virtualSharpConstraintIds(s).has(command.id)) throw new Error('This relation holds the virtual sharp at the original corner. Delete the virtual sharp or its dimensions to remove it.');
         if (!s.constraints.some(c => c.id === command.id)) throw new Error(`Unknown constraint: ${command.id}.`);
         cleanConstraints(c => c.id === command.id); break;
       }
@@ -205,7 +225,9 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         if (typeof command.label !== 'string' || command.label.trim().length > 40) throw new Error('Dimension names must be strings of at most 40 characters.');
         const { label: previous, ...base } = c, label = command.label.trim();
         if (label && s.constraints.some(other => 'value' in other && other.id === label)) throw new Error(`${label} is already a dimension's id; choose another name.`);
-        s.constraints = renameExpressionReferences(s, c.id, label).constraints.map(c => c.id === command.id ? { ...base, ...(label ? { label } : {}) } : c); break;
+        if (label && s.parameters?.some(p => p.name === label)) throw new Error(`${label} is already a parameter name; choose another name.`);
+        Object.assign(s, renameExpressionReferences(s, c.id, label));
+        s.constraints = s.constraints.map(c => c.id === command.id ? { ...base, ...(label ? { label } : {}) } : c); break;
       }
       case 'setEntityName': {
         const e = entity(command.id);
@@ -236,7 +258,7 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
       }
       case 'deletePoint': {
         point(command.id);
-        const adjacent = s.entities.filter(e => entityPoints(e).includes(command.id));
+        const adjacent = s.entities.filter(e => !isVirtualSharpHelper(e) && entityPoints(e).includes(command.id));
         if (adjacent.some(e => e.reference)) throw new Error('Reference points cannot be deleted.');
         if (adjacent.length) {
           const [left, right] = adjacent;
@@ -293,6 +315,7 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
       }
     }
     Object.assign(s, freezeRemovedExpressionReferences(sketch, s));
+    removedConstraints.push(...pruneVirtualSharps(s, addConstraint));
     const resolved = resolveExpressions(s);
     if (resolved.errors.length) throw new Error(resolved.errors.map(e => e.message).join(' '));
     // A diameter toggle is presentation only, including exact stored floating-point values.

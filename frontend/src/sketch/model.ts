@@ -15,7 +15,9 @@ export type Constraint = SolverConstraint & { label?: string; placement?: Dimens
   /** Selected acute branch against a reference: the directed solver angle is pi - value. */
   supplementary?: boolean; expression?: string; diameter?: true };
 export type NewConstraint = Constraint extends infer C ? C extends Constraint ? Omit<C, 'id'> : never : never;
+export interface Parameter { name: string; expression: string; value: number; unit: 'mm' | 'deg' | 'none' }
 export interface Sketch {
+  parameters?: Parameter[];
   version: 'wg-sketch-v1'; points: Point[]; entities: Entity[]; constraints: Constraint[]; nextId: number;
 }
 export type Validation = { ok: true } | { ok: false; reason: string };
@@ -65,6 +67,10 @@ export function constraintProblem(s: Sketch, c: Constraint | NewConstraint): str
     && (!('value' in c) || !Number.isFinite(c.value) || typeof c.driving !== 'boolean')) return 'Dimensions need a finite value and a driving flag.';
   if ('value' in c && ['distance', 'radius', 'pointLineDistance'].includes(c.kind) && c.value < 0) return 'This dimension cannot be negative.';
 }
+export function parameterNameProblem(name: unknown, used: Iterable<string | undefined>): string | undefined {
+  if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return 'Parameter names must be identifiers. Use letters, digits and underscores, starting with a letter or underscore.';
+  if (new Set(used).has(name)) return `Parameter name "${name}" is already used. Choose a unique name.`;
+}
 export function validateSketch(raw: unknown): Validation {
   const fail = (reason: string): Validation => ({ ok: false, reason });
   if (!object(raw) || raw.version !== 'wg-sketch-v1') return fail('Unknown sketch version.');
@@ -89,6 +95,17 @@ export function validateSketch(raw: unknown): Validation {
     if (!constraintKinds.includes(c.kind)) return fail(`Unknown constraint kind: ${c.kind}.`);
     const problem = constraintProblem(s, c); if (problem) return fail(problem);
   }
+  if (raw.parameters !== undefined) {
+    if (!Array.isArray(raw.parameters)) return fail('Expected a parameters array.');
+    const names = new Set(s.constraints.filter(c => 'value' in c).flatMap(c => [c.id, c.label?.trim()].filter(Boolean)));
+    for (const p of raw.parameters) {
+      if (!object(p)) return fail('Expected a parameter with a name, expression, value and unit.');
+      const nameProblem = parameterNameProblem(p.name, names); if (nameProblem) return fail(nameProblem);
+      names.add(p.name as string);
+      if (typeof p.expression !== 'string' || !p.expression.trim() || expressionLength(p.expression) > 200 || !Number.isFinite(p.value)
+        || !['mm', 'deg', 'none'].includes(p.unit as string)) return fail(`Invalid parameter "${p.name}". Enter an expression, finite value and mm, deg or none unit.`);
+    }
+  }
   return { ok: true };
 }
 export type ParsedSketch = { ok: true; sketch: Sketch } | { ok: false; reason: string; raw: unknown; unknownVersion?: true };
@@ -101,4 +118,8 @@ export function parseSketch(raw: unknown): ParsedSketch {
     return result.ok ? { ok: true, sketch: raw as Sketch } : { ...result, raw: original };
   } catch { return { ok: false, reason: 'Invalid sketch JSON.', raw: original }; }
 }
-export const toJSON = (sketch: Sketch): string => JSON.stringify(sketch);
+export function serializedSketch(sketch: Sketch): Sketch {
+  if (!sketch.parameters || sketch.parameters.length) return sketch;
+  const { parameters: _empty, ...rest } = sketch; return rest;
+}
+export const toJSON = (sketch: Sketch): string => JSON.stringify(serializedSketch(sketch));

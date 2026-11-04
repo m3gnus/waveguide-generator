@@ -189,3 +189,21 @@
 .sketch-dimension-property-value .sketch-expression-entry label > span { display: none; }
 .sketch-dimension-property-value input { padding-right: 20px; }
 .sketch-dimension-property-value > .sketch-expression-marker { position: absolute; top: 7px; right: 7px; color: var(--fg3); pointer-events: none; }
+
+/* Virtual sharp */
+.sketch-virtual-sharp-extensions { pointer-events: none; stroke: var(--sketch-construction); stroke-width: 1; stroke-dasharray: 4 3; opacity: .65; }
+.sketch-point.virtual-sharp:not(.selected):not(.hovered) { fill: var(--sketch-construction); stroke: var(--sketch-construction); }
+/* Parameters */
+.sketch-parameters ul { list-style: none; margin: 0 0 8px; padding: 0; }
+.sketch-parameter-row { padding: 8px 0; border-bottom: 1px solid var(--hair); }
+.sketch-parameter-heading { display: flex; align-items: end; gap: 6px; margin-bottom: 6px; }
+.sketch-parameter-heading label { display: grid; gap: 3px; min-width: 0; color: var(--fg3); }
+.sketch-parameter-heading label:first-child { flex: 1; }
+.sketch-parameters input, .sketch-parameters select { min-width: 0; box-sizing: border-box; width: 100%; padding: 5px 6px; border: 1px solid var(--border-control); border-radius: 4px; background: var(--surface-input, var(--surface-raised)); color: var(--fg); font: inherit; }
+.sketch-parameter-heading .btn { font-size: 16px; padding: 3px 7px; }
+.sketch-parameters input:focus, .sketch-parameters select:focus { outline: 1px solid var(--blue); }
+.sketch-parameters [aria-invalid="true"] { border-color: var(--red); }
+.sketch-parameter-footer { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 5px; color: var(--fg3); }
+.sketch-parameter-footer .btn { padding: 2px 7px; font-size: 11px; }
+.sketch-parameters [role="alert"] { color: var(--red); }
+.sketch-surface > .sketch-parameters { top: auto; bottom: 8px; max-height: 45%; }

@@ -15,6 +15,8 @@ import { extendPreview, filletPreview, trimPreview } from '../topology';
 import { SketchKit } from './sketchKit';
 import { trimmedArc } from '../bendTestSupport';
 import { arcGeometry, distance } from '../geometry';
+import { arcFilletCorner } from '../arcFilletTestSupport';
+import { isVirtualSharpHelper } from '../virtualSharp';
 import { modifyContext } from '../tools/modifyContext';
 
 let host: HTMLDivElement, root: Root, current: Sketch, controller: SketchController<null>;
@@ -81,7 +83,7 @@ describe('Modify toolbar and keyboard', () => {
 });
 
 describe('Fillet', () => {
-  it('highlights a corner, previews the exact arc while typing, applies a radius dimension, shows notice, and undoes', async () => {
+  it('highlights a corner, previews the exact arc while typing, keeps the sharp and its fix, applies a radius dimension, and undoes', async () => {
     await mount(corner()); const before = current;
     await key('g'); await pointer('pointermove', 4, 4, 0);
     expect(host.querySelector('[aria-label="Fillet corner"]')).not.toBeNull(); expect(field()).toBeNull();
@@ -91,7 +93,11 @@ describe('Fillet', () => {
     const first = preview('fillet')!.getAttribute('d'); await value('3,5'); expect(preview('fillet')!.getAttribute('d')).not.toBe(first);
     await key('Enter', field()!); expect(field()).toBeNull(); pressed('Fillet (G)');
     expect(current.constraints).toContainEqual(expect.objectContaining({ kind: 'radius', value: 3.5, driving: true }));
-    expect(host.querySelector('.sketch-dimension')).not.toBeNull(); expect(host.querySelector('.sketch-status')!.textContent).not.toContain('removed'); expect(controller.notice).toContain('Fix');
+    expect(host.querySelector('.sketch-dimension')).not.toBeNull(); expect(host.querySelector('.sketch-status')!.textContent).not.toContain('removed'); expect(controller.notice).toBeUndefined();
+    expect(host.querySelectorAll('.sketch-virtual-sharp-extensions line')).toHaveLength(2);
+    expect(host.querySelector('.sketch-point.virtual-sharp[data-id="p2"]')).not.toBeNull();
+    await key('Escape'); await click(4, 4);
+    expect(host.querySelector('.sketch-point.virtual-sharp.selected')).not.toBeNull();
     await undo(); expect(current).toEqual(before);
     await key('g'); await click(4, 4); expect(field()!.value).toBe('3,5');
   });
@@ -137,6 +143,25 @@ describe('Fillet', () => {
     await mount(corner()); await key('g'); await click(4, 4);
     vi.spyOn(controller, 'command').mockRejectedValueOnce(new Error('Move the fixed endpoint before rounding.'));
     await key('Enter', field()!); expect(field()).not.toBeNull(); expect(host.querySelector('[role="alert"]')!.textContent).toContain('Move the fixed endpoint');
+  });
+});
+
+describe('Arc corner fillets', () => {
+  it.each([['line', 'internal'], ['line', 'external'], ['internal', 'internal'], ['external', 'external']] as const)('highlights, previews, applies and undoes %s / %s', async (a, b) => {
+    const s = arcFilletCorner(a, b);
+    // Keep the complete corner away from the workspace edges.
+    s.points = s.points.map(p => ({ ...p, x: p.x + 12, y: p.y + 12 }));
+    s.constraints.push({ id: 'fixed', kind: 'fix', point: 'corner' });
+    await mount(s); const before = current, command = vi.spyOn(controller, 'command');
+    await key('g'); await pointer('pointermove', 12, 12, 0);
+    expect(host.querySelector('[aria-label="Fillet corner"]')).not.toBeNull();
+    await click(12, 12); expect(field()).not.toBeNull();
+    const expected = filletPreview(before, 'corner', 2); if ('error' in expected) throw new Error(expected.error);
+    expect(preview('fillet')!.getAttribute('d')).toBe(displayPath({ id: 'preview', kind: 'arc', role: 'preview', editable: false, ...expected }, view));
+    await key('Enter', field()!); expect(field()).toBeNull(); expect(command).toHaveBeenCalledTimes(1);
+    expect(current.entities.filter(e => !isVirtualSharpHelper(e))).toHaveLength(3); expect(controller.notice).toBeUndefined();
+    expect(current.constraints.filter(c => c.kind === 'tangent')).toHaveLength(2);
+    await undo(); expect(current).toEqual(before); expect(controller.history.canUndo).toBe(false);
   });
 });
 

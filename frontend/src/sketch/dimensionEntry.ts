@@ -1,5 +1,5 @@
 import { parseDecimalInput } from '../design/decimalInput';
-import type { Constraint, Sketch } from './model';
+import type { Constraint, Parameter, Sketch } from './model';
 import type { Command } from './commands';
 import { applyCommand } from './ops';
 import { formatReference } from './expressions';
@@ -19,8 +19,13 @@ function bracketNames(sketch: Sketch, text: string): string {
 }
 
 /** Validation and live readout share the exact command used on submission. No preview is persisted. */
-export function dimensionEntry(sketch: Sketch, dimension: Constraint & { value: number }, text: string):
+export function dimensionEntry(sketch: Sketch, dimension: (Constraint & { value: number }) | Parameter, text: string):
   { command: Command; value: number } | { error: string } {
+  if ('name' in dimension) {
+    const command: Command = { kind: 'setParameter', name: dimension.name, expression: bracketNames(sketch, text.trim()) };
+    const result = applyCommand(sketch, command);
+    return 'error' in result ? result : { command, value: result.sketch.parameters!.find(p => p.name === dimension.name)!.value };
+  }
   const parsed = !text.trim() && dimension.expression ? { kind: 'expression' as const, raw: '' } : parseDecimalInput(text, { allowExpression: true });
   if (parsed.kind === 'error') return { error: parsed.message };
   const command: Command = parsed.kind === 'number'

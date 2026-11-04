@@ -1,5 +1,5 @@
 import { parseDecimalInput } from '../design/decimalInput';
-import type { Constraint, Sketch } from './model';
+import type { Constraint, Parameter, Sketch } from './model';
 import { displayValue, internalValue } from './dimensionValue';
 
 export type Expression = { kind: 'number'; value: number } | { kind: 'ref'; name: string; from: number; to: number }
@@ -92,7 +92,12 @@ export function parseExpression(src: string): { ok: true; ast: Expression } | { 
 function refs(ast: Expression): Extract<Expression, { kind: 'ref' }>[] {
   return ast.kind === 'ref' ? [ast] : ast.kind === 'binary' ? [...refs(ast.left), ...refs(ast.right)] : ast.kind === 'unary' ? refs(ast.arg) : ast.kind === 'call' ? ast.args.flatMap(refs) : [];
 }
-function reference(s: Sketch, name: string): Constraint & { value: number; driving: boolean } {
+type ExpressionOwner = (Constraint & { value: number }) | Parameter;
+const ownerId = (owner: ExpressionOwner): string => 'name' in owner ? owner.name : owner.id;
+const ownerValue = (owner: ExpressionOwner): number => 'name' in owner ? owner.value : displayValue(owner);
+function reference(s: Sketch, name: string): ExpressionOwner {
+  const parameter = s.parameters?.find(p => p.name === name);
+  if (parameter) return parameter;
   const byId = s.constraints.find(c => 'value' in c && c.id === name);
   const matches = byId ? [byId] : s.constraints.filter(c => 'value' in c && c.label?.trim() === name);
   if (matches.length !== 1) throw new Error(`${matches.length ? 'Ambiguous' : 'Unknown'} dimension reference "${name}". Use a unique dimension name or ID.`);
@@ -101,37 +106,45 @@ function reference(s: Sketch, name: string): Constraint & { value: number; drivi
   return c;
 }
 export function expressionDependencies(s: Sketch, id: string): string[] {
-  const expression = s.constraints.find(c => c.id === id)?.expression;
+  const expression = s.parameters?.find(p => p.name === id)?.expression ?? s.constraints.find(c => c.id === id)?.expression;
   if (!expression) return [];
   const parsed = parseExpression(expression); if (!parsed.ok) throw new Error(parsed.error);
-  return [...new Set(refs(parsed.ast).map(r => reference(s, r.name).id))];
+  return [...new Set(refs(parsed.ast).map(r => ownerId(reference(s, r.name))))];
 }
 /** Invalid imported rows remain repairable; they cannot supply a resolved dependency list. */
 export function expressionDependents(s: Sketch, id: string): string[] {
-  return s.constraints.filter(c => {
-    try { return c.expression && expressionDependencies(s, c.id).includes(id); }
+  return [...s.constraints, ...(s.parameters ?? [])].filter(c => {
+    try { return c.expression && expressionDependencies(s, 'name' in c ? c.name : c.id).includes(id); }
     catch { return false; }
-  }).map(c => c.id);
+  }).map(c => 'name' in c ? c.name : c.id);
 }
 /** The only owner of reference syntax, including labels the grammar cannot encode. */
 export function formatReference(s: Sketch, id: string): string {
+  if (s.parameters?.some(p => p.name === id)) return id === 'pi' ? '[pi]' : id;
   const label = s.constraints.find(c => c.id === id)?.label?.trim();
-  const name = label && !label.includes(']') && !s.constraints.some(c => 'value' in c && c.id !== id && (c.id === label || c.label?.trim() === label)) ? label : id;
+  const name = label && !label.includes(']') && !s.parameters?.some(p => p.name === label) && !s.constraints.some(c => 'value' in c && c.id !== id && (c.id === label || c.label?.trim() === label)) ? label : id;
   return /^[A-Za-z_][A-Za-z_0-9.]*$/.test(name) && name !== 'pi' ? name : `[${name}]`;
 }
 function rewriteReferences(s: Sketch, id: string, replace: (ref: Extract<Expression, { kind: 'ref' }>, text: string, source: string) => string | { from: number; to: number; text: string }): Sketch {
-  return { ...s, constraints: s.constraints.map(c => {
+  function rewrite<T extends { expression?: string }>(c: T): T {
     if (!c.expression) return c;
     const parsed = parseExpression(c.expression); if (!parsed.ok) throw new Error(parsed.error);
     let expression = c.expression;
-    for (const r of refs(parsed.ast).filter(r => reference(s, r.name).id === id).reverse()) {
+    for (const r of refs(parsed.ast).filter(r => ownerId(reference(s, r.name)) === id).reverse()) {
       const replacement = replace(r, expression.slice(r.from, r.to), expression);
       const edit = typeof replacement === 'string' ? { from: r.from, to: r.to, text: replacement } : replacement;
       expression = expression.slice(0, edit.from) + edit.text + expression.slice(edit.to);
     }
     return expression === c.expression ? c : { ...c, expression };
-  }) };
+  }
+  return { ...s, constraints: s.constraints.map(rewrite), ...(s.parameters?.length ? { parameters: s.parameters.map(rewrite) } : {}) };
 }
+export function renameParameterReferences(s: Sketch, from: string, to: string): Sketch {
+  const renamed = { ...s, parameters: s.parameters?.map(p => p.name === from ? { ...p, name: to } : p) };
+  const rewritten = rewriteReferences(s, from, () => formatReference(renamed, to));
+  return { ...rewritten, parameters: rewritten.parameters?.map(p => p.name === from ? { ...p, name: to } : p) };
+}
+
 export function renameExpressionReferences(s: Sketch, id: string, name: string): Sketch {
   const renamed = { ...s, constraints: s.constraints.map(c => c.id === id ? { ...c, label: name } : c) };
   return rewriteReferences(s, id, (ref, text) => ref.name === id ? text : formatReference(renamed, id));
@@ -149,38 +162,52 @@ export function rescaleDiameterExpressions(s: Sketch, id: string, diameter: bool
 }
 /** Preserve the last stored value when topology or consumer cleanup deletes an input dimension. */
 export function freezeRemovedExpressionReferences(before: Sketch, after: Sketch): Sketch {
-  const deleted = new Set(before.constraints.filter(c => !after.constraints.some(n => n.id === c.id)).map(c => c.id));
+  const deleted = new Set(before.constraints.filter(c => 'value' in c && !after.constraints.some(n => n.id === c.id)).map(c => c.id));
   if (!deleted.size) return after;
-  return { ...after, constraints: after.constraints.map(c => {
+  let frozen: Sketch = { ...before, parameters: after.parameters };
+  for (const id of deleted) {
+    const dimension = before.constraints.find(c => c.id === id)!;
+    if ('value' in dimension) frozen = rewriteReferences(frozen, id, () => `(${displayValue(dimension)})`);
+  }
+  return { ...after, ...(after.parameters?.length ? { parameters: frozen.parameters } : {}), constraints: after.constraints.map(c => {
     const old = before.constraints.find(old => old.id === c.id);
     if (!c.expression || !old?.expression || !expressionDependencies(before, c.id).some(id => deleted.has(id))) return c;
     const { expression: _expression, ...base } = c; return base;
   }) };
 }
 export function resolveExpressions(sketch: Sketch): { sketch: Sketch; changed: string[]; errors: { id: string; message: string }[] } {
-  const changed: string[] = [], errors: { id: string; message: string }[] = [], done = new Map<string, Constraint & { value: number }>(), stack: string[] = [];
-  function evaluate(ast: Expression): number {
+  const changed: string[] = [], errors: { id: string; message: string }[] = [], done = new Map<string, ExpressionOwner>(), stack: string[] = [];
+  function evaluate(ast: Expression, unit: Parameter['unit']): number {
     if (ast.kind === 'number') return ast.value;
-    if (ast.kind === 'ref') return displayValue(visit(reference(sketch, ast.name)));
-    if (ast.kind === 'unary') return -evaluate(ast.arg);
-    if (ast.kind === 'call') return functions[ast.name].run(...ast.args.map(evaluate));
-    const a = evaluate(ast.left), b = evaluate(ast.right);
+    if (ast.kind === 'ref') {
+      const input = reference(sketch, ast.name);
+      if ('name' in input && input.unit !== 'none' && unit !== 'none' && input.unit !== unit)
+        throw new Error(`Parameter "${input.name}" uses ${input.unit}, but this expression needs ${unit}. Change the parameter unit or reference a parameter with matching units.`);
+      return ownerValue(visit(input));
+    }
+    if (ast.kind === 'unary') return -evaluate(ast.arg, unit);
+    if (ast.kind === 'call') {
+      const inputUnit = ['sin', 'cos', 'tan'].includes(ast.name) ? 'deg' : ['asin', 'acos', 'atan'].includes(ast.name) ? 'none' : unit;
+      return functions[ast.name].run(...ast.args.map(arg => evaluate(arg, inputUnit)));
+    }
+    const a = evaluate(ast.left, unit), b = evaluate(ast.right, unit);
     switch (ast.op) { case '+': return a + b; case '-': return a - b; case '*': return a * b; case '/': return a / b; default: return a ** b; }
   }
-  function visit(c: Constraint & { value: number }): Constraint & { value: number } {
-    const cached = done.get(c.id); if (cached) return cached;
-    if (stack.includes(c.id)) throw new Error(`Expression cycle: ${[...stack.slice(stack.indexOf(c.id)), c.id].map(id => sketch.constraints.find(c => c.id === id)?.label || id).join(' → ')}. Remove a cyclic reference.`);
-    stack.push(c.id); let next = c;
+  function visit(c: ExpressionOwner): ExpressionOwner {
+    const id = ownerId(c), cached = done.get(id); if (cached) return cached;
+    if (stack.includes(id)) throw new Error(`Expression cycle: ${[...stack.slice(stack.indexOf(id)), id].map(id => sketch.constraints.find(c => c.id === id)?.label || id).join(' → ')}. Remove a cyclic reference.`);
+    stack.push(id); let next = c;
     try {
       if (c.expression) {
         const parsed = parseExpression(c.expression); if (!parsed.ok) throw new Error(parsed.error);
-        const value = internalValue(c, evaluate(parsed.ast));
-        if (!Number.isFinite(value) || ['radius', 'distance', 'pointLineDistance'].includes(c.kind) && value < 0) throw new Error('Expression gives an invalid dimension value. Enter a finite value in its allowed range.');
-        if (value !== c.value) { changed.push(c.id); next = { ...c, value }; }
+        const value = 'name' in c ? evaluate(parsed.ast, c.unit) : internalValue(c, evaluate(parsed.ast, c.kind === 'angle' ? 'deg' : 'mm'));
+        if (!Number.isFinite(value) || !('name' in c) && ['radius', 'distance', 'pointLineDistance'].includes(c.kind) && value < 0) throw new Error(`Expression gives an invalid ${'name' in c ? 'parameter' : 'dimension'} value. Enter a finite value in its allowed range.`);
+        if (value !== c.value) { changed.push(id); next = { ...c, value }; }
       }
-      done.set(c.id, next); return next;
+      done.set(id, next); return next;
     } finally { stack.pop(); }
   }
-  for (const c of sketch.constraints) if ('value' in c && c.expression) try { visit(c); } catch (e) { errors.push({ id: c.id, message: (e as Error).message }); }
-  return { sketch: { ...sketch, constraints: sketch.constraints.map(c => done.get(c.id) ?? c) }, changed: [...new Set(changed)], errors };
+  for (const c of [...sketch.constraints, ...(sketch.parameters ?? [])]) if ('value' in c && c.expression) try { visit(c); } catch (e) { errors.push({ id: ownerId(c), message: (e as Error).message }); }
+  return { sketch: { ...sketch, constraints: sketch.constraints.map(c => 'value' in c ? done.get(c.id) as Constraint ?? c : c),
+    ...(sketch.parameters?.length ? { parameters: sketch.parameters.map(p => done.get(p.name) as Parameter ?? p) } : {}) }, changed: [...new Set(changed)], errors };
 }

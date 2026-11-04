@@ -1,10 +1,12 @@
+import { virtualSharpConstraintIds } from './virtualSharp';
 import { constraintName } from './displayName';
 import { expressionDependencies } from './expressions';
 import type { Sketch } from './model';
 
 /** One notice builder, used at the command boundary and by consumer controllers. */
 export function commandNotice(before: Sketch, after: Sketch, action: string): string | undefined {
-  const removed = before.constraints.filter(c => !after.constraints.some(n => n.id === c.id));
+  const internal = virtualSharpConstraintIds(before);
+  const removed = before.constraints.filter(c => !internal.has(c.id) && !after.constraints.some(n => n.id === c.id));
   const notices: string[] = [];
   const names: Record<string, string> = { fillet: 'Fillet', trim: 'Trim', extend: 'Extend', splitAt: 'Split',
     deleteEntity: 'Delete', deletePoint: 'Delete', removeConstraint: 'Delete' };
@@ -16,7 +18,7 @@ export function commandNotice(before: Sketch, after: Sketch, action: string): st
     notices.push(`${name} removed ${counts}: ${removed.map(constraintName).join(', ')}.`);
   }
   for (const c of before.constraints) if (removed.length && c.expression && after.constraints.some(n => n.id === c.id && !n.expression)) {
-    const deleted = expressionDependencies(before, c.id).filter(id => !after.constraints.some(n => n.id === id));
+    const deleted = expressionDependencies(before, c.id).filter(id => removed.some(n => 'value' in n && n.id === id));
     if (deleted.length) notices.push(`${name} kept ${constraintName(c)} at its last value because ${deleted.map(id => constraintName(before.constraints.find(c => c.id === id)!)).join(', ')} ${deleted.length === 1 ? 'was' : 'were'} removed; its expression was cleared.`);
   }
   if (action === 'setConstraintLabel') {

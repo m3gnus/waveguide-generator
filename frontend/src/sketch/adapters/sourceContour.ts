@@ -16,6 +16,7 @@ import type { Authoring } from '../controller';
 import type { DomainAdapter } from '../workspace/types';
 import { sketchSolver } from '../workspace/sketchSolver';
 import { SelectionProperties } from '../SelectionProperties';
+import { pruneVirtualSharps } from '../virtualSharp';
 import { sketchGeometry } from '../sketchGeometry';
 import { geometryCandidates, rankedGeometryHits } from '../geometryHit';
 import { dragPointIds, marqueeSelection } from '../tools/select';
@@ -401,6 +402,7 @@ export function applySourceCommand(sketch: Sketch, meta: SourceMeta, command: Co
     }
     preset = { ...preset, dimensions, values };
   }
+  result.removedConstraints.push(...pruneVirtualSharps(result.sketch));
   const weights = { ...meta.weights };
   const parent = command.kind === 'splitAt' || command.kind === 'trim' ? command.entity
     : command.kind === 'fillet' ? sketch.entities.find(e => e.kind === 'line' && [e.p1, e.p2].includes(command.point))?.id : undefined;

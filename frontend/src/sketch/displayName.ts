@@ -37,6 +37,7 @@ export function displayName(sketch: Sketch, id: string): string {
     const kind = entity.kind[0].toUpperCase() + entity.kind.slice(1);
     return `${kind} ${sketch.entities.filter(e => !e.construction && e.kind === entity.kind).findIndex(e => e.id === id) + 1}`;
   }
+  if (!sketch.points.some(p => p.id === id) && sketch.parameters?.some(p => p.name === id)) return id;
   const references = new Set(sketch.entities.filter(e => e.reference).flatMap(e => e.kind === 'line' ? [e.p1, e.p2] : []));
   return `Point ${sketch.points.filter(p => !references.has(p.id)).findIndex(p => p.id === id) + 1}`;
 }

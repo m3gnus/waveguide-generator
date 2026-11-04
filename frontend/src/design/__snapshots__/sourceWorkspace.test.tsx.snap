@@ -1198,31 +1198,33 @@ exports[`W0 workspace DOM at 77c641c8 > HF contour 1`] = `
 <title>Land (land)</title>
 </path>
 </g>
+<g class="sketch-virtual-sharp-extensions" aria-hidden="true">
+</g>
 <g class="sketch-handle">
 <circle data-id="pole" cx="32" cy="101.45454545454547" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="pole" cx="32" cy="101.45454545454547" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point under   ">
+<circle data-id="pole" cx="32" cy="101.45454545454547" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point  under   ">
 <title>pole: 0, 3 mm</title>
 </circle>
 </g>
 <g class="sketch-handle">
 <circle data-id="dome.rim" cx="450.90909090909093" cy="258.54545454545456" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="dome.rim" cx="450.90909090909093" cy="258.54545454545456" r="4" tabindex="-1" role="button" aria-label="Select point Dome edge" class="sketch-point under   ">
+<circle data-id="dome.rim" cx="450.90909090909093" cy="258.54545454545456" r="4" tabindex="-1" role="button" aria-label="Select point Dome edge" class="sketch-point  under   ">
 <title>dome.rim: 8, 0 mm</title>
 </circle>
 </g>
 <g class="sketch-handle">
 <circle data-id="surround.rim" cx="555.6363636363636" cy="258.54545454545456" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="surround.rim" cx="555.6363636363636" cy="258.54545454545456" r="4" tabindex="-1" role="button" aria-label="Select point Surround edge" class="sketch-point under   ">
+<circle data-id="surround.rim" cx="555.6363636363636" cy="258.54545454545456" r="4" tabindex="-1" role="button" aria-label="Select point Surround edge" class="sketch-point  under   ">
 <title>surround.rim: 10, 0 mm</title>
 </circle>
 </g>
 <g class="sketch-handle">
 <circle data-id="rim" cx="608" cy="258.54545454545456" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="rim" cx="608" cy="258.54545454545456" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point determined   ">
+<circle data-id="rim" cx="608" cy="258.54545454545456" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point  determined   ">
 <title>rim: 11, 0 mm</title>
 </circle>
 </g>
@@ -1636,17 +1638,19 @@ exports[`W0 workspace DOM at 77c641c8 > conflict state 1`] = `
 <title>Piston (piston)</title>
 </path>
 </g>
+<g class="sketch-virtual-sharp-extensions" aria-hidden="true">
+</g>
 <g class="sketch-handle">
 <circle data-id="pole" cx="80" cy="193.375" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="pole" cx="80" cy="193.375" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point conflicting  selected ">
+<circle data-id="pole" cx="80" cy="193.375" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point  conflicting  selected ">
 <title>pole: 0, 0 mm</title>
 </circle>
 </g>
 <g class="sketch-handle">
 <circle data-id="rim" cx="486" cy="193.375" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="rim" cx="486" cy="193.375" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point conflicting  selected ">
+<circle data-id="rim" cx="486" cy="193.375" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point  conflicting  selected ">
 <title>rim: 8, 0 mm</title>
 </circle>
 </g>
@@ -2154,17 +2158,19 @@ exports[`W0 workspace DOM at 77c641c8 > dimension editing with the value box ope
 <title>Piston (piston)</title>
 </path>
 </g>
+<g class="sketch-virtual-sharp-extensions" aria-hidden="true">
+</g>
 <g class="sketch-handle">
 <circle data-id="pole" cx="32" cy="200.57142857142858" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="pole" cx="32" cy="200.57142857142858" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point under   ">
+<circle data-id="pole" cx="32" cy="200.57142857142858" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point  under   ">
 <title>pole: 0, 0 mm</title>
 </circle>
 </g>
 <g class="sketch-handle">
 <circle data-id="rim" cx="361.14285714285717" cy="200.57142857142858" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="rim" cx="361.14285714285717" cy="200.57142857142858" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point determined   ">
+<circle data-id="rim" cx="361.14285714285717" cy="200.57142857142858" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point  determined   ">
 <title>rim: 8, 0 mm</title>
 </circle>
 </g>
@@ -2685,38 +2691,40 @@ exports[`W0 workspace DOM at 77c641c8 > woofer with aperture context 1`] = `
 <title>Land (land)</title>
 </path>
 </g>
+<g class="sketch-virtual-sharp-extensions" aria-hidden="true">
+</g>
 <g class="sketch-handle">
 <circle data-id="pole" cx="32" cy="200.57142857142856" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="pole" cx="32" cy="200.57142857142856" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point under   ">
+<circle data-id="pole" cx="32" cy="200.57142857142856" r="4" tabindex="-1" role="button" aria-label="Select point Pole" class="sketch-point  under   ">
 <title>pole: 0, -2 mm</title>
 </circle>
 </g>
 <g class="sketch-handle">
 <circle data-id="cap.rim" cx="155.42857142857144" cy="282.8571428571429" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="cap.rim" cx="155.42857142857144" cy="282.8571428571429" r="4" tabindex="-1" role="button" aria-label="Select point Dust-cap edge" class="sketch-point under   ">
+<circle data-id="cap.rim" cx="155.42857142857144" cy="282.8571428571429" r="4" tabindex="-1" role="button" aria-label="Select point Dust-cap edge" class="sketch-point  under   ">
 <title>cap.rim: 3, -4 mm</title>
 </circle>
 </g>
 <g class="sketch-handle">
 <circle data-id="cone.rim" cx="443.42857142857144" cy="118.28571428571428" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="cone.rim" cx="443.42857142857144" cy="118.28571428571428" r="4" tabindex="-1" role="button" aria-label="Select point Cone edge" class="sketch-point under   ">
+<circle data-id="cone.rim" cx="443.42857142857144" cy="118.28571428571428" r="4" tabindex="-1" role="button" aria-label="Select point Cone edge" class="sketch-point  under   ">
 <title>cone.rim: 10, 0 mm</title>
 </circle>
 </g>
 <g class="sketch-handle">
 <circle data-id="surround.rim" cx="525.7142857142858" cy="118.28571428571428" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="surround.rim" cx="525.7142857142858" cy="118.28571428571428" r="4" tabindex="-1" role="button" aria-label="Select point Surround edge" class="sketch-point under   ">
+<circle data-id="surround.rim" cx="525.7142857142858" cy="118.28571428571428" r="4" tabindex="-1" role="button" aria-label="Select point Surround edge" class="sketch-point  under   ">
 <title>surround.rim: 12, 0 mm</title>
 </circle>
 </g>
 <g class="sketch-handle">
 <circle data-id="rim" cx="566.8571428571429" cy="118.28571428571428" r="10" class="sketch-point-hit">
 </circle>
-<circle data-id="rim" cx="566.8571428571429" cy="118.28571428571428" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point under   ">
+<circle data-id="rim" cx="566.8571428571429" cy="118.28571428571428" r="4" tabindex="-1" role="button" aria-label="Select point Rim" class="sketch-point  under   ">
 <title>rim: 13, 0 mm</title>
 </circle>
 </g>

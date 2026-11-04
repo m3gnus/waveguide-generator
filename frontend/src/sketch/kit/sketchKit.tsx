@@ -1,3 +1,6 @@
+import { VirtualSharpExtensions } from './VirtualSharp';
+import { virtualSharpConstraintIds, virtualSharpPointIds } from '../virtualSharp';
+import { ParametersPanel } from './ParametersPanel';
 import { SelectOther, useSelectOther } from './SelectOther';
 import { selectLabels } from '../tools/selectLabels';
 import { DimensionExpressionField } from './DimensionExpressionField';
@@ -145,6 +148,7 @@ export function SketchKit({ presentation, slots, workflow, scaleToFit, context, 
   const highlighted = new Set([...(constraintState?.ids ?? []), ...selection, ...constraintSelection, ...(showConflict ? conflictConstraints.flatMap(constraintRefs) : [])]);
   const conflictRefs = new Set([...sketch.constraints.filter(c => diagnosis?.constraintStates[c.id] === 'conflicting'), ...conflictConstraints].flatMap(c => constraintRefs(c).flatMap(id => [id, ...entityPoints(sketch.entities.find(e => e.id === id) ?? { kind: 'circle', id: '' })])));
   const color = (ids: string[]) => ids.some(id => conflictRefs.has(id)) ? 'conflicting' : ids.every(id => determined(id) === true) ? 'determined' : ids.some(id => determined(id) === undefined) ? 'not-analysed' : 'under';
+  const virtualSharps = useMemo(() => ({ points: virtualSharpPointIds(sketch), constraints: virtualSharpConstraintIds(sketch) }), [sketch]);
   const { arcs, endpoints, hiddenCentres, helperPoints, drawingSnapHidden, visiblePoints } = sketchGeometry(sketch, references, selection, selectHover, hoveredPoint, hoveredArc,
     tool === 'constraint' && constraintState ? id => acceptsConstraintPick(sketch, constraintState, id) : undefined);
   const validStarts = new Set(drawing && tool !== 'line' ? visiblePoints.filter(p => {
@@ -569,7 +573,7 @@ export function SketchKit({ presentation, slots, workflow, scaleToFit, context, 
     const related = new Set([c.id, ...constraintRefs(c).flatMap(id => [id, ...entityPoints(sketch.entities.find(e => e.id === id) ?? { kind: 'circle', id: '' })])]);
     const problem = diagnosis?.constraintStates[c.id] === 'conflicting' || conflicts.includes(c.id) || problems.some(p => p.ids.some(id => related.has(id)));
     const active = selection.includes(c.id) || hoveredConstraint === c.id || selectHover === c.id;
-    return { problem, active, visible: ('value' in c ? viewOptions.dimensions : viewOptions.constraints) || problem || active };
+    return { problem, active, visible: !virtualSharps.constraints.has(c.id) && (('value' in c ? viewOptions.dimensions : viewOptions.constraints) || problem || active) };
   };
   const renderedDimensionLabel = (c: Constraint & { value: number; driving: boolean }) => dimensionLabel(c, (viewOptions.names || constraintVisibility(c).active) && c.label?.trim() ? 'name' : 'value');
   // Reserve full names so hovering/selecting a label never changes its automatic lane.
@@ -684,7 +688,14 @@ export function SketchKit({ presentation, slots, workflow, scaleToFit, context, 
       open={viewOptions.inspectorOpen} onOpenChange={open => setViewOptions(previous => {
         if (previous.inspectorOpen === open) return previous;
         const next = { ...previous, inspectorOpen: open }; saveSketchView(next); return next;
-      })} onHover={setHoveredConstraint} onSelect={setSelection} command={command => run(() => session!.command(command))}/></>}
+      })} onHover={setHoveredConstraint} onSelect={setSelection} command={command => run(() => session!.command(command))}/>
+      <ParametersPanel sketch={sketch} enabled={!!session} pending={pending} command={async command => {
+        let failure: unknown;
+        await run(async () => {
+          try { await session!.command(command); } catch (reason) { failure = reason; throw reason; }
+        });
+        if (failure) throw failure;
+      }}/></>}
     overlays={<>
       {selectOther.menu && <SelectOther key={selectOther.menu.ids.join(',') + selectOther.menu.at.x + ':' + selectOther.menu.at.y} {...selectOther.menu} sketch={sketch} nameFor={nameFor} container={svg.current?.closest('[role="dialog"]') ?? document.body}
         onHover={selectOther.setHover} onClose={() => { selectOther.close(); svg.current?.focus({ preventScroll: true }); }}
@@ -761,8 +772,9 @@ export function SketchKit({ presentation, slots, workflow, scaleToFit, context, 
           const entityName = nameFor?.(e.id) ?? displayName(sketch, e.id);
           return <g key={e.id} className="sketch-curve"><path data-id={e.id} d={d} className="sketch-curve-hit"/>{issues.length > 0 && <path d={d} className={`sketch-problem ${workflow?.state === 'unfinished' ? 'unfinished' : ''}`} />}<path data-id={e.id} d={d} tabIndex={-1} role="button" aria-label={`Select ${e.kind} ${nameFor?.(e.id) ?? e.id}`} style={entityStyle?.(e)} className={`sketch-entity ${entityClassName?.(e) ?? ''} ${status} ${(tool === 'constraint' ? constraintHover : tool === 'dimension' ? dimensionHover : selectHover) === e.id ? 'hovered' : ''} ${e.construction ? 'construction' : ''} ${highlighted.has(e.id) || ids.some(id => highlighted.has(id)) ? 'selected' : ''}`}><title>{entityName} ({e.id}){issues.length > 0 ? ` · ${issues.map(p => p.message).join('\n')}` : ''}</title></path>{labelAt && <text data-id={e.id} x={labelAt.x} y={labelAt.y - 10} textAnchor="middle" className="sketch-curve-name sketch-glyph" aria-hidden="true">{entityName}</text>}</g>;
         }}/>
+        <VirtualSharpExtensions sketch={sketch} view={view}/>
         {visiblePoints.map(p => { const at = xy(p.id), centre = !endpoints.has(p.id) && arcs.some(e => e.center === p.id);
-          const className = `sketch-point ${color([p.id])} ${(tool === 'constraint' ? constraintHover : tool === 'dimension' ? dimensionHover : selectHover) === p.id ? 'hovered' : ''} ${highlighted.has(p.id) ? 'selected' : ''} ${validStarts.has(p.id) ? 'valid-start' : ''}`;
+          const className = `sketch-point ${virtualSharps.points.has(p.id) ? 'virtual-sharp' : ''} ${color([p.id])} ${(tool === 'constraint' ? constraintHover : tool === 'dimension' ? dimensionHover : selectHover) === p.id ? 'hovered' : ''} ${highlighted.has(p.id) ? 'selected' : ''} ${validStarts.has(p.id) ? 'valid-start' : ''}`;
           return <WorkspacePoint key={p.id} id={p.id} at={at} glyph={centre ? 'centre' : 'dot'} className={className}
             validStart={validStarts.has(p.id)} label={`Select point ${nameFor?.(p.id) ?? p.id}`}
             title={centre ? <>{p.id}: {p.x}, {p.y} mm</> : <>{p.id}: {p.x}, {p.y} mm{problems.filter(v => v.ids.includes(p.id)).map(v => ` · ${v.message}`)}</>}/>; })}

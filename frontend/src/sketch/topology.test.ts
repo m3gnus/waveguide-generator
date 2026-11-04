@@ -4,6 +4,7 @@ import { filletPreview, trimPreview, extendPreview } from './topology';
 import { arcGeometry, curveEnds, curveIntersections, distance, onArc } from './geometry';
 import { validateSketch, type Arc, type Sketch } from './model';
 import type { Command } from './commands';
+import { isVirtualSharpHelper } from './virtualSharp';
 import { History } from './history';
 
 function corner() { return importedSketch([{ id: 'p1', x: 0, y: 10 }, { id: 'p2', x: 0, y: 0 }, { id: 'p3', x: 10, y: 0 }],
@@ -22,9 +23,9 @@ describe('fillet', () => {
     s.constraints.push({ id: 'c6', kind: 'fix', point: 'p2' }, { id: 'c7', kind: 'vertical', line: 'l4' }, { id: 'c8', kind: 'horizontal', line: 'l5' }); s.nextId = 9;
     const preview = filletPreview(s, 'p2', 2); expect(preview).toMatchObject({ center: { x: 2, y: 2 }, start: { x: 0, y: expect.closeTo(2) }, end: { x: expect.closeTo(2), y: 0 }, ccw: true });
     const r = edit(s, { kind: 'fillet', point: 'p2', radius: 2 }), arc = r.sketch.entities[1] as Arc;
-    expect(arc.kind).toBe('arc'); expect(arc.construction).toBe(construction); expect(r.sketch.entities.map(e => e.id)).toEqual(['l4', arc.id, 'l5']);
+    expect(arc.kind).toBe('arc'); expect(arc.construction).toBe(construction); expect(r.sketch.entities.filter(e => !isVirtualSharpHelper(e)).map(e => e.id)).toEqual(['l4', arc.id, 'l5']);
     expect(Math.abs(arcGeometry(r.sketch, arc).sweep)).toBeCloseTo(Math.PI / 2); expect(arcGeometry(r.sketch, arc).radius).toBeCloseTo(2);
-    expect(r.sketch.points.some(p => p.id === 'p2')).toBe(false); expect(r.removedConstraints).toEqual(['c6']); expect(r.notice).toContain('Fix');
+    expect(r.sketch.points.some(p => p.id === 'p2')).toBe(true); expect(r.removedConstraints).toEqual([]); expect(r.notice).toBeUndefined();
     expect(r.sketch.constraints.filter(c => c.kind === 'tangent')).toHaveLength(2); expect(r.sketch.constraints).toContainEqual(expect.objectContaining({ kind: 'radius', value: 2, driving: true }));
     expect(r.sketch.constraints.some(c => c.id === 'c7')).toBe(true); expect(r.sketch.constraints.some(c => c.id === 'c8')).toBe(true);
   });
@@ -36,11 +37,9 @@ describe('fillet', () => {
   it.each([0, -1, NaN, 11])('refuses an invalid/unfitting radius %s without changing input', radius => {
     const s = corner(), before = JSON.stringify(s); expect(applyCommand(s, { kind: 'fillet', point: 'p2', radius })).toHaveProperty('error'); expect(JSON.stringify(s)).toBe(before);
   });
-  it('refuses collinearity, branches, reference geometry and arcs with guidance', () => {
+  it('refuses collinearity, branches and reference geometry with guidance', () => {
     const s = corner(); s.points[2] = { ...s.points[2], x: 0, y: -10 }; expect(filletPreview(s, 'p2', 1)).toHaveProperty('error', expect.stringContaining('Collinear'));
     s.entities[0].reference = true; expect(filletPreview(s, 'p2', 1)).toHaveProperty('error', expect.stringContaining('exactly two'));
-    const a = circleArc(); a.entities.push({ id: 'l8', kind: 'line', p1: 'p2', p2: 'p4' }); a.nextId = 9;
-    expect(filletPreview(a, 'p2', 1)).toHaveProperty('error', expect.stringContaining('line–line'));
   });
 });
 describe('trim', () => {

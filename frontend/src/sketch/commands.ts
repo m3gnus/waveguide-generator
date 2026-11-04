@@ -1,9 +1,13 @@
-import type { DimensionPlacement, JSONValue, NewConstraint } from './model';
+import type { DimensionPlacement, JSONValue, NewConstraint, Parameter } from './model';
 import type { SnapResult } from './snap';
 import type { SketchContext } from './context';
 
 export type PointRef = string | { x: number; y: number; snap?: SnapResult | null };
 export type Command =
+  | { kind: 'addParameter'; name: string; expression: string; unit: Parameter['unit'] }
+  | { kind: 'setParameter'; name: string; expression: string; unit?: Parameter['unit'] }
+  | { kind: 'renameParameter'; from: string; to: string }
+  | { kind: 'removeParameter'; name: string }
   | { kind: 'addPoint'; x: number; y: number }
   | { kind: 'addLine'; from: PointRef; to: PointRef }
   | { kind: 'addTangentArc'; from: string; to: PointRef }

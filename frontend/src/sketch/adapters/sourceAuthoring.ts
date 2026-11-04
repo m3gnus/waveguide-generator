@@ -1,6 +1,6 @@
 import type { SourceDocument } from '../../api/sourceEditor';
 import type { Authoring } from '../controller';
-import { parseSketch } from '../model';
+import { parseSketch, serializedSketch } from '../model';
 import { contextData } from '../context';
 import { lower, movingWeights, type SourceMeta } from './sourceContour';
 
@@ -47,5 +47,5 @@ export function parseSourceAuthoring(raw: unknown, document: SourceDocument): Au
 /** Live host context is rebuilt on open; only authored geometry and provenance persist. */
 export function serializeSourceAuthoring(state: Authoring<SourceMeta>, pending = false) {
   const { clearances: _clearances, missingContext: _missing, ...meta } = state.meta;
-  return { version: 'wg-source-authoring-v2', sketch: state.sketch, meta, pending };
+  return { version: 'wg-source-authoring-v2', sketch: serializedSketch(state.sketch), meta, pending };
 }

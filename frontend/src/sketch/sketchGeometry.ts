@@ -1,3 +1,4 @@
+import { virtualSharpPointIds } from './virtualSharp';
 import type { Sketch } from './model';
 import { constraintRefs, entityPoints } from './model';
 import { referencePointIds } from './context';
@@ -12,7 +13,8 @@ export function sketchGeometry(sketch: Sketch, references: Reference[], selectio
   const hiddenCentres = arcs.map(e => e.center).filter(id => !endpoints.has(id) && !selection.includes(id) && hoveredPoint !== id
     && !acceptsPoint?.(id)
     && !arcs.some(e => e.center === id && (selection.includes(e.id) || (hoveredArc === e.id || hoverId === e.id))));
-  const helperPoints = new Set(sketch.entities.filter(internalHelper).flatMap(entityPoints).filter(id => !sketch.entities.some(e => !internalHelper(e) && entityPoints(e).includes(id))));
+  const sharps = virtualSharpPointIds(sketch);
+  const helperPoints = new Set(sketch.entities.filter(internalHelper).flatMap(entityPoints).filter(id => !sharps.has(id) && !sketch.entities.some(e => !internalHelper(e) && entityPoints(e).includes(id))));
   const drawingSnapHidden = [...hiddenCentres.filter(id => !arcs.some(e => e.construction && e.center === id)), ...helperPoints];
   const visiblePoints = sketch.points.filter(p => !fixedPoints.has(p.id) && !hiddenCentres.includes(p.id) && !helperPoints.has(p.id));
   return { arcs, endpoints, hiddenCentres, helperPoints, drawingSnapHidden, visiblePoints };

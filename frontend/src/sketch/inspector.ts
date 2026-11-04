@@ -1,3 +1,4 @@
+import { virtualSharpConstraintIds } from './virtualSharp';
 import { constraintRefs, entityPoints, type Constraint, type Sketch } from './model';
 import { displayName } from './displayName';
 import { displayValue } from './dimensionValue';
@@ -18,7 +19,8 @@ export function inspectConstraints(sketch: Sketch, diagnosis?: Pick<SolveResult,
     if (selection!.includes(e.id)) entityPoints(e).forEach(id => selected.add(id));
     if (entityPoints(e).some(id => selection!.includes(id))) selected.add(e.id);
   }
-  return sketch.constraints.filter(c => !selected || selected.has(c.id) || constraintRefs(c).some(id => selected.has(id)))
+  const internal = virtualSharpConstraintIds(sketch);
+  return sketch.constraints.filter(c => !internal.has(c.id) && (!selected || selected.has(c.id) || constraintRefs(c).some(id => selected.has(id))))
     .sort((a, b) => Number('value' in b) - Number('value' in a)).map(c => ({
       id: c.id, kind: c.kind, name: displayName(sketch, c.id), refs: constraintRefs(c).map(id => ({ id, name: displayName(sketch, id) })),
       ...('value' in c ? { value: `${c.diameter ? 'Ø' : ''}${formatValue(displayValue(c))}${c.kind === 'angle' ? '°' : ' mm'}`, driving: c.driving } : {}),

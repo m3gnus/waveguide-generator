@@ -1,3 +1,4 @@
+import { virtualSharpEndpoint } from '../virtualSharp';
 import type { Sketch } from '../model';
 import type { SourceMeta } from './sourceContour';
 
@@ -12,7 +13,7 @@ export function presetDimensionActive(sketch: Sketch, meta: SourceMeta, paramete
   const rim = `${preset.shape}.rim`;
   const patch = (id: string, kind: 'arc' | 'line', start: string, end: string) => {
     const e = sketch.entities.find(e => e.id === id && !e.construction);
-    return e?.kind === kind && (e.kind === 'arc' ? e.start === start && e.end === end : e.kind === 'line' && e.p1 === start && e.p2 === end);
+    return e?.kind === kind && (e.kind === 'arc' ? virtualSharpEndpoint(sketch, e.id, e.start, start) && virtualSharpEndpoint(sketch, e.id, e.end, end) : e.kind === 'line' && virtualSharpEndpoint(sketch, e.id, e.p1, start) && virtualSharpEndpoint(sketch, e.id, e.p2, end));
   };
   const dimension = (kind: 'distanceX' | 'distanceY', a: string, b: string) => c.kind === kind && c.a === a && c.b === b;
   const surroundKind = (preset.values ? preset.values.surround_depth_mm : preset.dimensions.surround_depth_mm) ? 'arc' : 'line';
@@ -31,7 +32,7 @@ export function presetDimensionActive(sketch: Sketch, meta: SourceMeta, paramete
       if (!surround() || e?.kind !== 'arc' || c.kind !== 'distanceY' || c.a !== rim) return false;
       return sketch.entities.some(helper => helper.kind === 'arc' && helper.construction
         && helper.data && typeof helper.data === 'object' && !Array.isArray(helper.data) && helper.data.dimensionHelper === true
-        && helper.center === e.center && helper.start === e.start && helper.end === c.b)
+        && helper.center === e.center && virtualSharpEndpoint(sketch, e.id, e.start, helper.start) && helper.end === c.b)
         && sketch.constraints.some(v => v.kind === 'vertical' && 'a' in v && v.a === e.center && v.b === c.b);
     }
     case 'land_width_mm': return c.kind === 'distanceX' && [rim, 'surround.rim'].includes(c.a)

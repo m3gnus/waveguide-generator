@@ -1,3 +1,4 @@
+import { isVirtualSharpHelper, virtualSharpPointIds } from './virtualSharp';
 import type { Reference } from './adapter';
 import { entityPoints, type Entity, type Sketch } from './model';
 import { distance, projectToEntity, projectToLine } from './geometry';
@@ -7,7 +8,8 @@ import type { XY } from './solver/types';
 
 /** Points owned by context/helpers and centres hidden by the canvas cannot be picked. */
 export function excludedGeometryPoints(sketch: Sketch, hidden: string[] = [], references: Reference[] = []) {
-  return new Set([...referencePointIds(sketch, references), ...sketch.entities.filter(internalHelper).flatMap(entityPoints), ...hidden]);
+  const sharps = virtualSharpPointIds(sketch);
+  return new Set([...referencePointIds(sketch, references), ...sketch.entities.filter(e => internalHelper(e) && !isVirtualSharpHelper(e)).flatMap(entityPoints).filter(id => !sharps.has(id)), ...hidden]);
 }
 export function geometryCandidates(sketch: Sketch, at: XY, hidden: string[] = [], references: Reference[] = [],
   include: (entity: Entity) => boolean = e => !e.reference) {
