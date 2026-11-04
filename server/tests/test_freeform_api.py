@@ -41,16 +41,31 @@ def post(client, operation, **payload):
     return result
 
 
-@pytest.mark.parametrize('family', ['freeform', 'lookup'])
-def test_legacy_json_translation_and_canonical_text_keep_original_bytes(family):
-    golden = LEGACY[family]
+def test_legacy_freeform_json_translation_and_canonical_text_keep_original_bytes():
+    golden = LEGACY['freeform']
     design = DesignConfig.model_validate_json(golden['json'])
     assert design.model_dump_json(indent=2) + '\n' == golden['json']
     assert json.dumps(design_to_mesher_config(design), separators=(',', ':')) == golden['config']
     assert serialize(design) == golden['text']
-    if family == 'lookup':
-        assert serialize(parse(golden['json'])) == golden['json']
     assert serialize(parse(golden['text'])) == golden['text']
+
+
+@pytest.mark.parametrize('format', ['json', 'text'])
+def test_retired_table_golden_imports_and_saves_as_custom_profile(format):
+    original = deepcopy(LEGACY['lookup'])
+    parsed = parse(original[format])
+    assert parsed.design.formula == 'FREEFORM'
+    assert parsed.migrations
+    saved = serialize(parsed)
+    assert 'Freeform.Shared = 1' in saved
+    assert 'Lookup.Profile' not in saved
+    reopened = parse(saved)
+    assert not reopened.migrations
+    for field in ('profile_h', 'profile_v'):
+        before, after = getattr(parsed.design.root, field), getattr(reopened.design.root, field)
+        assert [point.t.constant_value() for point in after.points] == pytest.approx([point.t.constant_value() for point in before.points])
+        assert [point.r.constant_value() for point in after.points] == pytest.approx([point.r.constant_value() for point in before.points])
+    assert LEGACY['lookup'] == original
 
 
 def test_explicit_default_join_keeps_legacy_translation(design):

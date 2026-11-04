@@ -26,3 +26,6 @@ check exact straight-run reduction, the 64-anchor and 1 mm corner-spacing fit,
 source-cap shape, snapped morph construction, and normal Freeform.* save/reopen.
 The generated-grid comparison is sampled; it does not certify OCC wall distance.
 `dense-curve.json` and `close-corners.json` add generated fit-limit inputs.
+`aspect-section.json` is a saved-input construction case for separate H/V derived
+from one table and non-unit aspect, including scale and normal save/reopen. Like
+the fit-limit inputs, it carries no historical mesh/STEP byte baseline.

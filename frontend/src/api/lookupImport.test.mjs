@@ -73,6 +73,27 @@ it.skipIf(!python)('restores an old autosave before installing editor state', as
   expect(storage.removeItem).not.toHaveBeenCalled();
 }, 20000);
 
+it.skipIf(!python)('opens and roundtrips a non-circular table as separate constructed H/V profiles', async () => {
+  const payload = JSON.parse(readFileSync('../server/tests/data/lookup_oldconfig_corpus/aspect-section.json', 'utf8')).design;
+  const opened = await openDesignText(JSON.stringify(payload), serverFetch);
+  const document = hydrateDesignDocument(opened.design);
+  expect(document.shared_profile).toBe(false);
+  const h = document.profile_h.points.at(-1).r;
+  const v = document.profile_v.points.at(-1).r;
+  expect(h).toBeCloseTo(12.7 + (110 - 12.7) * 1.6, 9);
+  expect(v).toBeCloseTo(110, 9);
+  expect(importNotice(opened).toLowerCase()).not.toContain('aspect');
+  const saved = await serializeDesignDocument(document, 'aspect', serverFetch, undefined, null);
+  expect(saved.text).toContain('Freeform.Shared = 0');
+  const reopened = hydrateDesignDocument((await openDesignText(saved.text, serverFetch)).design);
+  expect(reopened.shared_profile).toBe(false);
+  for (const field of ['profile_h', 'profile_v']) {
+    expect(reopened[field].points).toEqual(document[field].points.map((point) => ({
+      ...point, r: expect.closeTo(point.r, 10),
+    })));
+  }
+}, 60000);
+
 it.skipIf(!python)('opens a converted run snapshot for editing with its notice', async () => {
   const opened = await openDesignText(JSON.stringify(legacy), serverFetch);
   const job = { script_snapshot: { version: 1, design: opened.design }, design_availability: {

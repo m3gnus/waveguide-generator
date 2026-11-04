@@ -1,0 +1,9 @@
+{
+  "design": {
+    "formula": "LOOKUP",
+    "lookup_profile": [[0, 12.7], [30, 28], [90, 65], [160, 110]],
+    "cross_section": {"exponent": 2, "aspect_ratio": 1.6},
+    "scale": 1.5,
+    "mesh": {"wall_thickness": 0}
+  }
+}

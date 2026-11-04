@@ -1,6 +1,7 @@
 """S4 conversion: generated geometry is the judge, without browser fallback."""
 from copy import deepcopy
 import math
+import re
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -137,14 +138,25 @@ def test_freeform_and_schema_refusals_echo_key(client):
         assert expected in str(response.json()['detail'])
 
 
-@pytest.mark.parametrize('error_type',[RuntimeError,ValueError])
-def test_program_faults_are_not_presented_as_user_refusals(client,monkeypatch,error_type):
+@pytest.mark.parametrize('error_name',['RuntimeError', 'ValueError', 'InternalInvariantError', 'chained invariant'])
+def test_program_faults_are_not_presented_as_user_refusals(client,monkeypatch,error_name):
     import server.preview.freeform_conversion as conversion
+    from hornlab_mesher.errors import ConfigError, InternalInvariantError
+    from server.preview.errors import public_error_message
+    error_type = {'RuntimeError': RuntimeError, 'ValueError': ValueError,
+                  'InternalInvariantError': InternalInvariantError, 'chained invariant': ConfigError}[error_name]
     def broken(design):
+        if error_name == 'chained invariant':
+            try:
+                raise InternalInvariantError('deliberate internal fault')
+            except InternalInvariantError as cause:
+                raise ConfigError('deliberate internal fault') from cause
         raise error_type('deliberate internal fault')
     monkeypatch.setattr(conversion,'_sample',broken)
-    with pytest.raises(error_type,match='deliberate internal fault'):
+    with pytest.raises(error_type,match='deliberate internal fault') as raised:
         client.post('/api/design/freeform/convert',json={'design':{'formula':'OSSE'},'content_key':'fault'})
+    if error_name in ('InternalInvariantError', 'chained invariant'):
+        assert public_error_message(raised.value) is None
 
 
 @pytest.mark.parametrize('name',['osse_scale.cfg','osse_no_simtype.cfg','osse_baffle_polars_unstated.cfg'])
@@ -193,19 +205,68 @@ def test_morph_is_baked_with_stations_and_reported_as_approximate():
     assert_honest(result)
 
 
-def test_icw_converts_or_explains_a_fidelity_refusal(client):
-    # The default flat-baffle ICW approaches a vertical mouth; normalized-t
-    # anchor spacing can make the last fractions of a millimetre unfit for
-    # FREEFORM. It must be measured or refused, never reduced to endpoints.
+def test_icw_refines_generated_wall_before_accepting_conversion(client, record_property):
     response = client.post('/api/design/freeform/convert',json={'design':{'formula':'ICW'},'content_key':'icw'})
     assert response.json()['content_key'] == 'icw'
-    if response.status_code == 200:
-        from server.preview.freeform_conversion import ConvertResponse
-        assert_honest(ConvertResponse.model_validate(response.json()))
-    else:
-        assert response.status_code == 422
-        assert '0.5 mm' in response.json()['detail']
-        assert 'Keep the original' in response.json()['detail']
+    assert response.status_code == 200, response.text
+    from server.preview.freeform_conversion import ConvertResponse
+    result = ConvertResponse.model_validate(response.json())
+    maximum = assert_honest(result)
+    assert maximum < .47
+    assert 23 < len(result.design.root.profile_h.points) <= 64
+    assert result.report.method.axial_segments_before >= 4096
+    record_property('max_deviation_mm', maximum)
+    print(f'Default ICW: {maximum:.8f} mm, {len(result.design.root.profile_h.points)} anchors')
+    print('ICW construction:', [feature.message for feature in result.report.features])
+
+
+def test_ath_rear_plane_change_is_measured_and_prevents_match():
+    source = parse('OSSE={\nL=120\na=40\na0=15.5\n}\nABEC.SimType=2\nMesh.WallThickness=5\n').design
+    result = convert_design(source, 'rear')
+    assert result.report.wall.max_deviation_mm <= .01
+    assert result.verdict == 'approximate'
+    rear = next(feature for feature in result.report.features if feature.name == 'Rear construction')
+    assert float(re.search(r'z (-?[\d.]+)', rear.message)[1]) == pytest.approx(-6.33652, abs=1e-4)
+    assert '→ -5 mm' in rear.message
+    assert float(re.search(r'displacement ([\d.]+)', rear.message)[1]) == pytest.approx(1.33652, abs=1e-4)
+
+
+def test_comparison_measures_outer_wall_and_rear_changes_with_unchanged_bore():
+    source = DesignConfig.model_validate({'formula': 'OSSE', 'mesh': {'wall_thickness': 3}})
+    changed = DesignConfig.model_validate({'formula': 'OSSE', 'mesh': {'wall_thickness': 5}})
+    report = compare_generated_designs(source, changed)
+    assert report.wall.max_deviation_mm == 0
+    assert {'Outer wall', 'Rear construction'} <= {feature.name for feature in report.features}
+    assert any('→ -5 mm' in feature.message for feature in report.features)
+
+
+@pytest.mark.parametrize('scale', [1, 1.5])
+def test_ath_natural_log_expression_keeps_value_after_family_change(scale):
+    from server.preview.translate import design_to_mesher_config
+    from server.design.textcfg import serialize
+    from hornlab_mesher.profile_common import eval_param
+    source = parse('OSSE={\nL=120\na=40\na0=15.5\n}\n'
+                   f'Scale={scale}\nSource.Radius=10*log(100)\nSource.Shape=1\n'
+                   'Mesh.WallThickness=0\n').design
+    result = convert_design(source, 'expressions')
+    assert_honest(result)
+    radius = design_to_mesher_config(result.design)['source']['sourceRadius']
+    assert eval_param(radius, 0, 0) == pytest.approx(10*math.log(100))
+    assert result.report.source_cap_angle_after_deg == pytest.approx(result.report.source_cap_angle_before_deg)
+    for design in (result.design, DesignConfig.model_validate(result.design.model_dump(mode='json')),
+                   parse(serialize(result.design)).design):
+        assert design.root.source.radius.constant_value()*scale == pytest.approx(10*math.log(100))
+
+
+@pytest.mark.parametrize('raw', ['log(100+p)', 'Math.log(100+p)', 'log10(100+p)'])
+def test_expression_owner_can_preserve_parameterized_log_meaning_in_another_dialect(raw):
+    from server.design.schema import Expr
+    from hornlab_mesher.profile_common import eval_param
+    original = Expr.model_validate(raw)
+    converted = original.in_dialect('wg-v1')
+    assert converted.constant_value() is None
+    for phi in (0, .5, 1):
+        assert eval_param(converted.execution_text(), phi, 0) == pytest.approx(eval_param(original.execution_text(), phi, 0))
 
 
 def test_extensions_and_slots_are_baked_once_with_real_corners():

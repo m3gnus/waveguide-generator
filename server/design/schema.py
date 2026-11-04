@@ -504,6 +504,17 @@ class Expr(StrictModel):
             return _expression_candidate(self.raw, self.dialect)
         return self.value
 
+    def in_dialect(self, dialect: Literal["ath", "wg-v1"]) -> "Expr":
+        """Re-express executable meaning when a document changes dialect."""
+        if self.raw is None or self.dialect == dialect or not re.search(r"\b(?:log|ln)\s*\(", self.raw):
+            return self
+        # execution_text already resolves the source dialect, including Math.*
+        # and legacy ln. WG spells natural log ln; log10 is unambiguous in both.
+        raw = self.execution_text()
+        if dialect == "wg-v1":
+            raw = re.sub(r"\blog\s*(?=\()", "ln", raw)
+        return Expr.model_validate({"value": self.value, "raw": raw, "dialect": dialect})
+
     def constant_value(self) -> float | None:
         """Return a scalar only when the executable source is actually constant.
 

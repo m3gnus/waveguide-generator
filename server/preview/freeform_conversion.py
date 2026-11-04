@@ -5,7 +5,7 @@ with the mesher. Coordinates and tolerances are finished (scaled) millimetres.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 import math
 from typing import Literal
 
@@ -20,7 +20,7 @@ from server.exports.core import _bare_grid_config, _inner_grid
 from server.preview.translate import _expr, design_to_mesher_config
 
 ANGULAR = 144
-AXIAL = 1024
+AXIAL = 4096
 AZIMUTHS = np.arange(ANGULAR) * 360.0 / ANGULAR
 MATCH_MM = 0.01
 REFUSE_MM = 0.5
@@ -83,6 +83,19 @@ def _number(value: Expr | None, default: float = 0) -> float:
 def _at(value: Expr | None, phi: float) -> float:
     from hornlab_mesher.profile_common import eval_param
     return float(eval_param(_expr(value), phi, 0))
+
+
+def _expression_payload(value, transform):
+    """Visit typed expressions only; unknown text/extension blocks stay text."""
+    if isinstance(value, Expr):
+        return transform(value)
+    if isinstance(value, StrictModel):
+        return {key: _expression_payload(getattr(value, key), transform) for key in value.model_dump(mode='json')}
+    if isinstance(value, dict):
+        return {key: _expression_payload(child, transform) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_expression_payload(child, transform) for child in value]
+    return value
 
 
 def _active_morph(design: DesignConfig) -> bool:
@@ -227,7 +240,7 @@ def _radial_difference(left: np.ndarray, right: np.ndarray, *, align_disjoint: b
 def compare_generated_designs(
     before: DesignConfig, after: DesignConfig, *, features: list[FeatureChange] | None = None,
     before_points: np.ndarray | None = None, after_points: np.ndarray | None = None,
-    align_disjoint: bool = False,
+    align_disjoint: bool = False, include_construction: bool = True,
 ) -> GeneratedComparison:
     """Compare any two buildable ring-grid families using the export owner.
 
@@ -255,17 +268,90 @@ def compare_generated_designs(
                             z_mm=float(a[peak, -1, 0]), sample_count=ANGULAR),
         axial_extent_deviation_mm=float(extent),
         source_cap_angle_before_deg=_cap_angle(before, first), source_cap_angle_after_deg=_cap_angle(after, second),
-        features=_feature_changes(before, after) if features is None else features, method=GeneratedComparisonMethod(
+        features=[*(_feature_changes(before, after) if features is None else features),
+                  *(_construction_changes(before, after) if include_construction else [])], method=GeneratedComparisonMethod(
             angular_samples=ANGULAR, angular_samples_before=first.shape[0], angular_samples_after=second.shape[0],
             axial_segments_before=first.shape[1] - 1, axial_segments_after=second.shape[1] - 1,
             azimuths_deg=AZIMUTHS.tolist(), grid='Full 360° domain at 2.5°; union of both generated z grids and 2049 uniform overlap samples per meridian; polar-linear interpolation of exported rings.',
             limits=['Sampled estimate, not a bound between angular or axial samples and not a mesh/STEP surface-distance certificate.',
-                    'The bare inner grid excludes the outer wall, enclosure, baffle, rear body and source surface; source-cap opening angle is checked separately.',
-                    'Active morphs, explicit axial maps and ATH lips retain the authored axial count to preserve snapping and construction; other profiles use 1024 axial segments.',
+                    'Rear boundaries and outer walls are checked separately on the resolved construction grids and reported as feature changes; enclosure, baffle and source surface distances are not certified. Source-cap opening angle is checked separately.',
+                    'Active morphs, explicit axial maps and ATH lips retain the authored axial count to preserve snapping and construction; other profiles use 4096 axial segments plus semantic anchors.',
                     'Native constructions use their resolved inner-wall grid at the native owner’s density; the actual axial count is reported above.',
                     'Radial errors use the common z range and all fold branches; axial extent error and 3D mouth-ring displacement at a common azimuth are reported separately.',
                     *(['Disjoint imported axial ranges are aligned at the throat for radial comparison; the actual translation remains in the extent and mouth measurements.'] if align_disjoint else [])]),
     )
+
+
+def _construction_changes(before: DesignConfig, after: DesignConfig) -> list[FeatureChange]:
+    """Measure construction the bare bore deliberately omits, using its owner."""
+    from hornlab_mesher.config_builder import resolve_geometry
+    from hornlab_mesher.rear_compatibility import geometry_rear_ring
+    from hornlab_mesher.builders.point_grid_freestanding import _restored_outer_throat_points
+    from hornlab_mesher.errors import UserRefusal
+    from server.preview.errors import public_error_message
+
+    configs = []
+    for design in (before, after):
+        # The resolver's structural controls require numbers. Evaluate scalar
+        # expressions through Expr, preserving their physical value and dialect.
+        payload = _expression_payload(design.root, lambda e: e.constant_value()
+            if e.constant_value() is not None else e.model_dump(mode='json'))
+        numeric = legacy_lookup_source(payload) if isinstance(design.root, LookupConfig) else DesignConfig.model_validate(payload)
+        configs.append(_legacy_config(numeric) if isinstance(numeric.root, LookupConfig) else design_to_mesher_config(numeric))
+    # Bare/infinite-baffle/enclosure designs have no offset outer shell/rear.
+    if all(config['mode'] != 'freestanding' for config in configs):
+        return []
+    geometries = []
+    problems = []
+    for label, config in zip(('Original', 'Converted'), configs):
+        # Keep the production sampling contract: rear normals and hence the
+        # rear plane depend on it. Do not substitute legacy point-grid normals.
+        try:
+            geometries.append(resolve_geometry(config).geometry)
+        except UserRefusal as exc:
+            words = public_error_message(exc)
+            if words is None:
+                raise
+            problems.append(FeatureChange(name='Outer construction', change='changed',
+                message=f'{label} outer/rear construction could not be generated: {words} Its surface change is unmeasured.'))
+    if problems:
+        return problems
+    outer = [getattr(g, 'outer_points', None) for g in geometries]
+    changes = []
+    if any(points is None for points in outer):
+        if not all(points is None for points in outer):
+            changes.append(FeatureChange(name='Outer wall / rear body', change='changed',
+                message='The resolved outer shell and rear body are present in only one design.'))
+        return changes
+    outer = [_restored_outer_throat_points(g.inner_points, points, wall_thickness_mm=g.wall_thickness_mm)
+             for g, points in zip(geometries, outer)]
+    a, b = [_meridians(points) for points in outer]
+    maximum = 0.
+    for left, right in zip(a, b):
+        _, delta = _radial_difference(left, right, align_disjoint=True)
+        maximum = max(maximum, float(delta.max()),
+                      abs(left[:, 0].min()-right[:, 0].min()), abs(left[:, 0].max()-right[:, 0].max()))
+    if maximum > MATCH_MM:
+        changes.append(FeatureChange(name='Outer wall', change='changed',
+            message=f'Maximum sampled outer-wall radial/axial-extent change {maximum:.6g} mm on the resolved construction grids.'))
+    rear = [getattr(g, 'ath_rear_points', None) for g in geometries]
+    rear = [geometry_rear_ring(g, g.inner_points, points) if ring is None else ring
+            for g, points, ring in zip(geometries, outer, rear)]
+    rings = [_meridians(np.asarray(ring)[:, None, :])[:, 0] for ring in rear]
+    displacement = float(np.linalg.norm(rings[0]-rings[1], axis=1).max())
+    for name in ('ath_rear_apex', 'ath_warped_rear_apex'):
+        apex = [getattr(g, name, None) for g in geometries]
+        if any(value is not None for value in apex):
+            displacement = max(displacement, float(np.linalg.norm(
+                np.asarray(apex[0] if apex[0] is not None else np.mean(rear[0], axis=0))-
+                np.asarray(apex[1] if apex[1] is not None else np.mean(rear[1], axis=0)))))
+    if displacement > MATCH_MM:
+        def location(ring):
+            lo, hi = np.min(ring[:, 2]), np.max(ring[:, 2])
+            return f'{lo:.6g}' if hi-lo < 1e-8 else f'[{lo:.6g}, {hi:.6g}]'
+        changes.append(FeatureChange(name='Rear construction', change='changed',
+            message=f'Rear boundary z {location(rear[0])} → {location(rear[1])} mm; maximum sampled boundary/apex displacement {displacement:.6g} mm.'))
+    return changes
 
 
 def _feature_changes(before: DesignConfig, after: DesignConfig) -> list[FeatureChange]:
@@ -291,6 +377,9 @@ def _preserve_shared(source: DesignConfig) -> tuple[dict, list[FeatureChange]]:
     """One preservation rule for conversion; unrelated authored values survive."""
     payload = source.root.model_dump(mode='json')
     common = {key: value for key, value in payload.items() if key in DesignCommon.model_fields}
+    if source.root.text_import_version is not None:
+        preserved = _expression_payload(source.root, lambda e: e.in_dialect('wg-v1').model_dump(mode='json'))
+        common = {key: preserved[key] for key in common}
     features: list[FeatureChange] = []
     def feature(name: str, message: str, change: str = 'baked') -> None:
         features.append(FeatureChange(name=name, change=change, message=message))
@@ -352,8 +441,11 @@ def _divide_expr(value: object, scale: float) -> object:
     expr = Expr.model_validate(value)
     if scale == 1:
         return value
+    if expr.constant_value() is not None:
+        return expr.constant_value()/scale
     return {'value': expr.value / scale if expr.value is not None else None,
-            'raw': f'({expr.raw})/{scale:.17g}' if expr.raw is not None else None}
+            'raw': f'({expr.raw})/{scale:.17g}' if expr.raw is not None else None,
+            'dialect': expr.dialect}
 
 
 def _axisymmetric(source: DesignConfig) -> bool:
@@ -487,7 +579,8 @@ def _polyline_fit(rows: np.ndarray, scale: float, check: Callable) -> tuple[dict
     return profile, error
 
 
-def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Callable) -> dict:
+def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Callable,
+               *, anchor_z: Sequence[float] = (), explicit: bool = False) -> dict:
     from hornlab_mesher import freeform_evaluate_profile
     from hornlab_mesher.freeform import MIN_INTERIOR_CORNER_SPACING_MM
     from server.preview.freeform import _params
@@ -496,9 +589,10 @@ def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Ca
     raw_z, raw_r = samples.T
     length = raw_z[-1]
     z = np.unique(np.r_[raw_z, np.linspace(raw_z[0], length, 2049),
-                        [v for v in seed_z if raw_z[0] <= v <= length]])
+                        [v for v in (*seed_z, *anchor_z) if raw_z[0] <= v <= length]])
     r = np.interp(z, raw_z, raw_r)
-    selected = sorted(set([0, len(z)-1, *[int(np.argmin(abs(z-v))) for v in seed_z]]))
+    arc = np.r_[0., np.cumsum(np.hypot(np.diff(z), np.diff(r)))]
+    selected = sorted(set([0, len(z)-1, *[int(np.argmin(abs(z-v))) for v in (*seed_z, *anchor_z)]]))
     if len(selected) > 64:
         selected = [0, len(z)-1]
     throat, mouth = _end_angle(samples), _end_angle(samples, True)
@@ -509,7 +603,7 @@ def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Ca
         points = [{'t': float(z[i]/length), 'r': float(r[i]/scale),
                    'join': 'corner' if any(abs(z[i]-v) < 1e-8 for v in seed_z) else 'smooth'} for i in selected]
         for i, point in zip(selected, points):
-            if point['join'] == 'smooth':
+            if point['join'] == 'smooth' and not explicit:
                 point['angle_deg'] = float(slopes[i])
         previous_corner = None
         for point in points[1:-1]:
@@ -525,7 +619,24 @@ def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Ca
                     position += gap+1e-10
                     point['t'] = float(position/length)
             previous_corner = position
+        if explicit:
+            # Parametric shape-preserving cubics give nearly vertical spans
+            # their own handle speeds, without the automatic tangent solver's
+            # repeated global shrinking. Each smooth run keeps collinear joins.
+            boundaries = [0, *[j for j, p in enumerate(points[1:-1], 1) if p['join'] == 'corner'], len(points)-1]
+            chosen = np.column_stack((z[selected], r[selected]))
+            for lo, hi in zip(boundaries[:-1], boundaries[1:]):
+                run_arc = arc[np.asarray(selected[lo:hi+1])]
+                derivatives = PchipInterpolator(run_arc, chosen[lo:hi+1]).derivative()(run_arc)
+                for j in range(lo, hi):
+                    step = (arc[selected[j+1]]-arc[selected[j]])/3/scale
+                    points[j]['handle_out'] = (derivatives[j-lo]*step).tolist()
+                    points[j+1]['handle_in'] = (-derivatives[j-lo+1]*step).tolist()
         profile = {'points': points, 'throat_angle_deg': throat, 'mouth_angle_deg': mouth}
+        if explicit:
+            # The feedback loop immediately builds and measures this candidate;
+            # spend its next anchors on that generated error, not a second fit.
+            return profile
         # Use the edit API's translator and production spline inversion,
         # precedence, tangent shrinking and validation, in physical mm.
         physical_points = []
@@ -538,6 +649,7 @@ def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Ca
         physical = {**profile, 'points': physical_points}
         trial = DesignConfig.model_validate({'formula': 'FREEFORM', 'length': length,
             'profile_h': physical, 'profile_v': physical, 'inflection_policy': 'warn',
+            'shared_profile': True,
             'cross_sections': [{'t': 0, 'shape': 'ellipse'}, {'t': 1, 'shape': 'ellipse'}]})
         evaluated = freeform_evaluate_profile(_params(trial), 'H', z)
         error = abs(evaluated-r)
@@ -547,6 +659,86 @@ def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Ca
             return profile
         selected.append(int(np.argmax(error)))
         selected.sort()
+
+
+def _refine_generated(candidate: DesignConfig, wall: np.ndarray, scale: float, seeds: Callable,
+                      check: Callable) -> tuple[DesignConfig, np.ndarray]:
+    """Spend the remaining anchors where the generated grid actually differs."""
+    length = _number(candidate.root.length)*scale
+    payload = candidate.model_dump(mode='json')
+    shared = candidate.root.shared_profile
+    planes = [('profile_h', 0)] if shared else [('profile_h', 0), ('profile_v', ANGULAR//4)]
+    for _ in range(64):
+        check()
+        generated = _sample(candidate)
+        actual = _meridians(generated)
+        changed = False
+        for field, index in planes:
+            profile = payload[field]
+            if len(profile['points']) >= 64:
+                continue
+            grid, errors = _radial_difference(wall[index], actual[index])
+            anchors = np.array([point['t']['value']*length for point in profile['points']])
+            eligible = np.min(abs(grid[:, None]-anchors), axis=1) > length*1.1e-7
+            errors[~eligible] = 0
+            if errors.max() <= MATCH_MM*.65:
+                continue
+            # Refit with the old anchors retained and a new anchor exactly at
+            # the measured peak; curve validation remains the mesher's job.
+            intervals = np.searchsorted(anchors, grid, side='right')-1
+            peaks = [int(indices[np.argmax(errors[indices])]) for interval in range(len(anchors)-1)
+                     if len(indices := np.flatnonzero(intervals == interval))]
+            peaks = sorted((i for i in peaks if errors[i] > MATCH_MM*.65), key=lambda i: -errors[i])
+            additions = grid[peaks[:min(8, 64-len(anchors))]].tolist()
+            payload[field] = _fit_plane(wall[index], seeds(index*math.tau/ANGULAR), scale, check,
+                                        anchor_z=[*anchors, *additions], explicit=True)
+            changed = True
+        if not changed:
+            break
+        if shared:
+            payload['profile_v'] = payload['profile_h']
+        else:
+            payload['profile_v']['points'][0]['r'] = payload['profile_h']['points'][0]['r']
+        candidate = DesignConfig.model_validate(payload)
+        payload = candidate.model_dump(mode='json')
+    # A near-vertical end can vary substantially inside the minimum permitted
+    # anchor spacing. Minimize the generated error there, allowing a measured
+    # mouth-radius change within the existing refusal budget.
+    for field, index in planes:
+        check()
+        sampled = _meridians(generated)[index]
+        grid, errors = _radial_difference(wall[index], sampled)
+        if errors.max() <= MATCH_MM:
+            continue
+        baseline = float(errors.max())
+        mouth = _number(getattr(candidate.root, field).points[-1].r)
+        best = (baseline, candidate)
+        def objective(delta):
+            nonlocal best
+            from hornlab_mesher import freeform_evaluate_profile
+            from server.preview.freeform import _params
+            check()
+            trial_payload = candidate.model_dump(mode='json')
+            trial_payload[field]['points'][-1]['r'] = mouth+float(delta)/scale
+            if shared:
+                trial_payload['profile_v'] = trial_payload['profile_h']
+            trial = DesignConfig.model_validate(trial_payload)
+            # Mouth radius changes leave the generated axial sample positions
+            # unchanged. Query those exact nodes through the production owner,
+            # then rebuild the full generated grid for the selected candidate.
+            radii = freeform_evaluate_profile(_params(trial), 'H' if index == 0 else 'V', sampled[:, 0]/scale)*scale
+            actual = np.column_stack((sampled[:, 0], radii))
+            _, deviations = _radial_difference(wall[index], actual)
+            maximum = max(float(deviations.max()), abs(actual[-1, 1]-wall[index, -1, 1]))
+            if maximum < best[0]:
+                best = maximum, trial
+            return maximum
+        minimize_scalar(objective, bounds=(-min(REFUSE_MM, mouth*scale*.5), REFUSE_MM),
+                        method='bounded', options={'xatol': 1e-5, 'maxiter': 28})
+        if best[1] is not candidate:
+            candidate = best[1]
+            generated = _sample(candidate)
+    return candidate, generated
 
 
 def _fit_stations(wall: np.ndarray, length: float, scale: float, check: Callable) -> list[dict]:
@@ -598,20 +790,13 @@ def _fit_stations(wall: np.ndarray, length: float, scale: float, check: Callable
 
 def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
                     progress: Callable, importing: bool = False) -> ConvertResponse:
-    from hornlab_mesher.errors import ConfigError, UserRefusal
     if source.formula == 'FREEFORM':
         _refuse('This design is already a Custom profile.', 'Edit its existing profile anchors instead of converting it.')
     if source.formula == 'SOURCE-DISK':
         _refuse('A source body has no inner horn wall to convert to a Custom profile.',
                 'Keep this source body, or choose a horn family before converting.')
     check()
-    try:
-        original = _sample(source)
-    except (ConfigError, UserRefusal) as exc:
-        if isinstance(exc, UserRefusal):
-            raise
-        _refuse('WG could not generate a conversion profile from this source.',
-                'Keep its original family, or remove unsupported construction features and try again.')
+    original = _sample(source)
     wall = _meridians(original)
     _monotone(wall, ' with the ATH Mesh.Roundover rollback lip' if source.root.mesh.ath_roundover else '')
     progress('sample')
@@ -635,9 +820,21 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
         rows = np.asarray(source.root.lookup_profile, dtype=float)*scale
         rows[:, 0] -= rows[0, 0]
         length = float(rows[-1, 0])
-        h, curve_error = _polyline_fit(rows, scale, check)
-        # Keep the authored meridian, and freeze family-specific construction
-        # settings explicitly instead of fitting a second morphed meridian.
+        from hornlab_mesher.profile_sampling import _cross_section_scaled, _superellipse_scale
+        exponent = source.root.cross_section.exponent
+        aspect = source.root.cross_section.aspect_ratio
+        shared = exponent == 2 and aspect == 1
+        # The old table is the base radius, before cross-section growth. Derive
+        # both cardinal meridians from that same table and the production rule;
+        # equal H/V samples do not establish a circular section.
+        def cardinal_rows(phi):
+            return np.column_stack((rows[:, 0], _cross_section_scaled(
+                rows[:, 1], rows[:, 0]/length, 0, _superellipse_scale(phi, exponent, aspect))))
+        h_rows, v_rows = cardinal_rows(0), cardinal_rows(math.pi/2)
+        h, h_error = _polyline_fit(h_rows, scale, check)
+        v, v_error = (h, h_error) if shared else _polyline_fit(v_rows, scale, check)
+        curve_error = max(h_error, v_error)
+        # Freeze family-specific construction instead of baking the morph twice.
         common['morph'] = source.root.morph.model_dump(mode='json')
         features = [f for f in features if f.name not in ('Mouth morph', 'Implicit mouth rounding')]
         config = _legacy_config(source)
@@ -659,7 +856,7 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
                 message=f'Morph-start snapping is frozen at {start:.12g} of the authored axial table; Custom profile uses that continuous start.'))
             from hornlab_mesher.profile_morph import _resolve_morph_half_dimensions, _morph_target_shape
             shape_only = _morph_target_shape(params, 0) == 3
-            half_width, half_height = _resolve_morph_half_dimensions(params, 0, rows[-1, 1], rows[-1, 1], round_implicit_up=not shape_only)
+            half_width, half_height = _resolve_morph_half_dimensions(params, 0, h_rows[-1, 1], v_rows[-1, 1], round_implicit_up=not shape_only)
             for field, half in (('target_width', half_width), ('target_height', half_height)):
                 value = getattr(source.root.morph, field)
                 if value is None or value.constant_value() == 0:
@@ -667,9 +864,8 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
                     label = 'Implicit mouth dimensions' if shape_only else 'Implicit mouth rounding'
                     features.append(FeatureChange(name=label, change='baked',
                         message=f'{label} frozen as {field.replace("_", " ")} {2*half:.12g} mm.'))
-        exponent = source.root.cross_section.exponent
         stations = [{'t': 0, 'shape': 'ellipse'}, {'t': 1, 'shape': 'ellipse'}]
-        if exponent != 2:
+        if not shared:
             # The generic section scales only growth past a circular throat.
             # Reuse S4's station fitter against that actual construction rather
             # than pretending a linear exponent ramp is the same outline.
@@ -678,15 +874,12 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
             base_wall = _meridians(_legacy_grid(base)[0])
             base_wall[:, :, 0] -= base_wall[:, :1, 0]
             stations = _fit_stations(base_wall, length, scale, check)
-            features.append(FeatureChange(name='Cross-section exponent', change='baked',
-                message='The cross-section exponent and circular-throat growth rule are fitted into the cross-section stations; the outline fit is included in the generated-grid comparison.'))
-        if source.root.cross_section.aspect_ratio != 1:
-            features.append(FeatureChange(name='Cross-section aspect', change='changed',
-                message='The shared authored meridian is retained; the former aspect scaling differs and is included in the generated-wall comparison.'))
+            features.append(FeatureChange(name='Cross-section exponent' if exponent != 2 else 'Cross-section outline', change='baked',
+                message='The cross-section outline and circular-throat growth rule are fitted into the cross-section stations; the outline fit is included in the generated-grid comparison.'))
         features.append(FeatureChange(name='Axial map / interpolate fit', change='changed',
             message='The ATH solve z-map / interpolate surface fit is replaced by the Custom profile corner-wall fit; the generated-grid comparison is sampled, not an OCC wall-distance certificate.'))
         candidate = DesignConfig.model_validate({**common, 'formula': 'FREEFORM', 'length': length/scale,
-            'profile_h': h, 'profile_v': h, 'shared_profile': True, 'cross_sections': stations, 'inflection_policy': 'warn'})
+            'profile_h': h, 'profile_v': v, 'shared_profile': shared, 'cross_sections': stations, 'inflection_policy': 'warn'})
     else:
         shared = _axisymmetric(source)
         def seeds(phi: float) -> list[float]:
@@ -707,15 +900,20 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
             'profile_h': h, 'profile_v': v, 'shared_profile': shared, 'cross_sections': stations, 'inflection_policy': 'warn'})
     progress('fit')
     check()
-    report = compare_generated_designs(source, candidate, features=features, before_points=original, align_disjoint=importing)
+    generated = None
+    if not lookup:
+        candidate, generated = _refine_generated(candidate, wall, scale, seeds, check)
+    report = compare_generated_designs(source, candidate, features=features, before_points=original,
+                                      after_points=generated, align_disjoint=importing, include_construction=False)
     maximum = max(report.wall.max_deviation_mm, report.mouth.max_deviation_mm, report.axial_extent_deviation_mm)
     if curve_error is not None:
         report.curve_deviation_mm = curve_error
     if maximum > REFUSE_MM and not importing:
         _refuse(f'The best Custom profile differs by {maximum:.4f} mm, above the 0.5 mm conversion limit (up to 64 anchors and 32 stations).',
                 'Keep the original family, or simplify the profile/morph and try again; no geometry was cropped or substituted.')
+    report.features.extend(_construction_changes(source, candidate))
     progress('compare')
-    same = maximum <= MATCH_MM and abs(report.source_cap_angle_before_deg-report.source_cap_angle_after_deg) <= .01 and not features
+    same = maximum <= MATCH_MM and abs(report.source_cap_angle_before_deg-report.source_cap_angle_after_deg) <= .01 and not report.features
     progress('ready')
     return ConvertResponse(content_key=content_key, design=candidate, report=report, verdict='match' if same else 'approximate')
 

@@ -172,13 +172,37 @@ def test_section_exponent_uses_s4_station_fit_with_measured_outline_change():
     payload = {'formula': 'LOOKUP', 'lookup_profile': [[0, 12.7], [30, 28], [90, 65], [160, 110]],
                'cross_section': {'exponent': 4, 'aspect_ratio': 1}}
     result = convert_design(legacy_lookup_source(payload), '', importing=True)
-    assert result.design.root.shared_profile is True
+    assert result.design.root.shared_profile is False
     assert 2 < len(result.design.root.cross_sections) <= 32
     assert any(feature.name == 'Cross-section exponent' for feature in result.report.features)
     assert result.report.wall.max_deviation_mm >= 0
     z = np.linspace(0, 160, 10001)
     for values in authored(result.design, z):
         np.testing.assert_allclose(values, np.interp(z, *np.asarray(payload['lookup_profile']).T), atol=1e-9, rtol=0)
+
+
+@pytest.mark.parametrize('aspect', [1.6, .7])
+def test_aspect_section_corpus_derives_separate_cardinal_profiles_from_same_rows(aspect):
+    payload = frozen('aspect-section')['design']
+    payload['cross_section']['aspect_ratio'] = aspect
+    parsed = parse(json.dumps(payload))
+    design = parsed.design
+    assert design.root.shared_profile is False
+    rows = np.asarray(payload['lookup_profile'])*payload['scale']
+    z = np.linspace(0, rows[-1, 0], 10001)
+    base = np.interp(z, *rows.T)
+    h, v = authored(design, z)
+    np.testing.assert_allclose(h, rows[0, 1]+(base-rows[0, 1])*aspect, atol=1e-9, rtol=0)
+    np.testing.assert_allclose(v, base, atol=1e-9, rtol=0)
+    assert 'aspect' not in parsed.migrations[-1].note.lower()
+    result = convert_design(legacy_lookup_source(payload), 'aspect', importing=True)
+    assert not any(feature.name == 'Cross-section aspect' for feature in result.report.features)
+    assert result.report.H.max_deviation_mm < .01
+    assert result.report.V.max_deviation_mm < .01
+    reopened = parse(serialize(parsed)).design
+    assert reopened.root.shared_profile is False
+    for left, right in zip(authored(reopened, z), (h, v)):
+        np.testing.assert_allclose(left, right, atol=1e-9, rtol=0)
 
 
 def test_unmarked_wg_expressions_keep_their_dialect_during_geometry_conversion():
