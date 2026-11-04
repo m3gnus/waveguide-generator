@@ -42,6 +42,9 @@ class AthImportError(ValueError):
 # Presentation hints only: native validation still decides what is accepted.
 # Only these authored names and sentences may cross the display boundary.
 _ATH_SETTING_FIXES = {
+    "Throat.Ext.Ctrl": "Throat.Ext.Ctrl needs six finite coordinates, a scalar OSSE body with s = 0, "
+    "Source.Shape = 2, ABEC.SimType = 2, zero walls and full-circle geometry. "
+    "Remove extensions, slots, stretch and other features for this import.",
     "Rot": "Rot must be a finite number or an expression of p that gives a finite number.",
     "OSSE.Scale.Z": "Move Scale.Z out of the OSSE block and set it at the top level.",
     "Scale.Z": "Scale.Z must be a positive finite constant and used with a supported horn shape.",

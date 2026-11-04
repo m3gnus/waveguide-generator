@@ -19,6 +19,11 @@ def normalize_json_value(value: Any) -> Any:
         return normalize_json_value(asdict(value))
     if isinstance(value, Enum):
         return value.value
+    if isinstance(value, bytes):
+        # Exact native meridians keep immutable coordinate buffers. These
+        # values previously failed JSON serialization rather than having an
+        # existing identity that must be retained.
+        return {"__bytes__": value.hex()}
     if isinstance(value, Mapping):
         return {str(key): normalize_json_value(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):

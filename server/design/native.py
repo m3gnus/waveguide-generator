@@ -11,6 +11,29 @@ NATIVE_FORMULAS = frozenset({
 })
 
 
+def controls_import_payload(config: dict[str, Any]) -> dict[str, Any]:
+    """Translate the mesher-certified ATH subset into the existing native schema."""
+    if config.get("formula") != "OSSE-ADAPTER-CONTROLS":
+        raise ValueError("Throat.Ext.Ctrl needs the exact native controls construction.")
+    profile = config["profile"]
+    mesh_fields = {
+        "angular_segments": "angular_segments", "length_segments": "length_segments",
+        "throat_res_mm": "throat_resolution", "mouth_res_mm": "mouth_resolution",
+        "rear_res_mm": "rear_resolution", "wall_thickness_mm": "wall_thickness",
+        "quadrants": "quadrants", "vertical_offset_mm": "vertical_offset",
+    }
+    return {
+        "formula": config["formula"], "throat_adapter": config["throat_adapter"],
+        "scale": config["scale"], "length_mode": "profile",
+        "source": {"shape": 2, "velocity": 1},
+        "throat_ext_length": 0, "throat_ext_angle": 0, "slot_length": 0,
+        **{target: profile[key] for key, target in (
+            ("L_mm", "L"), ("r0_mm", "r0"), ("a_deg", "a"),
+            ("a0_deg", "a0"), ("k", "k"), ("s", "s"))},
+        "mesh": {mesh_fields[key]: value for key, value in config["mesh"].items()},
+    }
+
+
 def field_label(name: str) -> str:
     from hornlab_mesher.controls import control_label
     if name in {"throat_adapter", "terminating_arc"}:

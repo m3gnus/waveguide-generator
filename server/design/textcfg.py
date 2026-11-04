@@ -870,7 +870,7 @@ _UNSUPPORTED_ATH_REASONS: dict[str, str] = {
     "Horn.Part": "the two-profile (Horn.Part) geometry is not implemented",
     "HornGeometry": "the two-profile (Horn.Part) geometry is not implemented",
     "Horn.Adapter": "the two-profile (Horn.Part) geometry is not implemented",
-    "Throat.Ext.Ctrl": "the curved throat adapter is not implemented",
+    "Throat.Ext.Ctrl": "controls require a fresh ATH import with top-level coordinates and a scalar, unterminated OSSE body",
     "Rollback": "the rollback mouth termination is not implemented",
     "Mesh.Roundover": "scalar form is unsupported: ATH requires a Radius/Segments block",
     "Profile": "a profile read from a point file is not implemented",
@@ -1830,6 +1830,17 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         )
     geometry_dialect = "mwg" if version == NATIVE_GEOMETRY_VERSION else "ath" if version in TEXT_IMPORT_VERSIONS else dialect
     import_version = version if version in TEXT_IMPORT_VERSIONS else TEXT_IMPORT_VERSION if geometry_dialect == "ath" else None
+    controls_config = None
+    if dialect == "ath" and version is None and "Throat.Ext.Ctrl" in flat:
+        # The mesher owns ATH interpretation and certification. Only fresh,
+        # previously refused inputs can enter the native controls construction.
+        from hornlab_mesher.config_parser import ConfigError, parse_text_config
+        try:
+            controls_config = parse_text_config(text)
+        except (ConfigError, ValueError) as exc:
+            raise TextConfigError(ath_import_failure(exc, setting="Throat.Ext.Ctrl")) from exc
+        flat = dict(flat)
+        flat.pop("Throat.Ext.Ctrl")
     # Refuse only files that are ATH by their own text and carry no WG stamp. A WG-saved file that
     # carries the text-import geometry stamp is read with ATH geometry but keeps
     # native passthrough semantics, so it never becomes unopenable.
@@ -1839,6 +1850,22 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         v2=uses_current_ath_import(import_version),
         v3=uses_ath_v3_import(import_version),
     )
+    if controls_config is not None:
+        from .native import controls_import_payload
+        payload.update(controls_import_payload(controls_config))
+        try:
+            design = DesignConfig.model_validate(payload)
+        except (ValueError, TypeError) as exc:
+            raise TextConfigError(ath_import_failure(exc, setting="Throat.Ext.Ctrl")) from exc
+        return ParsedDesign(
+            design=design, dialect=dialect, comments=comments, cadlink=cadlink,
+            source_text=None, _initial_fingerprint=_semantic_fingerprint(design),
+            migrations=[MigrationApplication(
+                "ath-exact-throat-controls",
+                "Imported the six throat coordinates as native exact controls. "
+                "The supplied body-join corner is preserved. Save in WG format to retain this construction.",
+            )],
+        )
     geometry_controls = blocks.get("WG.Geometry")
     if geometry_controls is not None:
         if version is None or set(geometry_controls.items) != {"Payload"} or geometry_controls.lines:

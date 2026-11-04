@@ -91,7 +91,8 @@ UNSUPPORTED = {
 
 @pytest.mark.parametrize("key", sorted(UNSUPPORTED))
 def test_unsupported_ath_items_are_refused_by_name_without_stretch(key: str) -> None:
-    with pytest.raises(TextConfigError, match="unsupported item") as caught:
+    reason = "Throat.Ext.Ctrl.*needs six finite coordinates" if key == "Throat.Ext.Ctrl" else "unsupported item"
+    with pytest.raises(TextConfigError, match=reason) as caught:
         parse(UNSUPPORTED[key])
     assert key.split(":")[0] in str(caught.value)
 
@@ -722,7 +723,8 @@ def test_every_gap_study_key_has_transport_or_a_named_refusal(family: str, base:
         else:
             assert config["mesh"]["athRoundover"] == {"radius": 5, "segments": 5}
         return
-    with pytest.raises(TextConfigError, match="unsupported item") as caught:
+    reason = "Throat.Ext.Ctrl.*needs six finite coordinates" if key == "Throat.Ext.Ctrl" else "unsupported item"
+    with pytest.raises(TextConfigError, match=reason) as caught:
         parse(base + GAP_STUDY_KEYS[key])
     assert key.split(".")[-1] in str(caught.value) or key in str(caught.value)
 
