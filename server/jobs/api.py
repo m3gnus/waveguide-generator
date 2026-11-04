@@ -25,6 +25,7 @@ from server.jobs.fem_field import FemFieldCorrupt, FemFieldInvalidSelection
 from server.platform.feature_flags import fem_regions_enabled
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
 from server.jobs.json_encoding import json_chunks as _json_chunks
+from server.jobs.json_encoding import result_json_text
 from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.jobs.models import (
     CadApprovalsRequest,
@@ -800,7 +801,7 @@ def create_jobs_router(
         except RecombineError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return Response(
-            content=json.dumps(updated, allow_nan=False),
+            content=await asyncio.to_thread(result_json_text, updated),
             media_type="application/json",
         )
 

@@ -465,6 +465,79 @@ def _solved_under_legacy_axial(results_text: str | None, axial_ids: Sequence[str
     return False
 
 
+def _archive_snapshot_presentation(
+    job_id: str, snapshot: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Convert one copied retention-consistent snapshot on a worker thread."""
+
+    from server.jobs.radiation_impedance import (
+        radiation_impedance_presentation,
+    )
+    from server.solver.pressure_basis import export_pressure_bases
+
+    if snapshot is None:
+        raise JobNotFoundError(job_id)
+    job = snapshot["job"]
+    if job["status"] != "complete":
+        raise JobConflictError("This run has not finished. Wait for it, then try again.")
+    results_text = snapshot["results_text"]
+    if results_text is None:
+        raise JobResourceUnavailableError("This run’s results are gone. Solve the design again.")
+    try:
+        results = json.loads(results_text)
+    except json.JSONDecodeError as exc:
+        logger.warning("Could not read stored results of run %s: %s", job_id, exc)
+        raise JobResourceUnavailableError(
+            "WG could not read this run’s results. Solve the design again."
+        ) from exc
+
+    pressure_bases: list[dict[str, str]] = []
+    bases_npz = snapshot["channel_bases"]
+    if bases_npz is not None:
+        try:
+            motions = _request_motions(job)
+            for artifact in export_pressure_bases(
+                bases_npz, results, request_motions=motions
+            ):
+                pressure_bases.append(
+                    {
+                        "channel_id": artifact.channel_id,
+                        "content_base64": base64.b64encode(
+                            artifact.content
+                        ).decode("ascii"),
+                    }
+                )
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning("Could not read pressure basis of run %s: %s", job_id, exc)
+            raise JobResourceUnavailableError(
+                "WG could not read this run’s saved response. Solve the design again."
+            ) from exc
+
+    radiation: dict[str, Any] | None = None
+    radiation_npz = snapshot["radiation_impedance"]
+    if radiation_npz is not None:
+        try:
+            presentation = radiation_impedance_presentation(radiation_npz)
+        except ValueError as exc:
+            logger.warning("Could not read radiation impedance of run %s: %s", job_id, exc)
+            raise JobResourceUnavailableError(
+                "WG could not read this run’s port data. Solve the design again."
+            ) from exc
+        radiation = {
+            "content_base64": base64.b64encode(radiation_npz).decode("ascii"),
+            "presentation": presentation,
+        }
+
+    return {
+        "schema_version": 1,
+        "results": results,
+        "results_sha256": snapshot["results_sha256"],
+        "mesh_artifact": snapshot["mesh_text"],
+        "pressure_bases": pressure_bases,
+        "radiation_impedance": radiation,
+    }
+
+
 def _request_motions(row: Mapping[str, Any]) -> dict[str, str]:
     """Each imported drive channel's motion from a job's archived request."""
 
@@ -3077,77 +3150,9 @@ class JobRuntime:
         multi-member archive observe a mixture of pre- and post-prune state.
         """
 
-        from server.jobs.radiation_impedance import (
-            radiation_impedance_presentation,
-        )
-        from server.solver.combine import deserialize_channel_bases
-        from server.solver.pressure_basis import export_pressure_basis
-
         await self.start()
         snapshot = await asyncio.to_thread(self.store.get_archive_snapshot, job_id)
-        if snapshot is None:
-            raise JobNotFoundError(job_id)
-        job = snapshot["job"]
-        if job["status"] != "complete":
-            raise JobConflictError("This run has not finished. Wait for it, then try again.")
-        results_text = snapshot["results_text"]
-        if results_text is None:
-            raise JobResourceUnavailableError("This run’s results are gone. Solve the design again.")
-        try:
-            results = json.loads(results_text)
-        except json.JSONDecodeError as exc:
-            logger.warning("Could not read stored results of run %s: %s", job_id, exc)
-            raise JobResourceUnavailableError(
-                "WG could not read this run’s results. Solve the design again."
-            ) from exc
-
-        pressure_bases: list[dict[str, str]] = []
-        bases_npz = snapshot["channel_bases"]
-        if bases_npz is not None:
-            try:
-                channel_ids = list(deserialize_channel_bases(bases_npz)["channel_ids"])
-                motions = _request_motions(job)
-                for channel_id in channel_ids:
-                    artifact = export_pressure_basis(
-                        bases_npz, results, str(channel_id), motions
-                    )
-                    pressure_bases.append(
-                        {
-                            "channel_id": artifact.channel_id,
-                            "content_base64": base64.b64encode(
-                                artifact.content
-                            ).decode("ascii"),
-                        }
-                    )
-            except (KeyError, TypeError, ValueError) as exc:
-                logger.warning("Could not read pressure basis of run %s: %s", job_id, exc)
-                raise JobResourceUnavailableError(
-                    "WG could not read this run’s saved response. Solve the design again."
-                ) from exc
-
-        radiation: dict[str, Any] | None = None
-        radiation_npz = snapshot["radiation_impedance"]
-        if radiation_npz is not None:
-            try:
-                presentation = radiation_impedance_presentation(radiation_npz)
-            except ValueError as exc:
-                logger.warning("Could not read radiation impedance of run %s: %s", job_id, exc)
-                raise JobResourceUnavailableError(
-                    "WG could not read this run’s port data. Solve the design again."
-                ) from exc
-            radiation = {
-                "content_base64": base64.b64encode(radiation_npz).decode("ascii"),
-                "presentation": presentation,
-            }
-
-        return {
-            "schema_version": 1,
-            "results": results,
-            "results_sha256": snapshot["results_sha256"],
-            "mesh_artifact": snapshot["mesh_text"],
-            "pressure_bases": pressure_bases,
-            "radiation_impedance": radiation,
-        }
+        return await asyncio.to_thread(_archive_snapshot_presentation, job_id, snapshot)
 
     async def get_radiation_impedance(self, job_id: str) -> bytes:
         """Return the lossless passive-cardioid radiation matrix artifact."""
@@ -3185,10 +3190,12 @@ class JobRuntime:
         if results_text is None:
             raise JobResourceUnavailableError("This run’s results are gone. Solve the design again.")
         motions = _request_motions(row)
+
+        def export() -> Any:
+            return export_pressure_basis(bases, json.loads(results_text), channel_id, motions)
+
         try:
-            return await asyncio.to_thread(
-                export_pressure_basis, bases, json.loads(results_text), channel_id, motions
-            )
+            return await asyncio.to_thread(export)
         except ValueError as exc:
             if "cannot be established" not in str(exc):
                 raise
@@ -3265,10 +3272,11 @@ class JobRuntime:
                     "This run did not keep what crossover changes need. Solve the design again."
                 )
             request = _replay_request(row)
-            results = json.loads(results_text)
-            updated = await asyncio.to_thread(
-                recombine_stored_results, results, bases, spec, request
-            )
+
+            def recombine() -> dict[str, Any]:
+                return recombine_stored_results(json.loads(results_text), bases, spec, request)
+
+            updated = await asyncio.to_thread(recombine)
             await asyncio.to_thread(self.store.store_results, job_id, updated)
             return updated
 

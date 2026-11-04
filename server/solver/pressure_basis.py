@@ -17,7 +17,7 @@ from __future__ import annotations
 import io
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 
@@ -52,15 +52,14 @@ def _channel_result_metadata(results: Mapping[str, Any], channel_id: str) -> Map
     return metadata if isinstance(metadata, Mapping) else {}
 
 
-def _stored_metadata(data: bytes, channel_id: str) -> dict[str, Any]:
-    with np.load(io.BytesIO(data), allow_pickle=False) as archive:
-        key = f"metadata::{channel_id}"
-        if key not in archive:
-            return {}
-        try:
-            decoded = json.loads(str(np.asarray(archive[key]).item()))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return {}
+def _stored_metadata(archive: Mapping[str, Any], channel_id: str) -> dict[str, Any]:
+    key = f"metadata::{channel_id}"
+    if key not in archive:
+        return {}
+    try:
+        decoded = json.loads(str(np.asarray(archive[key]).item()))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
     return decoded if isinstance(decoded, dict) else {}
 
 
@@ -77,8 +76,37 @@ def export_pressure_basis(
     source establishes it, the export is refused rather than guessed as normal.
     """
 
+    return export_pressure_bases(
+        bases_npz, results, [channel_id], request_motions
+    )[0]
+
+
+def export_pressure_bases(
+    bases_npz: bytes,
+    results: Mapping[str, Any],
+    channel_ids: Iterable[str | None] | None = None,
+    request_motions: Mapping[str, str] | None = None,
+) -> list[PressureBasisExport]:
+    """Export a request-local batch through one decoded bundle and encoder.
+
+    Omitting ``channel_ids`` exports every retained channel in bundle order.
+    Selection, metadata precedence and phase conversion share the single-channel
+    API's owner; no decoded fields are retained after this request.
+    """
+
     bundle = deserialize_channel_bases(bases_npz)
-    channel_ids = list(bundle["channel_ids"])
+    selected = bundle["channel_ids"] if channel_ids is None else [
+        _select_channel(bundle["channel_ids"], channel_id) for channel_id in channel_ids
+    ]
+    with np.load(io.BytesIO(bases_npz), allow_pickle=False) as archive:
+        return [
+            _export_channel(bundle, results, channel_id,
+                            _stored_metadata(archive, channel_id), request_motions)
+            for channel_id in selected
+        ]
+
+
+def _select_channel(channel_ids: list[str], channel_id: str | None) -> str:
     selected = str(channel_id or "").strip()
     if selected:
         if selected not in channel_ids:
@@ -93,8 +121,17 @@ def export_pressure_basis(
             "choose a pressure-basis channel: " + ", ".join(channel_ids)
         )
 
+    return selected
+
+
+def _export_channel(
+    bundle: Mapping[str, Any],
+    results: Mapping[str, Any],
+    selected: str,
+    stored: Mapping[str, Any],
+    request_motions: Mapping[str, str] | None,
+) -> PressureBasisExport:
     result = bundle["results_by_id"][selected]
-    stored = _stored_metadata(bases_npz, selected)
     public_metadata = _channel_result_metadata(results, selected)
     source_ids = [
         str(value)
@@ -191,4 +228,5 @@ __all__ = [
     "PRESSURE_PHASE_CONVENTION",
     "PressureBasisExport",
     "export_pressure_basis",
+    "export_pressure_bases",
 ]

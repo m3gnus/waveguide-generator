@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import base64
 import json
 from pathlib import Path
 import re
+import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +20,91 @@ from server.workspace.archive import (
     pin_cad_document,
     reclaim_captured_documents,
 )
+
+
+def test_multichannel_archive_decodes_once_and_preserves_the_complete_payload(monkeypatch):
+    from server.jobs.runtime import core
+    from server.jobs.radiation_impedance import radiation_impedance_presentation
+    from server.solver import combine, pressure_basis
+    from server.tests.test_pressure_basis import multichannel_basis
+    from server.tests.test_radiation_impedance_presentation import artifact_bytes
+
+    bases, results, motions = multichannel_basis()
+    text = json.dumps(results)
+    radiation = artifact_bytes()
+    snapshot = {
+        "job": {"status": "complete"}, "results_text": text,
+        "results_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "mesh_text": "unchanged mesh\n", "channel_bases": bases,
+        "radiation_impedance": radiation,
+    }
+    expected = {
+        "schema_version": 1, "results": results, "results_sha256": snapshot["results_sha256"],
+        "mesh_artifact": snapshot["mesh_text"],
+        "pressure_bases": [{"channel_id": name, "content_base64": base64.b64encode(
+            pressure_basis.export_pressure_basis(bases, results, name, motions).content
+        ).decode("ascii")} for name in ("normal", "axial", "request")],
+        "radiation_impedance": {"content_base64": base64.b64encode(radiation).decode("ascii"),
+                                "presentation": radiation_impedance_presentation(radiation)},
+    }
+    decodes = []
+    reads = []
+    original = combine.deserialize_channel_bases
+
+    def decode(data):
+        decodes.append(data)
+        return original(data)
+
+    def read(job_id):
+        reads.append(job_id)
+        return snapshot
+
+    async def start():
+        pass
+
+    monkeypatch.setattr(core, "_request_motions", lambda _job: motions)
+    monkeypatch.setattr(combine, "deserialize_channel_bases", decode)
+    monkeypatch.setattr(pressure_basis, "deserialize_channel_bases", decode)
+    runtime = SimpleNamespace(start=start, store=SimpleNamespace(get_archive_snapshot=read))
+    actual = asyncio.run(core.JobRuntime.get_archive_snapshot(runtime, "archive"))
+    assert actual == expected
+    assert reads == ["archive"]
+    assert len(decodes) == 1
+
+
+def test_archive_conversion_allows_a_heartbeat_while_the_worker_is_blocked(monkeypatch):
+    from server.jobs.runtime import core
+
+    entered, release = threading.Event(), threading.Event()
+    loop_thread = threading.get_ident()
+    snapshot = {"job": {"status": "complete"}, "results_text": "{}",
+                "results_sha256": "digest", "mesh_text": "mesh", "channel_bases": None,
+                "radiation_impedance": None}
+    original = core._archive_snapshot_presentation
+
+    def convert(*args):
+        assert threading.get_ident() != loop_thread
+        entered.set()
+        assert release.wait(5), "heartbeat did not release archive conversion"
+        return original(*args)
+
+    async def start():
+        pass
+
+    monkeypatch.setattr(core, "_archive_snapshot_presentation", convert)
+    runtime = SimpleNamespace(start=start, store=SimpleNamespace(get_archive_snapshot=lambda _: snapshot))
+
+    async def scenario():
+        task = asyncio.create_task(core.JobRuntime.get_archive_snapshot(runtime, "archive"))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            await asyncio.sleep(0)
+            assert not task.done(), "conversion finished before the heartbeat"
+        finally:
+            release.set()
+        return await task
+
+    assert asyncio.run(scenario())["results_sha256"] == "digest"
 
 
 # Asserted identically by ``frontend/src/stores/designNameSlug.parity.test.ts``.

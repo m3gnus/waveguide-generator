@@ -1,3 +1,4 @@
+import { activityOperation } from '../shell/activityOperation';
 import { deadlineFetch } from './deadlineFetch';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import type { components } from './generated/openapi';
@@ -538,21 +539,23 @@ export async function recombineJobResults(
   fetcher: typeof fetch = fetch,
 ): Promise<JobResults> {
   const revision = issueResultsRequest(jobId, 'recombine');
-  let result: JobResults | null = null;
-  try {
-    const response = await fetcher(`/api/results/${encodeURIComponent(jobId)}/combine`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(spec),
-    });
-    if (!response.ok) {
-      throw new Error(await httpErrorMessage(response, 'WG could not update the combined response. Change the crossover again.'));
+  return activityOperation({ kind: 'recombine', label: 'Updating the combined response' }, fetcher, async fetcher => {
+    let result: JobResults | null = null;
+    try {
+      const response = await fetcher(`/api/results/${encodeURIComponent(jobId)}/combine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(spec),
+      });
+      if (!response.ok) {
+        throw new Error(await httpErrorMessage(response, 'WG could not update the combined response. Change the crossover again.'));
+      }
+      result = parseFinalResultEnvelope(await response.json());
+      return result;
+    } finally {
+      settleResultsRequest(jobId, revision, result);
     }
-    result = parseFinalResultEnvelope(await response.json());
-    return result;
-  } finally {
-    settleResultsRequest(jobId, revision, result);
-  }
+  });
 }
 
 export class CompareStore {

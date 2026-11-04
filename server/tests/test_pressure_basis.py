@@ -171,3 +171,69 @@ def test_pressure_basis_content_comparison_rejects_payload_changes(change):
     np.savez(changed, **arrays)
     with pytest.raises(AssertionError):
         assert_npz_contents_equal(changed.getvalue(), expected)
+
+
+def multichannel_basis(*, spherical=True):
+    native = _native_basis()
+    native.frequency_status = ["interpolated"]
+    if not spherical:
+        native.sphere_pressure_complex = None
+    artifact = serialize_channel_bases(
+        {name: native for name in ("normal", "axial", "request")},
+        metadata_by_id={"normal": {
+            "source_motion": "normal", "source_ids": ["stored"],
+            "source_tags": [101], "source_areas_m2": [0.021],
+            "source_normalization": "native_rms_velocity",
+        }},
+    )
+    results = {"channels": {
+        "normal": {"metadata": {"source_motion": "axial", "source_ids": ["ignored"]}},
+        "axial": {"metadata": {
+            "source_motion": "axial", "impedance_drive": "voltage",
+            "axial_contract": "per-source-axis-v2",
+            "source_axes": [{"axis": [0, 0, 1], "raw_axis": [0, 0, 2]}],
+        }},
+    }}
+    return artifact, results, {"request": "normal"}
+
+
+@pytest.mark.parametrize("spherical", [False, True])
+def test_batch_pressure_bases_decode_once_and_match_single_exports(monkeypatch, spherical):
+    from server.solver import pressure_basis
+
+    artifact, results, motions = multichannel_basis(spherical=spherical)
+    expected = {name: export_pressure_basis(artifact, results, name, motions).content
+                for name in ("normal", "axial", "request")}
+    calls = []
+    original = pressure_basis.deserialize_channel_bases
+
+    def decode(data):
+        calls.append(data)
+        return original(data)
+
+    monkeypatch.setattr(pressure_basis, "deserialize_channel_bases", decode)
+    exports = pressure_basis.export_pressure_bases(artifact, results, request_motions=motions)
+    assert len(calls) == 1
+    assert [item.channel_id for item in exports] == list(expected)
+    for item in exports:
+        assert item.content == expected[item.channel_id]
+        assert_npz_contents_equal(item.content, expected[item.channel_id])
+        with np.load(io.BytesIO(item.content), allow_pickle=False) as data:
+            assert data["source_motion"].item() == ("axial" if item.channel_id == "axial" else "normal")
+            assert data["frequency_status"].tolist() == ["interpolated"]
+            assert ("sphere_pressure_complex" in data) == spherical
+            np.testing.assert_array_equal(data["pressure_complex"], _native_basis().pressure_complex.conjugate())
+
+
+def test_batch_pressure_bases_selection_and_missing_motion_refusals():
+    from server.solver.pressure_basis import export_pressure_bases
+
+    artifact, results, motions = multichannel_basis()
+    selected = export_pressure_bases(artifact, results, ["axial", "normal"], motions)
+    assert [item.channel_id for item in selected] == ["axial", "normal"]
+    with pytest.raises(ValueError, match="not available"):
+        export_pressure_bases(artifact, results, ["missing"], motions)
+    with pytest.raises(ValueError, match="cannot be established"):
+        export_pressure_bases(artifact, results)
+    with pytest.raises(ValueError, match="cannot be established"):
+        export_pressure_basis(artifact, results, "request")

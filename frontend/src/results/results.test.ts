@@ -1,4 +1,5 @@
 import { keepRefusalOriginals } from '../api/httpError';
+import { activityStore } from '../shell/activity';
 import { describe, expect, it, vi } from 'vitest';
 import { CompareStore, fetchJobArchiveSnapshot, fetchJobResults, fetchRadiationImpedancePresentation, invalidateJobResults, mergeProvisionalResults, parseFinalResultEnvelope, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults, type ResultData } from '../api/results';
 import { COMBINED_VIEW } from '../stores/resultView';
@@ -534,6 +535,24 @@ describe('chart data mappers', () => {
 });
 
 describe('recombineJobResults', () => {
+  it.each([200, 422])('keeps status-bar progress until a recombine settles (%s)', async status => {
+    let finish!: (response: Response) => void;
+    const fetcher = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; }));
+    const pending = recombineJobResults('progress-run', {
+      members: ['mf', 'hf'], crossovers_hz: [900],
+    }, fetcher as typeof fetch);
+    const active = activityStore.getSnapshot();
+    finish(new Response(JSON.stringify(status === 200 ? result() : {
+      detail: 'combine crossovers_hz [5000.0] lie outside the solved band [100, 1000] Hz',
+    }), { status }));
+    if (status === 200) await expect(pending).resolves.toEqual(result());
+    else await expect(pending).rejects.toThrow('Change the crossover again');
+    expect(active).toMatchObject([
+      { kind: 'recombine', label: 'Updating the combined response' },
+    ]);
+    expect(activityStore.getSnapshot()).toEqual([]);
+  });
+
   it('posts the spec, replaces the cache entry, and records the original refusal behind plain guidance', async () => {
     resultsCache.clear();
     const updated = {

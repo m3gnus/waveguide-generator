@@ -20,7 +20,8 @@ export type ActivityKind =
   | 'send-to-cad'
   | 'cad-import'
   | 'mesh-import'
-  | 'engine-check';
+  | 'engine-check'
+  | 'recombine';
 
 export interface ActivityProgress {
   done: number;
