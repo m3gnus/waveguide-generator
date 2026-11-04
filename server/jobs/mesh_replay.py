@@ -38,6 +38,7 @@ from server.mesh.child import MesherChildError, MesherCrashError
 from server.mesh.prepared_gc import prepared_mesh_use
 from server.mesh.records import get_prepared_mesh
 from server.solver.imported import AXIAL_CONTRACT_VERSION
+from server.platform.temp_session import temporary_directory_root
 
 MAX_REPLAY_BYTES = 64 * 1024 * 1024
 Digest = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
@@ -426,7 +427,7 @@ def _restore_cad_mesh(runtime: Any, store: Any, data_dir: Path, package: CadMesh
 
     # Use the same strict bundle reader and ingest writer as a CAD delivery.
     # No packaged record, cache sidecar, matrix or approval is adopted.
-    with lock, prepared_mesh_use(), tempfile.TemporaryDirectory(prefix="wg-replay-") as temporary:
+    with lock, prepared_mesh_use(), tempfile.TemporaryDirectory(prefix="wg-replay-", dir=temporary_directory_root()) as temporary:
         root = Path(temporary) / "replay.wgreturn"
         root.mkdir()
         (root / "wgreturn.json").write_bytes(package.manifest_text.encode("utf-8"))
