@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "6df604a842ccbb10b36c51b2f27340c62e9c8510",
+  "commit": "b67b7d26b443d12c5f6cdb4ef727544d6b3e2c31",
   "license": "AGPL-3.0-or-later",
   "addinVersion": "0.3.4",
-  "note": "Reliable detach, stable unsaved identity, wrapper-independent metadata, locked two-session request history and dialog cleanup. Shared protocol retains the qualified 0.3.4 contract; handoff claims and open-document features are excluded."
+  "note": "Send-to-CAD retry/discovery and Solid-tab dispatch guards; retained claims keep the original monotonic receipt lifetime. WG open-document consumers remain separate held work."
 }

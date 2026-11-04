@@ -180,3 +180,7 @@ prefix `d246bc1d33a0510e273b174a94e3344586a5e9bf`. Persistent-helper work is
 excluded after Windows fixture-contract failures. BM multi-source refusal occurs
 before setup. Experimental BM ground remains opt-in and defaults off; BEAT
 qualification is still required before enabling it.
+
+## Send-to-CAD package pin
+
+WGLink `b67b7d26b443d12c5f6cdb4ef727544d6b3e2c31` supplies the matching retry/discovery, Solid-tab dispatch and retained-receipt lifetime fixes. Its shared protocol is vendored from the exact committed bytes. The canonical fixture changes only its intentional pinned-file provenance hash; serializer cases are unchanged. The paired endpoint oracle retains its original WG capture, original add-in capture identity and every fixture digest while qualifying the new package. Open-in-Fusion and CADLink P2 consumer branches remain held.

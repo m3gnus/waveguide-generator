@@ -62,3 +62,9 @@ to run with only the standard library, bypassing the contracts package initializ
 | `server/solver/combine.py:97` | `serialize_channel_bases` | `canonical_ascii_json` |
 | `server/solver/field_plane.py:860` | `FieldPlaneService._synthesis_revision` | `canonical_ascii_strict_json` |
 | `server/solver/symmetry.py:161` | `_resolution_cache_key` | `canonical_ascii_string_json` |
+
+The intentional Send-to-CAD pin upgrade records WGLink `b67b7d26b443d12c5f6cdb4ef727544d6b3e2c31`,
+path `fusion-addins/WGLink/wglink_protocol.py`, SHA-256
+`cbff5fca26971d811cacc2b6425b9c6f90798a60e82e77ef45f37be8673179c5`. The previous qualified file hash was
+`afce1630cb2464244cb8a22d52182c42050242a28eb4807dbb3c1a286716a857`. Only pinned source provenance changes;
+all original serializer expressions, byte cases, errors and their baseline remain unchanged.

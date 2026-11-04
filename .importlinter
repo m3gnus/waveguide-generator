@@ -61,6 +61,8 @@ ignore_imports =
     server.mesh.imported -> server.cadlink.interpretation.solver_frame
     # Legacy use: source_physical_name.
     server.mesh.imported -> server.cadlink.wglink_protocol
+    # Shared stdlib-only WG/Fusion rename owner; leaf rule below keeps it pure.
+    server.platform.exclusive_rename -> server.cadlink.wglink_protocol
     # solver -> cadlink: existing upward dependency.
     # Legacy use: canonical_source_role.
     server.solver.imported_channels -> server.cadlink.roles
@@ -150,6 +152,7 @@ name = Shared contracts import no other server package
 type = forbidden
 source_modules =
     server.contracts
+    server.cadlink.wglink_protocol
 # Wildcard is deliberate here: unlike legacy exceptions, this also covers
 # future server packages. Contracts may import their own descendants.
 forbidden_modules =

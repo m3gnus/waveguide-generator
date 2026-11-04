@@ -1,5 +1,6 @@
 {
-  "addin_commit": "6df604a842ccbb10b36c51b2f27340c62e9c8510",
+  "addin_commit": "b67b7d26b443d12c5f6cdb4ef727544d6b3e2c31",
+  "captured_addin_commit": "6df604a842ccbb10b36c51b2f27340c62e9c8510",
   "files": {
     ".gitattributes": "68d608afba2742c934f399ada0c36621f11dd2f19d78dd3a0f569a41348a67c3",
     "BARE.json": "181b52b6c01b788b3d2d217d9511ccf1fd74b422b2ff3bec2c25b623fb7329b8",
@@ -88,6 +89,7 @@
     "zero-source-area.wgreturn/wgreturn.json": "0ac632fb70a5be997eb05455fea131e3d646db2a51bd48268aa6d36780ab9caa"
   },
   "generator": "server/tests/tools/generate_cadlink_endpoint_oracle.py",
+  "qualification_note": "Original WG capture and fixture files are unchanged; addin_commit is the exact upgraded package checked for compatibility. captured_addin_commit retains the original source provenance.",
   "schema": 1,
   "wg_commit": "9d38fcea792da31effdd2bfab4fa93bdd639ebe2"
 }
