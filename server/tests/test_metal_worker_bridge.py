@@ -96,7 +96,8 @@ def test_imported_single_source_preserves_channel_live_results(monkeypatch, tmp_
     assert streamed[0][1]["channels"]["left"]["metadata"]["role"] == "HF"
 
 
-def test_worker_keeps_live_results_power_traces_and_source_identity(monkeypatch):
+@pytest.mark.parametrize("callback_terminal", ["cancelled", "failed"])
+def test_worker_keeps_live_results_power_traces_and_source_identity(monkeypatch, callback_terminal):
     import beat_engine.beat_contract.worker as contract
     import hornlab_metal_bem
 
@@ -112,7 +113,7 @@ def test_worker_keeps_live_results_power_traces_and_source_identity(monkeypatch)
         def ensure_started(self):
             pass
 
-        def submit(self, request):
+        def submit(self, request, *, status_callback=None):
             count = sum(len(out["options"]["points_m"]) for out in request["outputs"]
                         if out["quantity"] == "exterior_pressure")
             for i, frequency in enumerate(request["frequencies_hz"]):
@@ -122,7 +123,7 @@ def test_worker_keeps_live_results_power_traces_and_source_identity(monkeypatch)
                         "lapack_info": 0, "native_diagnostics": {"mesh_resolution_suspect": True},
                     })
                 except InterruptedError:
-                    yield {"type": "cancelled", "solved_count": 0}
+                    yield {"type": callback_terminal, "solved_count": 0, "error": "native callback stopped"}
                     return
                 record = worker_record(request, frequency)
                 record["diagnostics"]["engine_provenance"] = {

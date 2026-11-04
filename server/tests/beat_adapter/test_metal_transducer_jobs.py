@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -15,7 +16,7 @@ from server.engines import registry
 from server.platform import feature_flags
 from server.solver import beat_transducer_imported as jobs, metal, metal_worker
 from server.solver.beat_adapter.transducers import TransducerSweep, parse_transducer_frequency
-from server.solver.beat_adapter.results import ResultContractError
+from server.solver.beat_adapter.results import ResultContractError, decode_complex_values
 from server.tests.beat_adapter.conftest import wire
 from server.tests.beat_adapter.test_transducer_jobs import (
     record as record_fixture, request, solid as solid_fixture,
@@ -101,7 +102,7 @@ def test_disabled_direct_solve_refuses_before_native_or_lem(monkeypatch, solid, 
 
 
 @pytest.mark.parametrize("mixed", [False, True])
-def test_route_uses_same_request_and_unscaled_results(monkeypatch, solid, record, mixed):
+def test_route_uses_same_request_and_unscaled_results(monkeypatch, worker, solid, record, mixed):
     monkeypatch.setenv(FLAG, "1")
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": True})
     monkeypatch.setattr(metal, "native_solve_multi_source", lambda *a, **k: pytest.fail("ideal path"))
@@ -118,27 +119,18 @@ def test_route_uses_same_request_and_unscaled_results(monkeypatch, solid, record
             for c in requested.geometry.drive_channels
         ]
     expected, indices = jobs.compile_request(solid, requested, record, backend="metal")
-    captured, partial, sweeps = [], [], []
-
-    def solve(compiled, **callbacks):
-        captured.append(compiled)
-        rows = tuple(parse_transducer_frequency(native_record(compiled, f), compiled, f)
-                     for f in compiled.wire["frequencies_hz"])
-        sweep = TransducerSweep(rows, False, len(rows))
-        sweeps.append(sweep)
-        for count in range(1, len(rows) + 1):
-            callbacks["on_frequency_result"](TransducerSweep(rows[:count], False, len(rows)))
-        return sweep
-
-    monkeypatch.setattr(metal_worker, "solve_transducer_worker", solve)
+    prepare_worker(worker, expected)
     result = metal.solve_imported_metal_from_msh_text(solid, requested, record,
-        result_callback=lambda i, frame: partial.append(frame))
-    assert captured[0].wire == expected.wire
+        result_callback=lambda i, frame: worker.partial.append(frame))
+    assert worker.requests == [expected.wire]
+    assert_worker_stopped(worker)
     engine = result["metadata"]["solver_engine"]
     assert engine["engine"] == "metal" and engine["package"] == "hornlab-metal-bem"
     assert engine["provider"] == "native"
     assert engine["formulation"] == "complex_k" and engine["complex_k_shift"] == .005
-    reference = jobs.package_sweep(sweeps[0], expected, requested, record, started=0,
+    rows = tuple(parse_transducer_frequency(native_record(expected, f), expected, f)
+                 for f in expected.wire["frequencies_hz"])
+    reference = jobs.package_sweep(TransducerSweep(rows, False, len(rows)), expected, requested, record, started=0,
                                    port_indices=indices, solver_engine=engine)
     for channel in requested.geometry.drive_channels:
         for key in ("spl_on_axis", "impedance", "acoustic_impedance", "phase"):
@@ -148,7 +140,7 @@ def test_route_uses_same_request_and_unscaled_results(monkeypatch, solid, record
     assert result["channels"]["driver"]["metadata"]["source_normalization"] == "native_rms_voltage"
     assert result["channels"]["driver"]["metadata"]["beat_transducer"]["current_rms_a"][0][0] == {
         "real": .4, "imaginary": .2}
-    assert all(p["metadata"]["solver_engine"] == engine for p in partial)
+    assert worker.finished and not worker.partial
     if mixed:
         assert result["channels"]["ideal"]["metadata"]["source_normalization"] == "native_rms_velocity"
         assert "impedance" not in result["channels"]["ideal"]
@@ -212,8 +204,6 @@ def solve(compiled, **callbacks):
     assert compiled.wire == payload['compiled']
     rows = tuple(parse_transducer_frequency(raw, compiled, frequency)
                  for raw, frequency in zip(payload['rows'], compiled.wire['frequencies_hz']))
-    for count in range(1, len(rows) + 1):
-        callbacks['on_frequency_result'](TransducerSweep(rows[:count], False, len(rows)))
     return TransducerSweep(rows, False, len(rows))
 metal_worker.solve_transducer_worker = solve
 
@@ -224,7 +214,7 @@ partial = []
 result = metal.solve_imported_metal_from_msh_text(
     payload['mesh'], request, payload['record'],
     result_callback=lambda revision, frame: partial.append(frame))
-assert len(partial) == len(payload['rows'])
+assert not partial
 assert result['metadata']['solver_engine']['package'] == 'hornlab-metal-bem'
 assert result['channel_order'] == [channel.id for channel in request.geometry.drive_channels]
 """],
@@ -294,76 +284,95 @@ def test_saved_auto_voltage_jobs_keep_beat_provider(monkeypatch, solid, record, 
     assert result.symmetry_metadata["solver_plan"]["requested"] == "auto"
 
 
+def compiled_result(compiled):
+    """Supply numerical arrays to the provider's real result encoder."""
+    from hornlab_metal_bem.compiled import CompiledQuantity, CompiledResult
+
+    rows = [native_record(compiled, f) for f in compiled.wire["frequencies_hz"]]
+    quantities = {}
+    for index, item in enumerate(rows[0]["quantities"]):
+        values = np.stack([decode_complex_values(row["quantities"][index]["values"],
+                           tuple(item["values"]["shape"])) for row in rows])
+        quantities[item["id"]] = CompiledQuantity(
+            id=item["id"], quantity=item["quantity"], unit=item["unit"],
+            axes=("frequency", *item["axes"]), values=values,
+            metadata=item["metadata"], target_id=item["target_id"],
+        )
+    return CompiledResult(
+        frequencies_hz=np.asarray(compiled.wire["frequencies_hz"]),
+        excitation_port_ids=tuple(compiled.wire["excitation_port_ids"]),
+        pressure={}, native_results=(), quantities=quantities, diagnostics=rows[0]["diagnostics"],
+    )
+
+
 @pytest.fixture
 def worker(monkeypatch):
-    import hornlab_metal_bem
-    from hornlab_metal_bem.beat_worker import worker_announcement
+    """Use the installed worker, thread, event stream and encoder; stub computation."""
+    from hornlab_metal_bem import beat_worker as provider
 
-    instances = []
+    state = SimpleNamespace(instances=[], submissions=[], requests=[], computed=[],
+                            result=None, finished=False, observed=[])
+    original_started = provider.MetalEngineWorker.ensure_started
+    original_submit = provider.MetalEngineWorker.submit
+    monkeypatch.setattr(provider, "_metal_availability", lambda: {"available": True})
 
-    class Worker:
-        def __init__(self, *, native_formulation, complex_k_shift, native_progress_cb):
-            self.options = (native_formulation, complex_k_shift)
-            self.progress = native_progress_cb
-            self.worker_info = worker_announcement({"available": True})
-            self.closed = self.terminated = self.submitted = False
-            self.cancelled = False
-            self.mutate = lambda data: None
-            instances.append(self)
+    def started(self, **kwargs):
+        if self not in state.instances:
+            state.instances.append(self)
+        original_started(self, **kwargs)
 
-        def ensure_started(self):
-            pass
+    def submit(self, request, **kwargs):
+        state.requests.append(request)
+        stream = original_submit(self, request, **kwargs)
+        state.submissions.append(stream)
+        return stream
 
-        def submit(self, request, *, status_callback=None):
-            self.submitted = True
-            self.request = request
-            try:
-                if status_callback:
-                    status_callback("native network")
-                for index, frequency in enumerate(request["frequencies_hz"]):
-                    self.progress(index, frequency, {})
-                    data = native_record(self.compiled, frequency)
-                    self.mutate(data)
-                    yield {"type": "result", "result": data}
-                    if self.cancelled:
-                        yield {"type": "cancelled", "solved_count": index + 1}
-                        return
-                yield {"type": "completed", "solved_count": len(request["frequencies_hz"])}
-            finally:
-                self.closed = True
+    def compute(request, *, base_dir, cancel_cb, native_formulation, complex_k_shift, native_progress_cb):
+        assert request == state.expected_wire
+        assert native_formulation == "complex_k" and complex_k_shift == .005
+        for index, frequency in enumerate(request["frequencies_hz"]):
+            cancel_cb()
+            state.computed.append(frequency)
+            state.observed.append(list(state.partial))
+            native_progress_cb(index, frequency, {})
+        state.finished = True
+        return state.result
 
-        def terminate(self):
-            self.terminated = True
-
-    monkeypatch.setattr(hornlab_metal_bem, "MetalEngineWorker", Worker)
-    return instances, Worker
+    monkeypatch.setattr(provider.MetalEngineWorker, "ensure_started", started)
+    monkeypatch.setattr(provider.MetalEngineWorker, "submit", submit)
+    monkeypatch.setattr(provider, "solve_compiled", compute)
+    return state
 
 
-def install_worker(monkeypatch, worker, compiled, configure=lambda _: None):
-    instances, Worker = worker
-    original = Worker.ensure_started
-    def started(self):
-        self.compiled = compiled
-        configure(self)
-        original(self)
-    monkeypatch.setattr(Worker, "ensure_started", started)
-    return instances
+def prepare_worker(state, compiled):
+    state.expected_wire = deepcopy(compiled.wire)
+    state.result = compiled_result(compiled)
+    state.partial = []
 
 
-def test_worker_decodes_driven_and_shorted_network_without_scaling(monkeypatch, worker, solid, record):
+def assert_worker_stopped(state):
+    assert len(state.instances) == 1
+    assert state.instances[0].worker_info is None
+    assert all(not stream.running for stream in state.submissions)
+
+
+def test_worker_decodes_driven_and_shorted_network_without_scaling(worker, solid, record):
     compiled, _ = jobs.compile_request(solid, metal_request(), record, backend="metal")
     # Only the first voltage port is excited; both physical drivers remain in the network.
     compiled = replace(compiled, wire={**compiled.wire, "excitation_port_ids": ["voltage:driver"]})
-    instances = install_worker(monkeypatch, worker, compiled)
+    prepare_worker(worker, compiled)
     original_wire = deepcopy(compiled.wire)
-    partial, statuses = [], []
-    result = metal_worker.solve_transducer_worker(compiled, on_frequency_result=partial.append,
+    statuses = []
+    result = metal_worker.solve_transducer_worker(compiled, on_frequency_result=worker.partial.append,
                                                  status_callback=statuses.append)
     assert compiled.wire == original_wire
-    assert instances[0].request is compiled.wire
-    assert instances[0].options == ("complex_k", .005)
-    assert instances[0].closed and instances[0].terminated
-    assert statuses == ["native network"] and len(partial) == 2
+    assert worker.requests == [compiled.wire]
+    assert worker.instances[0].native_formulation == "complex_k"
+    assert worker.instances[0].complex_k_shift == .005
+    assert_worker_stopped(worker)
+    assert statuses == ["Solving on hornlab-metal-bem native Metal"]
+    assert worker.finished and worker.observed == [[], []]
+    assert not worker.partial  # This experimental route publishes only the durable final.
     for actual in result.rows:
         expected = parse_transducer_frequency(native_record(compiled, actual.frequency_hz),
                                               compiled, actual.frequency_hz)
@@ -377,37 +386,107 @@ def test_worker_decodes_driven_and_shorted_network_without_scaling(monkeypatch, 
         assert actual.diagnostics["engine_provenance"]["implementation"] == "hornlab-metal-bem"
 
 
-@pytest.mark.parametrize("failure", ["decode", "callback", "native_cancel", "negotiate"])
+@pytest.mark.parametrize("failure", ["decode", "status", "native_cancel", "negotiate", "startup", "submit"])
 def test_worker_closes_and_preserves_errors(monkeypatch, worker, solid, record, failure):
     from beat_engine.beat_contract.worker import WorkerCompatibilityError
+    from hornlab_metal_bem import beat_worker as provider
 
     compiled, _ = jobs.compile_request(solid, metal_request(), record, backend="metal")
-    def configure(instance):
-        if failure == "decode":
-            instance.mutate = lambda data: data.update(excitation_port_ids=[])
-        if failure == "negotiate":
-            instance.worker_info["contracts"]["compiled_system"] = [1]
-    instances = install_worker(monkeypatch, worker, compiled, configure)
-    def stopped(*_):
-        raise LookupError("caller stopped")
+    prepare_worker(worker, compiled)
+    stopped = LookupError("caller stopped")
+
+    def stop(*args, **kwargs):
+        raise stopped
+
+    if failure == "decode":
+        worker.result = replace(worker.result, excitation_port_ids=())
+    elif failure == "negotiate":
+        original = provider.worker_announcement
+        def announcement(availability):
+            info = original(availability)
+            info["contracts"]["compiled_system"] = [1]
+            return info
+        monkeypatch.setattr(provider, "worker_announcement", announcement)
+    elif failure == "startup":
+        original = provider.MetalEngineWorker.ensure_started
+        def started(self, **kwargs):
+            original(self, **kwargs)
+            stop()
+        monkeypatch.setattr(provider.MetalEngineWorker, "ensure_started", started)
+    elif failure == "submit":
+        monkeypatch.setattr(provider.MetalEngineWorker, "submit", stop)
+
     def cancel():
-        if instances and instances[0].submitted:
-            stopped()
-    expected = LookupError if failure in {"callback", "native_cancel"} else (WorkerCompatibilityError, ResultContractError)
-    with pytest.raises(expected):
+        if worker.computed:
+            stop()
+
+    expected = (ResultContractError if failure == "decode" else
+                WorkerCompatibilityError if failure == "negotiate" else LookupError)
+    with pytest.raises(expected) as caught:
         metal_worker.solve_transducer_worker(compiled,
-            on_frequency_result=stopped if failure == "callback" else None,
+            status_callback=stop if failure == "status" else None,
             cancellation_callback=cancel if failure == "native_cancel" else None)
-    assert instances[0].terminated
-    assert instances[0].closed if failure != "negotiate" else not instances[0].submitted
+    if expected is LookupError:
+        assert caught.value is stopped
+    assert_worker_stopped(worker)
+    if failure in {"startup", "negotiate", "submit"}:
+        assert not worker.submissions
 
 
-def test_worker_preserves_cancelled_prefix(monkeypatch, worker, solid, record):
+def test_worker_cancellation_discards_computed_prefix(worker, solid, record):
     compiled, _ = jobs.compile_request(solid, metal_request(), record, backend="metal")
-    instances = install_worker(monkeypatch, worker, compiled, lambda w: setattr(w, "cancelled", True))
-    result = metal_worker.solve_transducer_worker(compiled)
-    assert result.cancelled and len(result.rows) == 1 and result.requested_frequency_count == 2
-    assert instances[0].closed and instances[0].terminated
+    prepare_worker(worker, compiled)
+    stopped = LookupError("caller stopped")
+
+    def cancel():
+        if worker.computed:
+            raise stopped
+
+    with pytest.raises(LookupError) as caught:
+        metal_worker.solve_transducer_worker(compiled, cancellation_callback=cancel,
+                                              on_frequency_result=worker.partial.append)
+    assert caught.value is stopped
+    assert worker.computed == compiled.wire["frequencies_hz"][:1]
+    assert not worker.partial and not worker.finished
+    assert_worker_stopped(worker)
+
+
+def test_provider_cancellation_emits_zero_results(worker, solid, record):
+    from hornlab_metal_bem import MetalEngineWorker
+
+    compiled, _ = jobs.compile_request(solid, metal_request(), record, backend="metal")
+    prepare_worker(worker, compiled)
+    def cancel(*_):
+        raise InterruptedError("stop after one computed frequency")
+    native = MetalEngineWorker(native_formulation="complex_k", native_progress_cb=cancel)
+    try:
+        native.ensure_started()
+        stream = native.submit(compiled.wire)
+        events = list(stream)
+        stream.close()
+    finally:
+        native.terminate()
+    assert events == [
+        {"type": "status", "message": "Solving on hornlab-metal-bem native Metal"},
+        {"type": "cancelled", "solved_count": 0},
+    ]
+    assert worker.computed == compiled.wire["frequencies_hz"][:1]
+    assert not worker.finished
+    assert_worker_stopped(worker)
+
+
+def test_worker_native_cancellation_explains_retry(monkeypatch, worker, solid, record):
+    from hornlab_metal_bem import beat_worker as provider
+
+    compiled, _ = jobs.compile_request(solid, metal_request(), record, backend="metal")
+    prepare_worker(worker, compiled)
+    def compute(*args, **kwargs):
+        raise InterruptedError("native computation stopped")
+    monkeypatch.setattr(provider, "solve_compiled", compute)
+    with pytest.raises(RuntimeError, match="partial results are unavailable.*Retry.*BEAT"):
+        metal_worker.solve_transducer_worker(compiled, on_frequency_result=worker.partial.append)
+    assert not worker.partial
+    assert_worker_stopped(worker)
 
 
 def test_worker_rejects_unsupported_request_before_construction(monkeypatch, worker, solid, record):
@@ -417,4 +496,4 @@ def test_worker_rejects_unsupported_request_before_construction(monkeypatch, wor
     monkeypatch.setattr(metal_worker, "validate_worker_request", reject)
     with pytest.raises(ValueError, match="unsupported driver option.*BEAT"):
         metal_worker.solve_transducer_worker(compiled)
-    assert not worker[0]
+    assert not worker.instances

@@ -21,10 +21,19 @@ Provider metadata identifies `hornlab-metal-bem`, rather than BEAT's native
 implementation. The formulation comes from WG's existing exterior policy:
 `complex_k`, shift `0.005`. This route makes no Burton–Miller claim.
 
-Stubbed worker tests cover translation, unchanged RMS values and complex field
-bytes, provider identity, mixed sources, admission, cancellation, negotiation and
-cleanup. These tests establish integration semantics; they do not establish
-numerical parity with BEAT or qualify the installed native helper.
+This experimental route is final-only. The pinned Metal-BEM worker computes the
+whole sweep before emitting result records. Native frequency callbacks check
+cancellation but do not publish progress or provisional results. Stopping during
+computation discards the computed prefix; retry the full sweep or select BEAT CPU
+or BEAT Metal when partial results are needed. The bridge publishes no provisional
+frames, including while decoding the completed sweep.
+
+Tests use the real Metal worker, submission thread and result encoder with native
+computation stubbed. They cover unchanged RMS values and complex field bytes,
+provider identity, final-only delivery, zero-result cancellation, negotiation and
+cleanup. Route tests cover mixed sources and admission. These tests establish
+integration semantics; they do not establish numerical parity with BEAT or
+qualify the installed native helper.
 
 Before enabling the route for normal use, qualify the exact installed worker
 and helper against BEAT and WG's current LEM path:
@@ -55,7 +64,9 @@ and helper against BEAT and WG's current LEM path:
    compare the mutual-load/shorted-coil effects separately; the one-way LEM path
    is not a coupled-network reference. Replay saved ideal-source/LEM designs
    with the flag off and on and require identical meshes and numerical results.
-6. Verify streamed/final results, cancellation during native assembly and
-   network work, retry, persistence and recombination on an installed build.
+6. Verify final-only delivery, cancellation without partial results during native
+   assembly and network work, retry, persistence and recombination on an installed
+   build. Streaming or retained cancelled prefixes require a provider change and
+   new qualification.
    Retain exact request/result artifacts and qualification evidence before any
    default-on or UI rollout decision.
