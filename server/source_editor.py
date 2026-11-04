@@ -15,49 +15,12 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, FastAPI, HTTPException, Response
 from server.platform.json_file import json_bytes, staged_json, write_json_atomic
-from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt
+from pydantic import Field, StrictInt
 
-Number = Annotated[StrictFloat | StrictInt, Field(allow_inf_nan=False)]
-Identity = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^\S(?:.*\S)?$")]
-
-
-class WireModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class Point(WireModel):
-    id: Identity
-    r_mm: Number
-    z_mm: Number
-
-
-class Segment(WireModel):
-    id: Identity
-    start: Identity
-    end: Identity
-    role: Literal["moving", "rigid"] = "moving"
-    kind: Literal["line", "arc"] = "line"
-    center_mm: tuple[Number, Number] | None = None
-    direction: Literal["cw", "ccw"] = "ccw"
-
-
-class Contour(WireModel):
-    version: Annotated[StrictInt, Field(ge=1, le=1)] = 1
-    physical_source_id: Identity
-    rim_id: Identity
-    points: Annotated[list[Point], Field(min_length=2, max_length=257)]
-    segments: Annotated[list[Segment], Field(min_length=1, max_length=256)]
-
-
-class Drive(WireModel):
-    channel_id: Identity
-    weights: Annotated[dict[Identity, Number], Field(min_length=1, max_length=256)]
-    motion: Literal["normal", "axial"] = "normal"
-
-
-class SourceDocument(WireModel):
-    contour: Contour
-    drive: Drive
+from server.design.source_document import (
+    Number, Identity, WireModel, Point as Point, Segment as Segment, Contour as Contour,
+    Drive as Drive, SourceDocument, canonical_document as canonical_document,
+)
 
 
 def native(document: SourceDocument):
@@ -76,17 +39,6 @@ def native(document: SourceDocument):
         return contour, drive
     except (TypeError, ValueError) as exc:
         raise HTTPException(422, user_error_message(exc)) from exc
-
-
-def canonical_document(contour, drive) -> dict[str, Any]:
-    return {
-        "contour": json.loads(json.dumps(contour.to_dict())),
-        "drive": {
-            "channel_id": drive.channel_id,
-            "weights": dict(drive.weights),
-            "motion": drive.motion,
-        },
-    }
 
 
 def validated(document: SourceDocument) -> dict[str, Any]:

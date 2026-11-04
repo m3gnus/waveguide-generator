@@ -2,7 +2,7 @@ import { beforeEach, expect, it } from 'vitest';
 import { exteriorTransducerError, parseExteriorTransducer } from '../stores/exteriorTransducer';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
-import { buildImportedSubmission, exteriorModeBlocker, undrivenChannels } from './importedSubmission';
+import { buildImportedSubmission, exteriorModeBlocker, resolveExteriorDriverPolicy, undrivenChannels } from './importedSubmission';
 import { buildCadProjectSetup } from '../shell/cadSetupPublisher';
 import { retainCadDraft, waitForCadProjectSettings } from '../stores/cadProjectSettings';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -46,13 +46,13 @@ it('never silently drops incomplete or unknown saved physics', () => {
   expect(parseExteriorTransducer(form)).toEqual(form);
 });
 
-it('refuses hybrid jobs, automatic engine fallback and adaptive jobs', () => {
+it('admits hybrid jobs and automatic engine selection, and refuses adaptive jobs', () => {
   enable();
   useImportedSolveOptionsStore.getState().setEngine('auto');
-  expect(() => buildImportedSubmission()).toThrow('Choose BEAT');
+  expect(buildImportedSubmission().options.engine).toBe('auto');
   useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
   useCadReturnStore.setState({ driveChannels: [...useCadReturnStore.getState().driveChannels, { id: 'ideal', source_ids: ['other'], motion: 'normal' }] });
-  expect(() => buildImportedSubmission()).toThrow('every channel');
+  expect(buildImportedSubmission().geometry.drive_channels).toHaveLength(2);
   useCadReturnStore.setState({ driveChannels: useCadReturnStore.getState().driveChannels.slice(0, 1) });
   useImportedSolveOptionsStore.getState().setAdaptiveFrequencySampling(true);
   expect(() => buildImportedSubmission()).toThrow('adaptive');
@@ -167,11 +167,26 @@ it.each(['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] as const)(
   },
 );
 
-it.each(['auto', 'beat-cuda', 'beat-rocm'] as const)('keeps non-FEM driver restrictions on %s', (engine) => {
+it.each(['beat-cuda', 'beat-rocm'] as const)('keeps non-FEM driver restrictions on %s', (engine) => {
   enable();
   useImportedSolveOptionsStore.getState().setEngine(engine);
   expect(exteriorModeBlocker(useCadReturnStore.getState(), useImportedSolveOptionsStore.getState()))
     .toBe('Choose BEAT CPU or BEAT Metal for coupled exterior drivers.');
+});
+
+it.each(['metal', 'bempp', 'beat-cuda', 'beat-rocm'] as const)('owns both unsupported-driver intents on %s', engine => {
+  enable();
+  const channels = useCadReturnStore.getState().driveChannels;
+  const before = structuredClone(channels);
+  const coupled = resolveExteriorDriverPolicy(channels, { engine }, 'block');
+  expect(coupled.blocker).toContain('Choose BEAT');
+  expect(coupled.channels).toEqual(before);
+  const fixed = resolveExteriorDriverPolicy(channels, { engine }, 'fixed_velocity');
+  expect(fixed.blocker).toBeNull();
+  expect(fixed.notice).toContain(engine === 'bempp' ? 'unit acceleration (1 m/s²)' : 'fixed velocity (1 m/s RMS)');
+  if (engine === 'bempp') expect(fixed.notice).not.toContain('1 m/s RMS');
+  expect(fixed.channels[0].exterior_transducer).toBeUndefined();
+  expect(channels).toEqual(before);
 });
 
 it('round-trips v2 Sd without altering v1 readers or allowing invalid Sd', async () => {

@@ -13,7 +13,7 @@ import { hasPassiveCardioidSurface, resetCadReturnStore, useCadReturnStore, type
 import { editFileDraft, flushImportedSetupWrites, openImported, resetImportedModelStore, useImportedModelStore } from './importedModel';
 import { createImportedSimulationSetup, importedSimulationSetup, seedFileSimulation } from './importedSimulationSetup';
 import { fileMeshSetup, fileMeshSubmission, fileSetupForSave } from './meshImport';
-import { resetSolveOptionsStore } from './solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore } from './solveOptions';
 import { workspaceModeStore } from './workspaceMode';
 
 const msh = new TextDecoder().decode(readFileSync('../server/tests/fixtures/mesh_import/tetra.msh'));
@@ -325,6 +325,13 @@ it.each([preset, { ...preset, base: {} }])('retains file driver controls through
 });
 
 it('uses the CAD exterior-driver readiness check for newly configured file drivers', () => {
+  importedSimulationSetup().setExteriorTransducer('source:high', { version: 1, motion_axis: [0, 0, 1] });
+  // Automatic admits coupled drivers, then validates the unfinished form.
+  expect(() => fileMeshSetup()).toThrow('HF driver: Enter resistance in the stated units.');
+});
+
+it.each(['bempp', 'metal'] as const)('requires a coupled engine for new file drivers on %s', engine => {
+  useImportedSolveOptionsStore.getState().setEngine(engine);
   importedSimulationSetup().setExteriorTransducer('source:high', { version: 1, motion_axis: [0, 0, 1] });
   expect(() => fileMeshSetup()).toThrow('Choose BEAT CPU or BEAT Metal');
 });

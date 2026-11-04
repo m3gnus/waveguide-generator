@@ -19,7 +19,7 @@ from server.contracts.observations import (
 
 from server.contracts import DriverSpec as DriverSpec, JobModel as JobModel
 from server.design.defaults import default_sweep_start_hz
-from server.design.schema import DesignConfig
+from server.design.schema import AssemblyWiringGroup, DesignConfig, validate_wiring_groups
 from server.design.uid import DesignUid
 from server.drivers.models import ExteriorDriverInputs
 
@@ -838,12 +838,21 @@ class DriverGroup(JobModel):
 
 class ImportedGeometrySource(JobModel):
     type: Literal["imported"]
+    # Missing fields retain their original wire bytes and use the legacy
+    # decoder below. Adapters state the convention for new requests.
+    excitation_normalization: Literal["rms_velocity", "acceleration_legacy"] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    excitation_normalization_by_engine: dict[Literal["bempp"], Literal["rms_velocity", "acceleration_legacy"]] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     required_features: list[Literal["native-source-contour-v1", "native-front-baffle-woofer-v1", "native-shared-horn-woofer-v1", "native-phase-plug-passages-v1", "native-general-horn-attachment-v1", "wg-design-assembly-v1"]] = Field(default_factory=list)
     ingest_id: str
     manifest_sha256: str
     artifact_sha256: str
     drive_channels: list[DriveChannel]
     driver_groups: list[DriverGroup] | None = None
+    wiring_groups: list[AssemblyWiringGroup] = Field(default_factory=list, exclude_if=lambda value: not value)
     combine: ChannelCombineSpec | None = None
     drive_voltage_v: float = Field(default=2.83, gt=0, allow_inf_nan=False)
     rg_ohm: float = Field(default=0.0, ge=0, allow_inf_nan=False)
@@ -910,11 +919,23 @@ class ImportedGeometrySource(JobModel):
         }
         return processing or None
 
-    @property
-    def design_assembly(self) -> bool:
-        """Whether this solve negotiates a compiled design assembly record."""
+    def normalization_for_engine(self, engine: str | None = None) -> str:
+        """Decode old excitation conventions only when the request omits them.
 
-        return "wg-design-assembly-v1" in self.required_features
+        BEMPP historically left every producer on its acceleration basis;
+        the other prescribed adapters converted design assemblies to RMS
+        velocity. This is a replay decoder, never admission or capability.
+        """
+        if engine in (self.excitation_normalization_by_engine or {}):
+            return self.excitation_normalization_by_engine[engine]
+        if self.excitation_normalization is not None:
+            return self.excitation_normalization
+        return ("rms_velocity" if engine != "bempp" and "wg-design-assembly-v1" in self.required_features
+                else "acceleration_legacy")
+
+    @property
+    def uses_rms_velocity(self) -> bool:
+        return self.normalization_for_engine() == "rms_velocity"
 
     def physical_members(self, members: list[str]) -> list[str]:
         """Resolve crossover branches to the physical channels they contain."""
@@ -947,7 +968,14 @@ class ImportedGeometrySource(JobModel):
 
     @model_validator(mode="after")
     def validate_channels_and_sizes(self) -> "ImportedGeometrySource":
-        if any(c.patch_weights is not None or c.physical_source_id is not None for c in self.drive_channels) and "native-source-contour-v1" not in self.required_features:
+        if self.wiring_groups:
+            if self.combine is not None and self.combine.id in {group.id for group in self.wiring_groups}:
+                raise ValueError("The combined result and wiring networks need distinct ids; rename the combined result.")
+            validate_wiring_groups(self.wiring_groups, {
+                channel.id for channel in self.drive_channels if channel.exterior_transducer is not None
+            }, {group.id: {name: (group.member_processing or {}).get(name, {}) for name in group.channel_ids}
+                for group in self.driver_groups or []}, {channel.id for channel in self.drive_channels})
+        if any(c.patch_weights is not None or c.physical_source_id is not None for c in self.drive_channels) and not {"native-source-contour-v1", "wg-design-assembly-v1"}.intersection(self.required_features):
             raise ValueError("weighted/grouped patches require native-source-contour-v1 negotiation")
         channel_ids = [channel.id for channel in self.drive_channels]
         if len(set(channel_ids)) != len(channel_ids):
@@ -1007,15 +1035,11 @@ class ImportedGeometrySource(JobModel):
                     "Set generator resistance to 0 ohms or drive the surfaces separately "
                     "when a driver group contains multiple channels."
                 )
-            if len(channels) > 1 and any(channel.patch_weights is not None for channel in channels):
-                raise ValueError("driver groups cannot combine weighted patch channels")
             if group.member_processing is None and any(
                 (channel.motion, channel.driver, channel.exterior_transducer)
                 != (first.motion, first.driver, first.exterior_transducer) for channel in channels[1:]
             ):
                 raise ValueError("driver group channels must have identical motion and drivers")
-            if group.member_processing is not None and not self.design_assembly:
-                raise ValueError("member processing requires a design assembly solve")
         if self.combine is not None:
             known_branches = known | set(group_ids)
             unknown_members = [name for name in self.combine.members if name not in known_branches]
@@ -1185,25 +1209,16 @@ class SolveRequest(JobDesignIdentity):
         # Explicit exterior-only jobs retain their restrictions here. With the
         # default exterior_only=False, record admission applies those same
         # restrictions unless retained FEM regions establish a coupled job.
-        if geometry.design_assembly:
-            # One coupled request: prescribed sources beside voltage-driven
-            # drivers, and a crossover over the resolved channel bases.
-            # Maximum-output gains are not offered on coupled drivers.
-            if geometry.combine is not None and any(
-                channel.gain.mode == "max" for channel in (geometry.combine.channels or {}).values()
-            ):
-                raise ValueError("maximum-output gain is not available with coupled exterior drivers")
-            if (geometry.passive_cardioid_enabled or geometry.rg_ohm != 0
-                    or geometry.max_drive_voltage_v is not None or self.options.adaptive_frequency_sampling
-                    or self.options.mesh_ladder != "off" or self.options.ground_plane.enabled):
-                raise ValueError("assembly driver solves do not yet support passive cardioid, generator resistance, ceilings, adaptive sampling, mesh ladders or ground")
-            return self
-        if geometry.exterior_only and not all(c.exterior_transducer for c in geometry.drive_channels):
-            raise ValueError("exterior transducer jobs currently require a model on every drive channel")
-        if (geometry.combine is not None or geometry.passive_cardioid_enabled or geometry.rg_ohm != 0
+        # BEAT v3 supports prescribed velocity and voltage ports in one system,
+        # with member processing and crossover over the retained pressure bases.
+        if geometry.combine is not None and any(
+            channel.gain.mode == "max" for channel in (geometry.combine.channels or {}).values()
+        ):
+            raise ValueError("maximum-output gain is not available with coupled exterior drivers")
+        if (geometry.passive_cardioid_enabled or geometry.rg_ohm != 0
                 or geometry.max_drive_voltage_v is not None or self.options.adaptive_frequency_sampling
                 or self.options.mesh_ladder != "off" or self.options.ground_plane.enabled):
-            raise ValueError("exterior transducer jobs do not yet support crossovers, passive cardioid, generator resistance, ceilings, adaptive sampling, mesh ladders or ground")
+            raise ValueError("exterior transducer jobs do not yet support passive cardioid, generator resistance, ceilings, adaptive sampling, mesh ladders or ground")
         return self
 
     @model_validator(mode="after")

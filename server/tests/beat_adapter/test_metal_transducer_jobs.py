@@ -147,6 +147,68 @@ def test_route_uses_same_request_and_unscaled_results(monkeypatch, worker, solid
         assert result["_channel_bases_npz"]
 
 
+@pytest.mark.parametrize("wired", [False, True])
+@pytest.mark.parametrize("normalization", ["rms_velocity", "acceleration_legacy"])
+@pytest.mark.parametrize("weight", [-.25, 0.])
+def test_signed_axial_prescribed_basis_and_wiring_share_metal_owner(
+    monkeypatch, worker, solid, record, wired, normalization, weight,
+):
+    from server.solver.combine import deserialize_channel_bases
+
+    monkeypatch.setenv(FLAG, "1")
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True})
+    driver_id = "00000000-0000-4000-8000-000000000001"
+    network_id = "00000000-0000-4000-8000-000000000010"
+    payload = metal_request(mixed=True).model_dump(mode="json")
+    geometry = payload["geometry"]
+    geometry["excitation_normalization"] = normalization
+    geometry["drive_channels"][0]["id"] = driver_id
+    ideal = geometry["drive_channels"][1]
+    ideal.update(motion="axial", patch_weights={"c": weight, "d": weight})
+    if wired:
+        geometry["driver_groups"] = [{"id": "lf", "channel_ids": [driver_id], "label": "LF"}]
+        geometry["wiring_groups"] = [{"id": network_id, "label": "LF", "network": {
+            "kind": "series", "children": [
+                {"kind": "driver", "radiator_id": driver_id}, {"kind": "R", "value": 2.0},
+            ],
+        }}]
+    requested = type(request()).model_validate(payload)
+    # The record declares independent axial directions; producer is irrelevant.
+    record.update(producer="cad", required_features=geometry["required_features"], excitations=[
+        {"id": driver_id, "source_ids": ["a", "b"], "motion": "axial", "motion_axis": [1, 0, 0]},
+        {"id": "ideal", "source_ids": ["c", "d"], "motion": "axial",
+         "motion_axis": [0, 0, 1], "patch_weights": ideal["patch_weights"]},
+    ])
+    compiled, _ = jobs.compile_request(solid, requested, record, backend="metal")
+    assert metal.MetalEngine().imported_preflight(record, solid, request=requested) is None
+    components = compiled.wire["compiled_system"]["components"]
+    prescribed = [component for component in components if component["kind"] == "ideal_velocity_source"]
+    assert len(prescribed) == 2
+    assert all(component["parameters"]["motion_axis"] == [0, 0, 1] for component in prescribed)
+    prepare_worker(worker, compiled)
+    result = metal.solve_imported_metal_from_msh_text(solid, requested, record)
+    assert_worker_stopped(worker)
+    bases = deserialize_channel_bases(result["_channel_bases_npz"])["results_by_id"]
+    scale = np.full(len(compiled.wire["frequencies_hz"]), 2 * weight, complex)
+    if normalization == "acceleration_legacy":
+        scale /= -2j * np.pi * np.asarray(compiled.wire["frequencies_hz"])
+    np.testing.assert_allclose(bases["ideal"].pressure_complex[:, 0, 0], scale * (2 + 3j))
+    np.testing.assert_allclose(bases["ideal"].sphere_pressure_complex[:, 0], scale * (2 + 3j))
+    if wired:
+        assert network_id in result["channel_order"]
+        assert result["channels"][network_id]["metadata"]["solver_engine"]["engine"] == "metal"
+        np.testing.assert_allclose(bases["ideal"].native_current[:, 0], scale * (.4 + .2j))
+        np.testing.assert_allclose(bases["ideal"].native_velocity[:, 0], scale * (1 - 2j))
+
+
+def test_signed_driver_weights_refuse_before_metal_worker(monkeypatch, solid, record):
+    monkeypatch.setenv(FLAG, "1")
+    requested = metal_request()
+    requested.geometry.drive_channels[0].patch_weights = {"a": 1., "b": -.25}
+    refusal = metal.MetalEngine().imported_preflight(record, solid, request=requested)
+    assert "signed or nonunit patch weights" in refusal and "fixed velocity" in refusal
+
+
 @pytest.mark.parametrize("mixed", [False, True])
 def test_metal_admission_and_solve_do_not_import_beat_engine(solid, record, mixed):
     requested = metal_request(mixed=mixed)

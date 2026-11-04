@@ -29,9 +29,9 @@ export interface ReverseNullTrace {
   points: Array<[number, number]>;
 }
 
-function onAxisComplex(payload: ResultPayload | undefined, count: number): Complex[] | null {
-  const spl = payload?.spl_on_axis?.spl;
-  const phase = payload?.spl_on_axis?.phase_degrees;
+function onAxisComplex(response: ResultPayload['spl_on_axis'] | undefined, count: number): Complex[] | null {
+  const spl = response?.spl;
+  const phase = response?.phase_degrees;
   if (!spl || !phase || spl.length !== count || phase.length !== count) return null;
   const values: Complex[] = [];
   for (let index = 0; index < count; index += 1) {
@@ -104,7 +104,7 @@ export function reverseNullTraces(
   const frequencies = combined.spl_on_axis?.frequencies ?? combined.frequencies;
   if (!frequencies?.length) return [];
   const count = frequencies.length;
-  const sum = onAxisComplex(combined, count);
+  const sum = onAxisComplex(combined.spl_on_axis, count);
   if (!sum) return [];
   const members = spec.members;
   if (members.some((member) => {
@@ -114,8 +114,15 @@ export function reverseNullTraces(
 
   const pressures: Complex[][] = [];
   for (const member of members) {
+    if (combine.member_responses) {
+      const response = combine.member_responses[member];
+      const field = response && onAxisComplex({ frequencies, ...response }, count);
+      if (!field) return [];
+      pressures.push(field);
+      continue;
+    }
     const physical = combine.member_channels?.[member] ?? [member];
-    const fields = physical.map(id => onAxisComplex(wrapper.channels![id] as ResultPayload | undefined, count));
+    const fields = physical.map(id => onAxisComplex((wrapper.channels![id] as ResultPayload | undefined)?.spl_on_axis, count));
     if (!fields.length || fields.some(field => !field)) return [];
     pressures.push(Array.from({ length: count }, (_, index) => fields.reduce<Complex>(
       (sum, field) => [sum[0] + field![index][0], sum[1] + field![index][1]], [0, 0])));

@@ -2767,6 +2767,8 @@ export interface components {
             hf_source?: components["schemas"]["AssemblyHfSource"];
             /** Signal Groups */
             signal_groups?: components["schemas"]["AssemblySignalGroup"][];
+            /** Wiring Groups */
+            wiring_groups?: components["schemas"]["AssemblyWiringGroup"][];
             /** Woofers */
             woofers?: components["schemas"]["AssemblyWoofer"][];
         };
@@ -2819,21 +2821,34 @@ export interface components {
         };
         /**
          * AssemblyHfSource
-         * @description The horn's classic prescribed throat source, with the mesher's identity.
+         * @description The horn's prescribed throat source: classic or a committed sketch.
          */
         AssemblyHfSource: {
+            /** Authoring */
+            authoring?: {
+                [key: string]: unknown;
+            } | null;
+            diaphragm?: components["schemas"]["SourceDocument"] | null;
             /**
              * Kind
              * @default classic
-             * @constant
+             * @enum {string}
              */
-            kind?: "classic";
+            kind?: "classic" | "sketched";
+            /** Phase Plugs */
+            phase_plugs?: components["schemas"]["PhasePlug"][];
             /**
              * Radiator Id
              * @default horn-throat
              * @constant
              */
             radiator_id?: "horn-throat";
+            /**
+             * Status
+             * @default valid
+             * @enum {string}
+             */
+            status?: "valid" | "unfinished" | "invalid";
         };
         /**
          * AssemblyMember
@@ -2899,6 +2914,52 @@ export interface components {
             /** Radiator Id */
             radiator_id: string;
         };
+        /** AssemblyWiringBranch */
+        AssemblyWiringBranch: {
+            /** Children */
+            children: (components["schemas"]["AssemblyWiringDriver"] | components["schemas"]["AssemblyWiringPart"] | components["schemas"]["AssemblyWiringBranch"])[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "parallel" | "series";
+        };
+        /** AssemblyWiringDriver */
+        AssemblyWiringDriver: {
+            /**
+             * Invert
+             * @default false
+             */
+            invert?: boolean;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "driver";
+            /** Radiator Id */
+            radiator_id: string;
+        };
+        /** AssemblyWiringGroup */
+        AssemblyWiringGroup: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            network: components["schemas"]["AssemblyWiringBranch"];
+        };
+        /**
+         * AssemblyWiringPart
+         * @description SI component values: ohms, henry and farad, respectively.
+         */
+        AssemblyWiringPart: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "C" | "L" | "R";
+            /** Value */
+            value: number;
+        };
         /** AssemblyWoofer */
         AssemblyWoofer: {
             ath?: components["schemas"]["AthLfProvenance"] | null;
@@ -2926,16 +2987,27 @@ export interface components {
         };
         /** AssemblyWooferShape */
         AssemblyWooferShape: {
+            /** Authoring */
+            authoring?: {
+                [key: string]: unknown;
+            } | null;
+            diaphragm?: components["schemas"]["SourceDocument"] | null;
             /**
              * Kind
              * @enum {string}
              */
-            kind: "piston" | "ath_cone";
+            kind: "piston" | "ath_cone" | "sketched";
             /**
              * Recess Mm
              * @default 0
              */
             recess_mm?: number;
+            /**
+             * Status
+             * @default valid
+             * @enum {string}
+             */
+            status?: "valid" | "unfinished" | "invalid";
         };
         /**
          * AthLfProvenance
@@ -5175,6 +5247,12 @@ export interface components {
             drive_voltage_v?: number;
             /** Driver Groups */
             driver_groups?: components["schemas"]["DriverGroup"][] | null;
+            /** Excitation Normalization */
+            excitation_normalization?: ("rms_velocity" | "acceleration_legacy") | null;
+            /** Excitation Normalization By Engine */
+            excitation_normalization_by_engine?: {
+                [key: string]: "rms_velocity" | "acceleration_legacy";
+            } | null;
             /**
              * Exterior Only
              * @default false
@@ -5221,6 +5299,8 @@ export interface components {
              * @enum {string}
              */
             type: "imported";
+            /** Wiring Groups */
+            wiring_groups?: components["schemas"]["AssemblyWiringGroup"][];
         };
         /** ImportedMeshRequest */
         ImportedMeshRequest: {
@@ -6454,6 +6534,23 @@ export interface components {
             result_kind: "parametric";
         } & {
             [key: string]: unknown;
+        };
+        /** PhasePlug */
+        PhasePlug: {
+            /** Id */
+            id: string;
+            /** Inner0 Mm */
+            inner0_mm: number;
+            /** Inner1 Mm */
+            inner1_mm: number;
+            /** Outer0 Mm */
+            outer0_mm: number;
+            /** Outer1 Mm */
+            outer1_mm: number;
+            /** Z0 Mm */
+            z0_mm: number;
+            /** Z1 Mm */
+            z1_mm: number;
         };
         /**
          * PlanAdjustment

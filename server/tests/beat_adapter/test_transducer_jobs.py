@@ -149,16 +149,16 @@ def test_engine_choice_uses_shared_policy_instead_of_wire_refusal(engine):
         assert caught.value.details["capable_engines"] == ["beat-cpu"]
 
 
-def test_hybrid_and_ceiling_refused():
+def test_hybrid_admitted_and_ceiling_refused():
     payload = request().model_dump(mode="json")
     payload["geometry"]["drive_channels"][1].pop("exterior_transducer")
     # The immutable ingestion record chooses exterior versus coupled dispatch.
     from server.jobs.runtime.imported_refusals import _imported_request_refusal
     mixed = SolveRequest.model_validate(payload)
-    assert _imported_request_refusal(mixed, {})[0] == "exterior_transducer_mixed_channels"
+    refusal = _imported_request_refusal(mixed, {})
+    assert refusal is None or refusal[0] != "exterior_transducer_mixed_channels"
     payload["geometry"]["exterior_only"] = True
-    with pytest.raises(ValidationError, match="every drive channel"):
-        SolveRequest.model_validate(payload)
+    assert SolveRequest.model_validate(payload).geometry.exterior_only
     payload = request().model_dump(mode="json")
     payload["geometry"]["max_drive_voltage_v"] = 10.0
     with pytest.raises(ValidationError, match="ceilings"):

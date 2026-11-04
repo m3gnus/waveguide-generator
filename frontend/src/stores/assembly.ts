@@ -19,6 +19,8 @@ export type AssemblyWooferShape = Schemas['AssemblyWooferShape'];
 export type AssemblyDriver = Schemas['AssemblyDriver'];
 export type AssemblyMember = Schemas['AssemblyMember'];
 export type AssemblySignalGroup = Schemas['AssemblySignalGroup'];
+export type AssemblyWiringGroup = Schemas['AssemblyWiringGroup'];
+export type AssemblyWiringNode = Schemas['AssemblyWiringBranch'] | Schemas['AssemblyWiringDriver'] | Schemas['AssemblyWiringPart'];
 export type AssemblyAnchor = AssemblyPlacement['anchor'];
 
 /** The design mesher's fixed identity of the horn's classic prescribed source. */
@@ -140,6 +142,8 @@ function spacingCycle(assembly: DesignAssembly): boolean {
 export function deleteWoofer(assembly: DesignAssembly, id: string): DesignAssembly {
   if (!wooferById(assembly, id)) throw new ProgramFault('Unknown woofer.');
   const next = structuredClone(assembly);
+  next.wiring_groups = (next.wiring_groups ?? []).filter(group => !wiringDriverIds(group.network).includes(id));
+  if (!next.wiring_groups.length) delete next.wiring_groups;
   next.woofers = woofers(next).filter(woofer => woofer.id !== id).map(woofer => {
     if (woofer.placement.spacing_to?.radiator_id !== id) return woofer;
     const { spacing_to: _removed, ...placement } = woofer.placement;
@@ -174,6 +178,9 @@ function withoutCrossoverMembers(assembly: DesignAssembly, removed: ReadonlySet<
 /** Bind (or clear) a T/S driver to a radiator identity. */
 export function setDriver(assembly: DesignAssembly, id: string, driver: AssemblyDriver | null): DesignAssembly {
   if (!wooferById(assembly, id)) throw new ProgramFault('Drivers bind to a woofer of this assembly.');
+  if (!driver && (assembly.wiring_groups ?? []).some(group => wiringDriverIds(group.network).includes(id))) {
+    throw new Error('This woofer is wired. Remove its wiring network before clearing its driver.');
+  }
   const next = structuredClone(assembly);
   const drivers = { ...(next.drivers ?? {}) };
   if (driver) drivers[id] = structuredClone(driver); else delete drivers[id];
@@ -222,6 +229,7 @@ export function setMemberProcessing(assembly: DesignAssembly, radiatorId: string
     return updated;
   }) }));
   if (!found) throw new ProgramFault('Unknown radiator.');
+  validateAssemblyWiring(next);
   return next;
 }
 
@@ -248,11 +256,105 @@ export function moveToGroup(assembly: DesignAssembly, radiatorId: string, groupI
     list = list.map(group => group.id === groupId ? { ...group, members: [...group.members, structuredClone(member)] } : group);
   }
   next.signal_groups = list;
+  validateAssemblyWiring(next);
   return removed.size ? withoutCrossoverMembers(next, removed) : next;
+}
+
+export function wiringDriverIds(node: AssemblyWiringNode): string[] {
+  return node.kind === 'driver' ? [node.radiator_id]
+    : 'children' in node ? node.children.flatMap(wiringDriverIds) : [];
+}
+
+export interface AssemblyWiringProblem { groupId: string; path: number[]; message: string; kind: 'network' | 'member-processing' }
+
+/** Electrical validation and its location, shared by commits and the wiring editor. */
+export function assemblyWiringProblems(assembly: DesignAssembly): AssemblyWiringProblem[] {
+  const problems: AssemblyWiringProblem[] = [];
+  const seen = new Set<string>();
+  const identities = new Set([...woofers(assembly).map(item => item.id), ...groups(assembly).map(item => item.id)]);
+  for (const group of assembly.wiring_groups ?? []) {
+    const problem = (path: number[], message: string, kind: AssemblyWiringProblem['kind'] = 'network') => problems.push({ groupId: group.id, path, message, kind });
+    if (!UUID.test(group.id) || identities.has(group.id)) problem([], 'Use a unique UUID for each wiring network.');
+    identities.add(group.id);
+    if (!group.label.trim() || group.label.length > 80 || /[\r\n]/.test(group.label)) problem([], 'Give the wiring network a label of 1–80 characters on one line.');
+    const ids = wiringDriverIds(group.network);
+    const owners = groups(assembly).filter(signal => ids.every(id => signal.members.some(member => member.radiator_id === id)));
+    function validate(node: AssemblyWiringNode, path: number[]): void {
+      if ('children' in node) {
+        if (node.children.length < 2) problem(path, 'Series and parallel connections need at least two children; add a woofer or a passive part, or remove the connection.');
+        node.children.forEach((child, index) => validate(child, [...path, index]));
+      } else if ('value' in node && (!Number.isFinite(node.value) || node.value <= 0)) {
+        problem(path, 'Passive parts need a positive finite value; enter a value greater than zero in the shown units.');
+      } else if (node.kind === 'driver') {
+        const id = node.radiator_id;
+        if (seen.has(id)) problem(path, 'A driver may appear only once in wiring; remove its duplicate connection.');
+        seen.add(id);
+        if (!assembly.drivers?.[id]) problem(path, 'Every wired woofer needs a T/S driver; assign its driver or remove the wiring.');
+        const member = owners[0]?.members.find(item => item.radiator_id === id);
+        if (member && (member.delay_ms || member.invert || (member.weight ?? 1) !== 1)) {
+          problem(path, 'Wired woofers cannot have member weight, delay or polarity; reset member processing and use signal-group DSP or wiring polarity.', 'member-processing');
+        }
+      }
+    }
+    validate(group.network, []);
+    if (!ids.length) problem([], 'A wiring network needs a woofer with a T/S driver; add a driver woofer or remove the network.');
+    if (owners.length !== 1) problem([], 'Move all woofers of a wiring network into the same signal group.');
+  }
+  return problems;
+}
+
+/** The same electrical membership rules as the saved-design and solve contracts. */
+export function validateAssemblyWiring(assembly: DesignAssembly): void {
+  const problem = assemblyWiringProblems(assembly)[0];
+  if (problem) throw new Error(problem.message);
+}
+
+/** Add or replace a wiring network by identity; call commitAssembly for one Undo. */
+export function setWiringGroup(assembly: DesignAssembly, group: AssemblyWiringGroup): DesignAssembly {
+  const next = structuredClone(assembly);
+  const found = (next.wiring_groups ?? []).some(item => item.id === group.id);
+  next.wiring_groups = found ? next.wiring_groups!.map(item => item.id === group.id ? structuredClone(group) : item)
+    : [...(next.wiring_groups ?? []), structuredClone(group)];
+  validateAssemblyWiring(next);
+  return next;
+}
+
+export function removeWiringGroup(assembly: DesignAssembly, id: string): DesignAssembly {
+  const next = structuredClone(assembly);
+  next.wiring_groups = (next.wiring_groups ?? []).filter(item => item.id !== id);
+  if (!next.wiring_groups.length) delete next.wiring_groups;
+  return next;
+}
+
+/** Edit by tree path, collapsing a connection when removal leaves only one child. */
+export function editWiringNode(assembly: DesignAssembly, groupId: string, path: number[],
+  edit: (node: AssemblyWiringNode) => AssemblyWiringNode | null): DesignAssembly {
+  const group = assembly.wiring_groups?.find(item => item.id === groupId);
+  if (!group) throw new ProgramFault('Unknown wiring network.');
+  function visit(node: AssemblyWiringNode, remaining: number[]): AssemblyWiringNode | null {
+    if (!remaining.length) return edit(structuredClone(node));
+    const [index, ...rest] = remaining;
+    if (!('children' in node) || !node.children[index]) throw new ProgramFault('Unknown wiring node.');
+    const child = visit(node.children[index], rest);
+    const children = node.children.flatMap((item, i) => i === index ? child ? [child] : [] : [item]);
+    return child === null && children.length === 1 ? children[0] : { ...node, children };
+  }
+  const network = visit(group.network, path);
+  // A remaining single driver is individual again; no empty electrical group is saved.
+  if (!network || !('children' in network) || !wiringDriverIds(network).length) return removeWiringGroup(assembly, groupId);
+  return setWiringGroup(assembly, { ...group, network });
+}
+
+/** Join only these drivers to the first driver's signal group, preserving their processing. */
+export function joinWiringDrivers(assembly: DesignAssembly, ids: string[], targetId = ids[0]): DesignAssembly {
+  const target = groups(assembly).find(group => group.members.some(member => member.radiator_id === targetId));
+  if (!target) throw new ProgramFault('Unknown wiring signal group.');
+  return ids.reduce((next, id) => moveToGroup(next, id, target.id), assembly);
 }
 
 /** Apply one assembly edit as one project history step (or one frame of a drag). */
 export function commitAssembly(next: DesignAssembly | null, mode: 'step' | 'drag' = 'step'): void {
+  if (next) validateAssemblyWiring(next);
   useDesignStore.getState().commitEmbedded({ assembly: next ?? undefined }, mode);
 }
 
@@ -263,4 +365,27 @@ export function designHasEnabledWoofers(design: DesignDocument): boolean {
 
 export function designAssembly(design: DesignDocument): DesignAssembly | undefined {
   return design.assembly ?? undefined;
+}
+
+/** Replace only the named diaphragm, publishing geometry and draft state atomically. */
+export function setWooferShape(assembly: DesignAssembly, id: string, shape: AssemblyWooferShape): DesignAssembly {
+  return updateWoofer(assembly, id, { shape });
+}
+
+export function setHfSource(assembly: DesignAssembly, id: string, source: NonNullable<DesignAssembly['hf_source']>): DesignAssembly {
+  if (id !== HF_RADIATOR_ID || source.radiator_id && source.radiator_id !== id) throw new ProgramFault('Unknown HF radiator.');
+  return { ...structuredClone(assembly), hf_source: structuredClone(source) };
+}
+
+/** Each call is one project Undo; the shared workspace owns gestures and drafts. */
+export function commitWooferShape(id: string, shape: AssemblyWooferShape): void {
+  const assembly = useDesignStore.getState().design.assembly;
+  if (!assembly) throw new ProgramFault('No design assembly.');
+  commitAssembly(setWooferShape(assembly, id, shape));
+}
+
+export function commitHfSource(id: string, source: NonNullable<DesignAssembly['hf_source']>): void {
+  const assembly = useDesignStore.getState().design.assembly;
+  if (!assembly) throw new ProgramFault('No design assembly.');
+  commitAssembly(setHfSource(assembly, id, source));
 }

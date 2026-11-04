@@ -6,7 +6,7 @@ import { combineWire } from './cadReturn';
 import { savedChannelDrivers } from './cadSetupRestore';
 import type { CadSetup } from '../api/jobsSocket';
 import type { SimulationData } from './cadReturn';
-import { planSubmission, type PreparedSubmission, crossoverBandBlocker, exteriorModeBlocker, importedSweepRangeInvalid, incompleteDriverBlocker, resolveAssemblySetup, simulationGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
+import { planSubmission, type PreparedSubmission, crossoverBandBlocker, exteriorModeBlocker, importedSweepRangeInvalid, incompleteDriverBlocker, resolveAssemblySetup, resolveExteriorDriverPolicy, simulationGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
 import { create } from 'zustand';
 import {
   inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
@@ -424,7 +424,8 @@ function readyMeshSetupControls(input: 'file' | 'assembly'): ImportedSetup {
     throw new Error('Set generator resistance to 0 ohms or drive the surfaces separately.');
   }
   // Motion edits of older file setups preserve their voltage fields.
-  const { drivers, effects } = simulationGeometry(simulation, simulation.sources, simulation.passiveTopology, retained?.geometry);
+  const policy = resolveExteriorDriverPolicy(simulation.driveChannels, options);
+  const { drivers, effects } = simulationGeometry({ ...simulation, driveChannels: policy.channels }, simulation.sources, simulation.passiveTopology, retained?.geometry);
   return {
     geometry: { skipped_source_ids: [], ...drivers,
       ...(simulation.persistDriverGroups ? { driver_groups: driverGroupsToWire(simulation.driverGroups) } : {}), ...effects },

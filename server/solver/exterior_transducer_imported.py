@@ -25,7 +25,7 @@ from server.contracts.conventions import (
 from typing import Any
 from .beat_adapter.mesh import read_surface
 from .beat_adapter.request import _axis, _layout
-from .beat_adapter.results import SweepResult
+from .beat_adapter.results import SweepResult, acceleration_scale
 from .beat_adapter.transducers import (
     EXTERIOR_AXIS_SYMMETRY_MESSAGE, ExteriorDriver, TransducerSweep, build_transducer_request, resolve_driver_sd,
 )
@@ -35,21 +35,12 @@ from .frequency_sweep import canonical_frequencies
 from .imported import imported_anchor_frame, imported_domain_planes, imported_symmetry_from_cut_planes
 from .combine import serialize_channel_bases
 from .combined_channel import package_combined_channel
-from .imported_channels import channel_source_identity, imported_validity_metadata
+from .imported_channels import channel_source_identity, imported_validity_metadata, scale_channel_result
 from .result_mapping import build_solver_response, json_safe_native_value
 
 
 def enabled(channels: Sequence) -> bool:
     return any(getattr(channel, "exterior_transducer", None) is not None for channel in channels)
-
-
-def mixed_allowed(record: Mapping) -> bool:
-    """A compiled design assembly solves prescribed sources beside its drivers.
-
-    Every other return keeps the all-driver contract: its mixed drives need
-    FEM regions.
-    """
-    return record.get("producer") == "design-assembly"
 
 
 #: Version of the retained mixed-basis contract: each channel's complex
@@ -89,9 +80,8 @@ def preflight(record: Mapping, msh_text: str, channels: Sequence, *, backend: st
         planes = imported_domain_planes(record)
         if any(p not in {"x0", "y0"} for p in planes):
             raise ValueError("Exterior transducers support only x0 and y0 symmetry planes")
-        if not channels or (not mixed_allowed(record) and any(
-                channel.exterior_transducer is None for channel in channels)):
-            raise ValueError("Every channel must carry an exterior transducer in this mode")
+        if not channels:
+            raise ValueError("Select at least one drive channel before solving")
         if any(channel.exterior_transducer is None and channel.driver is not None for channel in channels):
             raise ValueError("A prescribed channel beside exterior drivers cannot carry a lumped driver model")
         mesh = read_surface(msh_text)
@@ -179,6 +169,9 @@ def preflight(record: Mapping, msh_text: str, channels: Sequence, *, backend: st
 
 
 def drivers_for(record: Mapping, channels: Sequence) -> list[ExteriorDriver]:
+    for channel in channels:
+        if channel.exterior_transducer is not None and any(w != 1.0 for w in (getattr(channel, "patch_weights", None) or {}).values()):
+            raise ValueError("BEAT and native Metal exterior transducers cannot use signed or nonunit patch weights. Choose fixed velocity for this radiator, or use unit patch weights.")
     tags = record.get("source_tags")
     if not isinstance(tags, Mapping):
         raise ValueError("Ingestion record requires source_tags")
@@ -207,7 +200,7 @@ def package_sweep(
 
     ``port_indices`` names each channel's excitation columns (a prescribed
     channel sums its sources' ideal bases); by default channel *i* is port *i*.
-    A design assembly also retains its channel bases and builds its crossover
+    Every request retains its channel bases and builds its crossover
     through the shared combined-channel packager.
     """
     geometry = request.geometry
@@ -232,18 +225,22 @@ def package_sweep(
                for position, channel in enumerate(geometry.drive_channels)}
     channels = {}
     native_by_id: dict[str, SweepResult] = {}
+    basis_weights: dict[str, np.ndarray] = {}
     for channel in geometry.drive_channels:
         ports = indices[channel.id]
         port_index = ports[0]
-        # Linear superposition of a channel's own excitation columns.
+        weights = ([1.0] if channel.exterior_transducer is not None else
+                   [(channel.patch_weights or {}).get(source, 1.0) for source in channel.source_ids])
+        basis_weights[channel.id] = np.broadcast_to(weights, (len(frequencies), len(weights)))
+        # Linear superposition of the signed, weighted unit-velocity bases.
         pressure = np.stack(
             [
-                np.stack([sum(row.pressure_rms_pa[plane][i] for i in ports) for plane in layout.planes])
+                np.stack([sum(weight * row.pressure_rms_pa[plane][i] for i, weight in zip(ports, weights)) for plane in layout.planes])
                 for row in sweep.rows
             ]
         )
         sphere = (
-            np.stack([sum(row.pressure_rms_pa["sphere"][i] for i in ports) for row in sweep.rows])
+            np.stack([sum(weight * row.pressure_rms_pa["sphere"][i] for i, weight in zip(ports, weights)) for row in sweep.rows])
             if "sphere" in layout.points_m
             else None
         )
@@ -265,6 +262,12 @@ def package_sweep(
             sweep.requested_frequency_count,
             [],
         )
+        if channel.exterior_transducer is None and not geometry.uses_rms_velocity:
+            # Native ideal ports are RMS velocity; legacy acceleration is an
+            # explicit output basis convention, independent of the producer.
+            scales = np.asarray([acceleration_scale(f) for f in frequencies])
+            scale_channel_result(native, scales)
+            basis_weights[channel.id] = basis_weights[channel.id] * scales[:, None]
         native_by_id[channel.id] = native
         response = build_solver_response(
             result=native,
@@ -288,8 +291,9 @@ def package_sweep(
             response.pop("impedance", None)
             response["metadata"].update(
                 impedance_omitted="prescribed velocity source: no electrical input",
-                source_normalization="native_rms_velocity",
-                drive={"velocity_rms_m_per_s": 1.0, "motion": channel.motion},
+                source_normalization="native_rms_velocity" if geometry.uses_rms_velocity else "unit_normal_acceleration",
+                drive={"velocity_rms_m_per_s" if geometry.uses_rms_velocity else "acceleration_m_per_s2": 1.0,
+                       "motion": channel.motion},
                 beat_transducer={
                     "version": 1,
                     "excitation_port_ids": excitation,
@@ -395,9 +399,39 @@ def package_sweep(
         },
     }
     bases = None
-    if mixed_allowed(record) and sweep.rows:
+    if sweep.rows:
+        if geometry.wiring_groups:
+            from .driver_network import retain_native_tensors
+
+            retain_native_tensors(native_by_id, sweep, indices, geometry.drive_channels,
+                                  compiled.wire["solver_options"]["transducer_reference_voltage_v"],
+                                  basis_weights=basis_weights)
         bases = serialize_channel_bases(native_by_id, metadata_by_id=_mixed_basis_metadata(
             compiled, geometry, record, indices))
+        if geometry.wiring_groups:
+            from .driver_network import prepare_network_bases
+
+            network_bases = prepare_network_bases(native_by_id, geometry)
+            for group in geometry.wiring_groups:
+                representative = network_bases.representatives[group.id]
+                weights = {representative: np.ones(len(frequencies), complex)}
+                diagnostics = network_bases.diagnostics(weights)
+                electrical = diagnostics["networks"][group.id]["input_impedance_ohm"]
+                response = build_solver_response(
+                    result=network_bases.results[representative], config=config, context=context,
+                    start_time=started, sound_speed_m_per_s=343.0,
+                    metadata={"solver_backend": solver_engine["engine"], "solver_engine": dict(solver_engine),
+                              "drive_channel_id": group.id, "label": group.label,
+                              "derived_from_channels": group.driver_ids(),
+                              "phase_time_convention": PHASE_TIME_CONVENTION, "wiring": diagnostics,
+                              "impedance_units": "ohms", "impedance_quantity": "electrical_input_impedance",
+                              "impedance_drive": "rms_voltage", "source_normalization": "native_rms_voltage",
+                              "drive": {"voltage_v": geometry.drive_voltage_v, "rg_ohm": 0.0},
+                              "impedance_phase_convention": ENGINEERING_PHASE_CONVENTION})
+                response["impedance"] = {"frequencies": frequencies.tolist(), **electrical}
+                response.pop("acoustic_impedance", None)
+                channels[group.id] = response
+                channel_order.append(group.id)
         if geometry.combine is not None and not sweep.cancelled:
             spec = geometry.combine
             channels[spec.id] = package_combined_channel(
@@ -445,8 +479,8 @@ def _mixed_basis_metadata(compiled, geometry: Any, record: Mapping, indices: Map
     return {
         channel.id: {
             "basis_contract": MIXED_BASIS_CONTRACT,
-            "basis": "velocity_rms" if channel.exterior_transducer is None else "voltage_rms",
-            "source_normalization": "native_rms_velocity" if channel.exterior_transducer is None else "native_rms_voltage",
+            "basis": ("velocity_rms" if geometry.uses_rms_velocity else "acceleration") if channel.exterior_transducer is None else "voltage_rms",
+            "source_normalization": ("native_rms_velocity" if geometry.uses_rms_velocity else "unit_normal_acceleration") if channel.exterior_transducer is None else "native_rms_voltage",
             "excitation_port_ids": [ports[i] for i in indices[channel.id]],
             "reference_voltage_rms_v": float(compiled.wire["solver_options"]["transducer_reference_voltage_v"]),
             "undriven_transducers": "shorted",
@@ -519,7 +553,7 @@ def solve(
             if request.geometry.combine is not None:
                 # The crossover is the durable final's, from the whole sweep.
                 frame["channels"].pop(request.geometry.combine.id, None)
-                frame["channel_order"] = [c.id for c in request.geometry.drive_channels]
+                frame["channel_order"] = [c.id for c in request.geometry.drive_channels] + [g.id for g in request.geometry.wiring_groups]
             frame.pop("_field_trace_unavailable_reason", None)
             frame["metadata"]["provisional"] = {
                 "completed_frequency_count": len(sweep.rows),
@@ -531,6 +565,7 @@ def solve(
             for channel in frame["channels"].values():
                 channel["metadata"].pop("driver", None)
                 channel["metadata"].pop("beat_transducer", None)
+                channel["metadata"].pop("wiring", None)
             result_callback(len(sweep.rows) - 1, frame)
 
     native = compiled_solver(

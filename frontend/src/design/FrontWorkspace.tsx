@@ -26,7 +26,11 @@ import { Workspace } from '../sketch/workspace/Workspace';
 import { emptyAssembly, type DesignAssembly } from '../stores/assembly';
 import { designModelCurrent, prepareDesignModel, useAssemblyBuildStore, type AssemblyBuildState } from '../stores/assemblyBuild';
 import { useDesignModelStore } from '../stores/importedModel';
-import { serializeDesign, subscribeRevision, useDesignStore } from '../stores/design';
+import { currentDocumentLoad, serializeDesign, subscribeRevision, useDesignStore } from '../stores/design';
+import { DiaphragmWorkspace } from './DiaphragmWorkspace';
+import { DiaphragmSelect } from './DiaphragmControls';
+import { diaphragmFor, revertDiaphragm, unfinishedDiaphragms } from '../sketch/adapters/assemblyDiaphragm';
+import { commitAssembly, HF_RADIATOR_ID, setHfSource, setWooferShape } from '../stores/assembly';
 import { ExperimentalBadge } from './ExperimentalBadge';
 import { frontViewProperties } from './FrontProperties';
 import './frontWorkspace.css';
@@ -66,7 +70,7 @@ export function FrontWorkspaceDialog() {
 
 /** Why the front context did not arrive for one revision; `refused` means the server's words are about the design. */
 interface FrontContextFailure { revision: number; text: string; detail: string; refused: boolean }
-interface FrontContextState { resolved: FrontViewContext | undefined; checkedRevision: number | null; failure: FrontContextFailure | null; retry(): void }
+interface FrontContextState { resolved: FrontViewContext | undefined; checkedRevision: number | null; checkedLoad: number | null; failure: FrontContextFailure | null; retry(): void }
 
 /** The latest front context for the design on screen, refreshed when the design rests. */
 function useFrontContext(blank: DesignAssembly, fetcher: typeof fetch): FrontContextState {
@@ -75,17 +79,19 @@ function useFrontContext(blank: DesignAssembly, fetcher: typeof fetch): FrontCon
   const dragging = useDesignStore(state => !!state.dragSnapshot);
   const [resolved, setResolved] = useState<FrontViewContext>();
   const [checkedRevision, setCheckedRevision] = useState<number | null>(null);
+  const [checkedLoad, setCheckedLoad] = useState<number | null>(null);
   const [failure, setFailure] = useState<FrontContextState['failure']>(null);
   const [attempt, setAttempt] = useState(0);
   const latest = useRef(0);
   useEffect(() => {
     const ask = ++latest.current;
+    const load = currentDocumentLoad();
     if (dragging) return;
     const assembly = structuredClone(design.assembly ?? blank);
     const request = new AbortController();
     const timer = setTimeout(() => {
       fetchAssemblyContext(serializeDesign({ ...design, assembly }), fetcher, request.signal).then(context => {
-        if (ask === latest.current) { setResolved({ context, assembly }); setCheckedRevision(revision); setFailure(null); }
+        if (ask === latest.current && load === currentDocumentLoad()) { setResolved({ context, assembly }); setCheckedRevision(revision); setCheckedLoad(load); setFailure(null); }
       }, (reason: unknown) => {
         if (ask !== latest.current) return;
         setFailure({ revision, text: assemblyProblemText(reason, 'WG could not update the front view and has recorded the problem.'),
@@ -94,7 +100,7 @@ function useFrontContext(blank: DesignAssembly, fetcher: typeof fetch): FrontCon
     }, FRONT_CONTEXT_DELAY_MS);
     return () => { clearTimeout(timer); request.abort(); };
   }, [design, revision, dragging, fetcher, attempt]);
-  return { resolved, checkedRevision, failure, retry: () => { setFailure(null); setAttempt(value => value + 1); } };
+  return { resolved, checkedRevision, checkedLoad, failure, retry: () => { setFailure(null); setAttempt(value => value + 1); } };
 }
 
 /**
@@ -124,13 +130,16 @@ function buildLine(hasAssembly: boolean, status: AssemblyBuildState['status'], p
 export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => void; fetcher?: typeof fetch }) {
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: true, onClose });
   const [blank] = useState(() => emptyAssembly());
-  const { resolved, checkedRevision, failure, retry } = useFrontContext(blank, fetcher);
+  const [tab, setTab] = useState('front');
+  const { resolved, checkedRevision, checkedLoad, failure, retry } = useFrontContext(blank, fetcher);
   const context = useRef(resolved); context.current = resolved;
   const adapter = useMemo(() => frontViewAdapter(() => context.current,
-    frontViewProperties(() => context.current, () => !!useDesignStore.getState().design.assembly)), []);
+    frontViewProperties(() => context.current, () => !!useDesignStore.getState().design.assembly, setTab)), []);
   const [state, setState] = useState<DesignAssembly>(() => useDesignStore.getState().design.assembly ?? blank);
   const controller = useMemo(() => {
-    const authority = new ProjectHistoryAuthority(frontViewBinding(blank));
+    const binding = frontViewBinding(blank);
+    const authority = new ProjectHistoryAuthority({ ...binding, write: (current, values) => current.hf_source?.kind === 'sketched'
+      ? { assembly: current } : binding.write(current, values) });
     return new PlainController<DesignAssembly, DesignAssembly, FrontCommand>({
       initial: authority.current, adapter, authority, changed: setState, preview: setState,
     });
@@ -146,6 +155,20 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
   }), [onClose]);
   const design = useDesignStore(store => store.design);
   const hasAssembly = !!design.assembly;
+  const tabs = [{ id: 'front', label: 'Front' }, { id: HF_RADIATOR_ID, label: 'HF diaphragm' },
+    ...(design.assembly?.woofers ?? []).filter(w => w.shape.kind === 'sketched').map(w => ({ id: w.id, label: w.label }))];
+  const activeTab = tabs.some(t => t.id === tab) ? tab : 'front';
+  useEffect(() => { if (activeTab !== tab) setTab(activeTab); }, [activeTab, tab]);
+  useEffect(() => { if (activeTab !== 'front') void controller.endDrag(true); }, [activeTab, controller]);
+  const unfinished = unfinishedDiaphragms(design.assembly ?? blank);
+  const unfinishedReason = unfinished.length ? `Finish or revert the ${unfinished[0].label} sketch before solving.` : null;
+  const revert = (id: string) => {
+    const current = useDesignStore.getState().design.assembly;
+    const shape = current && diaphragmFor(current, id);
+    if (!current || !shape) return;
+    const next = revertDiaphragm(shape);
+    commitAssembly(id === HF_RADIATOR_ID ? setHfSource(current, id, { ...next, kind: next.kind === 'sketched' ? 'sketched' : 'classic' }) : setWooferShape(current, id, { ...next, kind: next.kind === 'sketched' ? 'sketched' : 'piston' }));
+  };
   const shown = hasAssembly ? state : blank;
   const build = useAssemblyBuildStore();
   const slot = useDesignModelStore();
@@ -166,18 +189,25 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
   const refusal = resolved?.context.refusal;
   const problems = [...placementProblems(shown, resolved).values()].flat();
   const revision = useDesignStore(store => store.designRevision);
-  const fit = fitHold(checkedRevision === revision, failure?.revision === revision ? failure : null, refusal, problems);
-  const solveDisabledReason = !hasAssembly ? 'Add a woofer to build or solve.'
+  const contextCurrent = checkedRevision === revision && checkedLoad === currentDocumentLoad();
+  const fit = fitHold(contextCurrent, failure?.revision === revision ? failure : null, refusal, problems);
+  const solveDisabledReason = unfinishedReason || (!hasAssembly ? 'Add a woofer to build or solve.'
     : building ? 'Building the mesh… Wait for the build to finish.'
       : fit.held ? fit.line
         : !solveControl ? 'Solve is unavailable. Close this window and try again from the main workspace.'
-          : solveControl.disabled ? solveControl.title : null;
+          : solveControl.disabled ? solveControl.title : null);
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Sources and baffle" className="front-workspace">
     <header className="front-header">
       <h2>Sources and baffle</h2><ExperimentalBadge/>
       <button className="btn" type="button" onClick={onClose}>Close</button>
     </header>
-    <div className="front-body">
+    <div className="front-tabs" role="tablist" aria-label="Assembly views">{tabs.map(item => <button className="btn" type="button" role="tab" key={item.id}
+      aria-selected={activeTab === item.id} onClick={() => setTab(item.id)}>{item.label}</button>)}</div>
+    {activeTab !== 'front' && diaphragmFor(design.assembly ?? blank, activeTab)?.kind === 'sketched'
+      ? <DiaphragmWorkspace key={`${activeTab}:${currentDocumentLoad()}`} id={activeTab} assembly={design.assembly ?? blank} resolved={contextCurrent ? resolved : undefined} onMissing={() => setTab('front')}/>
+      : activeTab === HF_RADIATOR_ID ? <div className="front-body" role="tabpanel" aria-label="HF diaphragm"><div className="front-canvas"><p>Choose Sketched to edit an HF diaphragm profile.</p></div>
+        <aside className="front-panel"><DiaphragmSelect id={HF_RADIATOR_ID} openProfile={setTab}/></aside></div>
+      : <div className="front-body" role="tabpanel" aria-label="Front">
       <div className="front-canvas">
         {panel && <Workspace adapter={adapter} state={shown} session={controller} selection={selection} onSelectionChange={setSelection}
           slots={{ properties: panel }} fitRequest={fits.current.count}/>}
@@ -198,11 +228,13 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
         </div>
         <div ref={setPanel}/>
       </aside>
-    </div>
+    </div>}
     <footer className="front-footer">
-      <p role="status">{solveDisabledReason || hasAssembly && !building && fit.line || buildLine(hasAssembly, build.status, !!slot.prepared, designModelCurrent(design, slot))}</p>
+      <div><p role="status">{solveDisabledReason || hasAssembly && !building && fit.line || buildLine(hasAssembly, build.status, !!slot.prepared, designModelCurrent(design, slot))}</p>
+        {unfinished.map(item => <div key={item.id}><span>{item.label} · </span><button className="btn-link" type="button" onClick={() => setTab(item.id)}>Open sketch</button>{' · '}
+          <button className="btn-link" type="button" onClick={() => revert(item.id)}>Revert</button></div>)}</div>
       <div className="front-actions">
-        <button className="btn" type="button" disabled={!hasAssembly || building || fit.held} title={fit.held && fit.line || undefined} onClick={() => { void prepareDesignModel(fetcher).catch(() => {}); onClose(); }}>Build</button>
+        <button className="btn" type="button" disabled={!hasAssembly || building || fit.held || !!unfinishedReason} title={fit.held && fit.line || undefined} onClick={() => { void prepareDesignModel(fetcher).catch(() => {}); onClose(); }}>Build</button>
         <button className="btn-primary" type="button" disabled={!!solveDisabledReason} title={solveDisabledReason || solveControl?.title} onClick={solve}>Solve</button>
       </div>
     </footer>

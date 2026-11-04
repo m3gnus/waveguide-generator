@@ -71,6 +71,8 @@ from .imported import (
 from .imported_channels import (
     apply_channel_driver,
     channel_basis_metadata,
+    normalize_prescribed_result,
+    prescribed_entry,
     channel_source_identity,
     imported_validity_metadata,
     prepare_imported_solve_facts,
@@ -102,6 +104,9 @@ def imported_bempp_preflight(
     pressure is pinned to zero and Metal's is not.
     """
 
+    if any(any(weight != 1.0 for weight in (getattr(channel, "patch_weights", None) or {}).values())
+           for channel in (drive_channels or ())):
+        return "BEMPP cannot use signed or nonunit patch weights. Choose BEAT CPU, BEAT Metal or Metal for this diaphragm."
     if has_axial_channel(drive_channels):
         bempp._load_api()
         if not config_supports_source_axes(getattr(bempp, "SolveConfig", None)):
@@ -414,7 +419,7 @@ def solve_imported_bempp_from_msh_text(
                 channel_response = build_provisional_frequency_response(
                     index=index,
                     frequency_hz=frequency_hz,
-                    entry=entry,
+                    entry=prescribed_entry(entry, frequency_hz, geometry, engine="bempp"),
                     config=_holder["config"],
                     context=_context,
                     backend="bempp",
@@ -512,6 +517,8 @@ def solve_imported_bempp_from_msh_text(
         stage_callback("finalizing", 1.0, "Packaging imported drive-channel bases")
 
     driver_payloads: dict[str, dict[str, Any]] = {}
+    for result in sorted_results.values():
+        normalize_prescribed_result(result, geometry, engine="bempp")
     for channel in geometry.drive_channels:
         if channel.driver is None:
             continue
@@ -539,6 +546,9 @@ def solve_imported_bempp_from_msh_text(
             request, quadrants=quadrants, source_motion=channel.motion
         )
         channel_metadata = {
+            **({"source_normalization": "native_rms_velocity",
+                "drive": {"velocity_rms_m_per_s": 1.0, "motion": channel.motion}}
+               if geometry.normalization_for_engine("bempp") == "rms_velocity" else {}),
             "solver_backend": "bempp",
             "solver_mode": "full_3d",
             "geometry_type": "imported",
@@ -581,6 +591,8 @@ def solve_imported_bempp_from_msh_text(
             metadata=channel_metadata,
             sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_bempp_bem"),
         )
+        if geometry.normalization_for_engine("bempp") == "rms_velocity":
+            channel_response["metadata"]["impedance_drive"] = "rms_velocity"
         if len(channel.source_ids) > 1:
             channel_response.pop("impedance", None)
             channel_response["metadata"]["impedance_omitted"] = (
@@ -613,7 +625,7 @@ def solve_imported_bempp_from_msh_text(
     channel_bases_npz = serialize_channel_bases(
         sorted_results,
         metadata_by_id=channel_basis_metadata(
-            geometry, record, source_tags, driver_payloads, axial_identity
+            geometry, record, source_tags, driver_payloads, axial_identity, engine="bempp"
         ),
     )
     first_config = configs[geometry.drive_channels[0].id]

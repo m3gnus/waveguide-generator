@@ -39,6 +39,7 @@ class SourceBasis:
     motion: str = "normal"
     axis: Sequence[float] | None = None
     port_id: str | None = None
+    weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -376,7 +377,8 @@ def _prepare_imported_sources(
                 tag = tags[source_id]
                 source = SourceBasis(source_id, tag, channel.motion,
                                      axes[tag].axis if channel.motion == "axial" else None,
-                                     f"excitation:{channel.motion}:{quote(source_id, safe='')}")
+                                     f"excitation:{channel.motion}:{quote(source_id, safe='')}",
+                                     (getattr(channel, "patch_weights", None) or {}).get(source_id, 1.0))
                 sources.append(source)
                 by_key[key] = source.port_id
             members.append(by_key[key])

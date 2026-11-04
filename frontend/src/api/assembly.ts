@@ -21,7 +21,8 @@ export interface AssemblyFrontContext {
 
 export interface AssemblyRadiator {
   radiator_id: string;
-  kind: 'classic' | 'piston' | 'ath_cone';
+  kind: 'classic' | 'piston' | 'ath_cone' | 'sketched';
+  compiled_from_committed_valid_geometry?: boolean;
   label: string;
   state: 'compiled' | 'disabled' | 'rigid';
   role: 'HF' | 'LF';

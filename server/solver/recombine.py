@@ -47,7 +47,8 @@ def recombine_stored_results(
         raise RecombineError(f"combine members name unknown drive channels: {unknown}")
     if len(set(physical_members)) != len(physical_members):
         raise RecombineError("combine branches must not overlap physical drive channels")
-    if spec.id in channel_ids or spec.id in {group.id for group in geometry.driver_groups or []}:
+    if (spec.id in channel_ids or spec.id in {group.id for group in geometry.driver_groups or []}
+            or spec.id in {group.id for group in geometry.wiring_groups}):
         raise RecombineError(
             f"combine id {spec.id!r} collides with a solved drive channel id"
         )

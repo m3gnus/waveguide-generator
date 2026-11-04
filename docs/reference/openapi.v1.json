@@ -108,6 +108,13 @@
             "title": "Signal Groups",
             "type": "array"
           },
+          "wiring_groups": {
+            "items": {
+              "$ref": "#/components/schemas/AssemblyWiringGroup"
+            },
+            "title": "Wiring Groups",
+            "type": "array"
+          },
           "woofers": {
             "items": {
               "$ref": "#/components/schemas/AssemblyWoofer"
@@ -227,18 +234,61 @@
       },
       "AssemblyHfSource": {
         "additionalProperties": false,
-        "description": "The horn's classic prescribed throat source, with the mesher's identity.",
+        "description": "The horn's prescribed throat source: classic or a committed sketch.",
         "properties": {
+          "authoring": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authoring"
+          },
+          "diaphragm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "kind": {
-            "const": "classic",
             "default": "classic",
+            "enum": [
+              "classic",
+              "sketched"
+            ],
             "title": "Kind",
             "type": "string"
+          },
+          "phase_plugs": {
+            "items": {
+              "$ref": "#/components/schemas/PhasePlug"
+            },
+            "maxItems": 8,
+            "title": "Phase Plugs",
+            "type": "array"
           },
           "radiator_id": {
             "const": "horn-throat",
             "default": "horn-throat",
             "title": "Radiator Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "valid",
+            "enum": [
+              "valid",
+              "unfinished",
+              "invalid"
+            ],
+            "title": "Status",
             "type": "string"
           }
         },
@@ -398,6 +448,128 @@
         "title": "AssemblySpacing",
         "type": "object"
       },
+      "AssemblyWiringBranch": {
+        "additionalProperties": false,
+        "properties": {
+          "children": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "C": "#/components/schemas/AssemblyWiringPart",
+                  "L": "#/components/schemas/AssemblyWiringPart",
+                  "R": "#/components/schemas/AssemblyWiringPart",
+                  "driver": "#/components/schemas/AssemblyWiringDriver",
+                  "parallel": "#/components/schemas/AssemblyWiringBranch",
+                  "series": "#/components/schemas/AssemblyWiringBranch"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/AssemblyWiringDriver"
+                },
+                {
+                  "$ref": "#/components/schemas/AssemblyWiringPart"
+                },
+                {
+                  "$ref": "#/components/schemas/AssemblyWiringBranch"
+                }
+              ]
+            },
+            "minItems": 2,
+            "title": "Children",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "series",
+              "parallel"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "children"
+        ],
+        "title": "AssemblyWiringBranch",
+        "type": "object"
+      },
+      "AssemblyWiringDriver": {
+        "additionalProperties": false,
+        "properties": {
+          "invert": {
+            "default": false,
+            "title": "Invert",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "driver",
+            "title": "Kind",
+            "type": "string"
+          },
+          "radiator_id": {
+            "title": "Radiator Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "radiator_id"
+        ],
+        "title": "AssemblyWiringDriver",
+        "type": "object"
+      },
+      "AssemblyWiringGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "network": {
+            "$ref": "#/components/schemas/AssemblyWiringBranch"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "network"
+        ],
+        "title": "AssemblyWiringGroup",
+        "type": "object"
+      },
+      "AssemblyWiringPart": {
+        "additionalProperties": false,
+        "description": "SI component values: ohms, henry and farad, respectively.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "R",
+              "L",
+              "C"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "value": {
+            "exclusiveMinimum": 0.0,
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "title": "AssemblyWiringPart",
+        "type": "object"
+      },
       "AssemblyWoofer": {
         "additionalProperties": false,
         "properties": {
@@ -472,10 +644,33 @@
       "AssemblyWooferShape": {
         "additionalProperties": false,
         "properties": {
+          "authoring": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authoring"
+          },
+          "diaphragm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "kind": {
             "enum": [
               "piston",
-              "ath_cone"
+              "ath_cone",
+              "sketched"
             ],
             "title": "Kind",
             "type": "string"
@@ -486,6 +681,16 @@
             "minimum": 0.0,
             "title": "Recess Mm",
             "type": "number"
+          },
+          "status": {
+            "default": "valid",
+            "enum": [
+              "valid",
+              "unfinished",
+              "invalid"
+            ],
+            "title": "Status",
+            "type": "string"
           }
         },
         "required": [
@@ -7588,6 +7793,42 @@
             ],
             "title": "Driver Groups"
           },
+          "excitation_normalization": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rms_velocity",
+                  "acceleration_legacy"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excitation Normalization"
+          },
+          "excitation_normalization_by_engine": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "enum": [
+                    "rms_velocity",
+                    "acceleration_legacy"
+                  ],
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "const": "bempp"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excitation Normalization By Engine"
+          },
           "exterior_only": {
             "default": false,
             "title": "Exterior Only",
@@ -7728,6 +7969,13 @@
             "const": "imported",
             "title": "Type",
             "type": "string"
+          },
+          "wiring_groups": {
+            "items": {
+              "$ref": "#/components/schemas/AssemblyWiringGroup"
+            },
+            "title": "Wiring Groups",
+            "type": "array"
           }
         },
         "required": [
@@ -11983,6 +12231,95 @@
           "metadata"
         ],
         "title": "ParametricResultEnvelope",
+        "type": "object"
+      },
+      "PhasePlug": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "Id",
+            "type": "string"
+          },
+          "inner0_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Inner0 Mm"
+          },
+          "inner1_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Inner1 Mm"
+          },
+          "outer0_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Outer0 Mm"
+          },
+          "outer1_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Outer1 Mm"
+          },
+          "z0_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Z0 Mm"
+          },
+          "z1_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Z1 Mm"
+          }
+        },
+        "required": [
+          "id",
+          "z0_mm",
+          "z1_mm",
+          "inner0_mm",
+          "outer0_mm",
+          "inner1_mm",
+          "outer1_mm"
+        ],
+        "title": "PhasePlug",
         "type": "object"
       },
       "PlanAdjustment": {

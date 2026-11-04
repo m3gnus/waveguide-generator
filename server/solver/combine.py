@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import io
+import json
 import math
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -53,6 +54,9 @@ _REVERSE_NULL_FLOOR_DB = -300.0
 # crossover can recombine in milliseconds without re-solving. The fields stay
 # in the solver's exp(+ikr) convention and the file says so.
 CHANNEL_BASES_VERSION = 1
+# Version 2 is opt-in for passive wiring: native_current/native_velocity keep
+# F x physical-driver columns per excitation, in solver phasors and RMS SI.
+# Version-1 jobs and new jobs without wiring retain their existing encoding.
 _BASES_PHASE_CONVENTION = SOLVER_PHASE_CONVENTION
 
 
@@ -66,7 +70,7 @@ def serialize_channel_bases(
     channel_ids = list(results_by_id)
     base = results_by_id[channel_ids[0]]
     arrays: dict[str, np.ndarray] = {
-        "version": np.asarray(CHANNEL_BASES_VERSION),
+        "version": np.asarray(2 if hasattr(base, "native_current") else CHANNEL_BASES_VERSION),
         "phase_convention": np.asarray(_BASES_PHASE_CONVENTION),
         "channel_ids": np.asarray(channel_ids, dtype=str),
         "frequencies_hz": np.asarray(base.frequencies_hz, dtype=np.float64).reshape(-1),
@@ -82,6 +86,9 @@ def serialize_channel_bases(
         arrays["sphere_phi_deg"] = np.asarray(base.sphere_phi_deg, dtype=np.float64)
     for name in channel_ids:
         result = results_by_id[name]
+        if hasattr(base, "native_current"):
+            arrays[f"native_current::{name}"] = np.asarray(result.native_current, dtype=np.complex128)
+            arrays[f"native_velocity::{name}"] = np.asarray(result.native_velocity, dtype=np.complex128)
         arrays[f"pressure::{name}"] = np.asarray(
             result.pressure_complex, dtype=np.complex128
         )
@@ -96,6 +103,9 @@ def serialize_channel_bases(
             arrays[f"metadata::{name}"] = np.asarray(
                 canonical_ascii_json(dict(metadata))
             )
+    if hasattr(base, "native_current"):
+        arrays["native_driver_ids"] = np.asarray(base.native_driver_ids, dtype=str)
+        arrays["native_reference_voltage"] = np.asarray(base.native_reference_voltage, dtype=float)
     buffer = io.BytesIO()
     np.savez_compressed(buffer, **arrays)
     return buffer.getvalue()
@@ -106,7 +116,7 @@ def deserialize_channel_bases(data: bytes) -> dict[str, Any]:
 
     with np.load(io.BytesIO(data)) as bundle:
         version = int(bundle["version"])
-        if version != CHANNEL_BASES_VERSION:
+        if version not in {CHANNEL_BASES_VERSION, 2}:
             raise ValueError(f"unsupported channel-bases version {version}")
         convention = str(bundle["phase_convention"])
         if convention != _BASES_PHASE_CONVENTION:
@@ -136,6 +146,21 @@ def deserialize_channel_bases(data: bytes) -> dict[str, Any]:
                 sphere_phi_deg=sphere_phi,
             )
             status_key = f"frequency_status::{name}"
+            if version == 2:
+                drivers = [str(item) for item in bundle["native_driver_ids"]]
+                reference = float(bundle["native_reference_voltage"])
+                if len(set(drivers)) != len(drivers) or not set(drivers).issubset(channel_ids) or not math.isfinite(reference) or reference <= 0:
+                    raise ValueError("invalid native channel-bases driver identities or voltage reference")
+                results[name].native_driver_ids = drivers
+                results[name].native_reference_voltage = reference
+                for field in ("current", "velocity"):
+                    values = bundle[f"native_{field}::{name}"]
+                    if values.shape != (frequencies.size, len(drivers)) or not np.isfinite(values).all():
+                        raise ValueError("invalid native channel-bases current/velocity tensor")
+                    setattr(results[name], f"native_{field}", values)
+                metadata_key = f"metadata::{name}"
+                if metadata_key in bundle:
+                    results[name].basis_metadata = json.loads(str(bundle[metadata_key]))
             if status_key in bundle:
                 flags = bundle[status_key].tolist()
                 if len(flags) != frequencies.size or any(flag not in {"solved", "interpolated"} for flag in flags):
@@ -794,6 +819,7 @@ def combine_drive_channels(
     member_channels: Mapping[str, list[str]] | None = None,
     member_labels: Mapping[str, str | None] | None = None,
     member_processing: Mapping[str, Mapping[str, Any]] | None = None,
+    retain_member_responses: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
     """Sum member channel results into one synthetic native-shaped result.
 
@@ -1279,6 +1305,14 @@ def combine_drive_channels(
         ),
         "warnings": warnings,
     }
+    if retain_member_responses:
+        # These are the actual branches after network termination and member
+        # processing, before DSP. Independent voltage ports cannot rebuild them.
+        payload["member_responses"] = {
+            name: {"spl": _spl_db(fields[name][:, 0, on_axis], 20.0e-6).tolist(),
+                   "phase_degrees": np.angle(fields[name][:, 0, on_axis], deg=True).tolist()}
+            for name in members
+        }
     if member_channels is not None:
         payload["member_channels"] = {member: list(member_channels.get(member, [member])) for member in members}
         payload["member_labels"] = [(member_labels or {}).get(member) for member in members]

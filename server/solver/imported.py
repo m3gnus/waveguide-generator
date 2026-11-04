@@ -272,9 +272,10 @@ def _plane_cuts_source(coordinates: np.ndarray, corners: np.ndarray, component: 
 
 
 def resolve_source_axes(
-    msh_text: str, tags: Iterable[int], mirror_planes: Iterable[str] = ()
+    msh_text: str, tags: Iterable[int], mirror_planes: Iterable[str] = (), *,
+    declared_axes: Mapping[int, Iterable[float]] | None = None,
 ) -> dict[int, SourceAxis]:
-    """The axis each axial source tag moves along, from the solve mesh alone.
+    """Resolve axial motion from declared mechanical axes or the solve mesh.
 
     ``axis = normalize(P_sym(sum of n dA over the tag's faces))`` with the
     canonical outward winding, so the axis is outward-positive by
@@ -287,8 +288,10 @@ def resolve_source_axes(
     rather than projecting it.
 
     A net area vector below :data:`AXIAL_NET_AREA_FRACTION` of the tag's area is
-    a closed or two-sided surface with no outward axis, and raises
-    :class:`SourceAxisError`. An axis within :data:`AXIAL_SNAP_DEGREES` of a
+    a closed or two-sided surface with no inferable outward axis, and raises
+    :class:`SourceAxisError` unless the compiled record declares its motion
+    axis. Declared axes still require finite, nondegenerate source faces and
+    must respect physical symmetry. An axis within :data:`AXIAL_SNAP_DEGREES` of a
     solver-frame axis snaps to it exactly; the raw axis is kept beside it.
     """
 
@@ -307,8 +310,11 @@ def resolve_source_axes(
         if not selected.any():
             raise SourceAxisError(f"axial source tag {tag} has no faces in the solve mesh")
         # cross is 2 * area * normal, so halving gives n dA.
+        face_areas = np.linalg.norm(cross[selected], axis=1) * 0.5
+        if not np.isfinite(face_areas).all() or np.any(face_areas <= 0):
+            raise SourceAxisError(f"axial source tag {tag} has nonfinite or degenerate faces")
         net = cross[selected].sum(axis=0) * 0.5
-        area = float(np.linalg.norm(cross[selected], axis=1).sum() * 0.5)
+        area = float(face_areas.sum())
         projected: list[str] = []
         for plane in planes:
             component = _PLANE_NORMAL_INDEX.get(plane)
@@ -319,13 +325,21 @@ def resolve_source_axes(
                 projected.append(plane)
         magnitude = float(np.linalg.norm(net))
         ratio = magnitude / area if area > 0.0 else 0.0
-        if not math.isfinite(ratio) or ratio < AXIAL_NET_AREA_FRACTION:
+        declared = (declared_axes or {}).get(tag)
+        if declared is not None:
+            raw = np.asarray(tuple(declared), dtype=float)
+            length = float(np.linalg.norm(raw))
+            if raw.shape != (3,) or not math.isfinite(length) or length <= 0:
+                raise SourceAxisError(f"axial source tag {tag} has an invalid declared motion axis")
+            raw = raw / length
+        elif not math.isfinite(ratio) or ratio < AXIAL_NET_AREA_FRACTION:
             raise SourceAxisError(
                 f"axial source tag {tag} has no outward axis: its faces' net area vector is "
                 f"{ratio:.2g} of its area (a closed or two-sided source). Use normal motion "
                 "for it, or split it into one-sided sources."
             )
-        raw = net / magnitude
+        else:
+            raw = net / magnitude
         axis = raw
         snapped_to = None
         for name, target in _SNAP_TARGETS:
@@ -383,7 +397,14 @@ def resolve_record_axial_axes(
     tags = {tag for members in channels.values() for tag in members.values()}
     if not tags:
         return {}
-    axes = resolve_source_axes(msh_text, tags, imported_domain_planes(record))
+    declared = {}
+    for excitation in record.get("excitations") or ():
+        if excitation.get("motion") == "axial" and "motion_axis" in excitation:
+            for source_id in excitation["source_ids"]:
+                tag = record["source_tags"][source_id]
+                if tag in tags:
+                    declared[tag] = excitation["motion_axis"]
+    axes = resolve_source_axes(msh_text, tags, imported_domain_planes(record), declared_axes=declared)
     if record.get("native_source") is not None:
         # Native contour v1 declares the aligned motion axis explicitly;
         # triangulation asymmetry must not tilt it through an area-vector vote.

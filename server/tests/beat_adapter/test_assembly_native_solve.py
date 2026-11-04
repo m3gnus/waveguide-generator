@@ -61,8 +61,8 @@ def request(*, combine=True, processing=None, w2_driver=False, **geometry_change
             G_HF: {"hp": {"family": "lr", "order": 4, "fc_hz": 300}, "gain": {"mode": "manual", "db": 0},
                    "delay": {"mode": "manual", "ms": 0}, "invert": True},
         })} if combine else {}),
-        **geometry_changes,
     )
+    geometry.update(geometry_changes)
     return SolveRequest.model_validate(dict(geometry=geometry, options=dict(
         engine="beat-cpu", frequencies_hz=[100.0, 300.0, 500.0],
         polar_config=dict(enabled_axes=["horizontal"], spherical_theta_count=5, spherical_phi_count=8))))
@@ -101,11 +101,11 @@ def test_mixed_request_is_one_official_v3_system_with_ideal_and_voltage_ports(so
     assert compiled.transducer_ids == (f"transducer:{W1}",)
 
 
-def test_only_compiled_assemblies_mix_prescribed_and_driven_channels(solid, record):
+def test_every_producer_can_mix_prescribed_and_driven_channels(solid, record):
     channels = request().geometry.drive_channels
     assert jobs.preflight(record, solid, channels, backend="cpu") is None
     cad = {key: value for key, value in record.items() if key not in {"producer", "required_features"}}
-    assert "every channel" in jobs.preflight(cad, solid, channels, backend="cpu").lower()
+    assert jobs.preflight(cad, solid, channels, backend="cpu") is None
     from server.jobs.runtime.imported_refusals import _imported_request_refusal
 
     payload = request().model_dump(mode="json")
@@ -117,7 +117,8 @@ def test_only_compiled_assemblies_mix_prescribed_and_driven_channels(solid, reco
     with pytest.raises(ValidationError, match="identical motion and drivers"):
         SolveRequest.model_validate(payload)
     payload["geometry"]["driver_groups"] = None
-    assert _imported_request_refusal(SolveRequest.model_validate(payload), {})[0] == "exterior_transducer_mixed_channels"
+    refusal = _imported_request_refusal(SolveRequest.model_validate(payload), {})
+    assert refusal is None or refusal[0] != "exterior_transducer_mixed_channels"
 
 
 @pytest.mark.parametrize(("gain", "message"), [({"mode": "max"}, "maximum-output")])
@@ -132,13 +133,12 @@ def test_maximum_output_stays_refused_for_coupled_drivers(gain, message):
         SolveRequest.model_validate(payload)
 
 
-def test_member_processing_names_exactly_the_group_and_needs_an_assembly():
+def test_member_processing_names_exactly_the_group_for_every_producer():
     with pytest.raises(ValidationError, match="exactly the group"):
         request(processing={W1: {}})
     payload = request().model_dump(mode="json")
     payload["geometry"]["required_features"] = []
-    with pytest.raises(ValidationError):
-        SolveRequest.model_validate(payload)
+    assert SolveRequest.model_validate(payload).geometry.branch_processing([G_LF])
 
 
 def _solve(solid, record, monkeypatch, solve_request):
@@ -158,6 +158,65 @@ def _solve(solid, record, monkeypatch, solve_request):
     result = jobs.solve(solid, solve_request, record, backend="cpu",
                         result_callback=lambda revision, frame: partial.append(frame))
     return result, captured[0], partial
+
+
+@pytest.mark.parametrize("producer", ["cad", "mesh-file"])
+@pytest.mark.parametrize("normalization", ["rms_velocity", "acceleration_legacy"])
+@pytest.mark.parametrize("weight", [None, -.25, 0.])
+def test_identical_explicit_physics_ignores_geometry_producer(solid, record, monkeypatch, producer, normalization, weight):
+    """Same admitted system, native wire, retained bases and recombined result."""
+    monkeypatch.setattr("server.solver.exterior_transducer_imported.time.time", lambda: 1000.)
+    assembly = request(excitation_normalization=normalization)
+    payload = assembly.model_dump(mode="json")
+    if weight is not None:
+        payload["geometry"]["drive_channels"][2]["patch_weights"] = {W2+'/piston': weight}
+        assembly = SolveRequest.model_validate(payload)
+    features = ["native-source-contour-v1"] if weight is not None else []
+    payload["geometry"]["required_features"] = features
+    imported = SolveRequest.model_validate(payload)
+    other_record = {**record, "producer": producer, "required_features": features}
+    assert jobs.preflight(other_record, solid, imported.geometry.drive_channels, backend="cpu") is None
+    before, compiled_before, _ = _solve(solid, record, monkeypatch, assembly)
+    after, compiled_after, _ = _solve(solid, other_record, monkeypatch, imported)
+    assert compiled_after.wire == compiled_before.wire
+    assert after == before
+    bases = deserialize_channel_bases(after["_channel_bases_npz"])["results_by_id"]
+    frequencies = np.asarray([100., 300., 500.])
+    expected = (1. if weight is None else weight) * 3 * (1 + 2j) * frequencies / 100
+    if normalization == "acceleration_legacy":
+        expected /= -2j * np.pi * frequencies
+    np.testing.assert_allclose(bases[W2].pressure_complex[:, 0, 0], expected)
+    replay = SolveRequest.model_validate_json(imported.model_dump_json())
+    stored = {key: value for key, value in after.items() if not key.startswith("_")}
+    recombined = recombine_stored_results(stored, after["_channel_bases_npz"], replay.geometry.combine, replay)
+    np.testing.assert_array_equal(recombined["channels"]["combined"]["spl_on_axis"]["spl"],
+                                  after["channels"]["combined"]["spl_on_axis"]["spl"])
+
+
+def test_acceleration_convention_changes_only_prescribed_bases(solid, record, monkeypatch):
+    velocity, _, _ = _solve(solid, record, monkeypatch, request(excitation_normalization="rms_velocity"))
+    acceleration, _, partial = _solve(solid, record, monkeypatch, request(
+        required_features=[], excitation_normalization="acceleration_legacy"))
+    v = deserialize_channel_bases(velocity["_channel_bases_npz"])["results_by_id"]
+    a = deserialize_channel_bases(acceleration["_channel_bases_npz"])["results_by_id"]
+    scale = 1 / (-2j * np.pi * np.asarray([100., 300., 500.]))
+    for name in ("horn-throat", W2):
+        np.testing.assert_array_equal(a[name].pressure_complex, v[name].pressure_complex * scale[:, None, None])
+        np.testing.assert_array_equal(a[name].sphere_pressure_complex, v[name].sphere_pressure_complex * scale[:, None])
+    np.testing.assert_array_equal(a[W1].pressure_complex, v[W1].pressure_complex)
+    assert partial[0]["channels"]["horn-throat"]["spl_on_axis"]["spl"][0] == acceleration["channels"]["horn-throat"]["spl_on_axis"]["spl"][0]
+
+
+def test_fem_does_not_silently_ignore_an_explicit_unsupported_normalization():
+    from server.jobs.runtime.imported_refusals import _imported_request_refusal
+
+    record = {"fem_regions": [{}]}
+    explicit = request(required_features=[], excitation_normalization="rms_velocity")
+    assert _imported_request_refusal(explicit, record)[0] == "fem_excitation_normalization_unsupported"
+    # Missing fields keep the retained FEM decoder and admission path.
+    legacy = request(required_features=[])
+    refusal = _imported_request_refusal(legacy, record)
+    assert refusal is None or refusal[0] != "fem_excitation_normalization_unsupported"
 
 
 def test_mixed_results_keep_each_basis_and_build_the_crossover_once(solid, record, monkeypatch):
@@ -294,3 +353,125 @@ def test_an_all_driver_assembly_keeps_its_bases_and_a_driverless_one_uses_the_pr
     payload = request(combine=False).model_dump(mode="json")
     payload["geometry"]["drive_channels"][1].pop("exterior_transducer")
     assert not jobs.enabled(SolveRequest.model_validate(payload).geometry.drive_channels)
+
+
+@pytest.mark.parametrize("kind", ["series", "parallel"])
+@pytest.mark.parametrize("combine", [True, False])
+@pytest.mark.parametrize("features", [[], ["wg-design-assembly-v1"]])
+def test_wired_solve_and_stored_recombine_share_network_math(solid, record, monkeypatch, kind, combine, features):
+    from server.tests.beat_adapter.conftest import wire
+    from server.solver.driver_network import prepare_network_bases
+
+    network_id = "00000000-0000-4000-8000-0000000000c1"
+    solve_request = request(w2_driver=True, processing={W1: {}, W2: {}}, combine=combine,
+        required_features=features, excitation_normalization="rms_velocity",
+        wiring_groups=[dict(id=network_id, label="LF network", network=dict(kind=kind, children=[
+            dict(kind="driver", radiator_id=W1), dict(kind="driver", radiator_id=W2)]))])
+    if not features:
+        record = {key: value for key, value in record.items() if key not in {"producer", "required_features"}}
+    original = distinct
+
+    def coupled(compiled, frequency):
+        data = original(compiled, frequency)
+        for item in data["quantities"]:
+            if item["quantity"] == "voice_coil_current":
+                item["values"] = wire([[.01+.02j, .02-.01j], [.3-.05j, .04+.02j], [.04+.02j, .2-.06j]])
+        return data
+
+    monkeypatch.setitem(globals(), "distinct", coupled)
+    result, _compiled, partial = _solve(solid, record, monkeypatch, solve_request)
+    assert all(network_id in frame["channel_order"] and "wiring" not in frame["channels"][network_id]["metadata"] for frame in partial)
+    network = result["channels"][network_id]
+    bundle = deserialize_channel_bases(result["_channel_bases_npz"])
+    prepared = prepare_network_bases(bundle["results_by_id"], solve_request.geometry)
+    diagnostics = prepared.diagnostics({W1: np.ones(3)})
+    assert network["impedance"]["real"] == diagnostics["networks"][network_id]["input_impedance_ohm"]["real"]
+    assert set(network["metadata"]["wiring"]["drivers"]) == {W1, W2}
+    spec = request(w2_driver=True, processing={W1: {}, W2: {}}).geometry.combine
+    stored = {key: value for key, value in result.items() if not key.startswith("_")}
+    replay = recombine_stored_results(stored, result["_channel_bases_npz"], spec, solve_request)
+    responses = replay["channels"]["combined"]["metadata"]["combine"]["member_responses"]
+    for member, ids in solve_request.geometry.crossover_branches(spec.members)[0].items():
+        pressure = sum(prepared.results[name].pressure_complex[:, 0, 0] for name in ids)
+        np.testing.assert_allclose(responses[member]["spl"], 20 * np.log10(abs(pressure) / 20e-6))
+        np.testing.assert_allclose(responses[member]["phase_degrees"], np.angle(pressure, deg=True))
+    if combine:
+        assert responses == result["channels"]["combined"]["metadata"]["combine"]["member_responses"]
+        assert replay["channels"]["combined"]["metadata"]["combine"]["wiring"] == result["channels"]["combined"]["metadata"]["combine"]["wiring"]
+        np.testing.assert_allclose(replay["channels"]["combined"]["spl_on_axis"]["spl"], result["channels"]["combined"]["spl_on_axis"]["spl"])
+    assert "max_output" not in replay["channels"]["combined"]["metadata"]["combine"]
+    spec.channels[G_LF].gain.db = -9
+    changed = recombine_stored_results(stored, result["_channel_bases_npz"], spec, solve_request)
+    assert changed["channels"]["combined"]["metadata"]["combine"]["wiring"] != replay["channels"]["combined"]["metadata"]["combine"]["wiring"]
+    from server.solver.errors import RecombineError
+
+    spec.channels[G_LF].gain.mode = "max"
+    with pytest.raises(RecombineError, match="choose Manual or Auto"):
+        recombine_stored_results(stored, result["_channel_bases_npz"], spec, solve_request)
+
+
+@pytest.mark.parametrize("engine", ["auto", "beat-cpu", "beat-metal", "bempp", "metal"])
+@pytest.mark.parametrize("available", [True, False])
+def test_wired_submission_selects_by_coupled_capability(engine, available):
+    import asyncio
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.jobs.runtime import ImportedSolveRefusal
+    from server.jobs.runtime.core import resolve_imported_submission
+    from server.jobs.runtime.engine_policy import EngineUnavailableError
+
+    payload = request(w2_driver=True, processing={W1: {}, W2: {}}).model_dump(mode="json")
+    payload["geometry"]["wiring_groups"] = [dict(id="00000000-0000-4000-8000-0000000000c1", label="LF", network=dict(
+        kind="series", children=[dict(kind="driver", radiator_id=W1), dict(kind="driver", radiator_id=W2)]))]
+    payload["options"]["engine"] = engine
+    payload["geometry"]["required_features"] = []
+    validated = SolveRequest.model_validate(payload)
+    registry = EngineRegistry(
+        detector=lambda: [EngineInfo(name, ready, "ready" if ready else "unavailable", "1",
+            geometry_sources=("imported",), imported_features=features) for name, ready, features in (
+                ("metal", True, ()), ("bempp", True, ()),
+                ("beat-cpu", available, ("exterior-transducers",)),
+                ("beat-metal", available, ("exterior-transducers",)))],
+        factory=lambda _: object(),
+    )
+    if available and engine in {"auto", "beat-cpu", "beat-metal"}:
+        resolved = asyncio.run(resolve_imported_submission(validated, registry, request_refusal=None))
+        assert resolved.engine_name in {"beat-cpu", "beat-metal"}
+        assert resolved.request.geometry.wiring_groups == validated.geometry.wiring_groups
+    else:
+        with pytest.raises((ImportedSolveRefusal, EngineUnavailableError), match="Wired woofers need BEAT CPU or BEAT Metal"):
+            asyncio.run(resolve_imported_submission(validated, registry, request_refusal=None))
+
+
+@pytest.mark.parametrize('producer,features', [
+    ('design-assembly', ['wg-design-assembly-v1']),
+    ('cad', ['native-source-contour-v1']), ('mesh-file', ['native-source-contour-v1']),
+])
+def test_signed_prescribed_weights_reach_the_shared_beat_bases(solid, record, producer, features):
+    from server.solver.beat_adapter.request import imported_source_bases
+    sources = ['horn-throat', W1+'/piston']
+    payload = request(combine=False).model_dump(mode='json')
+    payload['geometry'].update(required_features=features, drive_channels=[
+        dict(id='sketch', source_ids=sources, motion='normal', patch_weights=dict(zip(sources, [1., -.25]))),
+        dict(id='other', source_ids=[W2+'/piston'], motion='normal'),
+    ], driver_groups=[dict(id='group', channel_ids=['sketch', 'other'],
+                           member_processing={'sketch': {}, 'other': {}})])
+    geometry = SolveRequest.model_validate(payload).geometry
+    record = {**record, 'producer': producer, 'required_features': features}
+    bases, ports = imported_source_bases(record, solid, geometry.drive_channels[:1])
+    assert [b.weight for b in bases] == [1., -.25]
+    assert len(ports['sketch']) == 2
+
+
+def test_signed_driver_weights_name_beat_and_fixed_velocity(solid, record):
+    driven = request(combine=False)
+    driven.geometry.drive_channels[1].patch_weights = {W1+'/piston': -.25}
+    refusal = jobs.preflight(record, solid, driven.geometry.drive_channels, backend='cpu')
+    assert 'BEAT' in refusal and 'fixed velocity' in refusal
+
+
+def test_bempp_weight_refusal_names_a_supported_engine():
+    from server.jobs.models import DriveChannel
+    from server.solver.bempp_imported import imported_bempp_preflight
+    refusal = imported_bempp_preflight({}, [DriveChannel(
+        id='sketch', source_ids=['patch'], patch_weights={'patch': -.25})])
+    assert 'BEMPP' in refusal and 'BEAT CPU' in refusal

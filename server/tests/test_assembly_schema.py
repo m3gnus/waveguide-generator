@@ -28,6 +28,53 @@ DRIVER = {
 }
 
 
+def _wired():
+    value = _assembly()
+    value["drivers"][W2] = {"exterior_transducer": DRIVER}
+    value["signal_groups"][1]["members"][1] = {"radiator_id": W2}
+    value["wiring_groups"] = [{"id": "a1b2c3d4-0000-4000-8000-000000000003", "label": "LF network",
+                               "network": {"kind": "series", "children": [
+                                   {"kind": "driver", "radiator_id": W1},
+                                   {"kind": "parallel", "children": [
+                                       {"kind": "driver", "radiator_id": W2, "invert": True},
+                                       {"kind": "C", "value": 0.0001}]}]}}]
+    return value
+
+
+def test_wiring_roundtrip_and_absent_wiring_preserves_saved_bytes():
+    legacy = DesignConfig.model_validate(_osse(assembly=_assembly()))
+    saved = serialize(legacy)
+    empty = _assembly(wiring_groups=[])
+    assert serialize(DesignConfig.model_validate(_osse(assembly=empty))) == saved
+    assert "wiring_groups" not in legacy.model_dump_json()
+    wired = DesignConfig.model_validate(_osse(assembly=_wired()))
+    assert serialize(parse(serialize(wired))) == serialize(wired)
+    assert parse(serialize(wired)).design.root.assembly == wired.root.assembly
+    assert parse(serialize(wired)).design.root.assembly.wiring_groups[0].driver_ids() == [W1, W2]
+
+
+@pytest.mark.parametrize("fault", ["duplicate", "missing_driver", "split_group", "delay", "invert", "weight", "part_zero", "part_nan", "empty", "id_collision"])
+def test_invalid_wiring_is_refused_with_a_remedy(fault):
+    value = _wired()
+    network = value["wiring_groups"][0]
+    if fault == "duplicate":
+        network["network"]["children"].append({"kind": "driver", "radiator_id": W1})
+    elif fault == "missing_driver":
+        del value["drivers"][W2]
+    elif fault == "split_group":
+        value["signal_groups"][0]["members"].append(value["signal_groups"][1]["members"].pop())
+    elif fault in {"delay", "invert", "weight"}:
+        value["signal_groups"][1]["members"][0][{"delay": "delay_ms", "invert": "invert", "weight": "weight"}[fault]] = .2 if fault != "invert" else True
+    elif fault in {"part_zero", "part_nan"}:
+        network["network"]["children"][1]["children"][1]["value"] = 0 if fault == "part_zero" else float("nan")
+    elif fault == "empty":
+        network["network"]["children"] = []
+    else:
+        network["id"] = G_LF
+    with pytest.raises(ValidationError):
+        DesignConfig.model_validate(_osse(assembly=value))
+
+
 def _assembly(**changes):
     assembly = {
         "woofers": [
@@ -60,7 +107,9 @@ def test_identity_contract_names_patches_by_radiator_uuid() -> None:
     assert patch_id(W1, "piston") == f"{W1}/piston"
     assert split_source_id(f"{W1}/cap") == (W1, "cap")
     assert split_source_id(HF_RADIATOR_ID) == (HF_RADIATOR_ID, None)
-    for bad in ("LF 1/piston", f"{W1}", f"{W1}/Cap", "rigid"):
+    assert split_source_id(patch_id(W1, "Cap.1/inner")) == (W1, "Cap.1/inner")
+    assert split_source_id(patch_id(HF_RADIATOR_ID, "dome")) == (HF_RADIATOR_ID, "dome")
+    for bad in ("LF 1/piston", f"{W1}", "rigid"):
         with pytest.raises(ValueError):
             split_source_id(bad)
     assert source_role("primary") == "HF" and source_role("secondary") == "LF"

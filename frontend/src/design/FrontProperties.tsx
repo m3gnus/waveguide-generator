@@ -1,3 +1,4 @@
+import { DiaphragmSelect } from './DiaphragmControls';
 import { EmptyState } from '../shell/EmptyState';
 import { Notice } from '../shell/Notice';
 /**
@@ -7,7 +8,7 @@ import { Notice } from '../shell/Notice';
  * parameters, written as the Geometry panel writes them.
  */
 import {
-  DEFAULT_WOOFER_GAP_MM, commitAssembly, deleteWoofer, setMemberProcessing, setPlacement, setWooferDrive, updateWoofer, wooferById, wooferDriveMode,
+  DEFAULT_WOOFER_GAP_MM, commitAssembly, deleteWoofer, setMemberProcessing, setPlacement, setWooferDrive, updateWoofer, wiringDriverIds, wooferById, wooferDriveMode,
   type AssemblyAnchor, type AssemblyPlacement, type AssemblyWoofer, type DesignAssembly,
 } from '../stores/assembly';
 import { isNativeFamily, useDesignStore, type DesignDocument } from '../stores/design';
@@ -22,6 +23,7 @@ import { ToggleRow } from './SolveOptionsSections';
 import { WooferDriveSelect } from './WooferDrivers';
 import { assemblyDriverForm } from '../stores/assemblySimulation';
 import { exteriorTransducerError } from '../stores/exteriorTransducer';
+import { WiringProperties } from './WiringProperties';
 
 type Session = WorkspaceSession<DesignAssembly, FrontCommand>;
 const ANCHORS: Array<[AssemblyAnchor, string]> = [['above', 'Above the mouth'], ['below', 'Below the mouth'], ['free', 'Free position']];
@@ -51,10 +53,11 @@ function Clearances({ id, assembly, resolved }: { id: string; assembly: DesignAs
   </dl>;
 }
 
-function WooferProperties({ assembly, id, session, resolved, select }: { assembly: DesignAssembly; id: string; session: Session; resolved: FrontViewContext | undefined; select(ids: string[]): void }) {
+function WooferProperties({ assembly, id, session, resolved, select, openProfile }: { assembly: DesignAssembly; id: string; session: Session; resolved: FrontViewContext | undefined; select(ids: string[]): void; openProfile(id: string): void }) {
   const woofer = wooferById(assembly, id)!;
   const placement = woofer.placement;
   const processing = member(assembly, id);
+  const wired = (assembly.wiring_groups ?? []).some(group => wiringDriverIds(group.network).includes(id));
   const others = (assembly.woofers ?? []).filter(item => item.id !== id);
   const place = (next: AssemblyPlacement) => run(session, 'Move woofer', current => setPlacement(current, id, next));
   const drive = wooferDriveMode(assembly, id);
@@ -74,16 +77,7 @@ function WooferProperties({ assembly, id, session, resolved, select }: { assembl
     <NumberField label="Radius" unit="mm" value={woofer.radius_mm} min={0} exclusiveMin max={1000} precision={1}
       validate={radius => radiusProblem(assembly, id, radius, resolved)}
       onCommit={radius_mm => run(session, 'Woofer radius', current => updateWoofer(current, id, { radius_mm }))}/>
-    <SelectRow>
-      <label htmlFor="front-woofer-diaphragm">Diaphragm</label>
-      <select id="front-woofer-diaphragm" value={woofer.shape.kind} onChange={event => {
-        const kind = event.currentTarget.value as 'piston' | 'ath_cone';
-        run(session, 'Woofer diaphragm', current => updateWoofer(current, id, { shape: { kind } }));
-      }}>
-        <option value="piston">Flat piston</option>
-        <option value="ath_cone">ATH cone</option>
-      </select>
-    </SelectRow>
+    <DiaphragmSelect id={id} openProfile={openProfile}/>
     {woofer.shape.kind === 'piston' && <NumberField label="Recess" unit="mm" value={woofer.shape.recess_mm ?? 0} min={0} max={1000} precision={1}
       onCommit={recess_mm => run(session, 'Woofer recess', current => updateWoofer(current, id, { shape: { kind: 'piston', recess_mm } }))}/>}
     <WooferDriveSelect id="front-woofer-drive" woofer={woofer} mode={drive}
@@ -128,18 +122,21 @@ function WooferProperties({ assembly, id, session, resolved, select }: { assembl
 
     {processing && <>
       <h4>Signal</h4>
+      {wired && <p className="section-note">This woofer is wired. Set DSP for its signal group in Simulation, and polarity with Invert under Wiring.</p>}
       <NumberField label="Weight" value={processing.weight ?? 1} min={0} max={100} precision={3}
+        disabled={wired}
         onCommit={weight => run(session, 'Woofer weight', current => setMemberProcessing(current, id, { weight }))}/>
       <NumberField label="Delay" unit="ms" value={processing.delay_ms ?? 0} min={0} max={1000} precision={3}
+        disabled={wired}
         onCommit={delay_ms => run(session, 'Woofer delay', current => setMemberProcessing(current, id, { delay_ms }))}/>
-      <ToggleRow id="front-woofer-polarity" label="Invert polarity" help="Reverses this woofer's polarity in the combined result." checked={!!processing.invert}
+      <ToggleRow id="front-woofer-polarity" label="Invert polarity" help="Reverses this woofer's polarity in the combined result." checked={!!processing.invert} disabled={wired}
         onChange={invert => run(session, 'Woofer polarity', current => setMemberProcessing(current, id, { invert }))}/>
     </>}
   </>;
 }
 
-function SourcesProperties({ assembly, session, resolved, selection, select, hasAssembly }: {
-  assembly: DesignAssembly; session: Session; resolved: FrontViewContext | undefined; selection: string[]; select(ids: string[]): void; hasAssembly: boolean;
+function SourcesProperties({ assembly, session, resolved, selection, select, hasAssembly, openProfile }: {
+  assembly: DesignAssembly; session: Session; resolved: FrontViewContext | undefined; selection: string[]; select(ids: string[]): void; hasAssembly: boolean; openProfile(id: string): void;
 }) {
   const add = (anchor: AssemblyAnchor) => {
     let added = '';
@@ -162,6 +159,7 @@ function SourcesProperties({ assembly, session, resolved, selection, select, has
   return <>
     <div className="front-heading"><h3>Sources</h3>{woofers.length > 0 && menu}</div>
     <div className="front-source hf"><span className="front-swatch" aria-hidden="true"/><span>HF</span><small>Horn throat</small></div>
+    <DiaphragmSelect id="horn-throat" openProfile={openProfile}/>
     {woofers.length === 0
       ? full && !blocked
         ? <Notice tone="info" role={null} title="No room for a woofer yet" actions={<>{full.action && <button className="btn-primary" type="button"
@@ -213,14 +211,17 @@ function BaffleProperties() {
 }
 
 /** The properties of the front view adapter, reading the latest server context. */
-export function frontViewProperties(resolved: () => FrontViewContext | undefined, hasAssembly: () => boolean): DomainAdapter<DesignAssembly, DesignAssembly, FrontCommand>['properties'] {
+export function frontViewProperties(resolved: () => FrontViewContext | undefined, hasAssembly: () => boolean, openProfile: (id: string) => void): DomainAdapter<DesignAssembly, DesignAssembly, FrontCommand>['properties'] {
   return (state, selection, session, actions): PropertiesSection[] => {
     const selected = selection.filter(id => wooferById(state, id));
     const sections: PropertiesSection[] = [{ id: 'sources', title: 'Sources',
-      render: () => <SourcesProperties assembly={state} session={session} resolved={resolved()} selection={selected} select={actions.setSelection} hasAssembly={hasAssembly()}/> }];
+      render: () => <SourcesProperties assembly={state} session={session} resolved={resolved()} selection={selected} select={actions.setSelection} hasAssembly={hasAssembly()} openProfile={openProfile}/> }];
     if (selected.length === 1) {
       sections.push({ id: `woofer:${selected[0]}`, title: wooferById(state, selected[0])!.label,
-        render: () => <WooferProperties key={selected[0]} assembly={state} id={selected[0]} session={session} resolved={resolved()} select={actions.setSelection}/> });
+        render: () => <WooferProperties key={selected[0]} assembly={state} id={selected[0]} session={session} resolved={resolved()} select={actions.setSelection} openProfile={openProfile}/> });
+    }
+    if ((state.woofers ?? []).some(woofer => woofer.enabled !== false && wooferDriveMode(state, woofer.id) === 'driver')) {
+      sections.push({ id: 'wiring', title: 'Wiring', render: () => <WiringProperties assembly={state} selection={selected} run={(label, edit) => run(session, label, edit)}/> });
     }
     sections.push({ id: 'baffle', title: 'Baffle', render: () => <BaffleProperties/> });
     return sections;

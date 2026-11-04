@@ -283,26 +283,31 @@ _JS_ARTIFACT_TOKENS = frozenset({"undefined", "NaN", "null"})
 
 
 def _numeric_paths_for_annotation(
-    annotation: Any, prefix: tuple[str, ...]
+    annotation: Any, prefix: tuple[str, ...], active: frozenset[type] = frozenset()
 ) -> set[tuple[str, ...]]:
     if annotation is Expr:
         return {prefix}
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        # Passive network trees are recursive and contain literal SI values,
+        # not legacy Expr fields. Stop cycles in schema traversal.
+        if annotation in active:
+            return set()
+        active = active | {annotation}
         result: set[tuple[str, ...]] = set()
         for name, field_info in annotation.model_fields.items():
             result.update(
-                _numeric_paths_for_annotation(field_info.annotation, (*prefix, name))
+                _numeric_paths_for_annotation(field_info.annotation, (*prefix, name), active)
             )
         return result
     origin = get_origin(annotation)
     if origin is Annotated:
-        return _numeric_paths_for_annotation(get_args(annotation)[0], prefix)
+        return _numeric_paths_for_annotation(get_args(annotation)[0], prefix, active)
     if origin in {list, tuple}:
-        return _numeric_paths_for_annotation(get_args(annotation)[0], (*prefix, "*"))
+        return _numeric_paths_for_annotation(get_args(annotation)[0], (*prefix, "*"), active)
     if origin in {Union, UnionType}:
         result: set[tuple[str, ...]] = set()
         for choice in get_args(annotation):
-            result.update(_numeric_paths_for_annotation(choice, prefix))
+            result.update(_numeric_paths_for_annotation(choice, prefix, active))
         return result
     return set()
 

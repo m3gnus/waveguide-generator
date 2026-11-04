@@ -12,7 +12,9 @@ import math
 import operator
 import re
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Union
+
+from server.design.source_document import SourceDocument, PhasePlug, canonical_document
 
 from server.drivers.models import ExteriorDriverInputs
 
@@ -801,8 +803,45 @@ class AssemblyPlacement(StrictModel):
         return self
 
 
-class AssemblyWooferShape(StrictModel):
-    kind: Literal["piston", "ath_cone"]
+class AssemblySketch(StrictModel):
+    """The shared workspace's last valid geometry and persisted draft state."""
+
+    diaphragm: SourceDocument | None = Field(default=None, exclude_if=lambda v: v is None)
+    authoring: dict[str, Any] | None = Field(default=None, exclude_if=lambda v: v is None)
+    status: Literal["valid", "unfinished", "invalid"] = Field(default="valid", exclude_if=lambda v: v == "valid")
+
+    @field_validator("diaphragm")
+    @classmethod
+    def _canonical_diaphragm(cls, document):
+        if document is None:
+            return None
+        from hornlab_mesher.source_contour import SourceContour, ContourDrive
+
+        contour = SourceContour.from_dict(document.contour.model_dump())
+        drive = ContourDrive(document.drive.channel_id, tuple(document.drive.weights.items()), document.drive.motion)
+        drive.validate(contour)
+        return SourceDocument.model_validate(canonical_document(contour, drive))
+
+    @field_validator("authoring", mode="before")
+    @classmethod
+    def _authoring(cls, value):
+        if value is None:
+            return None
+        blob = _json_blob(value, "source authoring")
+        if blob.get("version") != "wg-source-authoring-v2":
+            raise ValueError("source authoring requires wg-source-authoring-v2")
+        return blob
+
+    def validate_sketch(self):
+        if self.kind == "sketched":
+            if self.status == "valid" and self.diaphragm is None:
+                raise ValueError("a valid sketched diaphragm needs a committed SourceDocument")
+        elif self.diaphragm is not None or self.authoring is not None or self.status != "valid":
+            raise ValueError("diaphragm and authoring state require kind sketched")
+
+
+class AssemblyWooferShape(AssemblySketch):
+    kind: Literal["piston", "ath_cone", "sketched"]
     recess_mm: AssemblyNumber = Field(default=0.0, ge=0, le=1_000, exclude_if=lambda v: v == 0)
 
     @model_validator(mode="after")
@@ -810,7 +849,11 @@ class AssemblyWooferShape(StrictModel):
         # The design mesher owns the diaphragm contract (recess weld floor).
         from hornlab_mesher.enclosure_woofers import AthConeShape, PistonShape
 
-        if self.kind == "ath_cone":
+        self.validate_sketch()
+        if self.kind == "sketched":
+            if self.recess_mm:
+                raise ValueError("recess_mm is piston-only; set depth in the diaphragm sketch")
+        elif self.kind == "ath_cone":
             if self.recess_mm:
                 raise ValueError("the ATH cone has a fixed recess; recess_mm is piston-only")
             AthConeShape()
@@ -839,11 +882,24 @@ class AssemblyWoofer(StrictModel):
     ath: AthLfProvenance | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
-class AssemblyHfSource(StrictModel):
-    """The horn's classic prescribed throat source, with the mesher's identity."""
+class AssemblyHfSource(AssemblySketch):
+    """The horn's prescribed throat source: classic or a committed sketch."""
 
     radiator_id: Literal["horn-throat"] = "horn-throat"
-    kind: Literal["classic"] = "classic"
+    kind: Literal["classic", "sketched"] = "classic"
+    phase_plugs: list[PhasePlug] = Field(default_factory=list, max_length=8, exclude_if=lambda v: not v)
+
+    @model_validator(mode="after")
+    def _sketch(self):
+        self.validate_sketch()
+        if self.phase_plugs and self.kind != "sketched":
+            raise ValueError("phase plugs require a sketched HF diaphragm")
+        from hornlab_mesher.phase_plug import PhasePlug as NativePlug
+        for plug in self.phase_plugs:
+            NativePlug(**plug.model_dump())
+        if len({p.id for p in self.phase_plugs}) != len(self.phase_plugs):
+            raise ValueError("phase plug ids must be unique")
+        return self
 
 
 class AssemblyDriverReference(StrictModel):
@@ -886,6 +942,69 @@ class AssemblySignalGroup(StrictModel):
     members: list[AssemblyMember] = Field(min_length=1)
 
 
+class AssemblyWiringDriver(StrictModel):
+    kind: Literal["driver"]
+    radiator_id: RadiatorUuid
+    invert: bool = Field(default=False, exclude_if=lambda v: not v)
+
+
+class AssemblyWiringPart(StrictModel):
+    """SI component values: ohms, henry and farad, respectively."""
+
+    kind: Literal["R", "L", "C"]
+    value: AssemblyNumber = Field(gt=0)
+
+
+class AssemblyWiringBranch(StrictModel):
+    # Identical read/write tree. Avoid mode-specific recursive references
+    # splitting every enclosing design schema into Input/Output variants.
+    model_config = ConfigDict(json_schema_mode_override="validation")
+    kind: Literal["series", "parallel"]
+    children: list[Annotated[Union[AssemblyWiringDriver, AssemblyWiringPart, "AssemblyWiringBranch"], Field(discriminator="kind")]] = Field(min_length=2)
+
+
+class AssemblyWiringGroup(StrictModel):
+    id: RadiatorUuid
+    label: AssemblyLabel
+    network: AssemblyWiringBranch
+
+    def driver_ids(self) -> list[str]:
+        def visit(node):
+            if isinstance(node, AssemblyWiringDriver):
+                return [node.radiator_id]
+            if isinstance(node, AssemblyWiringBranch):
+                return [item for child in node.children for item in visit(child)]
+            return []
+        return visit(self.network)
+
+
+def validate_wiring_groups(wiring, drivers: set[str], groups: Mapping[str, Mapping[str, Any]], radiator_ids: set[str]) -> None:
+    """One membership contract for saved designs and imported solve requests."""
+
+    seen: set[str] = set()
+    identities: set[str] = set()
+    for group in wiring:
+        if group.id in identities or group.id in radiator_ids or group.id in groups:
+            raise ValueError("Wiring ids must be unique and distinct from radiator and signal group ids.")
+        identities.add(group.id)
+        ids = group.driver_ids()
+        if not ids:
+            raise ValueError("A wiring network needs a driver; add a woofer with a T/S driver.")
+        if len(set(ids)) != len(ids) or seen.intersection(ids):
+            raise ValueError("A driver may appear only once in wiring; remove its duplicate connection.")
+        seen.update(ids)
+        if set(ids) - drivers:
+            raise ValueError("Every wired woofer needs a T/S driver; assign its driver or remove the wiring.")
+        owners = [members for members in groups.values() if set(ids).issubset(members)]
+        if len(owners) != 1:
+            raise ValueError("A wiring network must belong to one signal group; move all its woofers into the same group.")
+        for name in ids:
+            member = owners[0][name]
+            value = member if isinstance(member, Mapping) else member.model_dump()
+            if value.get("delay_ms", 0) or value.get("invert", False) or value.get("weight", 1) != 1:
+                raise ValueError("Wired woofers cannot have member weight, delay or polarity; reset member processing and use signal-group DSP or wiring polarity.")
+
+
 class AssemblyCrossover(StrictModel):
     """The shared crossover over signal groups; the combine wire, by group id."""
 
@@ -909,6 +1028,7 @@ class AssemblyConfig(StrictModel):
     hf_source: AssemblyHfSource = Field(default_factory=AssemblyHfSource)
     woofers: list[AssemblyWoofer] = Field(default_factory=list, max_length=16)
     drivers: dict[str, AssemblyDriver] = Field(default_factory=dict, exclude_if=lambda v: not v)
+    wiring_groups: list[AssemblyWiringGroup] = Field(default_factory=list, exclude_if=lambda v: not v)
     signal_groups: list[AssemblySignalGroup] = Field(default_factory=list)
     crossover: AssemblyCrossover | None = Field(default=None, exclude_if=lambda v: v is None)
     drive_voltage_v: AssemblyNumber = Field(default=2.83, gt=0, le=1_000, exclude_if=lambda v: v == 2.83)
@@ -947,6 +1067,9 @@ class AssemblyConfig(StrictModel):
         radiators = known | {HF_RADIATOR_ID}
         if len(set(members)) != len(members) or set(members) != radiators:
             raise ValueError("every radiator belongs to exactly one signal group")
+        validate_wiring_groups(self.wiring_groups, set(self.drivers), {
+            group.id: {member.radiator_id: member for member in group.members} for group in self.signal_groups
+        }, radiators)
         return self
 
 

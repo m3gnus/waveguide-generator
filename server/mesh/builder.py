@@ -1044,7 +1044,7 @@ def assembly_woofer_rows(design: DesignConfig) -> list[dict[str, Any]]:
             "radiator_id": woofer.id,
             "enabled": woofer.enabled,
             "radius_mm": woofer.radius_mm,
-            "shape": woofer.shape.model_dump(mode="json"),
+            "shape": woofer.shape.model_dump(mode="json", exclude={"authoring", "status"}),
             "placement": placement,
             "drive": {"kind": woofer.drive},
             **({"resolution_mm": woofer.resolution_mm} if woofer.resolution_mm is not None else {}),
@@ -1103,6 +1103,19 @@ def _assembly_preparation(design: DesignConfig) -> tuple[dict[str, Any], dict[st
             f"{design.root.formula} does not support an enclosure front baffle. "
             "Disable the woofers, or choose a horn family that supports Mounting: Waveguide in enclosure."
         )
+    assembly = design.root.assembly
+    if assembly.hf_source.kind == "sketched" or any(w.enabled and w.shape.kind == "sketched" for w in assembly.woofers):
+        try:
+            from hornlab_mesher.design_diaphragm import FEATURE
+        except ModuleNotFoundError as exc:
+            if exc.name != "hornlab_mesher.design_diaphragm":
+                raise
+            raise AssemblyRefusal(
+                "The installed mesher cannot build sketched diaphragms. Update Waveguide Generator, "
+                "or revert the diaphragm to its previous preset before solving."
+            ) from exc
+        if FEATURE != "design-sketched-diaphragms-v1":
+            raise AssemblyRefusal("The installed mesher cannot build this diaphragm contract. Update Waveguide Generator before solving.")
     config = _solver_mesher_config(design)
     config.setdefault("mesh", {})["quadrants"] = FULL_DOMAIN_QUADRANTS
     probe = deepcopy(config)
@@ -1129,6 +1142,12 @@ def _assembly_preparation(design: DesignConfig) -> tuple[dict[str, Any], dict[st
         config["enclosure"]["woofers"] = resolved
         if assembly_ath_envelope(design):
             config["enclosure"]["ath_lf_envelope"] = True
+    hf = design.root.assembly.hf_source
+    if hf.kind == "sketched":
+        config["hf_diaphragm"] = {
+            **hf.model_dump(mode="json", exclude={"authoring", "status", "kind", "radiator_id"}),
+            "fit_wg0_rim": True,
+        }
     placement = {
         "frame": "horn-throat-pre-placement-mm",
         "mouth_bottom_mm": bottom,

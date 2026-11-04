@@ -14,7 +14,6 @@ from .exterior_transducer_imported import (
     drivers_for as drivers_for,
     enabled as enabled,
     excitation_plan as excitation_plan,
-    mixed_allowed as mixed_allowed,
     preflight as preflight,
 )
 

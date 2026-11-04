@@ -172,6 +172,7 @@ def parse_frequency(
     mean_pressure_velocity: complex | None = None, boundary_loading: BoundaryLoading | None = None,
     excitation_port_ids: tuple[str, ...] | None = None,
     channel_port_ids: tuple[str, ...] | None = None,
+    port_weights: Mapping[str, float] | None = None,
     _decoded_quantities: dict[str, np.ndarray] | None = None,
 ) -> FrequencyResult:
     """Map a unit-velocity basis or a WG channel's sum of independent ports.
@@ -226,7 +227,12 @@ def parse_frequency(
                 _decoded_quantities[name] = array
         if values["dtype"] != ("complex64" if precision == "float32" else "complex128"):
             raise ResultContractError(f"{name} precision changed")
-        return array if axis == "radiator" else np.sum(array[indices], axis=0)
+        if axis == "radiator":
+            return array
+        selected = array[indices]
+        if port_weights is not None:
+            selected = selected * np.asarray([port_weights.get(port, 1.0) for port in channel_ports])[:, None]
+        return np.sum(selected, axis=0)
 
     pressure = np.stack([
         quantity(f"pressure:{plane}", "exterior_pressure", "Pa", "observation", len(layout.angles_deg))
@@ -288,6 +294,7 @@ def parse_compiled_frequency(result: Any, request: CompiledRequest, *, frequency
             excitation_port_id=members[0], excitation_port_ids=ports, channel_port_ids=members,
             symmetry=options["symmetry"], precision=options["precision"], backend=options["bem_backend"],
             trace_counts=counts, boundary_loading=request.channel_loading[channel],
+            port_weights={b.port_id: b.weight for b in request.bases} if any(b.weight != 1 for b in request.bases) else None,
             _decoded_quantities=decoded)
         for channel, members in request.channel_ports.items()
     }

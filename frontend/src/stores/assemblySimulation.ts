@@ -10,7 +10,7 @@
  */
 import type { CompiledAssembly } from '../api/assembly';
 import { parseWire, toWire } from '../results/crossoverSpec';
-import { HF_RADIATOR_ID, newRadiatorId, type AssemblyDriver, type AssemblySignalGroup, type DesignAssembly } from './assembly';
+import { HF_RADIATOR_ID, newRadiatorId, validateAssemblyWiring, type AssemblyDriver, type AssemblySignalGroup, type DesignAssembly } from './assembly';
 import { designPreparedRecord, useDesignPreparedRecord } from './importedModel';
 import { currentModel } from '../model/currentModel';
 import { combineEnabledEffective, PASSIVE_CARDIOID_DEFAULTS, type CadDriveChannel, type RoleSource, type SimulationData } from './cadReturn';
@@ -62,6 +62,7 @@ export function assemblySimulationData(design: DesignDocument, record: CompiledA
     const form = assemblyDriverForm(assembly.drivers?.[excitation.id]);
     const inputs = assembly.drivers?.[excitation.id]?.exterior_driver_inputs;
     return { id: excitation.id, source_ids: [...excitation.source_ids], motion: excitation.motion,
+      ...(Object.values(excitation.patch_weights ?? {}).some(weight => weight !== 1) ? { patch_weights: { ...excitation.patch_weights } } : {}),
       ...(inputs ? { exterior_driver_inputs: inputs } : {}),
       ...(form ? { exterior_transducer: form } : {}) };
   });
@@ -139,6 +140,7 @@ export function applyAssemblySimulation(assembly: DesignAssembly, next: Simulati
   } else delete result.crossover;
   if (next.driveVoltageV === DEFAULT_DRIVE_VOLTAGE_V) delete result.drive_voltage_v;
   else result.drive_voltage_v = next.driveVoltageV;
+  validateAssemblyWiring(result);
   return result;
 }
 

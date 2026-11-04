@@ -176,7 +176,12 @@ describe('assembly Solve press', () => {
     expect(planSubmission(snapshot).options).toEqual(snapshot.setup.options);
     expect(planSubmission(snapshot).geometry.ingest_id).toBe(prepared.press.prepared_id);
     expect(prepared.press.label).toBe('Speaker1');
-    const { label: _label, ...legacyPress } = prepared.press;
+    const { label: _label, ...legacyPress } = structuredClone(prepared.press);
+    expect(legacyPress.setup?.geometry.excitation_normalization).toBe('rms_velocity');
+    expect(legacyPress.setup?.geometry.excitation_normalization_by_engine).toEqual({ bempp: 'acceleration_legacy' });
+    // Pin the original press bytes separately from the new explicit contract.
+    delete legacyPress.setup?.geometry.excitation_normalization;
+    delete legacyPress.setup?.geometry.excitation_normalization_by_engine;
     expect(JSON.stringify(legacyPress)).toMatchSnapshot();
     expect(prepared.modelId).toBe('design-assembly:wgu_x');
     expect(prepared.notice).toBeNull();

@@ -38,7 +38,9 @@ import weakref
 
 from pydantic import Field, field_validator, model_validator
 
-from server.cadlink.intake.design_assembly import PRODUCER as ASSEMBLY_PRODUCER, compile_spec_digest
+from server.cadlink.intake.design_assembly import (
+    PRODUCER as ASSEMBLY_PRODUCER, AssemblyRefusal, compile_spec_digest, require_ready_sketches,
+)
 from server.cadlink.intake.ingest import mesh_preparation, read_snapshot, retained_snapshot_path
 from server.cadlink.intake.readings import (
     confirm_frame,
@@ -616,6 +618,10 @@ def _assembly_snapshot(body: ModelSolveRequest, record: Mapping[str, Any]) -> di
         raise ModelSolveRefusal(
             422, "design_refused", "This design has no Sources and baffle assembly. Build it, then press Solve again.",
         )
+    try:
+        require_ready_sketches(design)
+    except AssemblyRefusal as exc:
+        raise ModelSolveRefusal(422, "design_refused", str(exc)) from exc
     if manifest_sha256 != record.get("manifest_sha256"):
         raise ModelSolveRefusal(
             422, "design_changed", "The design changed after its assembly was built. Press Solve again.",

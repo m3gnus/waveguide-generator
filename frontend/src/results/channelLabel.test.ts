@@ -4,7 +4,7 @@ import { fieldPlaneMemberResponses } from '../viewport/fieldPlaneStore';
 import { channelLabel } from './channelLabel';
 import { resultViewEntries } from './ResultViewSwitch';
 import { summaryGroups } from './summary';
-import { selectResultChannels } from './mappers';
+import { impedanceSeries, selectResultChannels } from './mappers';
 import type { ResultPayload } from './types';
 
 const payload = {
@@ -59,4 +59,19 @@ it('numbers same-band design assembly channels instead of showing their identiti
   const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
   const result = { channels: Object.fromEntries([1, 2].map(n => [id(n), { metadata: { role: 'LF' } }])) } as unknown as ResultPayload;
   expect(channelLabel(result, id(2), 'design-assembly')).toBe('LF 2');
+});
+
+it('selects a wired group by its saved label and feeds its input impedance to the existing chart', () => {
+  const group = '00000000-0000-4000-8000-000000000009';
+  const result = { frequencies: [100, 200], channel_order: ['driver', group], channels: {
+    driver: { frequencies: [100, 200], metadata: { role: 'LF' } },
+    [group]: { frequencies: [100, 200], impedance: { frequencies: [100, 200], real: [12, 14], imaginary: [1, 2] },
+      metadata: { label: 'Bass pair', wiring: { networks: {} }, impedance_units: 'ohms', impedance_quantity: 'electrical_input_impedance' } },
+  } } as unknown as ResultPayload;
+  expect(resultViewEntries(result, 'design-assembly').find(entry => entry.channelId === group)?.label).toBe('Bass pair');
+  const selected = selectResultChannels('run', 'Run', result, group, 'design-assembly');
+  expect(selected.map(item => item.label)).toEqual(['Run · Bass pair']);
+  expect(impedanceSeries(selected[0].result, 'cartesian').map(series => series.data)).toEqual([
+    [[100, 12], [200, 14]], [[100, 1], [200, 2]],
+  ]);
 });

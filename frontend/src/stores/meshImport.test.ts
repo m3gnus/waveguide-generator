@@ -124,8 +124,13 @@ describe('standalone imported mesh', () => {
     const snapshot = fileSubmissionSnapshot();
     const press = modelSolvePress(snapshot, 'speaker1', 'p1');
     expect(fileMeshSubmission()).toEqual(planSubmission(snapshot));
-    expect(JSON.stringify(press)).toMatchSnapshot();
-    expect(importedSolvePlanRequestBody(fileMeshSubmission())).toMatchSnapshot();
+    expect(press.setup?.geometry.excitation_normalization).toBe('acceleration_legacy');
+    const legacyPress = structuredClone(press);
+    delete legacyPress.setup?.geometry.excitation_normalization;
+    const legacySubmission = fileMeshSubmission();
+    delete legacySubmission.geometry.excitation_normalization;
+    expect(JSON.stringify(legacyPress)).toMatchSnapshot();
+    expect(importedSolvePlanRequestBody(legacySubmission)).toMatchSnapshot();
   });
 
   it('automatically prepares confident server guesses with roles and the detected domain', async () => {

@@ -39,11 +39,7 @@ export function hornAssemblyContext(dimensions: Dimensions, plugs: PhasePlug[], 
     point('horn.throat', 'throat', `Throat r ${formatValue(throatRadius)} 🔒`, { x: throatRadius, y: 0 }, 'rim-plane'),
     { id: 'horn.wall', role: 'wall', label: 'Horn wall', kind: 'polyline', geometry: wall, pickable: false },
     point('horn.mouth', 'mouth', `Mouth r ${formatValue(mouth.x)}`, mouth, 'horn.wall'), ...box(d, d.horn_xy_mm, L, mouth.x), band('keepout.front', L, mouth.x, false)];
-  for (const p of plugs) {
-    const prefix = `plug/${p.id}`, a = { x: p.inner0_mm, y: p.z0_mm }, b = { x: p.outer0_mm, y: p.z0_mm }, c = { x: p.outer1_mm, y: p.z1_mm }, e = { x: p.inner1_mm, y: p.z1_mm };
-    items.push(segment(`${prefix}/inlet`, 'plug', `Plug ${p.id} inlet`, a, b), point(`${prefix}/inlet.inner`, 'plug', `Plug ${p.id} inner inlet`, a, `${prefix}/inlet`), point(`${prefix}/inlet.outer`, 'plug', `Plug ${p.id} outer inlet`, b, `${prefix}/inlet`),
-      { id: `${prefix}/body`, kind: 'polyline', geometry: [b, c, e, a], role: 'plug', label: `Plug ${p.id}`, pickable: false }, band(`${prefix}/keepout`, p.z0_mm, p.outer0_mm, false));
-  }
+  items.push(...phasePlugContextItems(plugs));
   return finish(items, rimPlaneLabel);
 }
 export function wooferAssemblyContext(dimensions: Dimensions, rimRadius = dimensions.aperture_radius_mm): SketchContext {
@@ -51,6 +47,22 @@ export function wooferAssemblyContext(dimensions: Dimensions, rimRadius = dimens
   return finish([segment('rim-plane', 'rim-plane', rimPlaneLabel, { x: 0, y: 0 }, { x: rimRadius, y: 0 }),
     ...box(dimensions, dimensions.woofer_xy_mm, 0, a), point('woofer.aperture', 'aperture', `Aperture r ${formatValue(a)}`, { x: a, y: 0 }, 'baffle.front'),
     segment('woofer.collar', 'collar', 'Mounting collar', { x: rimRadius, y: 0 }, { x: a, y: 0 }, false)], rimPlaneLabel);
+}
+function phasePlugContextItems(plugs: PhasePlug[]): ContextItem[] {
+  const items: ContextItem[] = [];
+  for (const p of plugs) {
+    const prefix = `plug/${p.id}`, a = { x: p.inner0_mm, y: p.z0_mm }, b = { x: p.outer0_mm, y: p.z0_mm }, c = { x: p.outer1_mm, y: p.z1_mm }, e = { x: p.inner1_mm, y: p.z1_mm };
+    items.push(segment(`${prefix}/inlet`, 'plug', `Plug ${p.id} inlet`, a, b), point(`${prefix}/inlet.inner`, 'plug', `Plug ${p.id} inner inlet`, a, `${prefix}/inlet`), point(`${prefix}/inlet.outer`, 'plug', `Plug ${p.id} outer inlet`, b, `${prefix}/inlet`),
+      { id: `${prefix}/body`, kind: 'polyline', geometry: [b, c, e, a], role: 'plug', label: `Plug ${p.id}`, pickable: false }, band(`${prefix}/keepout`, p.z0_mm, p.outer0_mm, false));
+  }
+  return items;
+}
+/** HF tabs need the live throat and passive bodies, without an invented horn wall. */
+export function hfThroatContext(radius: number, plugs: PhasePlug[]): SketchContext {
+  const label = `Throat plane (z = ${formatValue(0)})`;
+  return finish([segment('rim-plane', 'rim-plane', label, { x: 0, y: 0 }, { x: radius, y: 0 }),
+    point('horn.throat', 'throat', `Throat r ${formatValue(radius)} 🔒`, { x: radius, y: 0 }, 'rim-plane'),
+    ...phasePlugContextItems(plugs)], label);
 }
 export function standaloneContext(attachment: SourceAttachment | undefined, rimRadius: number): SketchContext {
   if (!attachment) return finish([], `Rim plane (z = ${formatValue(0)})`);

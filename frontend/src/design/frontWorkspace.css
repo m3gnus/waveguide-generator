@@ -5,7 +5,7 @@
 .front-launch small { color: var(--fg3); line-height: 1.4; }
 
 /* The dialog: the drawing is the work surface, everything else serves it. */
-.front-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(1400px, 96vw); height: min(920px, 94vh); box-sizing: border-box; border: 1px solid var(--border-control); border-radius: var(--r2); background: var(--surface-panel); color: var(--fg); font-size: var(--text-base); box-shadow: var(--float-sh); overflow: hidden; }
+.front-workspace { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; width: min(1400px, 96vw); height: min(920px, 94vh); box-sizing: border-box; border: 1px solid var(--border-control); border-radius: var(--r2); background: var(--surface-panel); color: var(--fg); font-size: var(--text-base); box-shadow: var(--float-sh); overflow: hidden; }
 .front-header { display: flex; align-items: center; gap: var(--space-6); padding: var(--space-6) var(--space-8); border-bottom: 1px solid var(--hair); }
 .front-header h2 { margin: 0; font: 600 var(--text-head) var(--ui); color: var(--fg1); }
 .front-header .experimental-badge { margin: 0; align-self: center; }
@@ -61,6 +61,7 @@ button.front-source[aria-pressed="true"] { border-color: rgba(var(--acc-rgb), .4
 .front-clearances dt::before { content: 'Clear of '; }
 .front-clearances dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .front-clearances .problem { color: var(--red); }
+.front-wiring-children { margin-left: var(--space-8); padding-left: var(--space-4); border-left: 1px solid var(--hair-soft); }
 
 /* Messages sit above the panel so the drawing keeps its size when one appears. */
 .front-messages { position: sticky; top: 0; z-index: 1; display: grid; gap: var(--space-4); background: var(--surface-panel); }
@@ -82,3 +83,6 @@ button.front-source[aria-pressed="true"] { border-color: rgba(var(--acc-rgb), .4
 
 /* The add menu portals to the page; inside this dialog it has to clear the backdrop. */
 .action-menu-popover { z-index: 1210; }
+
+.front-tabs { display: flex; gap: var(--space-4); padding: var(--space-4) var(--space-8); border-bottom: 1px solid var(--hair); overflow-x: auto; }
+.front-tabs [aria-selected="true"] { color: var(--acc-text); border-color: var(--acc); }
