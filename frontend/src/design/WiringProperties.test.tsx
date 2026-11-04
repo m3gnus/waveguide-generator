@@ -221,7 +221,7 @@ describe('Sources and baffle wiring', () => {
 
   it('uses the shared driver notice for an engine without coupling and hides wiring without enabled drivers', async () => {
     useSolveOptionsStore.getState().setEngine('bempp'); await mount();
-    expect(host.textContent).toContain('This engine solves every woofer at fixed velocity (1 m/s RMS), without its driver.');
+    expect(host.textContent).toContain('This engine solves every woofer at unit acceleration (1 m/s²), without its driver.');
     await act(async () => { useDesignStore.setState({ design: { ...useDesignStore.getState().design, assembly: {
       ...assembly(), woofers: assembly().woofers!.map(woofer => ({ ...woofer, enabled: false })),
     } } }); });
