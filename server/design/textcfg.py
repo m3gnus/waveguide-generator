@@ -1869,6 +1869,7 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         except (OverflowError, ValueError) as exc:
             raise TextConfigError(str(exc)) from exc
     mesh_payload = payload.get("mesh", {})
+    fresh_axial_source = False
     if (fresh_ath or uses_ath_v3_import(payload.get("text_import_version"))
             or mesh_payload.get("ath_roundover") is not None or mesh_payload.get("ath_rear_shape") == 3):
         # The mesher owns the bounded combinations and their named diagnostics.
@@ -1903,13 +1904,21 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             if "athThroatExtSegments" in mesher_config.get("mesh", {}):
                 payload.setdefault("mesh", {})["ath_throat_ext_segments"] = mesher_config["mesh"]["athThroatExtSegments"]
         if fresh_ath:
+            # Acceptance of this enum is the capability check: the pinned
+            # parser refuses it, so its existing imports keep their reading.
+            # For newly accepted input, use the mesher's resolved block/dotted
+            # precedence rather than WG's legacy section flattening.
+            velocity = mesher_config.get("source", {}).get("sourceVelocity")
+            if velocity == 2:
+                payload.setdefault("source", {})["velocity"] = velocity
+                fresh_axial_source = True
             _apply_ath_lf_sources(payload, _ath_enclosure_items(flat, blocks),
                                   flat.get("Mesh.Quadrants"), mesher_config, ignored_profile)
     try:
         design = DesignConfig.model_validate(payload)
     except ValidationError as exc:
         raise TextConfigError(str(exc)) from exc
-    if fresh_ath:
+    if fresh_axial_source:
         from server.design.source_motion import source_motion
 
         # Newly accepted axial imports need an explicit editor convention.
