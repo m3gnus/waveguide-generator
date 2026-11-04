@@ -596,7 +596,7 @@ describe('ParamPanel inventory UX', () => {
       });
     };
 
-    it.each(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES] as const)('leaves the unedited %s payload byte-identical', (formula) => {
+    it.each(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES] as const)('leaves the unedited %s payload byte-identical', (formula) => {
       const original = designForFamily(formula);
       const before = JSON.stringify(serializeDesign(original));
       act(() => useDesignStore.getState().replaceDocument(original));

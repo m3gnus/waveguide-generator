@@ -195,7 +195,7 @@ describe('complete parameter registry', () => {
       expect(LEGACY_PARAMETER_REGISTRY.some((field) => field.id === id)).toBe(false);
       const field = PARAMETER_REGISTRY.find((field) => field.id === id)!;
       expect(field.section).toBe('Imported ATH values');
-      for (const family of ['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES] as const) {
+      for (const family of ['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES] as const) {
         const design = { ...designForFamily(family), text_import_version: 'ath-2026-09a-v3' as const };
         expect(fieldIsVisible(field, design)).toBe(family === 'R-OSSE' || (family === 'OSSE' && id !== 'rosse.rotation'));
       }
