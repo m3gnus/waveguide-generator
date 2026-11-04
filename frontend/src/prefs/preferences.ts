@@ -231,7 +231,7 @@ export interface Preferences {
 /** 0 turns the graticule off; the map is read by hovering for values. */
 const GUIDE_INTERVAL_RANGE_DEG = [0, 180] as const;
 /** The run-number counter; six digits is what the naming formats can render. */
-const RUN_SEQUENCE_RANGE = [1, 999_999] as const;
+export const RUN_SEQUENCE_RANGE = [1, 999_999] as const;
 /** Stars, matching the rating control in the run list. */
 const MIN_RATING_RANGE = [0, 5] as const;
 

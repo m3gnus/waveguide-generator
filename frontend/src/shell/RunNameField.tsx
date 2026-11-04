@@ -1,10 +1,8 @@
 import type { ReactNode } from 'react';
 import { nextRunLabel, normalizeRunName, runSequenceFor } from '../jobs/runNaming';
 import { useRunNameSource } from '../jobs/runNameSource';
-import { preferencesStore, usePreferences } from '../prefs/preferences';
+import { preferencesStore, RUN_SEQUENCE_RANGE, usePreferences } from '../prefs/preferences';
 import { useDesignNameDraft } from '../design/designNameDraft';
-
-const MAX_RUN_NUMBER = 999_999;
 
 /**
  * The design's name, and the label the next solve will be stored under.
@@ -25,13 +23,11 @@ export function RunNameField({ now = new Date(), children }: { now?: Date; child
   const numbered = preferences.runNameNumberPosition !== 'off';
   const sequence = runSequenceFor(preferences, name);
   // The counter belongs to the design name on screen: storing the name with the
-  // number keeps runSequenceFor from resetting it to 1 for this design.
+  // number keeps runSequenceFor from resetting it to 1 for this design. The
+  // preference store owns the range and rounding.
   const setNextNumber = (value: number) => {
     if (!Number.isFinite(value)) return;
-    preferencesStore.update({
-      runSequenceName: normalizeRunName(name),
-      runSequenceNext: Math.min(MAX_RUN_NUMBER, Math.max(1, Math.floor(value))),
-    });
+    preferencesStore.update({ runSequenceName: normalizeRunName(name), runSequenceNext: value });
   };
   return <div className="run-name-field">
     <div className="run-name-row">
@@ -48,8 +44,8 @@ export function RunNameField({ now = new Date(), children }: { now?: Date; child
       {numbered && <label className="run-next-number" title="The number the next run of this design takes">No.<input
         aria-label="Next run number"
         type="number"
-        min={1}
-        max={MAX_RUN_NUMBER}
+        min={RUN_SEQUENCE_RANGE[0]}
+        max={RUN_SEQUENCE_RANGE[1]}
         step={1}
         value={sequence}
         onChange={(event) => setNextNumber(event.target.valueAsNumber)}

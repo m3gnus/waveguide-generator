@@ -199,12 +199,13 @@ function Section({ title, summary, description, children, forceOpen, revealId, d
           disclosure pattern: the heading carries the structure, the button
           carries the state. */}
       <h3 className="section-heading">
-        <button className="section-head" onClick={toggle} aria-expanded={shownOpen}>
-          <span className="chevron" aria-hidden="true">⌄</span><span className="section-name" {...descriptionTip}>{title}{tip}</span><span className="spacer" />
+        <button className="section-head" onClick={toggle} aria-expanded={shownOpen} {...descriptionTip}>
+          <span className="chevron" aria-hidden="true">⌄</span><span className="section-name">{title}</span><span className="spacer" />
           {!shownOpen && invalid && <span className="field-error" aria-label="Has a value to fix">!</span>}
           {summary && <span className="section-summary">{summary}</span>}
         </button>
       </h3>
+      {tip}
       {(shownOpen || cad) && <div className="section-body" hidden={!shownOpen}>
         {children}
       </div>}

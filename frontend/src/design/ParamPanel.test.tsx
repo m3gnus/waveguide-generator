@@ -1354,12 +1354,23 @@ describe('ParamPanel inventory UX', () => {
       const tip = document.querySelector<HTMLElement>('[role="tooltip"]')!;
       expect(tip.textContent).toBe('Select the horn family that defines the profile equation and its primary dimensions.');
       expect(tip.parentElement).toBe(document.body);
-      expect(title.getAttribute('aria-describedby')).toBe(tip.id);
+      const button = title.closest<HTMLButtonElement>('.section-head')!;
+      expect(button.getAttribute('aria-describedby')).toBe(tip.id);
       act(() => title.dispatchEvent(new PointerEvent('pointerout', { bubbles: true })));
       expect(document.querySelector('[role="tooltip"]')).toBeNull();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('shows the section description when its heading button gets keyboard focus', () => {
+    const button = host.querySelector<HTMLButtonElement>('[data-section="Model Type"] .section-head')!;
+    act(() => button.focus());
+    const tip = document.querySelector<HTMLElement>('[role="tooltip"]')!;
+    expect(tip.textContent).toBe('Select the horn family that defines the profile equation and its primary dimensions.');
+    expect(button.getAttribute('aria-describedby')).toBe(tip.id);
+    act(() => button.blur());
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
   });
 
   it('places OSSE features immediately after Profile with its existing controls', () => {
