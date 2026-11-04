@@ -313,16 +313,18 @@ def test_triangle_budget_refuses_before_import_or_solver_submission(tmp_path, mo
     config = parity.assembly.cases()["horn-woofer"]
     config["assembly"]["woofers"][0]["ath"] = {"key": "B"}
     design = DesignConfig.model_validate(config)
-    mesh = FileMesh(np.array([[0., 0, 0], [1, 0, 0], [0, 1, 0]]), np.array([[0, 1, 2], [0, 2, 1]]), np.array([2, 1]), {})
+    mesh = half_tetrahedron()
     mesh_file = tmp_path / "solve.msh"
     mesh_file.write_text(mesh_text(mesh))
     cfg = tmp_path / "test.cfg"
     cfg.write_text("dummy")
     ref = {"cfg": cfg, "provenance": {}, "drives": [], "arcs": [], "raw_triangles": 2,
-           "boundary": mesh, "interface_triangles_omitted": 0, "boundary_integrity": {}, "solving": {"domain_planes": []}}
+           "boundary": mesh, "interface_triangles_omitted": 0, "boundary_integrity": {},
+           "solving": {"domain_planes": ["x0"], "units": {"M1": "mm"}}, "measurement": {"woofers": []}}
     monkeypatch.setattr(parity, "read_reference", lambda *a: ref)
     monkeypatch.setattr("server.design.textcfg.parse", lambda *a: SimpleNamespace(design=design, migration_names=[]))
-    monkeypatch.setattr(parity.assembly, "compile_case", lambda *a, **kw: {"mesh_store_path": str(mesh_file), "excitations": []})
+    monkeypatch.setattr(parity, "build_x_half", lambda *a: {
+        "msh_text": mesh_text(mesh), "metadata": {"source_tags": {}}, "placement": {"woofers": []}})
     monkeypatch.setattr(parity, "geometry_parity", lambda *a: {})
     monkeypatch.setattr(models_api, "register_mesh", lambda *a, **kw: pytest.fail("budget must refuse before file import"))
     entry, plans = parity.prepare_case("test", tmp_path, tmp_path, None, [100], 1, 1)
@@ -331,7 +333,11 @@ def test_triangle_budget_refuses_before_import_or_solver_submission(tmp_path, mo
 
 
 def test_ready_dry_run_never_starts_solver(tmp_path, monkeypatch):
-    monkeypatch.setattr(parity, "prepare_case", lambda *a, **kw: ({"case": "test", "status": "ready", "issues": []}, {}))
+    def prepare(*args):
+        assert args[-1] is False  # Dry runs never request Wine regeneration.
+        return {"case": "test", "status": "ready", "issues": []}, {}
+
+    monkeypatch.setattr(parity, "prepare_case", prepare)
     monkeypatch.setattr(parity.assembly, "_solve", lambda *a, **kw: pytest.fail("dry run started a solve"))
     assert parity.main(["--out", str(tmp_path), "--phase1", str(tmp_path), "--cases", "test", "--dry-run"]) == 0
     summary = json.loads((tmp_path / "summary.json").read_text())
@@ -470,3 +476,139 @@ def test_unavailable_calibration_cannot_be_reported_as_a_pass(tmp_path, monkeypa
     assert result['status'] == 'incomplete' and result['calibration'] is None
     assert not (tmp_path / 'calibration.json').exists()
     assert 'CPU calibration unavailable' in result['cases']['b-base']['issues'][0]
+
+
+def half_tetrahedron():
+    return FileMesh(np.array([[0., 0, 0], [0, 10, 0], [0, 0, 10], [10, 0, 0]]),
+                    np.array([[0, 3, 1], [0, 2, 3], [1, 3, 2]]), np.array([7, 8, 9]),
+                    {7: 'HF', 8: 'cone', 9: 'dust cap'})
+
+
+def test_intact_positive_half_discards_broken_negative_half_and_closes_by_reflection():
+    half = half_tetrahedron()
+    full = parity._full_mesh(half, ['x0'])
+    # Simulate ATH's absent negative-X LF cone/dust-cap join.
+    full.triangles = full.triangles[:-1]
+    full.tags = full.tags[:-1]
+    original = copy.deepcopy(full)
+    kept, report = parity.x_half_reference(full, .001)
+    assert len(kept.triangles) == 3 and set(kept.tags) == {7, 8, 9}
+    assert kept.points[:, 0].min() == 0 and kept.points[:, 0].max() == 10
+    assert report['reflected_integrity']['open_edge_count'] == 0
+    assert report['half_integrity']['off_plane_open_edge_count'] == 0
+    assert report['half_integrity']['open_edge_count'] == 3
+    assert np.array_equal(full.points, original.points) and np.array_equal(full.triangles, original.triangles)
+    assert report['repair']['max_corner_displacement_mm'] == 0
+
+
+def test_half_closure_refuses_a_missing_positive_diaphragm_facet():
+    half = half_tetrahedron()
+    half.triangles, half.tags = half.triangles[:-1], half.tags[:-1]
+    with pytest.raises(parity.EvidenceRefusal, match='does not close'):
+        parity.x_half_reference(half, .001)
+
+
+def test_half_extraction_refuses_straddling_facets_instead_of_remeshing():
+    half = half_tetrahedron()
+    half.points[0, 0] = -1
+    with pytest.raises(parity.EvidenceRefusal, match='crosses x=0'):
+        parity.positive_x_half(half)
+    half.points[:, 0] = -np.abs(half.points[:, 0])
+    with pytest.raises(parity.EvidenceRefusal, match='empty'):
+        parity.positive_x_half(half)
+
+
+def test_half_extraction_omits_plane_caps_and_compacts_unused_negative_vertices():
+    half = half_tetrahedron()
+    full = parity._full_mesh(half, ['x0'])
+    full.triangles = np.vstack([full.triangles, [0, 1, 2]])
+    full.tags = np.append(full.tags, 11)
+    selected = parity.positive_x_half(full)
+    assert np.array_equal(selected.points, half.points)
+    assert np.array_equal(selected.triangles, half.triangles)
+    assert np.array_equal(selected.tags, half.tags)
+
+
+def test_half_reference_normalises_repair_tolerance_to_mm_for_si_wg_mesh():
+    half = half_tetrahedron()
+    half.points *= .001
+    selected, report = parity.x_half_reference(half, 1.)
+    assert np.allclose(selected.points, half.points, atol=1e-14, rtol=0)
+    assert report['reflected_integrity']['open_edge_count'] == 0
+
+
+def test_both_requests_use_shared_persisted_x_half_symmetry():
+    polar = parity.polar_options()
+    for producer in ['mesh-file', 'design-assembly']:
+        setup = parity._make_setup({'producer': producer, 'symmetry': {'domain_planes': ['x0']}}, [], [1000], polar)
+        assert setup['options']['symmetry'] == 'half_yz'
+
+
+def test_coordinator_commands_print_one_calibration_then_each_pair_without_preparing(tmp_path, monkeypatch, capsys):
+    import shlex
+
+    monkeypatch.setattr(parity, 'prepare_case', lambda *a: pytest.fail('printing commands prepared geometry'))
+    assert parity.main(['--print-commands', '--out', str(tmp_path), '--phase1', str(tmp_path)]) == 0
+    commands = [shlex.split(line) for line in capsys.readouterr().out.splitlines() if not line.startswith('#')]
+    assert len(commands) == 6
+    assert commands[0][commands[0].index('--case') + 1] == 'b-base'
+    assert commands[0][commands[0].index('--side') + 1] == 'B' and '--calibrate' in commands[0]
+    assert [c[c.index('--case') + 1] for c in commands[1:]] == list(parity.DEFAULT_CASES)
+    assert all(c[c.index('--side') + 1] == 'both' and '--calibration' in c for c in commands[1:])
+
+
+@pytest.mark.parametrize('side', ['A', 'B'])
+def test_selected_side_solves_only_that_side_and_does_not_claim_parity(tmp_path, monkeypatch, side):
+    plans = {v: {'requests': {'beat-cpu': {'request': SimpleNamespace()}}, 'variant': v} for v in ['A', 'B']}
+
+    def prepare(name, phase1, data_dir, store, freqs, maximum, revision, resolution, out, selected, regenerate):
+        assert name == 'b-pair' and selected == side
+        return {'case': name, 'status': 'ready', 'issues': [], 'estimated_beat_cpu_time': {
+            side: parity._cpu_estimate(4000, len(freqs), 2)}}, {side: plans[side]}
+
+    async def solve(data_dir, report, engines, timeout, **kwargs):
+        assert report['cases'] == {f'b-pair/{side}': plans[side]}
+        return {f'b-pair/{side}/beat-cpu': {'status': 'complete', 'findings': [], 'measurement': {}}}
+
+    calibration = tmp_path / 'calibration.json'
+    calibration.write_text(json.dumps({'symmetry': 'half_yz', 'resolution_mm': parity.DEFAULT_RESOLUTION_MM, 'triangles': 4000,
+                                       'seconds_per_frequency_per_channel': 1.}))
+    monkeypatch.setattr(parity, 'prepare_case', prepare)
+    monkeypatch.setattr(parity.assembly, '_solve', solve)
+    assert parity.main(['--case', 'b-pair', '--side', side, '--calibration', str(calibration),
+                        '--out', str(tmp_path), '--phase1', str(tmp_path)]) == 0
+    result = json.loads((tmp_path / 'summary.json').read_text())
+    assert result['status'] == 'side-complete' and 'metrics' not in result['cases']['b-pair']
+
+
+def test_native_half_build_reuses_assembly_geometry_and_guards_without_changing_the_design(tmp_path, monkeypatch):
+    from server.mesh import builder
+
+    dump = parity.assembly.cases()['horn-woofer']
+    original = copy.deepcopy(dump)
+    config = {'mesh': {'quadrants': 1234}, 'enclosure': {'woofers': [{'radius_mm': 50, 'resolution_mm': 40}]}}
+    placement = {'woofers': [{'x_mm': 0}]}
+    monkeypatch.setattr(builder, 'assembly_mesher_config', lambda d: (copy.deepcopy(config), placement))
+
+    def build(design, cfg, cancel_cb, **kwargs):
+        assert cfg == {**config, 'mesh': {'quadrants': 14}}
+        assert kwargs == {'assembly': True, 'work_dir': str(tmp_path)}
+        return {'guarded': True}
+
+    monkeypatch.setattr(builder, '_build_design_artifact', build)
+    assert parity._build_x_half_sync(dump, str(tmp_path)) == {'guarded': True, 'placement': placement}
+    assert dump == original
+    placement['woofers'][0]['x_mm'] = 1
+    with pytest.raises(parity.EvidenceRefusal, match='off x=0'):
+        parity._build_x_half_sync(dump, str(tmp_path))
+
+
+def test_lf_coverage_finds_rigid_ath_cone_and_cap_and_refuses_an_incomplete_half():
+    mesh = FileMesh(np.array([[10., 0, 0], [0, 10, 0], [3.5, 0, -4], [0, 0, -2], [0, 3.5, -4]]),
+                    np.array([[0, 1, 2], [3, 2, 4]]), np.array([1, 1]), {1: 'rigid'})
+    woofers = [{'source': 'B', 'aperture_center_mm': [0, 0, 0], 'radius_mm': 10}]
+    result = parity.lf_half_coverage(mesh, woofers)['B']
+    assert result['contains_cone'] and result['contains_dust_cap'] and result['triangles'] == 2
+    mesh.triangles = mesh.triangles[:1]
+    with pytest.raises(parity.EvidenceRefusal, match='cone or dust cap'):
+        parity.lf_half_coverage(mesh, woofers)

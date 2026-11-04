@@ -3,9 +3,9 @@
 Run --dry-run first. Solves belong on the compute broker, run by its owner.
 The external phase-1 corpus is discovered in a workspace ancestor, or supplied
 with --phase1. All generated records and evidence live below --out. No ATH
-corpus files are modified. Regenerated quadrant-14 references complete ATH's
-declared X symmetry, omit ABEC's virtual interfaces, and reuse WG's imported
-mesh weld for coincident seams. No missing surface is filled or reconstructed.
+corpus files are modified. References retain ATH's intact positive-X half,
+omit ABEC's virtual interfaces, and reuse WG's imported mesh repair and X-half
+solve support. Dry runs never launch Wine or discover a solver.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,7 @@ from scripts import qualify_assembly as assembly  # noqa: E402
 
 DEFAULT_CASES = ("b-base", "a-explicit", "b-pair", "mtm-q14", "b-morph")
 DEFAULT_FREQS = tuple(float(f) for f in np.geomspace(200, 8000, 12))
+DEFAULT_RESOLUTION_MM = 48.
 BANDS = (("below_1k", 0, 1000), ("1k_5k", 1000, 5000),
          ("5k_10k", 5000, 10000), ("10k_20k", 10000, 20000.0001))
 NORMALISATION = {
@@ -455,6 +457,64 @@ def _full_mesh(mesh: Any, planes: Sequence[str]) -> Any:
     return FileMesh(points, triangles, tags, mesh.names)
 
 
+def positive_x_half(mesh: Any, tolerance: float = 1e-8) -> Any:
+    """Select existing +X facets, without clipping or remeshing any triangle.
+
+    The corpus has a conforming x=0 seam. Refuse any other input rather than
+    introducing a second symmetry cutter alongside WG's production owner.
+    Coordinates and tolerance use the input mesh's units.
+    """
+    from server.mesh.file_import import FileMesh
+
+    x = mesh.points[mesh.triangles, 0]
+    if np.any((x.min(axis=1) < -tolerance) & (x.max(axis=1) > tolerance)):
+        raise EvidenceRefusal("A facet crosses x=0. Export a conforming positive-X half mesh before running parity.")
+    keep = (x.min(axis=1) >= -tolerance) & (x.max(axis=1) > tolerance)
+    if not np.any(keep):
+        raise EvidenceRefusal("The positive-X half is empty. Export ATH quadrants 14 with its complete LF diaphragm.")
+    used, inverse = np.unique(mesh.triangles[keep], return_inverse=True)
+    return FileMesh(mesh.points[used].copy(), inverse.reshape(-1, 3), mesh.tags[keep].copy(), mesh.names)
+
+
+def x_half_reference(mesh: Any, scale_m: float) -> tuple[Any, dict[str, Any]]:
+    """Repair coincident seams and prove the reflected surface closes using WG owners."""
+    from server.mesh.file_import import FileMesh, file_mesh_integrity
+
+    mm = FileMesh(mesh.points * (scale_m * 1000), mesh.triangles, mesh.tags, mesh.names)
+    half = positive_x_half(mm)
+    completed, repair = weld_reference(_full_mesh(half, ["x0"]))
+    half = positive_x_half(completed)
+    report = file_mesh_integrity(FileMesh(completed.points * .001, completed.triangles,
+                                         completed.tags, completed.names), [])
+    reduced = file_mesh_integrity(FileMesh(half.points * .001, half.triangles, half.tags, half.names), ["x0"])
+    if report["open_edge_count"] or not report["valid"] or not report["orientation_valid"]:
+        raise EvidenceRefusal(f"The retained +X half does not close under X reflection ({report['open_edge_count']} open edges). Repair the ATH export before solving.")
+    half.points /= scale_m * 1000
+    return half, {"kept_half": "+X (x >= 0)", "domain_planes": ["x0"], "repair": repair,
+                  "reflected_integrity": report, "half_integrity": reduced}
+
+
+def lf_half_coverage(half_mm: Any, woofers: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Locate even undriven LF surfaces, which ATH puts in its rigid group."""
+    corners = half_mm.points[half_mm.triangles]
+    coverage = {}
+    for woofer in woofers:
+        center, radius = np.asarray(woofer["aperture_center_mm"]), woofer["radius_mm"]
+        radial = np.linalg.norm(corners[:, :, :2] - center[:2], axis=2)
+        selected = ((radial.max(1) <= radius + .001) & (corners[:, :, 2].max(1) <= center[2] + .001)
+                    & (corners[:, :, 2].min(1) < center[2] - .001)
+                    & (corners[:, :, 2].min(1) >= center[2] - .5 * radius))
+        samples = radial[selected]
+        cone = bool(len(samples) and samples.max() > .35 * radius + .001)
+        cap = bool(len(samples) and samples.min() < .35 * radius - .001)
+        if not cone or not cap:
+            raise EvidenceRefusal(f"The retained +X half lacks the LF {woofer['source']} cone or dust cap. Supply an intact ATH positive half before solving.")
+        coverage[woofer["source"]] = {"triangles": int(selected.sum()), "contains_cone": cone, "contains_dust_cap": cap,
+                                      "complete_under_x_reflection": True,
+                                      "bounds_mm": [corners[selected].min((0, 1)).tolist(), corners[selected].max((0, 1)).tolist()]}
+    return coverage
+
+
 def _triangle_distances(point: np.ndarray, facets: np.ndarray) -> np.ndarray:
     """Exact point-to-triangle distances (plane projection plus all edges)."""
     a, b, c = facets[:, 0], facets[:, 1], facets[:, 2]
@@ -548,7 +608,7 @@ def geometry_parity(reference: Mapping[str, Any], record: Mapping[str, Any], wg_
     boundary = reference["boundary"]
     ath_mesh = _full_mesh(FileMesh(boundary.points * scale_mm, boundary.triangles, boundary.tags, boundary.names),
                           reference["solving"]["domain_planes"])
-    wg_mm = FileMesh(wg_mesh.points * 1000, wg_mesh.triangles, wg_mesh.tags, wg_mesh.names)
+    wg_mm = _full_mesh(FileMesh(wg_mesh.points * 1000, wg_mesh.triangles, wg_mesh.tags, wg_mesh.names), ["x0"])
     a_bounds = np.array([ath_mesh.points[np.unique(ath_mesh.triangles)].min(0), ath_mesh.points[np.unique(ath_mesh.triangles)].max(0)])
     b_bounds = np.array([wg_mm.points.min(0), wg_mm.points.max(0)])
     # Phase-1 proves outer mesh bounds are the enclosure bounds for this corpus.
@@ -629,6 +689,7 @@ def metric_differences(freqs: Sequence[float], angles: Sequence[float], a: np.nd
 
 def _make_setup(record: Mapping[str, Any], channels: list[dict[str, Any]], freqs: Sequence[float],
                 polar: Mapping[str, Any]) -> dict[str, Any]:
+    from server.solver.imported import imported_record_symmetry
     # Prepared imports require full polar coverage. Solve a common full circle
     # and select the harness nodes afterwards, without interpolation.
     start, end, count = polar["angle_range"]
@@ -642,7 +703,8 @@ def _make_setup(record: Mapping[str, Any], channels: list[dict[str, Any]], freqs
     if record.get("producer") == "design-assembly":
         geometry["required_features"] = [assembly.ASSEMBLY_RECORD_FEATURE]
     return {"schema_version": 1, "geometry": geometry,
-            "options": {"engine": "beat-cpu", "frequencies_hz": list(freqs), "polar_config": effective}}
+            "options": {"engine": "beat-cpu", "symmetry": imported_record_symmetry(record).mode,
+                        "frequencies_hz": list(freqs), "polar_config": effective}}
 
 
 def _cpu_estimate(count: int, frequencies: int, channels: int) -> dict[str, Any]:
@@ -666,9 +728,32 @@ def calibrated_estimates(results: Mapping[str, Any], calibration: Mapping[str, A
                                       "assumption": "serial A+B, N^2.5, linear frequencies/channels, 2x shared-CPU margin; estimate only"}
 
 
+def _build_x_half_sync(dump: dict[str, Any], work_dir: str, *, cancel_cb: Any = None) -> dict[str, Any]:
+    """Use the existing native assembly builder and its normal admission guards."""
+    from server.design.schema import DesignConfig
+    from server.mesh.builder import assembly_mesher_config, _build_design_artifact
+
+    design = DesignConfig.model_validate(dump)
+    config, placement = assembly_mesher_config(design)
+    if any(row["x_mm"] != 0 for row in placement["woofers"]):
+        raise EvidenceRefusal("An LF radiator is off x=0. Centre every radiator before using this symmetric parity fixture.")
+    config["mesh"]["quadrants"] = 14
+    built = _build_design_artifact(design, config, cancel_cb, assembly=True, work_dir=work_dir)
+    return {**built, "placement": placement}
+
+
+def build_x_half(dump: dict[str, Any], data_dir: Path) -> dict[str, Any]:
+    from server.mesh.child import run_mesh_build
+
+    work_dir = data_dir / "parity-half-build"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    return asyncio.run(run_mesh_build(_build_x_half_sync, dump, str(work_dir)))
+
+
 def prepare_case(name: str, phase1: Path, data_dir: Path, store: Any, freqs: Sequence[float],
                  maximum: int, revision: int, resolution: float | None = None,
-                 out: Path | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+                 out: Path | None = None, side: str = "both",
+                 regenerate: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
     from server.design.textcfg import parse
     from server.jobs.models_api import MeshRegistration, register_mesh
     from server.mesh.file_import import FileMesh, file_mesh_integrity, mesh_text, parse_file_mesh
@@ -692,14 +777,16 @@ def prepare_case(name: str, phase1: Path, data_dir: Path, store: Any, freqs: Seq
     if resolution is not None:
         if out is None:
             raise ValueError("regeneration requires an evidence output directory")
-        try:
-            generated = regenerate_reference(phase1, name, out, resolution)
-            reference = read_reference(generated, name)
-            result["regenerated_provenance"] = reference["provenance"]
-        except EvidenceRefusal as exc:
-            # Continue B's independent mesh/calibration, but never admit a
-            # mixed-resolution or defective A+B comparison as ready.
-            result["issues"].append(str(exc))
+        if side != "B" and regenerate:
+            try:
+                generated = regenerate_reference(phase1, name, out, resolution)
+                reference = read_reference(generated, name)
+                result["regenerated_provenance"] = reference["provenance"]
+            except EvidenceRefusal as exc:
+                result["issues"].append(str(exc))
+                regeneration_failed = True
+        elif side != "B":
+            result["issues"].append("A uses retained ATH sampling; matched-resolution parity needs coordinator regeneration. Dry run did not launch Wine.")
             regeneration_failed = True
         copied = coarse_cfg(original["cfg"].read_text(), resolution)
         folder = out / name
@@ -708,46 +795,62 @@ def prepare_case(name: str, phase1: Path, data_dir: Path, store: Any, freqs: Seq
         parsed = parse(copied)
         result["resolution_mm"] = resolution
     result["ath_original_boundary_integrity"] = original["boundary_integrity"]
-    full = _full_mesh(reference["boundary"], reference["solving"]["domain_planes"])
-    full, weld = weld_reference(full)
-    reference = {**reference, "boundary": full, "solving": {**reference["solving"], "domain_planes": []}}
-    result["ath_weld"] = weld
-    result["ath_boundary_triangles"] = len(full.triangles)
-    result["ath_boundary_integrity"] = file_mesh_integrity(FileMesh(full.points * .001, full.triangles, full.tags, full.names), [])
-    result["ath_reference_regenerated"] = resolution is not None and not regeneration_failed
+    scale_m = {"mm": .001, "cm": .01, "m": 1.}[next(iter(reference["solving"]["units"].values()))]
+    half, closure = x_half_reference(_full_mesh(reference["boundary"], reference["solving"]["domain_planes"]), scale_m)
+    reference = {**reference, "boundary": half, "solving": {**reference["solving"], "domain_planes": ["x0"]}}
+    result["ath_x_half"] = closure
+    result["ath_weld"] = closure["repair"]
+    result["ath_boundary_triangles"] = len(half.triangles)
+    result["ath_boundary_integrity"] = closure["half_integrity"]
+    result["symmetry"] = {"A": "half_yz", "B": "half_yz"}
+    result["ath_x_half"]["lf_diaphragms"] = lf_half_coverage(
+        FileMesh(half.points * scale_m * 1000, half.triangles, half.tags, half.names), reference["measurement"]["woofers"])
+    result["ath_reference_regenerated"] = resolution is not None and side != "B" and regenerate and not regeneration_failed
     if out is not None:
         folder = out / name
         folder.mkdir(exist_ok=True)
-        result["open_edges"] = edge_figure(folder, original, full)
+        result["open_edges"] = edge_figure(folder, original, weld_reference(_full_mesh(half, ["x0"]))[0])
     dump = parsed.design.model_dump(mode="json")
     result["product_imported_signal_groups"] = copy.deepcopy(dump["assembly"]["signal_groups"])
     result["effective_weights"] = match_ath_weights(dump, reference["drives"])
     result["parity_signal_groups"] = dump["assembly"]["signal_groups"]
     result["import_notes"] = parsed.migration_names
     # Mesh B even if A is invalid: geometric differences remain useful evidence.
-    record_b = assembly.compile_case(store, data_dir, dump, revision=revision)
-    mesh_b = parse_file_mesh(assembly.compiled_mesh_text(record_b))
+    from server.cadlink.intake.design_assembly import _radiators
+    from server.design.schema import DesignConfig
+    from server.integration.mesher_identity import mesher_identity
+
+    built = build_x_half(dump, data_dir)
+    mesh_b = parse_file_mesh(built["msh_text"])
+    mesh_b, result["wg_x_half"] = x_half_reference(mesh_b, 1.)
     result["wg_triangles"] = len(mesh_b.triangles)
-    result["wg_boundary_integrity"] = file_mesh_integrity(mesh_b, [])
-    result["wg_mesh_sha256"] = _sha(Path(record_b["mesh_store_path"]))
-    result["wg_mesher_identity"] = record_b.get("mesh", {}).get("metadata", {}).get("mesher_identity")
-    measurement_record = {**record_b, "_qualification_woofers": dump["assembly"]["woofers"]}
+    result["wg_boundary_integrity"] = file_mesh_integrity(mesh_b, ["x0"])
+    result["wg_mesh_sha256"] = hashlib.sha256(built["msh_text"].encode()).hexdigest()
+    result["wg_mesher_identity"] = mesher_identity()
+    b_source_tags = built["metadata"]["source_tags"]
+    b_radiators = _radiators(DesignConfig.model_validate(dump), built, list(b_source_tags))
+    measurement_record = {"radiators": b_radiators, "_qualification_woofers": dump["assembly"]["woofers"]}
     result["geometry"] = geometry_parity(reference, measurement_record, mesh_b)
     result["estimated_beat_cpu_time"] = {"A": _cpu_estimate(len(reference["boundary"].triangles), len(freqs), len(reference["drives"])),
                                           "B": _cpu_estimate(len(mesh_b.triangles), len(freqs), len(reference["drives"]))}
-    if max(0 if regeneration_failed else len(full.triangles), len(mesh_b.triangles)) > maximum:
+    for estimate in result["estimated_beat_cpu_time"].values():
+        estimate["channels"] = sum(d["weight"] != 0 for d in reference["drives"])
+    selected_counts = ([len(half.triangles)] if side == "A" else [len(mesh_b.triangles)] if side == "B"
+                       else [len(half.triangles), len(mesh_b.triangles)])
+    if max(selected_counts) > maximum:
         result["issues"].append(f"Triangle budget {maximum} exceeded. Increase --max-triangles deliberately or choose a smaller reference.")
         result["status"] = "refused"
         return result, {}
     roles = {drive["tag"]: "HF" if drive["radiator"] == "HF" else "LF" for drive in reference["drives"]}
     record_a = None
     try:
-        record_a = register_mesh(store, data_dir, MeshRegistration.model_validate({
-            "filename": f"{name}-ath-boundary.msh", "msh_text": mesh_text(reference["boundary"]),
-            "units": next(iter(reference["solving"]["units"].values())), "forward": "+z", "up": "+y",
-            "roles": roles, "domain_planes": reference["solving"]["domain_planes"], "auto_cut": False}))
-        result["ath_prepared_triangles"] = record_a["mesh"]["stats"]["triangle_count"]
-        result["ath_prepared_mesh_sha256"] = _sha(Path(record_a["mesh_store_path"]))
+        if side != "B":
+            record_a = register_mesh(store, data_dir, MeshRegistration.model_validate({
+                "filename": f"{name}-ath-boundary.msh", "msh_text": mesh_text(reference["boundary"]),
+                "units": next(iter(reference["solving"]["units"].values())), "forward": "+z", "up": "+y",
+                "roles": roles, "domain_planes": ["x0"], "reflect_planes": [], "auto_cut": False}))
+            result["ath_prepared_triangles"] = record_a["mesh"]["stats"]["triangle_count"]
+            result["ath_prepared_mesh_sha256"] = _sha(Path(record_a["mesh_store_path"]))
     except ValueError as exc:
         result["issues"].append(f"ATH file import refused: {exc}")
     polar = None
@@ -760,27 +863,46 @@ def prepare_case(name: str, phase1: Path, data_dir: Path, store: Any, freqs: Seq
         result["issues"].append(str(exc))
     by_key = {w["ath"]["key"]: w["id"] for w in dump["assembly"]["woofers"]}
     b_ids = {"HF": assembly.HF_RADIATOR_ID, **by_key}
+    record_b = None
+    if side != "A":
+        # The existing design mesher owns all geometry and identities. Admit
+        # its native half through the same imported half path as A. Existing
+        # full-domain design records are never changed.
+        b_roles = {b_source_tags[s]: "HF" if s == assembly.HF_RADIATOR_ID else "LF" for s in b_source_tags}
+        record_b = register_mesh(store, data_dir, MeshRegistration.model_validate({
+            "filename": f"{name}-wg-x-half.msh", "msh_text": mesh_text(mesh_b), "units": "m",
+            "forward": "+z", "up": "+y", "roles": b_roles,
+            "domain_planes": ["x0"], "reflect_planes": [], "auto_cut": False}))
+        result["wg_prepared_triangles"] = record_b["mesh"]["stats"]["triangle_count"]
+        result["wg_prepared_mesh_sha256"] = _sha(Path(record_b["mesh_store_path"]))
     plans = {}
     if polar is not None:
         active_ids = {b_ids[d["radiator"]] for d in reference["drives"] if d["weight"] != 0}
         for variant, record in (("A", record_a), ("B", record_b)):
-            if record is None:
+            if record is None or side not in {"both", variant}:
                 continue
             if variant == "A":
                 channels = [{"id": d["radiator"], "source_ids": [f"group_{d['tag']}"], "motion": d["motion"]}
                             for d in reference["drives"] if d["weight"] != 0]
             else:
-                channels = [{"id": e["id"], "source_ids": e["source_ids"], "motion": e["motion"]}
-                            for e in record["excitations"] if e["id"] in active_ids]
+                channels = [{"id": e["radiator_id"], "source_ids": [f"group_{b_source_tags[s]}" for s in e["source_ids"]], "motion": e["motion"]}
+                            for e in b_radiators if e["radiator_id"] in active_ids]
             setup = _make_setup(record, channels, freqs, polar)
             request = assembly.compose(record, setup, client_request_id=f"ath-parity-{name}-{variant}")
+            if out is not None:
+                _write_json(out / name / f"{variant}.request.json", request.model_dump(mode="json"))
+                _write_json(out / name / f"{variant}.record.json", record)
+                (out / name / f"{variant}.msh").write_text(assembly.compiled_mesh_text(record))
             plans[variant] = {"requests": {"beat-cpu": {"request": request, "notice": None, "transducer_channels": []}},
                               "radiator_ids": {d["radiator"]: d["radiator"] if variant == "A" else b_ids[d["radiator"]]
                                                for d in reference["drives"]}, "drives": reference["drives"],
                               "variant": variant, "polar": polar}
-        result["observations"]["effective_polar"] = plans["B"]["requests"]["beat-cpu"]["request"].options.polar_config.model_dump(mode="json")
+        if not plans:
+            result["status"] = "refused"
+            return result, plans
+        result["observations"]["effective_polar"] = next(iter(plans.values()))["requests"]["beat-cpu"]["request"].options.polar_config.model_dump(mode="json")
         result["observations"]["coverage_note"] = "Both geometries use the pipeline's common full-circle superset; metrics select 0–90 degrees every 5 degrees, 2 m from the throat. ATH arcs are metadata only."
-        result["status"] = "ready" if record_a is not None and not regeneration_failed else "refused"
+        result["status"] = "ready" if side == "B" or record_a is not None and not regeneration_failed else "refused"
     else:
         result["status"] = "refused"
     return result, plans
@@ -952,25 +1074,58 @@ def _phase1_default() -> Path | None:
     return None
 
 
+def coordinator_commands(args: Any, cases: Sequence[str]) -> list[str]:
+    """Exact solve argv for the broker owner; printing never prepares a runtime."""
+    out = args.out.resolve()
+    base = [sys.executable, "scripts/qualify_ath_lf_parity.py", "--phase1", str(args.phase1.resolve()),
+            "--resolution-mm", str(args.resolution_mm), "--max-triangles", str(args.max_triangles)]
+    commands = [shlex.join([*base, "--case", "b-base", "--side", "B", "--calibrate", "--out", str(out / "calibration")])]
+    for name in cases:
+        commands.append(shlex.join([*base, "--case", name, "--side", "both", "--freqs",
+                                   *[str(f) for f in args.command_freqs],
+                                   "--calibration", str(out / "calibration" / "calibration.json"),
+                                   "--out", str(out / name)]))
+    return commands
+
+
+def dry_run_table(results: Mapping[str, Any]) -> str:
+    rows = ["A uses retained ATH sampling in a sandbox dry run; B uses the requested resolution.",
+            "Open edges below are for each reflected closed surface; half-domain symmetry rims remain open by design.",
+            "", "| Case | A triangles | B triangles | A open edges | B open edges | Symmetry | Status |",
+            "|---|---:|---:|---:|---:|---|---|"]
+    for name, entry in results.items():
+        counts = [entry.get(key, {}).get("reflected_integrity", {}).get("open_edge_count", "unavailable")
+                  for key in ("ath_x_half", "wg_x_half")]
+        rows.append(f"| {name} | {entry.get('ath_boundary_triangles', 'unavailable')} | {entry.get('wg_triangles', 'unavailable')} | {counts[0]} | {counts[1]} | x=0, half_yz | {entry['status']} |")
+    return "\n".join(rows) + "\n"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--cases", nargs="+", default=list(DEFAULT_CASES), help="case names, space or comma separated")
+    parser.add_argument("--case", help="one case for a coordinator broker job; overrides --cases")
+    parser.add_argument("--side", choices=["A", "B", "both"], default="both", help="solve one side and retain its bases, or compare both")
     parser.add_argument("--freqs", nargs="+", help="Hz, space or comma separated; default 12 log-spaced points, 200–8000 Hz")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--engine", choices=["beat-cpu"], default="beat-cpu")
-    parser.add_argument("--max-triangles", type=int, default=6500)
-    parser.add_argument("--resolution-mm", type=float, default=40., help="same copied-cfg horn, enclosure and LF characteristic length for A and B; existing mesher chord-error floors still apply")
+    parser.add_argument("--max-triangles", type=int, default=8000)
+    parser.add_argument("--resolution-mm", type=float, default=DEFAULT_RESOLUTION_MM, help="same copied-cfg horn, enclosure and LF characteristic length for A and B; existing mesher chord-error floors still apply")
     parser.add_argument("--retained-reference", action="store_true", help="diagnose retained meshes without ATH regeneration; never a coarse parity solve")
-    parser.add_argument("--calibrate-only", action="store_true", help="exactly one b-base/B CPU solve at 1000 Hz, at most 115 seconds")
+    parser.add_argument("--calibrate", "--calibrate-only", dest="calibrate_only", action="store_true", help="exactly one b-base/B CPU solve at 1000 Hz, at most 115 seconds; no ATH regeneration")
     parser.add_argument("--calibration", type=Path, help="previous calibration.json used for dry-run planning")
     parser.add_argument("--dry-run", action="store_true", help="import and mesh only; never discover or start a solver")
+    parser.add_argument("--print-commands", action="store_true", help="print one calibration and one both-side command per selected case, then exit; broker owner submits them")
     parser.add_argument("--phase1", type=Path, default=_phase1_default(), help="external phase-1 evidence directory")
     parser.add_argument("--timeout", type=float, default=3600, help="per-geometry solve timeout in seconds")
     args = parser.parse_args(argv)
+    if args.case:
+        args.cases = [args.case]
     if args.calibrate_only:
         if args.dry_run:
             parser.error("--calibrate-only cannot be combined with --dry-run")
-        args.cases, args.freqs, args.timeout = ["b-base"], ["1000"], min(args.timeout, 115.)
+        if args.case not in {None, "b-base"} or args.side == "A":
+            parser.error("--calibrate requires --case b-base --side B (or their defaults)")
+        args.cases, args.freqs, args.timeout, args.side = ["b-base"], ["1000"], min(args.timeout, 115.), "B"
     cases = [part for value in args.cases for part in value.split(",")]
     try:
         freqs = [_finite(part) for value in args.freqs for part in value.split(",")] if args.freqs else list(DEFAULT_FREQS)
@@ -994,6 +1149,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     out = args.out.resolve()
     if out == ROOT or ROOT in out.parents:
         parser.error("--out must be outside this worktree")
+    if args.print_commands:
+        args.command_freqs = freqs
+        print("# Coordinator: submit each following command as a separate compute-broker job.")
+        print("# Run calibration first; use its measured estimates to reserve each case below 15 minutes.")
+        print("\n".join(coordinator_commands(args, cases)))
+        return 0
     out.mkdir(parents=True, exist_ok=True)
     from server.platform.temp_session import TemporarySession
 
@@ -1018,7 +1179,8 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
             started = time.monotonic()
             try:
                 entry, plan = prepare_case(name, args.phase1, data_dir, store, freqs, args.max_triangles, revision,
-                                           None if args.retained_reference else args.resolution_mm, out)
+                                           args.resolution_mm, out, args.side,
+                                           not args.dry_run and not args.retained_reference)
             except (EvidenceRefusal, ValueError, OSError) as exc:
                 entry, plan = {"case": name, "status": "refused", "issues": [str(exc)]}, {}
             entry["geometry_wall_seconds"] = round(time.monotonic() - started, 2)
@@ -1045,6 +1207,7 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
             if outcome["status"] == "complete" and not outcome["findings"]:
                 channels = len(selected["b-base/B"]["requests"]["beat-cpu"]["request"].geometry.drive_channels)
                 calibration = {"case": "b-base/B", "engine": "beat-cpu", "frequency_hz": 1000.,
+                               "symmetry": "half_yz",
                                "channels": channels, "triangles": results["b-base"]["wg_triangles"],
                                "wall_seconds": outcome["wall_seconds"],
                                "seconds_per_frequency_per_channel": outcome["wall_seconds"] / channels,
@@ -1059,22 +1222,30 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
         # invalid or over budget. The coordinator can select the ready subset.
         if all(entry["status"] == "ready" for entry in results.values()):
             if calibration is None:
-                raise EvidenceRefusal("CPU calibration is missing. Run --calibrate-only once, then supply --calibration.")
+                raise EvidenceRefusal("CPU calibration is missing. Run --case b-base --side B --calibrate once, then supply --calibration.")
+            if calibration.get("symmetry") != "half_yz" or calibration.get("resolution_mm") != args.resolution_mm:
+                raise EvidenceRefusal("CPU calibration uses another domain or resolution. Recalibrate the X-half mesh at the requested --resolution-mm.")
             calibrated_estimates(results, calibration)
-            if any(not entry["broker_budget"]["under_15_minutes"] for entry in results.values()):
-                raise EvidenceRefusal("Estimated A+B exceeds 15 minutes. Coarsen --resolution-mm and prepare both sides again.")
+            sides = ("A", "B") if args.side == "both" else (args.side,)
+            if any(sum(entry["estimated_beat_cpu_time"][v]["contention_minutes"] for v in sides) >= 15 for entry in results.values()):
+                raise EvidenceRefusal("Estimated selected solve exceeds 15 minutes. Coarsen --resolution-mm and prepare both sides again.")
             async def collect(runtime: Any, job_id: str, response: Mapping[str, Any], request: Any) -> Any:
                 plan = next(p for p in plans.values() if p["requests"]["beat-cpu"]["request"] is request)
                 payload = await asyncio.to_thread(runtime.store.get_channel_bases, job_id)
                 if payload is None:
                     raise ValueError("completed solve did not retain its complex channel bases")
+                case = next(name.split("/")[0] for name, p in plans.items() if p is plan)
+                (out / case / f"{plan['variant']}.channel-bases.bin").write_bytes(payload)
                 return grouped_bases(payload, plan)
 
             solved = asyncio.run(assembly._solve(data_dir, {"cases": plans}, [args.engine], args.timeout, on_result=collect))
             for name, entry in results.items():
-                outcomes = {variant: solved[f"{name}/{variant}/{args.engine}"] for variant in ("A", "B")}
+                outcomes = {variant: solved[f"{name}/{variant}/{args.engine}"] for variant in sides}
                 entry["solves"] = outcomes
-                if all(o["status"] == "complete" and not o["findings"] for o in outcomes.values()):
+                complete = all(o["status"] == "complete" and not o["findings"] for o in outcomes.values())
+                if complete and args.side != "both":
+                    entry["status"] = "side-complete"
+                elif complete:
                     left, right = (outcomes[v]["measurement"] for v in ("A", "B"))
                     entry["metrics"] = compare_groups(left, right)
                     entry["charts"] = charts(out / name, left, right, entry["metrics"])
@@ -1090,12 +1261,16 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
     refused = any(entry["status"] in {"not-importable", "refused", "failed-solve", "fail"} for entry in results.values())
     if args.calibrate_only:
         refused = not calibration_success
-    summary = {"schema": "ath-lf-parity-v1", "dry_run": args.dry_run, "engine": args.engine,
+    summary = {"schema": "ath-lf-parity-v1", "dry_run": args.dry_run, "engine": args.engine, "side": args.side,
                "frequencies_hz": freqs, "max_triangles": args.max_triangles, "normalisation": NORMALISATION,
                "resolution_mm": args.resolution_mm, "calibration": calibration,
-               "status": "incomplete" if refused else "calibration-complete" if args.calibrate_only else "geometry-only" if args.dry_run else "pass",
+               "status": "incomplete" if refused else "calibration-complete" if args.calibrate_only else "geometry-only" if args.dry_run else "side-complete" if args.side != "both" else "pass",
                "cases": results}
     _write_json(out / "summary.json", summary)
+    if args.dry_run:
+        table = dry_run_table(results)
+        (out / "dry-run.md").write_text(table)
+        print(table, flush=True)
     print(f"{summary['status']}: {len(results)} cases; summary.json written", flush=True)
     return 1 if refused else 0
 
