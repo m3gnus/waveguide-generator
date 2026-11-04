@@ -4,6 +4,7 @@ import { AppQueryProvider } from './queryClient';
 import { Shell } from './shell/Shell';
 import { SourceContourDialog } from './design/SourceContourEditor';
 import { FrontWorkspaceDialog } from './design/FrontWorkspace';
+import { ProfileCanvasDialog } from './sketch/ProfileCanvas';
 import { failureWords } from './api/httpError';
 
 /**
@@ -96,5 +97,5 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, { messa
 }
 
 export default function App() {
-  return <AppErrorBoundary><AppQueryProvider><Shell /><SourceContourDialog /><FrontWorkspaceDialog /></AppQueryProvider></AppErrorBoundary>;
+  return <AppErrorBoundary><AppQueryProvider><Shell /><SourceContourDialog /><FrontWorkspaceDialog /><ProfileCanvasDialog /></AppQueryProvider></AppErrorBoundary>;
 }

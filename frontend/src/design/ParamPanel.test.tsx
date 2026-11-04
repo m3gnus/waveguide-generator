@@ -1003,9 +1003,10 @@ describe('ParamPanel inventory UX', () => {
     const entry = buildParameterPaletteEntries('OSSE').find((item) => item.id === 'parametric-control-osse-features')!;
     expect(entry.matches?.('terminating arc')).toBe(true);
     act(() => entry.run());
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)); });
-    expect(host.querySelector('#osse-feature-throat')).not.toBeNull();
-    expect(document.activeElement?.id).toBe('osse-feature-throat');
+    await vi.waitFor(() => {
+      expect(host.querySelector('#osse-feature-throat')).not.toBeNull();
+      expect(document.activeElement?.id).toBe('osse-feature-throat');
+    });
     expect(host.textContent).not.toContain('No parameter labels');
     expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before);
     expect(buildParameterPaletteEntries('SOURCE-DISK').some((item) => item.id === entry.id)).toBe(false);
@@ -2653,22 +2654,25 @@ describe('ParamPanel inventory UX', () => {
     const head = () => host.querySelector<HTMLButtonElement>('[data-section="Surface accuracy"] .section-head')!;
     act(() => head().click());
     expect(host.querySelector('[data-parameter-id="mesh.surface_deviation_mm"]')).toBeNull();
-    requestParameterReveal({ id: 'mesh.surface_deviation_mm', tab: 'simulation', query: 'Max surface deviation' });
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
-    expect(document.activeElement).toBe(host.querySelector('[data-parameter-id="mesh.surface_deviation_mm"] input'));
+    act(() => requestParameterReveal({ id: 'mesh.surface_deviation_mm', tab: 'simulation', query: 'Max surface deviation' }));
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(host.querySelector('[data-parameter-id="mesh.surface_deviation_mm"] input'));
+    });
   });
 
   it('searches and reveals moved source cap fields and sweep controls under their new sections', async () => {
-    requestParameterReveal({ id: 'source.shape', tab: 'geometry', query: 'Source surface' });
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
-    const target = host.querySelector('[data-parameter-id="source.shape"]')!;
-    expect(target.closest('[data-section]')?.getAttribute('data-section')).toBe('Throat');
-    expect(document.activeElement).toBe(target.querySelector('select'));
+    act(() => requestParameterReveal({ id: 'source.shape', tab: 'geometry', query: 'Source surface' }));
+    await vi.waitFor(() => {
+      const target = host.querySelector('[data-parameter-id="source.shape"]')!;
+      expect(target.closest('[data-section]')?.getAttribute('data-section')).toBe('Throat');
+      expect(document.activeElement).toBe(target.querySelector('select'));
+    });
     const sweep = buildParameterPaletteEntries('R-OSSE').find((entry) => entry.id === 'parametric-control-frequency-points')!;
     expect(sweep.detail).toBe('Frequency sweep');
     act(() => { sweep.run(); root.render(withQueryClient(<ParamPanel tab="simulation" />)); });
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
-    expect(document.activeElement).toBe(host.querySelector('#design-solve-frequency-mode'));
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(host.querySelector('#design-solve-frequency-mode'));
+    });
   });
 
   it('plainly reports the infinite-baffle override', () => {
@@ -2743,7 +2747,8 @@ describe('ParamPanel inventory UX', () => {
       useDesignStore.getState().setFamily('FREEFORM');
       root.render(withQueryClient(<ParamPanel tab="geometry" />));
     });
-    expect(host.querySelector('[aria-label="Custom profile canvas"]')).not.toBeNull();
+    expect(host.querySelector('[data-control-reveal-id="profile-canvas-launch"] button')?.textContent).toBe('Edit profile on canvas…');
+    expect(host.querySelector('.profile-canvas')).toBeNull();
     // A new Custom profile has one table for both planes, plus the stations.
     expect(host.querySelectorAll('.editable-parameter-table')).toHaveLength(2);
     expect(host.querySelectorAll('.custom-profile-table')).toHaveLength(1);
@@ -2756,7 +2761,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('input[aria-label$=" strength"]')).toBeNull();
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="Station 1 shape"]')?.value).toBe('ellipse');
     act(() => useDesignStore.getState().setFamily('OSSE'));
-    expect(host.querySelector('[aria-label="Custom profile canvas"]')).toBeNull();
+    expect(host.querySelector('[data-control-reveal-id="profile-canvas-launch"]')).toBeNull();
   });
 
   it('groups FREEFORM controls in order, summarizes each plane and leaves saved designs unchanged', () => {
@@ -2768,9 +2773,9 @@ describe('ParamPanel inventory UX', () => {
     const before = serializeDesign(useDesignStore.getState().design);
     const profile = host.querySelector('[data-section="Profile"]')!;
     expect([...profile.querySelectorAll('[data-section]')].map((group) => group.getAttribute('data-section'))).toEqual([
-      'Throat and length', 'Horizontal profile', 'Vertical profile', 'Cross-section', 'Import points', 'Profile canvas',
+      'Throat and length', 'Horizontal profile', 'Vertical profile', 'Cross-section', 'Import points',
     ]);
-    expect(profile.querySelectorAll('[role="group"][data-section]')).toHaveLength(6);
+    expect(profile.querySelectorAll('[role="group"][data-section]')).toHaveLength(5);
     for (const [group, ids] of [
       ['Throat and length', ['common.scale', 'freeform.length', 'freeform.throatRadius', 'freeform.throatAngle']],
       ['Horizontal profile', ['freeform.mouthRadiusH', 'freeform.mouthAngleH', 'freeform.interiorH']],
@@ -2782,8 +2787,8 @@ describe('ParamPanel inventory UX', () => {
     expect(profile.querySelector('[data-section="Horizontal profile"] .section-summary')?.textContent).toBe('140 mm · 2 anchors');
     expect(profile.querySelector('[data-section="Vertical profile"] .section-summary')?.textContent).toBe('matches horizontal');
     expect(profile.querySelectorAll('.position-note')).toHaveLength(1);
-    expect(profile.querySelector('.profile-canvas')).not.toBeNull();
-    act(() => host.querySelector<HTMLButtonElement>('[data-section="Profile canvas"] .section-head')!.click());
+    expect(profile.querySelectorAll('[data-control-reveal-id="profile-canvas-launch"]')).toHaveLength(1);
+    expect(profile.querySelector('[data-section="Profile canvas"]')).toBeNull();
     expect(profile.querySelector('.profile-canvas')).toBeNull();
     expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
     act(() => useDesignStore.getState().updateValue('profile_v.points', [{ t: 0, r: 12.7 }, { t: .5, r: 60 }, { t: 1, r: 100 }]));

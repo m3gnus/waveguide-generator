@@ -11,17 +11,19 @@ import { CustomProfileTable } from '../design/FreeformEditors';
 import { createProfileAdapter, anchorId, profileBinding } from './adapters/profile';
 import { ProjectHistoryAuthority } from './workspace/projectHistoryAuthority';
 import { ProfileController } from './profileController';
-import { ProfileCanvas } from './ProfileCanvas';
+import { ProfileCanvasDialog, ProfileCanvasLauncher } from './ProfileCanvas';
+import { closeProfileCanvas } from './profileCanvasVisibility';
+import { focusableSelector } from '../shell/dialogFocus';
 import { getProfileDraft, profileDraftBlocker, setProfileDraft } from './profileDraft';
 import { profileServer } from './profileCanvasTestSupport';
 
 let host: HTMLDivElement, root: Root;
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 const tick = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(350); await flush(); }); };
-const mount = async () => { await act(async () => { root.render(<ProfileCanvas/>); await flush(); }); };
-const button = (text: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === text)!;
-const svg = () => host.querySelector<SVGSVGElement>('svg[role="application"]')!;
-const point = (id: string) => host.querySelector<SVGCircleElement>(`.sketch-point[data-id="${id}"]`)!;
+const mount = async () => { await act(async () => { root.render(<><ProfileCanvasLauncher/><ProfileCanvasDialog/></>); await flush(); }); await act(async () => button('Edit profile on canvas…').click()); };
+const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === text)!;
+const svg = () => document.querySelector<SVGSVGElement>('svg[role="application"]')!;
+const point = (id: string) => document.querySelector<SVGCircleElement>(`.sketch-point[data-id="${id}"]`)!;
 const xy = (id: string) => ({ x: Number(point(id).getAttribute('cx')), y: Number(point(id).getAttribute('cy')) });
 async function pointer(target: Element, phase: string, at: { x: number; y: number }) {
   await act(async () => {
@@ -33,44 +35,148 @@ async function choose(id: string) { const at = xy(id); await pointer(point(id), 
 
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  vi.useFakeTimers(); resetDesignStore();
+  vi.useFakeTimers(); closeProfileCanvas(); resetDesignStore();
   const design = designForFamily('FREEFORM'); design.shared_profile = true;
   design.profile_h!.points.splice(1, 0, { t: 1 / 3, r: 30 });
   useDesignStore.getState().replaceDocument(design); useDesignStore.temporal.getState().clear();
   profileServer(); host = document.createElement('div'); document.body.append(host); root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); setProfileDraft(null); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); closeProfileCanvas(); setProfileDraft(null); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('profile canvas UI', () => {
+  it('launches a portalled dialog, traps focus, and restores the launcher after Escape or Close', async () => {
+    await act(async () => root.render(<><ProfileCanvasLauncher/><ProfileCanvasDialog/></>));
+    const launch = button('Edit profile on canvas…');
+    expect(launch.className).toBe('btn'); expect(launch.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    launch.focus(); await act(async () => launch.click()); await tick();
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(host.contains(dialog)).toBe(false); expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(dialog.classList.contains('source-sketch-editor')).toBe(true);
+    expect(document.activeElement).toBe(button('Close'));
+    const controls = [...dialog.querySelectorAll<HTMLElement>(focusableSelector)];
+    const first = controls[0], last = controls.at(-1)!;
+    first.focus();
+    await act(async () => first.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true })));
+    expect(document.activeElement).toBe(last);
+    await act(async () => last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })));
+    expect(document.activeElement).toBe(first);
+    await act(async () => button('Insert exact').click());
+    await act(async () => svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    // Escape clears the selection before closing the dialog.
+    await choose(anchorId('H', 1));
+    expect(dialog.querySelector('aside [aria-label="Selected point join"]')).not.toBeNull();
+    await act(async () => svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    expect(dialog.querySelector('aside [aria-label="Selected point join"]')).toBeNull();
+    await act(async () => svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(document.activeElement).toBe(launch);
+    await act(async () => launch.click()); await tick();
+    await act(async () => button('Close').click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(document.activeElement).toBe(launch);
+  }, 15_000);
+
+  it('cancels a live point drag without a preview or Undo step, then closes on a second Escape', async () => {
+    const endDrag = vi.spyOn(ProfileController.prototype, 'endDrag');
+    await mount(); await tick();
+    const before = structuredClone(useDesignStore.getState().design), at = xy(anchorId('H', 1));
+    await pointer(point(anchorId('H', 1)), 'pointerdown', at);
+    await pointer(svg(), 'pointermove', { x: at.x + 12, y: at.y - 10 });
+    await pointer(svg(), 'pointermove', { x: at.x + 18, y: at.y - 20 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(20); await flush(); });
+    expect(xy(anchorId('H', 1))).not.toEqual(at);
+    expect(profileDraftBlocker()).toBeTruthy();
+    await act(async () => { svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await flush(); });
+    expect(endDrag).toHaveBeenCalledWith(true);
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(xy(anchorId('H', 1))).toEqual(at);
+    expect(useDesignStore.getState().design).toEqual(before);
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
+    expect(profileDraftBlocker()).toBeNull();
+    // Releasing after cancellation cannot finish the discarded drag.
+    await pointer(svg(), 'pointerup', { x: at.x + 18, y: at.y - 20 });
+    await tick();
+    expect(profileDraftBlocker()).toBeNull();
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
+    await act(async () => svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('cancels a box selection before closing on a second Escape', async () => {
+    await mount(); await tick();
+    await pointer(svg(), 'pointerdown', { x: 1, y: 1 });
+    await pointer(svg(), 'pointermove', { x: 500, y: 400 });
+    expect(document.querySelector('.sketch-marquee')).not.toBeNull();
+    await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector('.sketch-marquee')).toBeNull();
+    await pointer(svg(), 'pointerup', { x: 500, y: 400 });
+    expect(document.querySelector('aside [aria-label="Selected point join"]')).toBeNull();
+    await act(async () => svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it.each(['Insert exact', 'Insert refit'])('returns %s to Select before closing on a second Escape', async tool => {
+    await mount(); await tick();
+    const before = structuredClone(useDesignStore.getState().design);
+    await act(async () => button(tool).click());
+    expect(button(tool).getAttribute('aria-pressed')).toBe('true');
+    await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(button(tool).getAttribute('aria-pressed')).toBe('false');
+    expect(document.querySelector('[aria-label="Select (Esc)"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(useDesignStore.getState().design).toEqual(before);
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
+    await act(async () => svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('keeps accepted edits and project Undo/Redo after closing and reopening', async () => {
+    await mount(); await tick(); await choose(anchorId('H', 1));
+    const before = structuredClone(useDesignStore.getState().design);
+    const join = document.querySelector<HTMLSelectElement>('[aria-label="Selected point join"]')!;
+    await act(async () => { join.value = 'corner'; join.dispatchEvent(new Event('change', { bubbles: true })); await flush(); });
+    await act(async () => { button('Accept').click(); await flush(); });
+    const after = structuredClone(useDesignStore.getState().design);
+    await act(async () => button('Close').click());
+    expect(useDesignStore.getState().design).toEqual(after);
+    await act(async () => button('Edit profile on canvas…').click()); await tick();
+    await act(async () => { button('Undo').click(); await flush(); });
+    expect(useDesignStore.getState().design).toEqual(before);
+    await act(async () => { button('Redo').click(); await flush(); });
+    expect(useDesignStore.getState().design).toEqual(after);
+  }, 15_000);
+
   it('draws both layers in the shared workspace, uses round/square anchors, and toggles generated and plane inspection', async () => {
     await mount(); await tick();
-    expect(host.querySelector('[role="toolbar"][aria-label="Profile tools"]')).not.toBeNull();
-    expect(host.querySelector('.profile-authored')).not.toBeNull(); expect(host.querySelector('.profile-generated')).not.toBeNull();
-    expect(host.querySelectorAll('.sketch-point')).toHaveLength(3); expect(point(anchorId('H', 0)).tagName).toBe('circle');
-    expect(host.querySelector('.profile-V')).toBeNull();
-    const toggle = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')][0];
-    await act(async () => toggle.click()); expect(host.querySelector('.profile-generated')).toBeNull();
+    expect(document.querySelector('[role="toolbar"][aria-label="Profile tools"]')).not.toBeNull();
+    expect(document.querySelector('.profile-authored')).not.toBeNull(); expect(document.querySelector('.profile-generated')).not.toBeNull();
+    expect(document.querySelectorAll('.sketch-point')).toHaveLength(3); expect(point(anchorId('H', 0)).tagName).toBe('circle');
+    expect(document.querySelector('.profile-V')).toBeNull();
+    const toggle = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')][0];
+    await act(async () => toggle.click()); expect(document.querySelector('.profile-generated')).toBeNull();
     await act(async () => toggle.click());
-    const planes = host.querySelector<HTMLSelectElement>('select[aria-label="Profile planes"]')!;
+    const planes = document.querySelector<HTMLSelectElement>('select[aria-label="Profile planes"]')!;
     await act(async () => { planes.value = 'V'; planes.dispatchEvent(new Event('change', { bubbles: true })); });
-    expect(host.querySelectorAll('.profile-generated')).toHaveLength(1);
-    expect(host.querySelector('.profile-generated')?.querySelector('title')?.textContent).toBe('Generated V');
-    expect(host.textContent).not.toContain('DOF');
+    expect(document.querySelectorAll('.profile-generated')).toHaveLength(1);
+    expect(document.querySelector('.profile-generated')?.querySelector('title')?.textContent).toBe('Generated V');
+    expect(document.body.textContent).not.toContain('DOF');
   });
 
   it('previews a join change with the old curve dashed, both deviations, Accept and Cancel', async () => {
     await mount(); await tick(); await choose(anchorId('H', 1));
-    const join = host.querySelector<HTMLSelectElement>('[aria-label="Selected point join"]')!;
+    const join = document.querySelector<HTMLSelectElement>('[aria-label="Selected point join"]')!;
     await act(async () => { join.value = 'corner'; join.dispatchEvent(new Event('change', { bubbles: true })); await flush(); });
-    expect(host.querySelector('.ghost')).not.toBeNull();
-    expect(host.textContent).toContain('curve deviation 0.125 mm'); expect(host.textContent).toContain('Generated profile change');
+    expect(document.querySelector('.ghost')).not.toBeNull();
+    expect(document.body.textContent).toContain('curve deviation 0.125 mm'); expect(document.body.textContent).toContain('Generated profile change');
     expect(profileDraftBlocker()).toContain('unfinished'); expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
     await act(async () => { button('Cancel').click(); await flush(); });
     expect(profileDraftBlocker()).toBeNull(); expect(useDesignStore.getState().design.profile_h!.points[1].join).toBeUndefined();
     await act(async () => { join.value = 'corner'; join.dispatchEvent(new Event('change', { bubbles: true })); await flush(); });
     await act(async () => { button('Accept').click(); await flush(); });
     expect(useDesignStore.getState().design.profile_h!.points[1].join).toBe('corner');
-    expect(host.querySelector('rect.sketch-point')).not.toBeNull(); expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+    expect(document.querySelector('rect.sketch-point')).not.toBeNull(); expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
   });
 
   it('inserts by clicking the authored curve, defaults to exact, and deletes through the same preview', async () => {
@@ -82,7 +188,7 @@ describe('profile canvas UI', () => {
     await act(async () => { button('Accept').click(); await flush(); }); await tick();
     expect(useDesignStore.getState().design.profile_h!.points).toHaveLength(4);
     await choose(anchorId('H', 1)); await act(async () => { button('Delete point').click(); await flush(); });
-    expect(host.textContent).toContain('Preview: Delete point');
+    expect(document.body.textContent).toContain('Preview: Delete point');
     await act(async () => { button('Accept').click(); await flush(); });
     expect(useDesignStore.getState().design.profile_h!.points).toHaveLength(3);
     expect(useDesignStore.temporal.getState().pastStates).toHaveLength(2);
@@ -94,7 +200,7 @@ describe('profile canvas UI', () => {
     await pointer(svg(), 'pointermove', { x: at.x + 12, y: at.y - 10 });
     await pointer(svg(), 'pointermove', { x: at.x + 18, y: at.y - 20 });
     await pointer(svg(), 'pointerup', { x: at.x + 18, y: at.y - 20 });
-    expect(host.textContent).toContain('Preview: Move point'); expect(useDesignStore.getState().design).toEqual(before);
+    expect(document.body.textContent).toContain('Preview: Move point'); expect(useDesignStore.getState().design).toEqual(before);
     expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0); expect(profileDraftBlocker()).toBeTruthy();
     await act(async () => { button('Open sketch').click(); }); expect(document.activeElement).toBe(svg());
     await act(async () => { button('Accept').click(); await flush(); });
@@ -112,7 +218,7 @@ describe('profile canvas UI', () => {
   it('blocks invalid local NumberField drafts, and Revert uses their existing Escape cancellation', async () => {
     host.className = 'param-panel'; const unregister = registerParameterPanel(host);
     await mount(); await tick(); await choose(anchorId('H', 1));
-    const label = [...host.querySelectorAll<HTMLLabelElement>('label')].find(label => label.textContent === 'r (design mm)')!;
+    const label = [...document.querySelectorAll<HTMLLabelElement>('label')].find(label => label.textContent === 'r (design mm)')!;
     const input = document.getElementById(label.htmlFor) as HTMLInputElement;
     await act(async () => {
       input.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '-1');
@@ -120,71 +226,82 @@ describe('profile canvas UI', () => {
     });
     expect(profileDraftBlocker()).toContain('invalid'); expect(button('Revert to last valid')).toBeTruthy();
     await act(async () => { button('Revert to last valid').click(); await flush(); });
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     expect(profileDraftBlocker()).toBeNull(); expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0); unregister?.();
   });
 
-  it('cancels a pending preview on Escape or the first Ctrl+Z without undoing the preceding edit', async () => {
+  it('preserves a pending preview on Escape and cancels it on the first Ctrl+Z without undoing the preceding edit', async () => {
     await mount(); await tick(); await choose(anchorId('H', 1));
     const before = useDesignStore.getState().design;
     commitProfileEdit(currentEditOrigin(), before, setAnchorValue(before, 'H', 1, 'r', 33).after);
     await act(async () => { await flush(); }); await tick();
-    for (const event of [{ key: 'Escape' }, { key: 'z', ctrlKey: true }]) {
-      await act(async () => { button('Delete point').click(); await flush(); });
-      expect(profileDraftBlocker()).toBeTruthy();
-      await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { ...event, bubbles: true })); await flush(); });
-      expect(profileDraftBlocker()).toBeNull(); expect(useDesignStore.getState().design.profile_h!.points[1].r).toBe(33);
-      expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
-    }
+    await act(async () => { button('Delete point').click(); await flush(); });
+    expect(profileDraftBlocker()).toBeTruthy();
+    await act(async () => { svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await flush(); });
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () => { svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await flush(); });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(profileDraftBlocker()).toBeTruthy();
+    await act(async () => { getProfileDraft()!.open(); await flush(); });
+    expect(document.body.textContent).toContain('Preview: Delete point');
+    await act(async () => { svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true })); await flush(); });
+    expect(profileDraftBlocker()).toBeNull(); expect(useDesignStore.getState().design.profile_h!.points[1].r).toBe(33);
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
   });
 
   it('opens legacy LOOKUP as a corner polyline with disabled join/angle tools and no freeform request', async () => {
     const fetcher = profileServer();
     useDesignStore.getState().replaceDocument(designForFamily('LOOKUP'));
     await mount(); await tick();
-    expect(host.textContent).toContain('exact legacy LOOKUP polyline'); expect(host.querySelector('rect.sketch-point')).not.toBeNull();
+    expect(document.body.textContent).toContain('exact legacy LOOKUP polyline'); expect(document.querySelector('rect.sketch-point')).not.toBeNull();
     expect(fetcher.mock.calls.some(([url]) => String(url).includes('/freeform/'))).toBe(false);
-    const square = host.querySelector<SVGRectElement>('rect.sketch-point')!;
+    const square = document.querySelector<SVGRectElement>('rect.sketch-point')!;
     const at = { x: Number(square.getAttribute('x')) + 4, y: Number(square.getAttribute('y')) + 4 };
     await pointer(square, 'pointerdown', at); await pointer(svg(), 'pointerup', at);
-    expect(host.querySelector<HTMLSelectElement>('[aria-label="Selected point join"]')!.disabled).toBe(true);
-    expect(host.textContent).not.toContain('Incoming angle'); expect(button('Insert refit')).toBeUndefined();
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Selected point join"]')!.disabled).toBe(true);
+    expect(document.body.textContent).not.toContain('Incoming angle'); expect(button('Insert refit')).toBeUndefined();
   });
 
   it('keeps a table preview in the same Solve gate and lets the canvas recovery action cancel it', async () => {
-    await act(async () => root.render(<div className="param-panel"><CustomProfileTable plane="H" field={{ id: 'freeform.interiorH', legacyKey: 'profile_h.points', section: 'Profile', label: 'H', kind: 'table' }}/><ProfileCanvas/></div>));
+    await act(async () => root.render(<div className="param-panel"><CustomProfileTable plane="H" field={{ id: 'freeform.interiorH', legacyKey: 'profile_h.points', section: 'Profile', label: 'H', kind: 'table' }}/><ProfileCanvasLauncher/><ProfileCanvasDialog/></div>));
     await tick();
-    const join = host.querySelector<HTMLSelectElement>('select[aria-label="H point 1 join"]')!;
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    const join = document.querySelector<HTMLSelectElement>('select[aria-label="H point 1 join"]')!;
     await act(async () => { join.value = 'corner'; join.dispatchEvent(new Event('change', { bubbles: true })); await flush(); });
     expect(profileDraftBlocker()).toContain('unfinished');
+    await act(async () => getProfileDraft()!.open());
+    expect(document.querySelector('[role="dialog"][aria-label="Custom profile canvas"]')).not.toBeNull();
     expect(button('Open sketch')).toBeTruthy(); expect(button('Revert to last valid')).toBeTruthy();
     await act(async () => { button('Revert to last valid').click(); await flush(); });
     expect(profileDraftBlocker()).toBeNull(); expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
     expect(useDesignStore.getState().design.profile_h!.points[1].join).toBeUndefined();
   });
 
-  it('keeps invalid table fields in the Solve gate when the canvas section is closed', async () => {
+  it('opens the dialog from an invalid table draft while keeping Revert in the Solve gate', async () => {
     host.className = 'param-panel'; const unregister = registerParameterPanel(host);
-    await act(async () => root.render(<CustomProfileTable plane="H" field={{ id: 'freeform.interiorH', legacyKey: 'profile_h.points', section: 'Profile', label: 'H', kind: 'table' }}/>));
-    const label = [...host.querySelectorAll<HTMLLabelElement>('label')].find(label => label.textContent === 'H point 1 radius')!;
+    await act(async () => root.render(<><CustomProfileTable plane="H" field={{ id: 'freeform.interiorH', legacyKey: 'profile_h.points', section: 'Profile', label: 'H', kind: 'table' }}/><ProfileCanvasDialog/></>));
+    const label = [...document.querySelectorAll<HTMLLabelElement>('label')].find(label => label.textContent === 'H point 1 radius')!;
     const input = document.getElementById(label.htmlFor) as HTMLInputElement;
     await act(async () => {
       input.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '-1');
       input.dispatchEvent(new Event('input', { bubbles: true })); await flush();
     });
     expect(profileDraftBlocker()).toContain('invalid');
+    await act(async () => getProfileDraft()!.open());
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     await act(async () => { getProfileDraft()!.revert(); await flush(); });
     expect(profileDraftBlocker()).toBeNull(); expect(input.value).toBe('30.00'); unregister?.();
   });
 
   it.each([1, 1.7, .5])('ports FV: labels design and scaled coordinates for Scale %s', async scale => {
     useDesignStore.getState().updateValue('scale', scale); await mount(); await tick();
-    const coordinates = host.querySelector<HTMLSelectElement>('[aria-label="Profile coordinates"]');
+    const coordinates = document.querySelector<HTMLSelectElement>('[aria-label="Profile coordinates"]');
     if (scale === 1) expect(coordinates).toBeNull();
     else {
-      expect(host.textContent).toContain(`Design mm before Scale (Scale = ${scale}).`);
+      expect(document.body.textContent).toContain(`Design mm before Scale (Scale = ${scale}).`);
       await act(async () => { coordinates!.value = 'scaled'; coordinates!.dispatchEvent(new Event('change', { bubbles: true })); });
-      expect(host.textContent).toContain(`Plot in scaled mm (Scale = ${scale}).`);
-      expect(host.querySelector('.profile-axis-label')?.parentElement?.textContent).toContain('scaled mm');
+      expect(document.body.textContent).toContain(`Plot in scaled mm (Scale = ${scale}).`);
+      expect(document.querySelector('.profile-axis-label')?.parentElement?.textContent).toContain('scaled mm');
     }
   });
 
@@ -208,7 +325,7 @@ describe('profile canvas freshness (FV regression net)', () => {
     }));
   });
   const respond = async (group: Request[] = requests) => act(async () => { group.forEach(request => request.resolve(request.response)); await flush(); });
-  const curve = () => host.querySelector('.profile-authored')?.getAttribute('d');
+  const curve = () => document.querySelector('.profile-authored')?.getAttribute('d');
 
   it('debounces requests, drops late curve/export replies, and hides another document immediately', async () => {
     await mount(); expect(requests).toHaveLength(0); await tick(); expect(requests).toHaveLength(2);
@@ -216,25 +333,25 @@ describe('profile canvas freshness (FV regression net)', () => {
     await act(async () => useDesignStore.getState().updateValue('length', 130)); await tick();
     const obsolete = requests.slice(2);
     await act(async () => useDesignStore.getState().replaceDocument(designForFamily('FREEFORM')));
-    expect(host.querySelector('.profile-authored')).toBeNull(); expect(host.querySelector('.profile-generated')).toBeNull();
-    await respond(obsolete); expect(host.querySelector('.profile-generated')).toBeNull();
+    expect(document.querySelector('.profile-authored')).toBeNull(); expect(document.querySelector('.profile-generated')).toBeNull();
+    await respond(obsolete); expect(document.querySelector('.profile-generated')).toBeNull();
     await tick(); await respond(requests.slice(4)); expect(curve()).toBeTruthy();
-    expect(host.querySelector('.profile-canvas-freshness')?.textContent).toBe('');
+    expect(document.querySelector('.profile-canvas-freshness')?.textContent).toBe('');
     expect(obsolete.find(request => request.url.startsWith('/api/export'))?.init?.signal?.aborted).toBe(true);
   });
 
   it('dims last-valid layers during updates, reports failures, and recovers', async () => {
     await mount(); await tick(); await respond();
     await act(async () => useDesignStore.getState().updateValue('length', 130));
-    expect(host.querySelector('.profile-authored.stale')).not.toBeNull(); expect(host.textContent).toContain('Updating… — last valid profile');
+    expect(document.querySelector('.profile-authored.stale')).not.toBeNull(); expect(document.body.textContent).toContain('Updating… — last valid profile');
     await tick();
     await act(async () => {
       const generated = requests.slice(2).find(request => request.url.startsWith('/api/export'))!;
       generated.resolve(Response.json({ detail: 'Invalid corner radius' }, { status: 422 })); await flush();
     });
-    expect(host.textContent).toContain('Invalid corner radius');
+    expect(document.body.textContent).toContain('Invalid corner radius');
     await act(async () => useDesignStore.getState().updateValue('length', 140)); await tick(); await respond(requests.slice(4));
-    expect(host.querySelector('.profile-generated.stale')).toBeNull();
+    expect(document.querySelector('.profile-generated.stale')).toBeNull();
   });
 
   it('guards replacement before React observes it and ignores responses after unmount', async () => {
@@ -243,11 +360,11 @@ describe('profile canvas freshness (FV regression net)', () => {
       useDesignStore.getState().replaceDocument(designForFamily('FREEFORM'), { revision: useDesignStore.getState().designRevision });
       requests.forEach(request => request.resolve(request.response)); await flush();
     });
-    expect(host.querySelector('.profile-generated')).toBeNull();
+    expect(document.querySelector('.profile-generated')).toBeNull();
     await tick(); const pending = requests.slice(2);
     await act(async () => root.render(null));
     expect(pending.find(request => request.url.startsWith('/api/export'))?.init?.signal?.aborted).toBe(true);
-    await respond(pending); expect(host.querySelector('.profile-generated')).toBeNull();
+    await respond(pending); expect(document.querySelector('.profile-generated')).toBeNull();
   });
 
   it('drops older same-document replies after accepting the newer keyed curve and export', async () => {
@@ -263,10 +380,10 @@ describe('profile canvas freshness (FV regression net)', () => {
       }
       await flush();
     });
-    const accepted = [curve(), host.querySelector('.profile-generated')?.getAttribute('d')];
+    const accepted = [curve(), document.querySelector('.profile-generated')?.getAttribute('d')];
     await respond(old);
-    expect([curve(), host.querySelector('.profile-generated')?.getAttribute('d')]).toEqual(accepted);
-    expect(host.querySelector('.profile-canvas-freshness')?.textContent).toBe('');
+    expect([curve(), document.querySelector('.profile-generated')?.getAttribute('d')]).toEqual(accepted);
+    expect(document.querySelector('.profile-canvas-freshness')?.textContent).toBe('');
   });
 
   it('reports an initial refusal without an authored curve and blocks Solve with an honest empty last-valid state', async () => {
@@ -278,8 +395,8 @@ describe('profile canvas freshness (FV regression net)', () => {
       }
       await flush();
     });
-    expect(host.textContent).toContain('Bad profile'); expect(host.querySelector('.profile-authored')).toBeNull();
-    expect(host.querySelector('.profile-generated')).toBeNull(); expect(profileDraftBlocker()).toContain('invalid');
+    expect(document.body.textContent).toContain('Bad profile'); expect(document.querySelector('.profile-authored')).toBeNull();
+    expect(document.querySelector('.profile-generated')).toBeNull(); expect(profileDraftBlocker()).toContain('invalid');
     expect(button('Revert to last valid').disabled).toBe(true);
   });
 });

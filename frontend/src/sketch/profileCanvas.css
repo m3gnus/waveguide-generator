@@ -1,4 +1,7 @@
-.profile-canvas { grid-column: 1 / -1; min-width: 0; margin: 6px 0; }
+.profile-canvas { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; margin-top: 8px; }
+.profile-canvas > .source-editor-columns { flex: 1; min-height: 0; }
+.profile-canvas-dialog .profile-canvas-options label { display: flex; margin: 0; }
+.profile-canvas-options input[type="checkbox"] { width: auto; min-width: 0; }
 .profile-canvas-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--text-micro); }
 .profile-canvas-options label { display: flex; align-items: center; gap: 4px; }
 .profile-canvas select { min-width: 0; font-size: 11px; }
@@ -18,3 +21,4 @@
 .profile-anchor-fields { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .profile-anchor-fields > label, .profile-anchor-fields > div { display: grid; gap: 4px; width: 110px; }
 .profile-canvas .sketch-conflict-banner { flex-wrap: wrap; font-size: 11px; }
+.profile-canvas-launch { grid-column: 1 / -1; }

@@ -18,13 +18,15 @@ export interface WorkspaceProps<TDoc, S, C> {
   adapter: DomainAdapter<TDoc, S, C>; state: S; session?: WorkspaceSession<S, C>;
   slots?: WorkspaceSlots; selection?: string[]; onSelectionChange?(ids: string[]): void;
   hoverId?: string; onHoverChange?(id?: string): void; fitRequest?: number;
+  /** Let an enclosing editor close on Escape when the workspace is idle. */
+  onEscape?(): void;
 }
 function itemPosition(item: DisplayItem): XY | undefined {
   return item.kind === 'point' || item.kind === 'handle' ? item.at : item.kind === 'circle' ? item.center : undefined;
 }
 
 /** Adapter-driven workspace. The Sketch kit composes the same surface, navigation and gesture primitives. */
-export function Workspace<TDoc, S, C>({ adapter, state, session, slots, selection: controlled, onSelectionChange, hoverId, onHoverChange, fitRequest }: WorkspaceProps<TDoc, S, C>) {
+export function Workspace<TDoc, S, C>({ adapter, state, session, slots, selection: controlled, onSelectionChange, hoverId, onHoverChange, fitRequest, onEscape }: WorkspaceProps<TDoc, S, C>) {
   const surface = useWorkspaceView((width, height) => displayView(adapter.display(state, { selection: [], scale: 1 }), { width, height }));
   const { svg, size, view, setView, position, zoom, space, hovered, panning, panActive, setPanActive } = surface;
   const selectionState = useWorkspaceSelection(controlled, onSelectionChange);
@@ -75,6 +77,7 @@ export function Workspace<TDoc, S, C>({ adapter, state, session, slots, selectio
       cancelOnUndo: session?.historyKind === 'project' && (!!drag.current || !!selecting.current || tool !== 'select'),
       surface, tool, selection, setSelection, dragging: !!drag.current, navigateSelection: tool === 'select',
       escape: event => {
+        const wasActive = tool !== 'select' || !!selection.length || !!drag.current || !!selecting.current || !!panning.current;
         clearGestureFrames();
         abortWorkspaceDrag(drag, cancel => session!.endDrag(cancel), error);
         const result = activeTool?.key?.(event as globalThis.KeyboardEvent, state, local.current);
@@ -85,6 +88,7 @@ export function Workspace<TDoc, S, C>({ adapter, state, session, slots, selectio
           return;
         }
         choose('select'); setSelection([]);
+        if (event.key === 'Escape' && !wasActive) onEscape?.();
       },
       undo: redo => { void undo(redo); }, fit: all => setView(displayView(display, size, all)),
       remove: () => {

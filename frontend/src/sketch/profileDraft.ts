@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { currentDocumentLoad, useDesignStore } from '../stores/design';
 import { parameterPanelValidity } from '../design/parameterPanelValidity';
+import { openProfileCanvas } from './profileCanvasVisibility';
 
 interface ProfileDraft {
   load: number;
@@ -21,10 +22,7 @@ export function getProfileDraft() {
   if (formula !== 'FREEFORM' && formula !== 'LOOKUP') return null;
   return [...drafts.values()].find(draft => draft.load === currentDocumentLoad()) ?? (parameterPanelValidity.getSnapshot() ? {
     load: currentDocumentLoad(), message: 'Custom profile has an invalid draft. Open sketch or Revert to last valid before Solve.',
-    open: () => {
-      const input = document.querySelector<HTMLElement>('.param-panel [aria-invalid="true"]');
-      input?.scrollIntoView?.({ block: 'nearest' }); input?.focus();
-    }, revert: () => revertProfileFieldDrafts(),
+    open: openProfileCanvas, revert: () => revertProfileFieldDrafts(),
   } : null);
 }
 /** Use NumberField's own cancellation; never replace a draft by a guessed value. */

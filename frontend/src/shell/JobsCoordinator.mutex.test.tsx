@@ -713,9 +713,13 @@ describe('solve invocation mutex', () => {
     activityStore.reset();
     const actual = await vi.importActual<typeof import('../jobs/assemblySolve')>('../jobs/assemblySolve');
     mocks.prepareDesignAssembly.mockImplementation(() => actual.prepareDesignAssembly());
-    const fetcher = vi.fn<typeof fetch>(async (url, init) => String(url).endsWith('/context')
-      ? json({ minimum_clearance_mm: 0.1, clearances: {} })
-      : new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })));
+    const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+      // Debounced settings writes may arrive during this test on a busy host.
+      if (String(url).startsWith('/api/settings/')) return json({});
+      return String(url).endsWith('/context')
+        ? json({ minimum_clearance_mm: 0.1, clearances: {} })
+        : new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }));
+    });
     vi.stubGlobal('fetch', fetcher);
     await act(async () => {
       useDesignStore.getState().commitEmbedded({ assembly: emptyAssembly() }, 'step');
@@ -727,7 +731,8 @@ describe('solve invocation mutex', () => {
     await act(async () => { activityStore.getSnapshot()[0].cancel!(); await pending; });
     expect(solveControlStore.getSnapshot()!.actionError).toBe('Stopped');
     expect(mocks.solveModel).not.toHaveBeenCalled();
-    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual(['/api/models/assembly/context', '/api/models/assembly/compile']);
+    expect(fetcher.mock.calls.map(([url]) => String(url)).filter(url => !url.startsWith('/api/settings/')))
+      .toEqual(['/api/models/assembly/context', '/api/models/assembly/compile']);
     expect(activityStore.getSnapshot()).toEqual([]);
   });
 

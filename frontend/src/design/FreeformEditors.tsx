@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { setProfileDraft } from '../sketch/profileDraft';
+import { openProfileCanvas } from '../sketch/profileCanvasVisibility';
 import { useDesignStore, type CrossSectionStation, type DesignDocument, type FreeformPoint } from '../stores/design';
 import type { CurveAnchor, CurveDeviation, InsertMode } from '../api/freeformProfile';
 import type { GeneratedPlaneChange } from '../api/profileSamples';
@@ -243,11 +244,7 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
   useLayoutEffect(() => {
     setProfileDraft(preview ? {
       message: `Custom profile ${preview.status === 'refused' || preview.validation.status === 'error' ? 'has an invalid draft' : 'is unfinished'}. Open sketch or Revert to last valid before Solve.`,
-      open: () => {
-        const panel = document.getElementById(id);
-        const drawing = panel?.closest('.param-panel')?.querySelector<SVGSVGElement>('svg[aria-label="Custom profile drawing"]');
-        (drawing ?? panel)?.scrollIntoView?.({ block: 'nearest' }); (drawing ?? panel)?.focus();
-      }, revert: edit.cancel,
+      open: openProfileCanvas, revert: edit.cancel,
     } : null, draftOwner.current);
     return () => setProfileDraft(null, draftOwner.current);
   }, [preview, edit.cancel, id]);

@@ -6,7 +6,7 @@ import { sourceRoleLabel } from '../model/cadLabels';
 import { useDeveloperDetails } from '../prefs/preferences';
 import { osseFeatures, OSSE_SWITCH_NOTICE } from './osseFeatures';
 import { OsseFeatureChoices } from './OsseFeatureChoices';
-import { ProfileCanvas } from '../sketch/ProfileCanvas';
+import { ProfileCanvasLauncher } from '../sketch/ProfileCanvas';
 import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeSymmetryLimitation } from './nativeFamilies';
 import { EnclosureResolutionField } from './EnclosureResolutionField';
@@ -1325,6 +1325,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
       revealId={workspaceMode === 'parametric' ? `parametric.section.${definition.title}` : undefined}
     >
       {workspaceMode === 'parametric' && definition.title === 'Mounting' && <FrontWorkspaceLauncher />}
+      {showCustom && definition.title === 'Profile' && (design.formula === 'FREEFORM' || design.formula === 'LOOKUP') && <ProfileCanvasLauncher />}
       {showOuterBodyMode && <WallEnclosureModeControl design={design} mounting={workspaceMode === 'parametric'} serverError={workspaceMode === 'parametric' ? previewErrorForParameter(PARAMETER_REGISTRY.find((field) => field.id === 'simulation.sim_type')!, currentPreviewFields) : undefined} />}
       {/* Domain is an execution option, not a saved design parameter. Keeping
           it independent of mesh.quadrants prevents the round-trip-only ATH
@@ -1348,7 +1349,6 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           {groupSlots.map((id) => {
             if (id === 'control.meshValidation') return hasCustomSlot ? <MeshValidationControl key={id} /> : null;
             if (id === 'control.freeformImport') return hasCustomSlot ? <CustomProfilePaste key={id} /> : null;
-            if (id === 'control.freeformInspection') return hasCustomSlot ? <ProfileCanvas key={id} /> : null;
             const field = groupFields.find((candidate) => candidate.id === id);
             return field ? renderField(field) : null;
           })}

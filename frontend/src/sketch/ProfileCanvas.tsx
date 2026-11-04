@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { inspectProfileSamples } from '../api/designIo';
 import type { ProfileSamples } from '../api/profileSamples';
 import { failureWords } from '../api/httpError';
@@ -7,7 +8,8 @@ import {
 } from '../design/customProfileEdit';
 import { ProfileEditPreviewPanel } from '../design/FreeformEditors';
 import { NumberField } from '../design/NumberField';
-import { parameterPanelValidity } from '../design/parameterPanelValidity';
+import { parameterPanelValidity, registerParameterPanel } from '../design/parameterPanelValidity';
+import { useModalDialogFocus } from '../shell/dialogFocus';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { createProfileAdapter, equalProfiles, parseAnchor, profileBinding, profilePoints, type ProfileCommand, type ProfilePlaneChoice, type ProfilePresentation } from './adapters/profile';
 import { ProfileController } from './profileController';
@@ -15,7 +17,25 @@ import { getProfileDraft, revertProfileFieldDrafts, setProfileDraft, useProfileD
 import { ProjectHistoryAuthority } from './workspace/projectHistoryAuthority';
 import { PlainController } from './workspace/plainController';
 import { Workspace } from './workspace/Workspace';
+import { closeProfileCanvas, openProfileCanvas, profileCanvasVisibility } from './profileCanvasVisibility';
+import '../design/sourceContourEditor.css';
 import './profileCanvas.css';
+
+export function ProfileCanvasLauncher() {
+  return <div className="source-editor-launch profile-canvas-launch" data-control-reveal-id="profile-canvas-launch">
+    <button className="btn" type="button" aria-haspopup="dialog" onClick={openProfileCanvas}>Edit profile on canvas…</button>
+    <small>Drag anchors and preview changes.</small>
+  </div>;
+}
+
+/** App owns the session: closing or replacing the rail preserves its preview. */
+export function ProfileCanvasDialog() {
+  const open = useSyncExternalStore(profileCanvasVisibility.subscribe, profileCanvasVisibility.getSnapshot, profileCanvasVisibility.getSnapshot);
+  const formula = useDesignStore(state => state.design.formula);
+  const eligible = formula === 'FREEFORM' || formula === 'LOOKUP';
+  useEffect(() => { if (!eligible) closeProfileCanvas(); }, [eligible]);
+  return eligible ? <ProfileCanvas open={open} onClose={closeProfileCanvas}/> : null;
+}
 
 /** Generated samples are physical mm, including Scale. Never replace authored
  * samples with this export: the mesher curve query is the authoring authority. */
@@ -42,7 +62,7 @@ export function useGeneratedProfile(design: DesignDocument, revision: number, id
   return { samples: visible?.samples, scale: visible?.scale, stale: visible?.key !== key || Boolean(error), error };
 }
 
-export function ProfileCanvas() {
+function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () => void }) {
   const design = useDesignStore(state => state.design), revision = useDesignStore(state => state.designRevision), identity = useDesignStore(state => state.loadGeneration);
   const legacy = design.formula === 'LOOKUP';
   const invalidInputs = useSyncExternalStore(parameterPanelValidity.subscribe, parameterPanelValidity.getSnapshot, parameterPanelValidity.getSnapshot);
@@ -58,6 +78,7 @@ export function ProfileCanvas() {
   const anyDraft = useProfileDraftBlocker();
   const curveError = legacy ? undefined : currentCurves.error;
   const host = useRef<HTMLDivElement>(null), latest = useRef({ edit, dragging, invalidInputs, curveError }); latest.current = { edit, dragging, invalidInputs, curveError };
+  const revertingFields = useRef(false);
   const lastValid = useRef<{ identity: number; design: DesignDocument } | undefined>(undefined);
   if (!currentCurves.stale && currentCurves.curves && !currentCurves.error && !edit.preview && !dragging) lastValid.current = { identity, design };
   const presentation = useRef<ProfilePresentation>({});
@@ -66,13 +87,21 @@ export function ProfileCanvas() {
   const preview = edit.preview;
   const previewCurves = preview?.validation.status === 'ready' ? preview.validation.value : undefined;
   const displayState = preview?.after ?? state;
-  const open = useCallback(() => { host.current?.scrollIntoView?.({ block: 'nearest' }); host.current?.querySelector<SVGSVGElement>('svg[role="application"]')?.focus(); }, []);
+  const open = useCallback(() => { openProfileCanvas(); host.current?.querySelector<SVGSVGElement>('svg[role="application"]')?.focus(); }, []);
+  const close = useCallback(() => {
+    if (revertingFields.current) return;
+    void session?.endDrag(true);
+    setDragging(false);
+    onClose();
+  }, [session, onClose]);
+  const dialog = useModalDialogFocus<HTMLDivElement>({ open: visible, onClose: close });
+  const registerHost = useCallback((node: HTMLDivElement | null) => { host.current = node; return registerParameterPanel(node); }, []);
   const revert = useCallback(() => {
     latest.current.edit.cancel();
     void session?.endDrag(true);
     // NumberField's own Escape path restores its local draft without a write.
-    const panel = host.current?.closest('.param-panel') ?? host.current;
-    if (panel) revertProfileFieldDrafts(panel);
+    revertingFields.current = true;
+    try { revertProfileFieldDrafts(); } finally { revertingFields.current = false; }
     setFieldVersion(version => version + 1); setDraft(null);
     const valid = lastValid.current;
     if (latest.current.curveError && valid?.identity === useDesignStore.getState().loadGeneration) {
@@ -99,15 +128,15 @@ export function ProfileCanvas() {
     setDraft(unfinished ? { message: `Custom profile ${preview?.status === 'refused' || invalidInputs || curveError ? 'has an invalid draft' : 'is unfinished'}. Open sketch or Revert to last valid before Solve.`, open, revert } : null);
   }, [unfinished, preview?.status, curveError, open, revert, setDraft]);
   useEffect(() => {
-    if (!preview) return;
+    if (!preview || !visible) return;
     const cancelGesture = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' || (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault(); event.stopPropagation(); edit.cancel();
       }
     };
     window.addEventListener('keydown', cancelGesture, true);
     return () => window.removeEventListener('keydown', cancelGesture, true);
-  }, [Boolean(preview), edit.cancel]);
+  }, [Boolean(preview), visible, edit.cancel]);
   useEffect(() => { setSelection([]); setPlane('both'); }, [identity]);
   useEffect(() => { setFitRequest(value => value + 1); }, [scaled, Boolean(currentCurves.curves), Boolean(generated.samples)]);
 
@@ -145,7 +174,10 @@ export function ProfileCanvas() {
       <p className="profile-canvas-caption">{legacy ? 'Legacy LOOKUP keeps straight spans. Join and angle tools are disabled.' : 'Throat z and mouth z are fixed. Change Length in the table to move the mouth. Tangent handles are display only.'}</p>
     </div> : null;
   presentation.current.properties = () => properties ? [{ id: 'profile-anchor', title: 'Selected profile point', render: () => properties }] : [];
-  return <div ref={host} className="profile-canvas" role="group" aria-label="Custom profile canvas">
+  if (!visible) return null;
+  return createPortal(<div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Custom profile canvas" className="source-editor source-sketch-editor profile-canvas-dialog">
+    <header><h2>Custom profile</h2><button type="button" className="btn" onClick={close}>Close</button></header>
+    <div ref={registerHost} className="profile-canvas">
     <div className="profile-canvas-options">
       <label>Profile planes <select aria-label="Profile planes" value={plane} onChange={event => { setPlane(event.target.value as ProfilePlaneChoice); setSelection([]); }}>
         <option value="both">H and V</option><option value="H">Horizontal (H)</option><option value="V">Vertical (V)</option>
@@ -163,9 +195,14 @@ export function ProfileCanvas() {
       <button type="button" className="btn" onClick={() => getProfileDraft()?.open()}>Open sketch</button><button type="button" className="btn" onClick={() => getProfileDraft()?.revert()}
         disabled={Boolean(curveError && lastValid.current?.identity !== identity && !preview && !dragging && !invalidInputs)}
         title={curveError && lastValid.current?.identity !== identity ? 'This document has no previously validated profile. Fix its table values.' : undefined}>Revert to last valid</button></div>}
-    <Workspace adapter={adapter} state={displayState} session={session} selection={selection} onSelectionChange={setSelection} fitRequest={fitRequest} slots={{ properties: propertiesHost }}/>
-    {actionError && <p className="field-error" role="alert">{actionError}</p>}
-    <div ref={setPropertiesHost}/>
-    <ProfileEditPreviewPanel edit={edit}/>
-  </div>;
+    <div className="source-editor-columns">
+      <div className="source-workspace"><Workspace adapter={adapter} state={displayState} session={session} selection={selection} onSelectionChange={setSelection} fitRequest={fitRequest} slots={{ properties: propertiesHost }} onEscape={close}/></div>
+      <aside aria-label="Profile properties and preview">
+        <div ref={setPropertiesHost}/>
+        {actionError && <p className="field-error" role="alert">{actionError}</p>}
+        <ProfileEditPreviewPanel edit={edit}/>
+      </aside>
+    </div>
+    </div>
+  </div></div>, document.body);
 }
