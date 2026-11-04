@@ -205,7 +205,10 @@ def test_solve_refuses_unfinished_sketch_even_with_matching_prepared_record(comp
     from hornlab_mesher.source_contour import dome
     from server.cadlink.intake.design_assembly import compile_spec_digest
     from server.design.schema import DesignConfig
-    from test_assembly_diaphragms import document, sketched_design
+    from test_assembly_diaphragms import document, needs_diaphragm_mesher, sketched_design
+
+    if source != 'disabled-woofer' and needs_diaphragm_mesher.args[0]:
+        pytest.skip(needs_diaphragm_mesher.kwargs['reason'])
 
     app, runtime, _store = compiled_app
     runtime._ensure_scheduler = lambda: None

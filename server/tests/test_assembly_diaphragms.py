@@ -1,6 +1,7 @@
 """Sketched documents compile into the shared assembly record and excitations."""
 import asyncio
 import copy
+import importlib.util
 import math
 from pathlib import Path
 
@@ -12,6 +13,11 @@ from server.design.schema import DesignConfig
 from server.mesh.builder import AssemblyRefusal, _build_assembly_sync
 from server.source_editor import SourceDocument, canonical_document, native
 from test_design_assembly_record import HORN, W1, UID, assembly, woofer
+
+#: Building a sketched diaphragm needs a mesher with the design diaphragm builder;
+#: an older pinned mesher refuses it (tested by the refusal tests instead).
+needs_diaphragm_mesher = pytest.mark.skipif(importlib.util.find_spec('hornlab_mesher.design_diaphragm') is None,
+                                            reason='installed mesher predates sketched diaphragms')
 
 
 def document(contour, motion='axial'):
@@ -42,6 +48,7 @@ def test_schema_roundtrip_and_canonical_source_document():
     assert dump['assembly']['hf_source'] == {'radiator_id': 'horn-throat', 'kind': 'classic'}
 
 
+@needs_diaphragm_mesher
 def test_record_determinism_signed_weights_and_committed_geometry(tmp_path):
     config = sketched_design()
     built = _build_assembly_sync(config.model_dump(mode='json'))
@@ -72,6 +79,7 @@ def test_unfinished_sketch_refused_before_any_record_lookup(status, pending, tmp
                     design_uid=UID, design_name='Horn', design_revision=2))
 
 
+@needs_diaphragm_mesher
 def test_sketched_hf_only_record(tmp_path):
     body = {**copy.deepcopy(HORN), 'assembly': assembly()}
     body['assembly']['hf_source'] = {'kind': 'sketched', 'diaphragm': document(dome(12.7, 3), 'normal')}
