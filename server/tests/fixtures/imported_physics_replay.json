@@ -1,0 +1,1448 @@
+{
+  "assembly": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"required_features\":[\"wg-design-assembly-v1\"],\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"hf\",\"source_ids\":[\"hf\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"lf\",\"source_ids\":[\"lf\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":{\"id\":\"combined\",\"members\":[\"lf\",\"hf\"],\"crossovers_hz\":null,\"level_match\":true,\"align\":true,\"reference\":\"hf\",\"channels\":{\"lf\":{\"hp\":null,\"lp\":{\"family\":\"lr\",\"order\":4,\"fc_hz\":300.0},\"gain\":{\"mode\":\"manual\",\"db\":-3.0},\"delay\":{\"mode\":\"manual\",\"ms\":0.2},\"invert\":null},\"hf\":{\"hp\":{\"family\":\"lr\",\"order\":4,\"fc_hz\":300.0},\"lp\":null,\"gain\":{\"mode\":\"manual\",\"db\":0.0},\"delay\":{\"mode\":\"manual\",\"ms\":0.0},\"invert\":null}}},\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":null,\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,300.0,500.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[0.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":true,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "required_features": [
+          "wg-design-assembly-v1"
+        ],
+        "drive_channels": [
+          {
+            "id": "hf",
+            "source_ids": [
+              "hf"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "lf",
+            "source_ids": [
+              "lf"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": {
+          "id": "combined",
+          "members": [
+            "lf",
+            "hf"
+          ],
+          "crossovers_hz": null,
+          "level_match": true,
+          "align": true,
+          "reference": "hf",
+          "channels": {
+            "lf": {
+              "hp": null,
+              "lp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "gain": {
+                "mode": "manual",
+                "db": -3.0
+              },
+              "delay": {
+                "mode": "manual",
+                "ms": 0.2
+              },
+              "invert": null
+            },
+            "hf": {
+              "hp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "lp": null,
+              "gain": {
+                "mode": "manual",
+                "db": 0.0
+              },
+              "delay": {
+                "mode": "manual",
+                "ms": 0.0
+              },
+              "invert": null
+            }
+          }
+        },
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": null,
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          300.0,
+          500.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            0.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "a028190dbe13592d9b0b0e1ec86c1ae6581bf52b50202a2fee7669d82f6851a3",
+      "frequencies_hz": "7341554ffb76d5a0e7d8019374acdd73d3799fd8b30341a6d4820de739e1dc29",
+      "observation_angles_deg": "b49ee99e2a1947568c4cea8aa12a2433dd3f72229eace8e9e5f0b42d78aa90d6",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "sphere_theta_deg": "2236b461917f920d96dfa6db0e5e77186cce896a97bd1931d84878d68dc10d23",
+      "sphere_phi_deg": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+      "pressure::hf": "027c557aa2caeba64ca70a12284bafa4304e06c2e88444e1a65626b9ee07d76b",
+      "sphere::hf": "027c557aa2caeba64ca70a12284bafa4304e06c2e88444e1a65626b9ee07d76b",
+      "metadata::hf": "a1ff80b5a6b517ff6be5aa26095cd85bee193d8d0caa79fff3c6cdadd1ab2294",
+      "pressure::lf": "1162447ec03109e273d2587d7c0609bebf29dce2e5cfec99aa8c0c8bc1b8acb2",
+      "sphere::lf": "1162447ec03109e273d2587d7c0609bebf29dce2e5cfec99aa8c0c8bc1b8acb2",
+      "metadata::lf": "7e9db630261883b8cf507ff8f9d2e1f0b1b7446c0477d12dc1c46639e7f12670"
+    },
+    "combined": {
+      "result_kind": "parametric",
+      "result_contract_version": 1,
+      "frequencies": [
+        100.0,
+        300.0,
+        500.0
+      ],
+      "directivity": {
+        "horizontal": [
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              10.0,
+              0.0
+            ]
+          ],
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              10.0,
+              0.0
+            ]
+          ],
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              10.0,
+              0.0
+            ]
+          ]
+        ]
+      },
+      "directivity_phase": {
+        "horizontal": [
+          [
+            [
+              0.0,
+              36.44957696549543
+            ],
+            [
+              10.0,
+              36.44957696549543
+            ]
+          ],
+          [
+            [
+              0.0,
+              166.11581130109585
+            ],
+            [
+              10.0,
+              166.11581130109585
+            ]
+          ],
+          [
+            [
+              0.0,
+              -127.14914625613471
+            ],
+            [
+              10.0,
+              -127.14914625613471
+            ]
+          ]
+        ]
+      },
+      "spl_on_axis": {
+        "frequencies": [
+          100.0,
+          300.0,
+          500.0
+        ],
+        "spl": [
+          159.92154097223155,
+          167.9655225070112,
+          171.09401574272258
+        ],
+        "phase_degrees": [
+          36.44957696549543,
+          166.11581130109585,
+          -127.14914625613471
+        ]
+      },
+      "di": {
+        "frequencies": [
+          100.0,
+          300.0,
+          500.0
+        ],
+        "di": [
+          null,
+          null,
+          null
+        ]
+      },
+      "metadata": {
+        "solver_mode": "full_3d",
+        "geometry_type": "imported",
+        "drive_channel_id": "combined",
+        "derived_from_channels": [
+          "lf",
+          "hf"
+        ],
+        "source_ids": [
+          "lf",
+          "hf"
+        ],
+        "phase_time_convention": "exp(+ikr)",
+        "combine": {
+          "type": "filtered_time_aligned_sum",
+          "members": [
+            "lf",
+            "hf"
+          ],
+          "member_roles": [
+            null,
+            null
+          ],
+          "reference": "hf",
+          "crossovers_hz": [
+            300.0
+          ],
+          "channels": {
+            "lf": {
+              "hp": null,
+              "lp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "gain_db": -3.0,
+              "gain_mode": "manual",
+              "gain_auto_db": 0.24657081402699532,
+              "delay_ms": 0.2,
+              "delay_mode": "manual",
+              "delay_auto_ms": 0.0,
+              "inverted": false,
+              "invert_mode": "auto",
+              "gain_max_db": null,
+              "max_limit": null,
+              "max_limit_hz": null,
+              "max_limit_at_band_edge": false
+            },
+            "hf": {
+              "hp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "lp": null,
+              "gain_db": 0.0,
+              "gain_mode": "manual",
+              "gain_auto_db": -0.2465708140269669,
+              "delay_ms": 0.0,
+              "delay_mode": "manual",
+              "delay_auto_ms": 0.0,
+              "inverted": false,
+              "invert_mode": "auto",
+              "gain_max_db": null,
+              "max_limit": null,
+              "max_limit_hz": null,
+              "max_limit_at_band_edge": false
+            }
+          },
+          "pairs": {
+            "lf-hf": {
+              "eval_hz": 300.0,
+              "fit_residual_deg": 0.0,
+              "fit_delay_ms": 0.0,
+              "phase_error_at_fc_deg": -21.600000000000005,
+              "reverse_null_db": -11.807630780802143,
+              "points": 2
+            }
+          },
+          "level_match": {
+            "enabled": false,
+            "target_db": null,
+            "medians_db": {},
+            "gains_db": {
+              "lf": -3.0,
+              "hf": 0.0
+            }
+          },
+          "align": false,
+          "reference_angle_degrees": 0.0,
+          "delays_ms": {
+            "lf": 0.2,
+            "hf": 0.0
+          },
+          "gains_db": {
+            "lf": -3.0,
+            "hf": 0.0
+          },
+          "pair_eval_hz": {
+            "lf-hf": 300.0
+          },
+          "weight_convention": "weights defined in engineering exp(+jwt); applied to exp(+ikr) solver fields as complex conjugates",
+          "warnings": [
+            "pair lf-hf: only 1 solved frequencies lie in the +/-1/3-octave window around 300 Hz; the alignment delay is fitted over the whole overlap region instead and may pick the wrong cycle"
+          ]
+        },
+        "solver_backend": "metal",
+        "engine": "hornlab-metal-bem",
+        "recombined": true,
+        "warnings": [],
+        "warning_count": 0,
+        "failures": [],
+        "failure_count": 0,
+        "partial_success": false,
+        "spl_on_axis": {
+          "requested_angle_degrees": 0.0,
+          "sampled_angle_degrees": 0.0,
+          "plane_reference_spl_db": {
+            "horizontal": [
+              159.92154097223155,
+              167.9655225070112,
+              171.09401574272258
+            ]
+          }
+        },
+        "observation": {
+          "requested_distance_m": 2.0,
+          "effective_distance_m": 2.0,
+          "adjusted": false,
+          "observation_origin": "throat",
+          "sound_speed_m_per_s": 343.0
+        },
+        "directivity": {
+          "angle_range_degrees": [
+            0.0,
+            180.0
+          ],
+          "sample_count": 37,
+          "angular_step_degrees": 5.0,
+          "requested_angular_step_degrees": null,
+          "resolved_grid": {
+            "start": 0.0,
+            "end": 180.0,
+            "count": 37,
+            "step": 5.0
+          },
+          "enabled_axes": [
+            "horizontal"
+          ],
+          "planes": [
+            {
+              "id": "horizontal",
+              "phi_degrees": 0.0
+            }
+          ],
+          "normalization_angle_degrees": 5.0,
+          "diagonal_angle_degrees": 45.0,
+          "observation_origin": "throat",
+          "requested_distance_m": 2.0,
+          "effective_distance_m": 2.0,
+          "sound_speed_m_per_s": 343.0
+        },
+        "directivity_index": {
+          "available": false,
+          "definition": "10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)",
+          "method": "unavailable",
+          "domain": "full_sphere",
+          "power_average": "linear_mean_square_pressure",
+          "planes_used": [],
+          "opposing_orbit_sides": "not_applicable",
+          "rear_hemisphere": "sampled"
+        },
+        "result_contract_version": 1,
+        "phase_quantity": "raw_wrapped_pressure_phase",
+        "phase_units": "degrees",
+        "impedance_units": "Z/(rho*c)",
+        "impedance_quantity": "specific_acoustic_impedance",
+        "impedance_drive": "unit_acceleration",
+        "source_motion": "normal",
+        "quadrants": 1234,
+        "frequency_spacing": "explicit",
+        "frequency_source": "explicit_list",
+        "verbose": false,
+        "balloon_sampling": {
+          "requested": false,
+          "configured": false,
+          "available": false,
+          "status": "disabled"
+        },
+        "impedance_omitted": "combined channel: member drives differ; no single impedance exists",
+        "power_qualification": {
+          "version": 1,
+          "status": "unknown",
+          "evaluated": "solve",
+          "threshold_db": 0.5,
+          "validity_max_hz": null,
+          "frequency_status": [
+            "qualified",
+            "qualified",
+            "qualified"
+          ],
+          "frequency_reasons": [
+            null,
+            null,
+            null
+          ],
+          "unqualified_ranges": [],
+          "reasons": [],
+          "unknown_reason": "member_unknown",
+          "worst": null,
+          "provenance": {
+            "engine": "metal",
+            "package": "hornlab-metal-bem",
+            "formulation": null,
+            "complex_k_shift": null,
+            "package_version": null,
+            "solver_pin": null,
+            "missing": [
+              "formulation",
+              "solver_pin"
+            ],
+            "recorded": false
+          },
+          "members": {
+            "lf": "unknown",
+            "hf": "unknown"
+          },
+          "unqualified_channels": [],
+          "message": null
+        }
+      }
+    }
+  },
+  "cad": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"hf\",\"source_ids\":[\"hf\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"lf\",\"source_ids\":[\"lf\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":{\"id\":\"combined\",\"members\":[\"lf\",\"hf\"],\"crossovers_hz\":null,\"level_match\":true,\"align\":true,\"reference\":\"hf\",\"channels\":{\"lf\":{\"hp\":null,\"lp\":{\"family\":\"lr\",\"order\":4,\"fc_hz\":300.0},\"gain\":{\"mode\":\"manual\",\"db\":-3.0},\"delay\":{\"mode\":\"manual\",\"ms\":0.2},\"invert\":null},\"hf\":{\"hp\":{\"family\":\"lr\",\"order\":4,\"fc_hz\":300.0},\"lp\":null,\"gain\":{\"mode\":\"manual\",\"db\":0.0},\"delay\":{\"mode\":\"manual\",\"ms\":0.0},\"invert\":null}}},\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":null,\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,300.0,500.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[0.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":true,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "hf",
+            "source_ids": [
+              "hf"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "lf",
+            "source_ids": [
+              "lf"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": {
+          "id": "combined",
+          "members": [
+            "lf",
+            "hf"
+          ],
+          "crossovers_hz": null,
+          "level_match": true,
+          "align": true,
+          "reference": "hf",
+          "channels": {
+            "lf": {
+              "hp": null,
+              "lp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "gain": {
+                "mode": "manual",
+                "db": -3.0
+              },
+              "delay": {
+                "mode": "manual",
+                "ms": 0.2
+              },
+              "invert": null
+            },
+            "hf": {
+              "hp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "lp": null,
+              "gain": {
+                "mode": "manual",
+                "db": 0.0
+              },
+              "delay": {
+                "mode": "manual",
+                "ms": 0.0
+              },
+              "invert": null
+            }
+          }
+        },
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": null,
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          300.0,
+          500.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            0.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "a028190dbe13592d9b0b0e1ec86c1ae6581bf52b50202a2fee7669d82f6851a3",
+      "frequencies_hz": "7341554ffb76d5a0e7d8019374acdd73d3799fd8b30341a6d4820de739e1dc29",
+      "observation_angles_deg": "b49ee99e2a1947568c4cea8aa12a2433dd3f72229eace8e9e5f0b42d78aa90d6",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "sphere_theta_deg": "2236b461917f920d96dfa6db0e5e77186cce896a97bd1931d84878d68dc10d23",
+      "sphere_phi_deg": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+      "pressure::hf": "01272a1a351198b453c0462478f7b91f0b75bb1424de568919831fbd205dcbd6",
+      "sphere::hf": "01272a1a351198b453c0462478f7b91f0b75bb1424de568919831fbd205dcbd6",
+      "metadata::hf": "2de3c2d7f7acf89a8ce524ec37f86bdd0b14b5ac03e85529e65d9bea5ba87635",
+      "pressure::lf": "f5a9165f9a4852698b1b7bd7512f2f602da6b2688a9a4106be78a67455a7b044",
+      "sphere::lf": "f5a9165f9a4852698b1b7bd7512f2f602da6b2688a9a4106be78a67455a7b044",
+      "metadata::lf": "23247483120a2c2afbb9d64a397f0145b472a83c7d40b589246e5b5c1781898c"
+    },
+    "combined": {
+      "result_kind": "parametric",
+      "result_contract_version": 1,
+      "frequencies": [
+        100.0,
+        300.0,
+        500.0
+      ],
+      "directivity": {
+        "horizontal": [
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              10.0,
+              0.0
+            ]
+          ],
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              10.0,
+              0.0
+            ]
+          ],
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              10.0,
+              0.0
+            ]
+          ]
+        ]
+      },
+      "directivity_phase": {
+        "horizontal": [
+          [
+            [
+              0.0,
+              126.44957696549544
+            ],
+            [
+              10.0,
+              126.44957696549544
+            ]
+          ],
+          [
+            [
+              0.0,
+              -103.88418869890414
+            ],
+            [
+              10.0,
+              -103.88418869890414
+            ]
+          ],
+          [
+            [
+              0.0,
+              -37.14914625613469
+            ],
+            [
+              10.0,
+              -37.14914625613469
+            ]
+          ]
+        ]
+      },
+      "spl_on_axis": {
+        "frequencies": [
+          100.0,
+          300.0,
+          500.0
+        ],
+        "spl": [
+          103.95794360506925,
+          102.45950004545563,
+          101.15101828883991
+        ],
+        "phase_degrees": [
+          126.44957696549544,
+          -103.88418869890414,
+          -37.14914625613469
+        ]
+      },
+      "di": {
+        "frequencies": [
+          100.0,
+          300.0,
+          500.0
+        ],
+        "di": [
+          null,
+          null,
+          null
+        ]
+      },
+      "metadata": {
+        "solver_mode": "full_3d",
+        "geometry_type": "imported",
+        "drive_channel_id": "combined",
+        "derived_from_channels": [
+          "lf",
+          "hf"
+        ],
+        "source_ids": [
+          "lf",
+          "hf"
+        ],
+        "phase_time_convention": "exp(+ikr)",
+        "combine": {
+          "type": "filtered_time_aligned_sum",
+          "members": [
+            "lf",
+            "hf"
+          ],
+          "member_roles": [
+            null,
+            null
+          ],
+          "reference": "hf",
+          "crossovers_hz": [
+            300.0
+          ],
+          "channels": {
+            "lf": {
+              "hp": null,
+              "lp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "gain_db": -3.0,
+              "gain_mode": "manual",
+              "gain_auto_db": -3.248279207653127,
+              "delay_ms": 0.2,
+              "delay_mode": "manual",
+              "delay_auto_ms": 0.0,
+              "inverted": false,
+              "invert_mode": "auto",
+              "gain_max_db": null,
+              "max_limit": null,
+              "max_limit_hz": null,
+              "max_limit_at_band_edge": false
+            },
+            "hf": {
+              "hp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "lp": null,
+              "gain_db": 0.0,
+              "gain_mode": "manual",
+              "gain_auto_db": 3.248279207653127,
+              "delay_ms": 0.0,
+              "delay_mode": "manual",
+              "delay_auto_ms": 0.0,
+              "inverted": false,
+              "invert_mode": "auto",
+              "gain_max_db": null,
+              "max_limit": null,
+              "max_limit_hz": null,
+              "max_limit_at_band_edge": false
+            }
+          },
+          "pairs": {
+            "lf-hf": {
+              "eval_hz": 300.0,
+              "fit_residual_deg": 0.0,
+              "fit_delay_ms": 0.0,
+              "phase_error_at_fc_deg": -21.60000000000003,
+              "reverse_null_db": -11.80763078080214,
+              "points": 3
+            }
+          },
+          "level_match": {
+            "enabled": false,
+            "target_db": null,
+            "medians_db": {},
+            "gains_db": {
+              "lf": -3.0,
+              "hf": 0.0
+            }
+          },
+          "align": false,
+          "reference_angle_degrees": 0.0,
+          "delays_ms": {
+            "lf": 0.2,
+            "hf": 0.0
+          },
+          "gains_db": {
+            "lf": -3.0,
+            "hf": 0.0
+          },
+          "pair_eval_hz": {
+            "lf-hf": 300.0
+          },
+          "weight_convention": "weights defined in engineering exp(+jwt); applied to exp(+ikr) solver fields as complex conjugates",
+          "warnings": [
+            "pair lf-hf: only 1 solved frequencies lie in the +/-1/3-octave window around 300 Hz; the alignment delay is fitted over the whole overlap region instead and may pick the wrong cycle"
+          ]
+        },
+        "solver_backend": "metal",
+        "engine": "hornlab-metal-bem",
+        "recombined": true,
+        "warnings": [],
+        "warning_count": 0,
+        "failures": [],
+        "failure_count": 0,
+        "partial_success": false,
+        "spl_on_axis": {
+          "requested_angle_degrees": 0.0,
+          "sampled_angle_degrees": 0.0,
+          "plane_reference_spl_db": {
+            "horizontal": [
+              103.95794360506925,
+              102.45950004545563,
+              101.15101828883991
+            ]
+          }
+        },
+        "observation": {
+          "requested_distance_m": 2.0,
+          "effective_distance_m": 2.0,
+          "adjusted": false,
+          "observation_origin": "throat",
+          "sound_speed_m_per_s": 343.0
+        },
+        "directivity": {
+          "angle_range_degrees": [
+            0.0,
+            180.0
+          ],
+          "sample_count": 37,
+          "angular_step_degrees": 5.0,
+          "requested_angular_step_degrees": null,
+          "resolved_grid": {
+            "start": 0.0,
+            "end": 180.0,
+            "count": 37,
+            "step": 5.0
+          },
+          "enabled_axes": [
+            "horizontal"
+          ],
+          "planes": [
+            {
+              "id": "horizontal",
+              "phi_degrees": 0.0
+            }
+          ],
+          "normalization_angle_degrees": 5.0,
+          "diagonal_angle_degrees": 45.0,
+          "observation_origin": "throat",
+          "requested_distance_m": 2.0,
+          "effective_distance_m": 2.0,
+          "sound_speed_m_per_s": 343.0
+        },
+        "directivity_index": {
+          "available": false,
+          "definition": "10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)",
+          "method": "unavailable",
+          "domain": "full_sphere",
+          "power_average": "linear_mean_square_pressure",
+          "planes_used": [],
+          "opposing_orbit_sides": "not_applicable",
+          "rear_hemisphere": "sampled"
+        },
+        "result_contract_version": 1,
+        "phase_quantity": "raw_wrapped_pressure_phase",
+        "phase_units": "degrees",
+        "impedance_units": "Z/(rho*c)",
+        "impedance_quantity": "specific_acoustic_impedance",
+        "impedance_drive": "unit_acceleration",
+        "source_motion": "normal",
+        "quadrants": 1234,
+        "frequency_spacing": "explicit",
+        "frequency_source": "explicit_list",
+        "verbose": false,
+        "balloon_sampling": {
+          "requested": false,
+          "configured": false,
+          "available": false,
+          "status": "disabled"
+        },
+        "impedance_omitted": "combined channel: member drives differ; no single impedance exists",
+        "power_qualification": {
+          "version": 1,
+          "status": "unknown",
+          "evaluated": "solve",
+          "threshold_db": 0.5,
+          "validity_max_hz": null,
+          "frequency_status": [
+            "qualified",
+            "qualified",
+            "qualified"
+          ],
+          "frequency_reasons": [
+            null,
+            null,
+            null
+          ],
+          "unqualified_ranges": [],
+          "reasons": [],
+          "unknown_reason": "member_unknown",
+          "worst": null,
+          "provenance": {
+            "engine": "metal",
+            "package": "hornlab-metal-bem",
+            "formulation": null,
+            "complex_k_shift": null,
+            "package_version": null,
+            "solver_pin": null,
+            "missing": [
+              "formulation",
+              "solver_pin"
+            ],
+            "recorded": false
+          },
+          "members": {
+            "lf": "unknown",
+            "hf": "unknown"
+          },
+          "unqualified_channels": [],
+          "message": null
+        }
+      }
+    }
+  },
+  "file": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"hf\",\"source_ids\":[\"hf\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"lf\",\"source_ids\":[\"lf\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":{\"id\":\"combined\",\"members\":[\"lf\",\"hf\"],\"crossovers_hz\":null,\"level_match\":true,\"align\":true,\"reference\":\"hf\",\"channels\":{\"lf\":{\"hp\":null,\"lp\":{\"family\":\"lr\",\"order\":4,\"fc_hz\":300.0},\"gain\":{\"mode\":\"manual\",\"db\":-3.0},\"delay\":{\"mode\":\"manual\",\"ms\":0.2},\"invert\":null},\"hf\":{\"hp\":{\"family\":\"lr\",\"order\":4,\"fc_hz\":300.0},\"lp\":null,\"gain\":{\"mode\":\"manual\",\"db\":0.0},\"delay\":{\"mode\":\"manual\",\"ms\":0.0},\"invert\":null}}},\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":null,\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,300.0,500.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[0.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":true,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "hf",
+            "source_ids": [
+              "hf"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "lf",
+            "source_ids": [
+              "lf"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": {
+          "id": "combined",
+          "members": [
+            "lf",
+            "hf"
+          ],
+          "crossovers_hz": null,
+          "level_match": true,
+          "align": true,
+          "reference": "hf",
+          "channels": {
+            "lf": {
+              "hp": null,
+              "lp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "gain": {
+                "mode": "manual",
+                "db": -3.0
+              },
+              "delay": {
+                "mode": "manual",
+                "ms": 0.2
+              },
+              "invert": null
+            },
+            "hf": {
+              "hp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "lp": null,
+              "gain": {
+                "mode": "manual",
+                "db": 0.0
+              },
+              "delay": {
+                "mode": "manual",
+                "ms": 0.0
+              },
+              "invert": null
+            }
+          }
+        },
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": null,
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          300.0,
+          500.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            0.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "a028190dbe13592d9b0b0e1ec86c1ae6581bf52b50202a2fee7669d82f6851a3",
+      "frequencies_hz": "7341554ffb76d5a0e7d8019374acdd73d3799fd8b30341a6d4820de739e1dc29",
+      "observation_angles_deg": "b49ee99e2a1947568c4cea8aa12a2433dd3f72229eace8e9e5f0b42d78aa90d6",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "sphere_theta_deg": "2236b461917f920d96dfa6db0e5e77186cce896a97bd1931d84878d68dc10d23",
+      "sphere_phi_deg": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+      "pressure::hf": "01272a1a351198b453c0462478f7b91f0b75bb1424de568919831fbd205dcbd6",
+      "sphere::hf": "01272a1a351198b453c0462478f7b91f0b75bb1424de568919831fbd205dcbd6",
+      "metadata::hf": "2de3c2d7f7acf89a8ce524ec37f86bdd0b14b5ac03e85529e65d9bea5ba87635",
+      "pressure::lf": "f5a9165f9a4852698b1b7bd7512f2f602da6b2688a9a4106be78a67455a7b044",
+      "sphere::lf": "f5a9165f9a4852698b1b7bd7512f2f602da6b2688a9a4106be78a67455a7b044",
+      "metadata::lf": "23247483120a2c2afbb9d64a397f0145b472a83c7d40b589246e5b5c1781898c"
+    },
+    "combined": {
+      "result_kind": "parametric",
+      "result_contract_version": 1,
+      "frequencies": [
+        100.0,
+        300.0,
+        500.0
+      ],
+      "directivity": {
+        "horizontal": [
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              10.0,
+              0.0
+            ]
+          ],
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              10.0,
+              0.0
+            ]
+          ],
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              10.0,
+              0.0
+            ]
+          ]
+        ]
+      },
+      "directivity_phase": {
+        "horizontal": [
+          [
+            [
+              0.0,
+              126.44957696549544
+            ],
+            [
+              10.0,
+              126.44957696549544
+            ]
+          ],
+          [
+            [
+              0.0,
+              -103.88418869890414
+            ],
+            [
+              10.0,
+              -103.88418869890414
+            ]
+          ],
+          [
+            [
+              0.0,
+              -37.14914625613469
+            ],
+            [
+              10.0,
+              -37.14914625613469
+            ]
+          ]
+        ]
+      },
+      "spl_on_axis": {
+        "frequencies": [
+          100.0,
+          300.0,
+          500.0
+        ],
+        "spl": [
+          103.95794360506925,
+          102.45950004545563,
+          101.15101828883991
+        ],
+        "phase_degrees": [
+          126.44957696549544,
+          -103.88418869890414,
+          -37.14914625613469
+        ]
+      },
+      "di": {
+        "frequencies": [
+          100.0,
+          300.0,
+          500.0
+        ],
+        "di": [
+          null,
+          null,
+          null
+        ]
+      },
+      "metadata": {
+        "solver_mode": "full_3d",
+        "geometry_type": "imported",
+        "drive_channel_id": "combined",
+        "derived_from_channels": [
+          "lf",
+          "hf"
+        ],
+        "source_ids": [
+          "lf",
+          "hf"
+        ],
+        "phase_time_convention": "exp(+ikr)",
+        "combine": {
+          "type": "filtered_time_aligned_sum",
+          "members": [
+            "lf",
+            "hf"
+          ],
+          "member_roles": [
+            null,
+            null
+          ],
+          "reference": "hf",
+          "crossovers_hz": [
+            300.0
+          ],
+          "channels": {
+            "lf": {
+              "hp": null,
+              "lp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "gain_db": -3.0,
+              "gain_mode": "manual",
+              "gain_auto_db": -3.248279207653127,
+              "delay_ms": 0.2,
+              "delay_mode": "manual",
+              "delay_auto_ms": 0.0,
+              "inverted": false,
+              "invert_mode": "auto",
+              "gain_max_db": null,
+              "max_limit": null,
+              "max_limit_hz": null,
+              "max_limit_at_band_edge": false
+            },
+            "hf": {
+              "hp": {
+                "family": "lr",
+                "order": 4,
+                "fc_hz": 300.0
+              },
+              "lp": null,
+              "gain_db": 0.0,
+              "gain_mode": "manual",
+              "gain_auto_db": 3.248279207653127,
+              "delay_ms": 0.0,
+              "delay_mode": "manual",
+              "delay_auto_ms": 0.0,
+              "inverted": false,
+              "invert_mode": "auto",
+              "gain_max_db": null,
+              "max_limit": null,
+              "max_limit_hz": null,
+              "max_limit_at_band_edge": false
+            }
+          },
+          "pairs": {
+            "lf-hf": {
+              "eval_hz": 300.0,
+              "fit_residual_deg": 0.0,
+              "fit_delay_ms": 0.0,
+              "phase_error_at_fc_deg": -21.60000000000003,
+              "reverse_null_db": -11.80763078080214,
+              "points": 3
+            }
+          },
+          "level_match": {
+            "enabled": false,
+            "target_db": null,
+            "medians_db": {},
+            "gains_db": {
+              "lf": -3.0,
+              "hf": 0.0
+            }
+          },
+          "align": false,
+          "reference_angle_degrees": 0.0,
+          "delays_ms": {
+            "lf": 0.2,
+            "hf": 0.0
+          },
+          "gains_db": {
+            "lf": -3.0,
+            "hf": 0.0
+          },
+          "pair_eval_hz": {
+            "lf-hf": 300.0
+          },
+          "weight_convention": "weights defined in engineering exp(+jwt); applied to exp(+ikr) solver fields as complex conjugates",
+          "warnings": [
+            "pair lf-hf: only 1 solved frequencies lie in the +/-1/3-octave window around 300 Hz; the alignment delay is fitted over the whole overlap region instead and may pick the wrong cycle"
+          ]
+        },
+        "solver_backend": "metal",
+        "engine": "hornlab-metal-bem",
+        "recombined": true,
+        "warnings": [],
+        "warning_count": 0,
+        "failures": [],
+        "failure_count": 0,
+        "partial_success": false,
+        "spl_on_axis": {
+          "requested_angle_degrees": 0.0,
+          "sampled_angle_degrees": 0.0,
+          "plane_reference_spl_db": {
+            "horizontal": [
+              103.95794360506925,
+              102.45950004545563,
+              101.15101828883991
+            ]
+          }
+        },
+        "observation": {
+          "requested_distance_m": 2.0,
+          "effective_distance_m": 2.0,
+          "adjusted": false,
+          "observation_origin": "throat",
+          "sound_speed_m_per_s": 343.0
+        },
+        "directivity": {
+          "angle_range_degrees": [
+            0.0,
+            180.0
+          ],
+          "sample_count": 37,
+          "angular_step_degrees": 5.0,
+          "requested_angular_step_degrees": null,
+          "resolved_grid": {
+            "start": 0.0,
+            "end": 180.0,
+            "count": 37,
+            "step": 5.0
+          },
+          "enabled_axes": [
+            "horizontal"
+          ],
+          "planes": [
+            {
+              "id": "horizontal",
+              "phi_degrees": 0.0
+            }
+          ],
+          "normalization_angle_degrees": 5.0,
+          "diagonal_angle_degrees": 45.0,
+          "observation_origin": "throat",
+          "requested_distance_m": 2.0,
+          "effective_distance_m": 2.0,
+          "sound_speed_m_per_s": 343.0
+        },
+        "directivity_index": {
+          "available": false,
+          "definition": "10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)",
+          "method": "unavailable",
+          "domain": "full_sphere",
+          "power_average": "linear_mean_square_pressure",
+          "planes_used": [],
+          "opposing_orbit_sides": "not_applicable",
+          "rear_hemisphere": "sampled"
+        },
+        "result_contract_version": 1,
+        "phase_quantity": "raw_wrapped_pressure_phase",
+        "phase_units": "degrees",
+        "impedance_units": "Z/(rho*c)",
+        "impedance_quantity": "specific_acoustic_impedance",
+        "impedance_drive": "unit_acceleration",
+        "source_motion": "normal",
+        "quadrants": 1234,
+        "frequency_spacing": "explicit",
+        "frequency_source": "explicit_list",
+        "verbose": false,
+        "balloon_sampling": {
+          "requested": false,
+          "configured": false,
+          "available": false,
+          "status": "disabled"
+        },
+        "impedance_omitted": "combined channel: member drives differ; no single impedance exists",
+        "power_qualification": {
+          "version": 1,
+          "status": "unknown",
+          "evaluated": "solve",
+          "threshold_db": 0.5,
+          "validity_max_hz": null,
+          "frequency_status": [
+            "qualified",
+            "qualified",
+            "qualified"
+          ],
+          "frequency_reasons": [
+            null,
+            null,
+            null
+          ],
+          "unqualified_ranges": [],
+          "reasons": [],
+          "unknown_reason": "member_unknown",
+          "worst": null,
+          "provenance": {
+            "engine": "metal",
+            "package": "hornlab-metal-bem",
+            "formulation": null,
+            "complex_k_shift": null,
+            "package_version": null,
+            "solver_pin": null,
+            "missing": [
+              "formulation",
+              "solver_pin"
+            ],
+            "recorded": false
+          },
+          "members": {
+            "lf": "unknown",
+            "hf": "unknown"
+          },
+          "unqualified_channels": [],
+          "message": null
+        }
+      }
+    }
+  }
+}

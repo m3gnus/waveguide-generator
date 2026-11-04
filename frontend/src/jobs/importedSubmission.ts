@@ -189,18 +189,21 @@ export function exteriorModeBlocker(state: Parameters<typeof combineWire>[0] & P
   label: (id: string) => string = id => id): string | null {
   if (!state.driveChannels.some(channel => channel.exterior_transducer)) return null;
   const fem = !state.exteriorOnly && (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0;
-  const engines = fem ? ['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] : ['beat-cpu', 'beat-metal'];
-  if (!engines.includes(solveStore.engine)) return fem
-    ? 'Choose Auto or BEAT CPU, Metal, CUDA or ROCm for FEM drivers.'
-    : 'Choose BEAT CPU or BEAT Metal for coupled exterior drivers.';
-  if (!fem && state.driveChannels.some(channel => !channel.exterior_transducer)) return 'Enable the BEAT driver model on every channel in this solve.';
+  const policy = resolveExteriorDriverPolicy(state.driveChannels, solveStore, 'block', fem);
+  if (policy.blocker) return policy.blocker;
+  if (!policy.coupled) return null;
+  if (!fem && state.driveChannels.some(channel => !channel.source_ids.length)) {
+    return 'Assign source faces to every exterior channel, or include the FEM regions for FEM-only sources.';
+  }
   for (const channel of state.driveChannels) {
     if (!channel.exterior_transducer) continue;
     const error = exteriorTransducerError(channel.exterior_transducer);
     if (error) return `${label(channel.id)}: ${error}`;
     if (channel.motion !== 'axial') return `${label(channel.id)}: coupled exterior drivers require axial motion.`;
   }
-  if (combineWire(state)) return 'Turn off the crossover combination for coupled exterior drivers.';
+  if (Object.values(combineWire(state)?.channels ?? {}).some(channel => channel.gain?.mode === 'max')) {
+    return 'Choose automatic or manual crossover gain for coupled exterior drivers; maximum-output gain is unavailable.';
+  }
   if (state.passiveCardioid.enabled || state.maxDriveVoltageV !== null || solveStore.adaptiveFrequencySampling || solveStore.groundPlane.enabled) {
     return 'Coupled exterior drivers require cardioid, voltage ceiling, adaptive sampling, mesh ladder and ground plane off.';
   }
@@ -313,8 +316,9 @@ export function incompleteDriverBlocker(state: Pick<SimulationData, 'driveChanne
 }
 
 /** Channel physics has one wire owner for CAD and file inputs. */
-export function simulationDriverGeometry(state: Pick<SimulationData, 'driveChannels' | 'channelDrivers' | 'driveVoltageV' | 'maxDriveVoltageV'>, retained?: ImportedSetup['geometry']): Pick<ImportedSetup['geometry'], 'drive_channels' | 'drive_voltage_v' | 'max_drive_voltage_v'> {
+export function simulationDriverGeometry(state: Pick<SimulationData, 'driveChannels' | 'channelDrivers' | 'driveVoltageV' | 'maxDriveVoltageV'>, retained?: ImportedSetup['geometry']): Pick<ImportedSetup['geometry'], 'drive_channels' | 'drive_voltage_v' | 'max_drive_voltage_v' | 'excitation_normalization'> {
   return {
+      excitation_normalization: retained?.excitation_normalization ?? 'acceleration_legacy',
       drive_channels: state.driveChannels.map((channel) => {
         const driver = submittedDriver(state, channel);
         return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
@@ -367,9 +371,11 @@ export function resolveCadImportedSetup(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
 ): ImportedSetup {
-  const { drivers, effects } = simulationGeometry(state, state.selectedBundle?.sources ?? [], cadPassiveCardioidTopology(state));
   const nativeError = exteriorModeBlocker(state, solveStore);
   if (nativeError) throw new Error(nativeError);
+  const fem = !state.exteriorOnly && (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0;
+  const policy = resolveExteriorDriverPolicy(state.driveChannels, solveStore, 'block', fem);
+  const { drivers, effects } = simulationGeometry({ ...state, driveChannels: policy.channels }, state.selectedBundle?.sources ?? [], cadPassiveCardioidTopology(state));
   const options = solveStore.options() as ImportedSolveSubmission['options'];
   if (solveStore.frequencyMode === 'range') {
     options.frequency_range = [state.frequencyStartHz, state.frequencyEndHz];
@@ -415,21 +421,40 @@ export function buildImportedSubmission(
   return bindImportedSetup(record, setup, blockingFindingWire(record));
 }
 
-/** Engines whose imported solve couples exterior drivers (BEAT v3 CPU and Metal). */
-const COUPLED_DRIVER_ENGINES = new Set(['auto', 'beat-cpu', 'beat-metal']);
-
 type AssemblyDriverOptions = Pick<ImportedSolveSubmission['options'], 'engine' | 'adaptive_frequency_sampling' | 'ground_plane'>;
 
-/** Whether this engine choice solves an assembly's woofer drivers, voltage-driven. */
-export function assemblyEngineCouplesDrivers(options: Pick<AssemblyDriverOptions, 'engine'>): boolean {
-  return COUPLED_DRIVER_ENGINES.has(String(options.engine ?? 'auto'));
+type UnsupportedDriverPolicy = 'block' | 'fixed_velocity';
+// Owner decision pending: set this to 'block' or 'fixed_velocity' to unify
+// every adapter. 'requested' preserves the existing requested fallback intent.
+const UNSUPPORTED_ENGINE_DRIVERS: UnsupportedDriverPolicy | 'requested' = 'requested';
+
+/** One capability/policy owner. The caller states the requested fallback,
+ * never a geometry producer. Fixed velocity has already been the assembly
+ * adapter's contract; CAD/file requests continue to ask for coupled drivers. */
+export function resolveExteriorDriverPolicy(channels: CadDriveChannel[], options: Pick<AssemblyDriverOptions, 'engine'>,
+  requested: UnsupportedDriverPolicy = 'block', fem = false): {
+    coupled: boolean; channels: CadDriveChannel[]; blocker: string | null; notice: string | null;
+  } {
+  const engine = String(options.engine ?? 'auto');
+  const coupled = (fem ? ['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] : ['auto', 'beat-cpu', 'beat-metal']).includes(engine);
+  const policy = UNSUPPORTED_ENGINE_DRIVERS === 'requested' ? requested : UNSUPPORTED_ENGINE_DRIVERS;
+  const unsupported = channels.some(channel => channel.exterior_transducer) && !coupled;
+  const fixed = unsupported && policy === 'fixed_velocity';
+  return {
+    coupled,
+    channels: fixed ? channels.map(({ exterior_transducer: _driver, exterior_driver_inputs: _inputs, ...channel }) => channel) : channels,
+    blocker: unsupported && !fixed ? (fem
+      ? 'Choose Auto or BEAT CPU, Metal, CUDA or ROCm for FEM drivers.'
+      : 'Choose BEAT CPU or BEAT Metal for coupled exterior drivers.') : null,
+    notice: fixed
+      ? 'This engine solves every woofer at fixed velocity (1 m/s RMS), without its driver. To solve the drivers, set Advanced backend under Solver to Automatic, BEAT CPU or BEAT Metal.'
+      : null,
+  };
 }
 
 /** What an engine that cannot couple drivers does with them instead, said before Solve and with it. */
 export function assemblyDriverNotice(state: Pick<SimulationData, 'driveChannels'>, options: Pick<AssemblyDriverOptions, 'engine'>): string | null {
-  return state.driveChannels.some(channel => channel.exterior_transducer) && !assemblyEngineCouplesDrivers(options)
-    ? 'This engine solves every woofer at fixed velocity (1 m/s RMS), without its driver. To solve the drivers, set Advanced backend under Solver to Automatic, BEAT CPU or BEAT Metal.'
-    : null;
+  return resolveExteriorDriverPolicy(state.driveChannels, options, 'fixed_velocity').notice;
 }
 
 /**
@@ -440,7 +465,9 @@ export function assemblyDriverNotice(state: Pick<SimulationData, 'driveChannels'
 export function assemblyDriverBlocker(state: Pick<SimulationData, 'driveChannels'>, options: AssemblyDriverOptions,
   label: (id: string) => string = id => id): string | null {
   const driven = state.driveChannels.filter(channel => channel.exterior_transducer);
-  if (!driven.length || !assemblyEngineCouplesDrivers(options)) return null;
+  const policy = resolveExteriorDriverPolicy(state.driveChannels, options, 'fixed_velocity');
+  if (policy.blocker) return policy.blocker;
+  if (!driven.length || !policy.coupled) return null;
   for (const channel of driven) {
     const error = exteriorTransducerError(channel.exterior_transducer!);
     if (error) return `${label(channel.id)} needs its driver: ${error} Pick one from the library or enter its values under Drivers in Simulation, or set the woofer to Fixed velocity.`;
@@ -471,10 +498,10 @@ export function resolveAssemblySetup(
   sweep: { f1: number; f2: number; num_frequencies: number },
   label?: (id: string) => string,
 ): AssemblySetupResolution {
-  const coupled = assemblyEngineCouplesDrivers(options);
+  const policy = resolveExteriorDriverPolicy(state.driveChannels, options, 'fixed_velocity');
   const blocker = assemblyDriverBlocker(state, options, label);
   if (blocker) throw new Error(blocker);
-  const physics = coupled ? state : { ...state, driveChannels: state.driveChannels.map(({ exterior_transducer: _driver, ...channel }) => channel) };
+  const physics = { ...state, driveChannels: policy.channels };
   const { drivers, effects } = simulationGeometry(physics, state.sources, null);
   const processing = new Map((assembly.signal_groups ?? []).flatMap(group => group.members.map(member => [member.radiator_id, {
     weight: member.weight ?? 1, delay_ms: member.delay_ms ?? 0, invert: member.invert ?? false,
@@ -492,10 +519,12 @@ export function resolveAssemblySetup(
     setup: {
       geometry: {
         ...drivers, required_features: ['wg-design-assembly-v1'],
+        excitation_normalization: 'rms_velocity',
+        excitation_normalization_by_engine: { bempp: 'acceleration_legacy' },
         driver_groups: groups, skipped_source_ids: [], exterior_only: false, ...effects,
       },
       options: resolvedOptions,
     },
-    notice: assemblyDriverNotice(state, options),
+    notice: policy.notice,
   };
 }

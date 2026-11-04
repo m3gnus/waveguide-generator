@@ -193,6 +193,44 @@ class _RecordingBempp:
         return result
 
 
+def test_legacy_assembly_bempp_preserves_acceleration_bases(monkeypatch):
+    """Characterized before P6: BEMPP never applied the assembly RMS conversion."""
+    package = _RecordingBempp()
+    _install(monkeypatch, package)
+    request = _request(required_features=["wg-design-assembly-v1"])
+    result = bempp_imported.solve_imported_bempp_from_msh_text(MESH, request, _record())
+    bases = deserialize_channel_bases(result["_channel_bases_npz"])
+    for index, name in enumerate(bases["channel_ids"], 1):
+        np.testing.assert_array_equal(bases["results_by_id"][name].pressure_complex,
+                                      np.full((3, 1, 3), 20e-6 * index, dtype=complex))
+
+
+@pytest.mark.parametrize("normalization,override", [
+    ("rms_velocity", None), ("rms_velocity", "acceleration_legacy"),
+    ("acceleration_legacy", "rms_velocity"),
+])
+def test_explicit_bempp_normalization_and_engine_override(monkeypatch, normalization, override):
+    package = _RecordingBempp()
+    _install(monkeypatch, package)
+    geometry = {"excitation_normalization": normalization}
+    if override:
+        geometry["excitation_normalization_by_engine"] = {"bempp": override}
+    request = _request(**geometry)
+    streamed = []
+    result = _solve(request, _record(), streamed)
+    bases = deserialize_channel_bases(result["_channel_bases_npz"])
+    rms = (override or normalization) == "rms_velocity"
+    scale = -2j * np.pi * np.array([100., 500., 1000.]) if rms else np.ones(3)
+    for index, name in enumerate(bases["channel_ids"], 1):
+        expected = np.full((3, 1, 3), 20e-6 * index, dtype=complex) * scale[:, None, None]
+        np.testing.assert_array_equal(bases["results_by_id"][name].pressure_complex, expected)
+        with np.load(io.BytesIO(result["_channel_bases_npz"]), allow_pickle=False) as archive:
+            metadata = json.loads(archive[f"metadata::{name}"].item())
+        assert metadata["source_normalization"] == ("native_rms_velocity" if rms else "unit_normal_acceleration")
+    assert result["channels"]["right"]["metadata"]["impedance_drive"] == ("rms_velocity" if rms else "unit_acceleration")
+    assert streamed[0][1]["channels"]["left"]["spl_on_axis"]["spl"][0] == result["channels"]["left"]["spl_on_axis"]["spl"][0]
+
+
 def _install(monkeypatch: pytest.MonkeyPatch, package: _RecordingBempp, status: dict[str, Any] | None = None) -> None:
     # The real configuration classes; only the sweep and the probe stand in.
     assert bempp._load_api(), "hornlab-bempp-bem must import for these tests"

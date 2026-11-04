@@ -7594,6 +7594,42 @@
             ],
             "title": "Driver Groups"
           },
+          "excitation_normalization": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rms_velocity",
+                  "acceleration_legacy"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excitation Normalization"
+          },
+          "excitation_normalization_by_engine": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "enum": [
+                    "rms_velocity",
+                    "acceleration_legacy"
+                  ],
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "const": "bempp"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excitation Normalization By Engine"
+          },
           "exterior_only": {
             "default": false,
             "title": "Exterior Only",

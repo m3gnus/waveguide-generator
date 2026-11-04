@@ -5189,6 +5189,12 @@ export interface components {
             drive_voltage_v?: number;
             /** Driver Groups */
             driver_groups?: components["schemas"]["DriverGroup"][] | null;
+            /** Excitation Normalization */
+            excitation_normalization?: ("rms_velocity" | "acceleration_legacy") | null;
+            /** Excitation Normalization By Engine */
+            excitation_normalization_by_engine?: {
+                [key: string]: "rms_velocity" | "acceleration_legacy";
+            } | null;
             /**
              * Exterior Only
              * @default false

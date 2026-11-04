@@ -109,6 +109,9 @@ export interface SolveSubmissionMetadata { label: string; designRevision: number
 export interface ImportedGeometrySubmission {
   type: 'imported';
   required_features?: string[];
+  excitation_normalization?: 'rms_velocity' | 'acceleration_legacy';
+  /** Preserve backend conventions when Auto selects a different engine. */
+  excitation_normalization_by_engine?: { bempp?: 'rms_velocity' | 'acceleration_legacy' };
   ingest_id: string;
   manifest_sha256: string;
   artifact_sha256: string;

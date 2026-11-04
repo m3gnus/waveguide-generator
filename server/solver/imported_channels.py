@@ -197,6 +197,7 @@ def channel_basis_metadata(
     source_tags: Mapping[str, Any],
     driver_payloads: Mapping[str, Any],
     axial_identity: Mapping[str, Mapping[str, Any]] | None = None,
+    *, engine: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Describe the drive domain retained beside each complex channel basis.
 
@@ -215,7 +216,12 @@ def channel_basis_metadata(
             "source_normalization": (
                 "voltage_driven_driver_lem"
                 if channel.id in driver_payloads
-                else "native_rms_velocity" if geometry.design_assembly else "unit_normal_acceleration"
+                else "native_rms_velocity" if geometry.normalization_for_engine(
+                    # Preserve even the legacy BEMPP basis label on replay;
+                    # explicit requests describe their actual backend basis.
+                    engine if (geometry.excitation_normalization is not None
+                               or geometry.excitation_normalization_by_engine is not None) else None
+                ) == "rms_velocity" else "unit_normal_acceleration"
             ),
         }
         if channel.patch_weights is not None:
@@ -299,15 +305,15 @@ def scale_channel_result(result: Any, scale: np.ndarray) -> None:
             )
 
 
-def normalize_assembly_prescribed_result(result: Any, geometry: ImportedGeometrySource) -> None:
-    """Assembly prescribed channels use 1 m/s RMS on every backend and driver route.
+def normalize_prescribed_result(result: Any, geometry: ImportedGeometrySource, *, engine: str | None = None) -> None:
+    """Convert acceleration bases to the requested prescribed normalization.
 
     The legacy imported solvers return pressure per unit acceleration under
     exp(-jwt). Undo that velocity factor once; ordinary CAD/file bases keep
     their established acceleration normalization.
     """
 
-    if not geometry.design_assembly:
+    if geometry.normalization_for_engine(engine) != "rms_velocity":
         return
     scale = -2j * np.pi * np.asarray(result.frequencies_hz, dtype=float)
     scale_channel_result(result, scale)
@@ -316,11 +322,11 @@ def normalize_assembly_prescribed_result(result: Any, geometry: ImportedGeometry
         result.impedance = np.asarray(impedance) * scale
 
 
-def assembly_prescribed_entry(entry: Mapping[str, Any], frequency_hz: float,
-                              geometry: ImportedGeometrySource) -> dict[str, Any]:
+def prescribed_entry(entry: Mapping[str, Any], frequency_hz: float,
+                              geometry: ImportedGeometrySource, *, engine: str | None = None) -> dict[str, Any]:
     """Apply the same basis conversion to a provisional single-frequency row."""
 
-    if not geometry.design_assembly:
+    if geometry.normalization_for_engine(engine) != "rms_velocity":
         return dict(entry)
     fields = {"observation_pressure_complex": "pressure_complex",
               "observation_sphere_pressure_complex": "sphere_pressure_complex",
@@ -328,5 +334,10 @@ def assembly_prescribed_entry(entry: Mapping[str, Any], frequency_hz: float,
     native = SimpleNamespace(frequencies_hz=[frequency_hz], **{
         target: np.asarray(entry[source])[None, ...]
         for source, target in fields.items() if entry.get(source) is not None})
-    normalize_assembly_prescribed_result(native, geometry)
+    normalize_prescribed_result(native, geometry, engine=engine)
     return {**entry, **{source: getattr(native, target)[0] for source, target in fields.items() if hasattr(native, target)}}
+
+
+# Compatibility names for callers of the original conversion helper.
+normalize_assembly_prescribed_result = normalize_prescribed_result
+assembly_prescribed_entry = prescribed_entry

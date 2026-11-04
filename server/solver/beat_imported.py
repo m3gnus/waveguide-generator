@@ -47,12 +47,12 @@ from .imported import (
 )
 from .imported_channels import (
     apply_channel_driver,
-    assembly_prescribed_entry,
+    prescribed_entry,
     channel_basis_metadata,
     channel_source_identity,
     imported_validity_metadata,
     prepare_imported_solve_facts,
-    normalize_assembly_prescribed_result,
+    normalize_prescribed_result,
 )
 from .result_mapping import (
     build_provisional_frequency_response,
@@ -210,7 +210,7 @@ def _combined_channel_response(
                 native_plane=native_plane,
                 merged_tags=None,
                 result=combined_result,
-                velocity_rms=geometry.design_assembly,
+                velocity_rms=geometry.uses_rms_velocity,
             ),
         }
 
@@ -399,7 +399,7 @@ def solve_imported_beat_from_msh_text(
         ) -> bool:
             if result_callback is None:
                 return True
-            entry = assembly_prescribed_entry(entry, frequency_hz, geometry)
+            entry = prescribed_entry(entry, frequency_hz, geometry)
             pressure = np.asarray(
                 entry.get("observation_pressure_complex"), dtype=np.complex128
             )
@@ -498,7 +498,7 @@ def solve_imported_beat_from_msh_text(
                         return
                     from copy import copy
                     native = copy(native)
-                    normalize_assembly_prescribed_result(native, geometry)
+                    normalize_prescribed_result(native, geometry)
                     snapshot = build_solver_response(
                         result=native,
                         config=config,
@@ -603,7 +603,7 @@ def solve_imported_beat_from_msh_text(
 
     driver_payloads: dict[str, dict[str, Any]] = {}
     for result in sorted_results.values():
-        normalize_assembly_prescribed_result(result, geometry)
+        normalize_prescribed_result(result, geometry)
     for channel in geometry.drive_channels:
         if channel.id not in sorted_results:
             continue
@@ -639,7 +639,7 @@ def solve_imported_beat_from_msh_text(
             _native_result_callback(channel.id, result)
         channel_metadata = {
             **({"source_normalization": "native_rms_velocity",
-                "drive": {"velocity_rms_m_per_s": 1.0, "motion": channel.motion}} if geometry.design_assembly else {}),
+                "drive": {"velocity_rms_m_per_s": 1.0, "motion": channel.motion}} if geometry.uses_rms_velocity else {}),
             "solver_backend": "beat",
             "solver_mode": "full_3d",
             "geometry_type": "imported",
@@ -678,7 +678,7 @@ def solve_imported_beat_from_msh_text(
                 merged_tags=sorted(channel_tags[channel.id]),
                 result=result,
                 precision=precision,
-                velocity_rms=geometry.design_assembly,
+                velocity_rms=geometry.uses_rms_velocity,
             ),
         }
         channel_response = build_solver_response(
@@ -689,7 +689,7 @@ def solve_imported_beat_from_msh_text(
             metadata=channel_metadata,
             sound_speed_m_per_s=(343.0),
         )
-        if geometry.design_assembly:
+        if geometry.uses_rms_velocity:
             channel_response["metadata"]["impedance_drive"] = "rms_velocity"
         if len(channel.source_ids) > 1:
             channel_response.pop("impedance", None)

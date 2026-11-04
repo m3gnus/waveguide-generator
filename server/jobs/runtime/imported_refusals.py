@@ -323,17 +323,18 @@ def _imported_request_refusal(
     if not coupled_regions and any(c.exterior_transducer is not None for c in request.geometry.drive_channels):
         # The engine choice is refused by the shared selection policy,
         # never here: the planner applies this refusal to every engine's verdict.
-        # A compiled design assembly solves its prescribed sources beside its
-        # drivers in one coupled request; other returns still need FEM regions.
-        if not request.geometry.design_assembly and not all(
-            c.exterior_transducer is not None for c in request.geometry.drive_channels
-        ):
-            return "exterior_transducer_mixed_channels", "Exterior-only transducer jobs require a model on every drive channel; mixed drives require FEM regions"
         if any(not c.source_ids for c in request.geometry.drive_channels):
             return "exterior_transducer_missing_source", "An exterior-only transducer needs painted source faces; a FEM-only driver requires FEM regions"
     if coupled_regions:
         from server.solver.coupled_admission import fem_request_problem
 
+        # FEM retains its separate unit-acceleration contract. Do not accept a
+        # new explicit RMS request and silently return an acceleration basis.
+        if (request.geometry.excitation_normalization == "rms_velocity"
+                and any(c.exterior_transducer is None for c in request.geometry.drive_channels)):
+            return ("fem_excitation_normalization_unsupported",
+                    "FEM prescribed sources require legacy acceleration. Set excitation_normalization "
+                    "to acceleration_legacy, or choose exterior-only to use RMS velocity.")
         problem = fem_request_problem(
             record, request.geometry.drive_channels,
             ground=request.options.ground_plane.enabled,
