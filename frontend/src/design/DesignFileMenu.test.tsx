@@ -1957,3 +1957,16 @@ it.each(['STEP solid', 'STEP inner surface'])('shows stages and Stop for a long 
     expect(fetcher.mock.calls.some(([url]) => /write-export|client-errors/.test(String(url)))).toBe(false);
   } finally { vi.useRealTimers(); activityStore.reset(); }
 });
+
+it('shows the LOOKUP outcome before collapsed measurement and limit details', () => {
+  act(() => useDesignStore.setState({ loadNotice: 'Close to the original — the inside changes by at most 0.013 mm\nThe rear edge moves by 1.3 mm.\n\nH: 0.013 mm.\nThe wall conversion limit is 0.5 mm.' }));
+  act(() => root.render(<DesignFileMenu />));
+  const notice = container.querySelector('[data-outcome="design-import"]')!;
+  expect(notice.firstElementChild?.textContent).toContain('Close to the original');
+  const details = notice.querySelector('details')!;
+  expect(details.open).toBe(false);
+  expect(details.textContent).toContain('H: 0.013 mm.');
+  expect(details.textContent).toContain('0.5 mm');
+  act(() => details.querySelector('summary')!.click());
+  expect(useDesignStore.getState().loadNotice).not.toBeNull();
+});

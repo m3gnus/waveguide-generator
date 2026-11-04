@@ -833,10 +833,10 @@ describe('ParamPanel inventory UX', () => {
 
   it('keeps the import notice with the app-level owner without a retired family option', () => {
     const loaded = designForFamily('FREEFORM');
-    act(() => useDesignStore.getState().replaceDocument(loaded, { notice: 'Opened as Custom profile. Profile curve unchanged. Largest measured change to the shape: 0.2 mm.' }));
+    act(() => useDesignStore.getState().replaceDocument(loaded, { notice: 'Opened as Custom profile. Profile curve unchanged. Largest measured change to the inside of the horn: 0.2 mm.' }));
     expect(host.querySelector<HTMLSelectElement>('#family')!.value).toBe('FREEFORM');
     expect(host.querySelector('option[value="LOOKUP"]')).toBeNull();
-    expect(useDesignStore.getState().loadNotice).toContain('Largest measured change to the shape: 0.2 mm');
+    expect(useDesignStore.getState().loadNotice).toContain('Largest measured change to the inside of the horn: 0.2 mm');
     expect(host.querySelector('.conversion-notice')).toBeNull();
   });
 
@@ -1295,7 +1295,7 @@ describe('ParamPanel inventory UX', () => {
     const preview = () => host.querySelector('.profile-edit-preview')!;
     await vi.waitFor(() => expect(preview()?.textContent).toContain('Preview: Convert to Custom profile'));
     await vi.waitFor(() => expect(preview().querySelector<HTMLButtonElement>('button')!.disabled).toBe(false));
-    expect(preview().textContent).toContain('Converted with differences.');
+    expect(preview().textContent).toContain('Close to the original — the inside of the horn changes by at most 0.020 mm');
     expect([...preview().querySelectorAll<HTMLButtonElement>('button')].map((button) => button.textContent)).toEqual(['Accept', 'Cancel']);
     expect(preview().querySelector<HTMLButtonElement>('button')!.disabled).toBe(false);
     expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/convert'))).toBe(true);

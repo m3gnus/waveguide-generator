@@ -329,10 +329,16 @@ describe('Custom profile table, insertion, paste and Length', () => {
     commitDraft('Insert H anchor at z', '40');
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="H insertion mode"]')!.value).toBe('exact');
     act(() => button('Add point').click());
-    await vi.waitFor(async () => { await settle(); expect(host.textContent).toContain('Generated profile change'); expect(host.textContent).toContain('largest radius change 0 mm'); });
-    expect(host.textContent).toContain('H: largest curve change 0.125 mm at z = 40 mm over the full profile');
+    await vi.waitFor(async () => { await settle(); expect(host.textContent).toContain('Generated profile change'); expect(host.textContent).toContain('largest radius change 0.000 mm'); });
+    expect(host.textContent).toContain('H: largest curve change 0.125 mm at z = 40.0 mm over the full profile');
     expect(host.textContent).toContain('Checked at 16390 positions along the length. Larger changes between checked positions are possible.');
     expect(host.textContent).toContain('Exact insertion at z = 40 mm in H');
+    const details = host.querySelector<HTMLDetailsElement>('.profile-edit-preview details')!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector('summary')?.textContent).toBe('Measurement details');
+    expect(details.textContent).toContain('Larger changes between checked positions are possible.');
+    expect(details.textContent).toContain('Generated profile change');
+    expect(host.querySelector('.profile-edit-preview p')?.textContent).toContain('Exact insertion');
     const insert = server.mock.calls.find(([url]) => String(url).endsWith('/insert'))!;
     expect(JSON.parse(String(insert[1]?.body))).toMatchObject({ plane: 'H', z_mm: 40, mode: 'exact' });
     expect(serializeDesign(useDesignStore.getState().design)).toEqual(initial);

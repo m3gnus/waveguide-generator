@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 import math
+import re
 from typing import Literal
 
 import numpy as np
@@ -1002,6 +1003,40 @@ def conversion_notice(result: ConvertResponse) -> str:
            'Profile curve unchanged.' if curve < 1e-9 else f'Largest profile curve change: {curve:.6g} mm.')
     limit = ' The profile curve change exceeds the 0.01 mm limit for a match.' if curve > MATCH_MM else ''
     refusal = ' This exceeds the 0.5 mm limit used by Convert current design. The file was opened with the closest fit. Review the shape before using it.' if maximum > REFUSE_MM else ''
-    scope = 'kept ' if removed_lip else ''
-    return (f'Opened as Custom profile. {fit} Largest measured change to the {scope}shape: {maximum:.6g} mm. Larger differences between checked points are possible.'
-            f'{limit}{refusal} ' + ' '.join(f.message for f in report.features))
+    scope = 'kept inside' if removed_lip else 'inside'
+    def mm(value):
+        return f'{value:.3f}' if abs(value) < 1 else f'{value:.1f}'
+    headline = ('Matches the original' if result.verdict == 'match' else
+                f'Close to the original — the {scope} of the horn changes by at most {mm(maximum)} mm')
+    changes = []
+    for feature in report.features:
+        if feature.name == 'Rolled-back lip removed':
+            length = re.search(r'length along the horn was ([\d.e+-]+)', feature.message)
+            changes.append('The curled-back lip at the mouth is removed' +
+                           (f' ({mm(float(length[1]))} mm long).' if length else '.'))
+        elif feature.name == 'Source-cap angle':
+            changes.append('The source surface angle and curvature become fixed values.')
+        elif feature.name == 'Rear construction':
+            movement = re.search(r'rear edge or rear tip: ([\d.e+-]+)', feature.message)
+            changes.append(f'The rear edge or rear tip moves by up to {mm(float(movement[1]))} mm.' if movement else feature.message)
+        else:
+            first = re.split(r'(?<=\.)\s', feature.message)[0]
+            first = first.replace('Outer wall changes', 'The outside of the horn changes')
+            first = re.sub(r'(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?) mm', lambda m: mm(float(m[1]))+' mm', first)
+            changes.append(re.sub(r'(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)°', lambda m: f'{float(m[1]):.1f}°', first))
+    if report.source_cap_angle_before_deg != report.source_cap_angle_after_deg:
+        changes.append(f'The source surface angle changes from {report.source_cap_angle_before_deg:.1f}° to {report.source_cap_angle_after_deg:.1f}°.')
+    measurements = []
+    for label, value in [('H', report.H), ('V', report.V), ('Wall', report.wall), ('Mouth', report.mouth)]:
+        measurements.append(f'{label}: {mm(value.max_deviation_mm)} mm change; {value.azimuth_deg:.1f}° around the horn; z = {value.z_mm:.1f} mm. Exact change: {value.max_deviation_mm} mm.')
+    details = list(dict.fromkeys([
+        'Opened as Custom profile.', fit, f'Largest measured change to the {scope} of the horn: {maximum} mm.',
+        'Measurements include Scale. Match requires at most 0.01 mm at the checked points; the wall conversion limit is 0.5 mm.',
+        f'Wall start/end position change along the length: {mm(report.axial_extent_deviation_mm)} mm. Exact change: {report.axial_extent_deviation_mm} mm.',
+        'Larger differences between checked points are possible.', limit.strip(), refusal.strip(),
+        f'Source surface opening angle: {report.source_cap_angle_before_deg:.1f}° → {report.source_cap_angle_after_deg:.1f}°. Exact angles: {report.source_cap_angle_before_deg}° → {report.source_cap_angle_after_deg}°.',
+        f'Exact profile curve change: {curve} mm.' if report.curve_deviation_mm is not None else '',
+        *measurements, *(f.message for f in report.features), report.method.grid, *report.method.limits,
+    ]))
+    # The existing import-notice owner renders the blank-line boundary as a disclosure.
+    return '\n'.join([headline, *dict.fromkeys(changes)]) + '\n\n' + '\n'.join(d for d in details if d)

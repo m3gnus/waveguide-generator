@@ -1,3 +1,5 @@
+import { ProfileEditPreviewPanel } from './FreeformEditors';
+import { conversionPreviewText } from '../api/freeformProfile';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -276,7 +278,7 @@ describe('Custom profile commit and preview', () => {
   describe('useProfileEdit', () => {
     let host: HTMLDivElement; let root: Root;
     let edit: ReturnType<typeof useProfileEdit>;
-    function Probe({ fetcher }: { fetcher: typeof fetch }) { edit = useProfileEdit({ fetcher }); return null; }
+    function Probe({ fetcher, panel = false }: { fetcher: typeof fetch; panel?: boolean }) { edit = useProfileEdit({ fetcher }); return panel ? <ProfileEditPreviewPanel edit={edit} /> : null; }
     beforeEach(() => { host = document.createElement('div'); document.body.append(host); root = createRoot(host); });
     afterEach(() => { act(() => root.unmount()); host.remove(); });
 
@@ -298,6 +300,36 @@ describe('Custom profile commit and preview', () => {
       axial_extent_deviation_mm: 0, source_cap_angle_before_deg: 15.5, source_cap_angle_after_deg: 15.5,
       features: [{ name: 'Morph', change: 'baked', message: 'The morph is baked into the stations.' }],
       method: { grid: 'Full-domain generated grid.', limits: ['Sampled estimate.'] } };
+    it('keeps the edit outcome visible and folds additional notes with its measurements', () => {
+      act(() => root.render(<ProfileEditPreviewPanel edit={{
+        preview: { label: 'Stretch profile', origin: currentEditOrigin(), status: 'ready', after: custom(),
+          notes: ['Length changes to 130 mm. The radii stay unchanged.', 'Handles keep their relative positions.', 'Cross-section stations move with Length.'],
+          validation: { status: 'pending' }, curve: { status: 'pending' }, generated: { status: 'pending' } },
+        notice: null, propose: vi.fn(), accept: vi.fn(), cancel: vi.fn(), dismissNotice: vi.fn(),
+      }} />));
+      expect(host.querySelector('.profile-edit-preview p')?.textContent).toBe('Length changes to 130.0 mm.');
+      const details = host.querySelector<HTMLDetailsElement>('details')!;
+      expect(details.open).toBe(false);
+      expect(details.textContent).toContain('Handles keep their relative positions.');
+      expect(details.textContent).toContain('Cross-section stations move with Length.');
+      expect(details.textContent).toContain('This does not check the whole wall, mouth outline or source surface.');
+    });
+
+    it('names the inner scope while showing larger outer-wall and rear changes before details', () => {
+      const text = conversionPreviewText({ ...conversionReport,
+        wall: { ...deviation, max_deviation_mm: .00509 }, mouth: { ...deviation, max_deviation_mm: .00509 },
+        features: [
+          { name: 'Outer wall', change: 'changed', message: 'Outer wall changes by up to 0.49958 mm at the checked points. More method facts.' },
+          { name: 'Rear construction', change: 'changed', message: 'Rear edge position along the length: -6.33656 → -5 mm. Largest measured movement of the rear edge or rear tip: 1.33656 mm.' },
+        ],
+      } as Parameters<typeof conversionPreviewText>[0], 'approximate');
+      expect(text.headline).toBe('Close to the original — the inside of the horn changes by at most 0.005 mm');
+      expect(text.changes.join(' ')).toContain('0.500 mm');
+      expect(text.changes.join(' ')).toContain('1.3 mm');
+      expect(text.details.join(' ')).toContain('0.49958 mm');
+      expect(conversionPreviewText({ ...conversionReport, wall: { ...deviation, max_deviation_mm: .010004 } } as Parameters<typeof conversionPreviewText>[0], 'approximate').headline).not.toContain('Matches');
+    });
+
     const conversionReply = (body: Record<string, unknown>) => new Response(JSON.stringify({ content_key: body.content_key,
       design: serializeDesign(custom()), report: conversionReport, verdict: 'approximate' }));
 
@@ -307,14 +339,25 @@ describe('Custom profile commit and preview', () => {
       const fetcher = routes({ '/convert': body => new Response(JSON.stringify({ content_key: body.content_key,
         design: serializeDesign(custom()), verdict: 'approximate', report: { ...conversionReport,
           features: [{ name: 'Rolled-back lip removed', change: 'removed', message }] } })) });
-      act(() => root.render(<Probe fetcher={fetcher} />));
+      act(() => root.render(<Probe fetcher={fetcher} panel />));
       await act(async () => edit.propose('Convert', convertToCustomProfileBuilder(fetcher)));
       await vi.waitFor(() => expect(edit.preview?.validation.status).toBe('ready'));
-      const notes = edit.preview!.notes.join(' ');
-      expect(notes).toContain('Converted with differences');
-      expect(notes).toContain('Kept wall: largest measured change 0.02000 mm');
+      const notes = [...edit.preview!.notes, ...conversionPreviewText(edit.preview!.conversion!.report, edit.preview!.conversion!.verdict).details].join(' ');
+      expect(notes).toContain('Close to the original — the kept inside of the horn changes by at most 0.020 mm');
+      expect(notes).toContain('Kept wall: 0.020 mm change');
       expect(notes).toContain('Kept mouth outline:');
       expect(notes).toContain(message);
+      expect(host.querySelector('.profile-edit-preview p')?.textContent).toContain('Close to the original');
+      const details = host.querySelector<HTMLDetailsElement>('details')!;
+      expect(details.open).toBe(false);
+      expect(details.textContent).toContain('Kept wall: 0.020 mm');
+      expect(details.textContent).toContain('0.01 mm');
+      expect(details.textContent).toContain('0.5 mm');
+      expect(details.textContent).toContain('Full-domain generated grid.');
+      expect(details.textContent).toContain('Sampled estimate.');
+      expect(details.textContent?.match(/Measurements include Scale/g)).toHaveLength(1);
+      expect(details.textContent).toContain(message);
+      expect(host.querySelector('.profile-edit-preview ul')?.textContent).toContain('lip at the mouth is removed');
     });
 
     it('previews a conversion with its report, cancels untouched and accepts the entire family change in one Undo step', async () => {

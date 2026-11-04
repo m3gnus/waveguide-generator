@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  compareFreeformProfiles, convertToCustomProfile, FreeformRequestError, insertFreeformAnchor, queryFreeformCurves, StaleFreeformResponse,
+  compareFreeformProfiles, conversionPreviewText, convertToCustomProfile, FreeformRequestError, insertFreeformAnchor, queryFreeformCurves, StaleFreeformResponse,
   type CompareResponse, type ConversionReport, type ConversionVerdict, type CurveAnchor, type CurvesResponse, type InsertMode,
 } from '../api/freeformProfile';
 import { inspectProfileSamples } from '../api/designIo';
@@ -853,18 +853,8 @@ export function convertToCustomProfileBuilder(fetcher: typeof fetch = fetch): Ed
     const result = await convertToCustomProfile(design, profileRequestKey(origin, design), fetcher, signal);
     if (!isCurrentOrigin(origin)) throw new StaleFreeformResponse('Discarded a conversion for an older design.');
     const report = result.report;
-    const kept = report.features.some(feature => feature.name === 'Rolled-back lip removed');
-    const maximum = Math.max(report.wall.max_deviation_mm, report.mouth.max_deviation_mm, report.axial_extent_deviation_mm);
-    const measured = (label: string, d: ConversionReport['wall']) => `${label}: largest measured change ${d.max_deviation_mm.toFixed(5)} mm. At ${d.azimuth_deg}° around the horn, z = ${d.z_mm.toFixed(5)} mm along its length. Measurements include Scale.`;
-    return { after: result.design, notes: [
-      result.verdict === 'match' ? 'Matches the original within 0.01 mm at the checked points.'
-        : `Converted with differences. Largest measured change${kept ? ' in the kept part' : ''}: ${maximum.toFixed(5)} mm. Review the feature changes and measurement limits below before accepting.`,
-      measured('Horizontal profile (H)', report.H), measured('Vertical profile (V)', report.V),
-      measured(kept ? 'Kept wall' : 'Whole wall', report.wall), measured(kept ? 'Kept mouth outline' : 'Mouth outline', report.mouth),
-      `${kept ? 'Kept wall' : 'Wall'} start/end position change along the length: ${report.axial_extent_deviation_mm.toFixed(5)} mm after Scale.`,
-      `Source surface opening angle: ${report.source_cap_angle_before_deg.toFixed(5)}° → ${report.source_cap_angle_after_deg.toFixed(5)}°.`,
-      ...report.features.map(feature => feature.message), report.method.grid, ...report.method.limits,
-    ],
+    const text = conversionPreviewText(report, result.verdict);
+    return { after: result.design, notes: [text.headline, ...text.changes],
       conversion: { report: result.report, verdict: result.verdict } };
   };
 }

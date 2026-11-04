@@ -1,3 +1,4 @@
+import { conversionPreviewText, previewMeasurementWords, previewMm } from '../api/freeformProfile';
 import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { setProfileDraft } from '../sketch/profileDraft';
 import { openProfileCanvas } from '../sketch/profileCanvasVisibility';
@@ -130,7 +131,7 @@ export function freeformAngleDisabledReason(field: ParameterDefinition, design: 
 type ProfileEdit = ReturnType<typeof useProfileEdit>;
 
 function formatDeviation(value: number | null | undefined): string {
-  return value == null ? '—' : value === 0 ? '0' : Math.abs(value) < 1e-6 ? value.toExponential(2) : formatMm(Number(value.toPrecision(6)));
+  return value == null ? '—' : previewMm(value);
 }
 
 function curveLine(plane: string, deviation: CurveDeviation): string {
@@ -139,7 +140,7 @@ function curveLine(plane: string, deviation: CurveDeviation): string {
   const where = extents.comparison_domain === 'overlap_only'
     ? ` only where both profiles exist, z = ${extents.overlap!.map(formatMm).join('–')} mm. The lengths differ, so this does not measure the whole profile`
     : ' over the full profile';
-  return `${plane}: largest curve change ${formatDeviation(deviation.curve_deviation_mm)} mm at z = ${formatDeviation(deviation.curve_at_z_mm)} mm${where}. The radius calculation used to build the profile changes by ${formatDeviation(deviation.evaluator_deviation_mm)} mm at z = ${formatDeviation(deviation.evaluator_at_z_mm)} mm. Checked at ${deviation.sample_count} positions along the length. Larger changes between checked positions are possible.`;
+  return `${plane}: largest curve change ${formatDeviation(deviation.curve_deviation_mm)} mm at z = ${deviation.curve_at_z_mm == null ? '—' : deviation.curve_at_z_mm.toFixed(1)} mm${where}. The radius calculation used to build the profile changes by ${formatDeviation(deviation.evaluator_deviation_mm)} mm at z = ${deviation.evaluator_at_z_mm == null ? '—' : deviation.evaluator_at_z_mm.toFixed(1)} mm. Checked at ${deviation.sample_count} positions along the length. Larger changes between checked positions are possible.`;
 }
 
 function generatedLine(plane: string, change: GeneratedPlaneChange): string {
@@ -150,8 +151,8 @@ function generatedLine(plane: string, change: GeneratedPlaneChange): string {
     : '';
   const shared = change.maxChangeMm === null
     ? 'the exports have no measured positions in common'
-    : `largest radius change ${formatDeviation(change.maxChangeMm)} mm at z = ${formatDeviation(change.atZMm)} mm at the ${change.sampleCount} measured positions both exports share`;
-  return `${plane}: ${shared}. Joining exported points with straight lines gives a largest change of ${formatDeviation(change.interpolatedMaxChangeMm)} mm at z = ${formatDeviation(change.interpolatedAtZMm)} mm. This checks ${change.interpolatedSampleCount} positions, including points added or removed by the edit.${where}`;
+    : `largest radius change ${formatDeviation(change.maxChangeMm)} mm at z = ${change.atZMm == null ? '—' : change.atZMm.toFixed(1)} mm at the ${change.sampleCount} measured positions both exports share`;
+  return `${plane}: ${shared}. Joining exported points with straight lines gives a largest change of ${formatDeviation(change.interpolatedMaxChangeMm)} mm at z = ${change.interpolatedAtZMm == null ? '—' : change.interpolatedAtZMm.toFixed(1)} mm. This checks ${change.interpolatedSampleCount} positions, including points added or removed by the edit.${where}`;
 }
 
 /** The before/after feedback of one proposed edit, with Accept and Cancel. */
@@ -171,7 +172,7 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
   if (preview.status !== 'ready') {
     return <Notice id={id} tabIndex={-1} tone={preview.status === 'refused' ? 'error' : 'info'} title={preview.label} className="profile-edit-preview"
       actions={<button type="button" className="btn" onClick={edit.cancel}>{preview.status === 'refused' ? 'Close' : 'Cancel'}</button>}>
-      {preview.status === 'refused' ? `Not applied: ${preview.message}` : 'Preparing the edit…'}
+      {preview.status === 'refused' ? `${preview.label.includes('Convert') ? "Can't convert" : 'Not applied'}: ${preview.message?.replace(/^Cannot convert(?: this design)?[:.]?\s*/i, '')}` : 'Preparing the edit…'}
     </Notice>;
   }
   const after = preview.after!;
@@ -180,7 +181,12 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
       <button type="button" className="btn" disabled={!previewAcceptable(preview)} onClick={edit.accept}>Accept</button>
       <button type="button" className="btn" onClick={edit.cancel}>Cancel</button>
     </>}>
-      <ul className="profile-edit-notes">{preview.notes.map(note => <li key={note}>{note}</li>)}</ul>
+      <p>{preview.notes[0]}</p>
+      <ul className="profile-edit-notes">{preview.notes.slice(1).map(note => <li key={note}>{note}</li>)}</ul>
+      <details className="section-note">
+        <summary>Measurement details</summary>
+        <ul className="profile-edit-notes">{conversionPreviewText(preview.conversion.report, preview.conversion.verdict).details.map(note => <li key={note}>{note}</li>)}</ul>
+      </details>
       {preview.validation.status === 'pending' && <p>Checking the fitted profile…</p>}
       {preview.validation.status === 'error' && <p className="field-error" role="alert">Cannot apply this edit: {preview.validation.message}</p>}
     </Notice>;
@@ -197,9 +203,13 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
       <button type="button" className="btn" disabled={!previewAcceptable(preview)} title={blocked} onClick={edit.accept}>Accept</button>
       <button type="button" className="btn" onClick={edit.cancel}>Cancel</button>
     </>}>
-    <ul className="profile-edit-notes">{preview.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+    <p>{previewMeasurementWords(preview.notes[0]?.split(/(?<=\.)\s/)[0] ?? '')}</p>
+    {preview.notes.length <= 2 && <ul className="profile-edit-notes">{preview.notes.slice(1).map(note => <li key={note}>{previewMeasurementWords(note)}</li>)}</ul>}
     {preview.validation.status === 'error' && <p className="field-error" role="alert">Cannot apply this edit: {preview.validation.message}</p>}
     {preview.validation.status === 'ready' && preview.validation.value.warnings.map((warning) => <p key={warning} className="field-warning">{warning}</p>)}
+    <details className="section-note">
+      <summary>Measurement details</summary>
+      <ul className="profile-edit-notes">{(preview.notes.length > 2 ? preview.notes : preview.notes.slice(0, 1)).map(note => <li key={note}>{note}</li>)}</ul>
     <div className="profile-edit-measure" role="group" aria-label="Curve change">
       <b>Curve change</b> <span>(compares the curves you edit; mm before Scale. z is distance along the length from the throat.)</span>
       {curve.status === 'pending' && <p>Measuring…</p>}
@@ -212,6 +222,7 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
       {generated.status === 'error' && <p className="field-error">Unavailable: {generated.message}. The built shapes could not be confirmed to be the same. Cancel and try the edit again.</p>}
       {generated.status === 'ready' && (['H', 'V'] as const).map((plane) => <p key={plane}>{generatedLine(plane, generated.value[plane])}</p>)}
     </div>
+    </details>
     {blocked && <p className="disabled-reason">{blocked}</p>}
   </Notice>;
 }

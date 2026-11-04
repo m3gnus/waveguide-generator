@@ -655,7 +655,13 @@ export function DesignFileMenu() {
     >
       {/* Both, when both exist: a menu message never hides a send's outcome. */}
       {message && message !== sendOutcome?.text && <div>{message}</div>}
-      {loadNotice && <div data-outcome="design-import">{loadNotice}</div>}
+      {loadNotice && <div key={loadNotice} data-outcome="design-import">
+        {loadNotice.split('\n\n')[0].split('\n').map(line => <p key={line}>{line}</p>)}
+        {loadNotice.includes('\n\n') && <details className="section-note" onClick={event => event.stopPropagation()}>
+          <summary>Measurement details</summary>
+          {loadNotice.slice(loadNotice.indexOf('\n\n') + 2).split('\n').map(line => <p key={line}>{line}</p>)}
+        </details>}
+      </div>}
       {sendOutcome && <div data-outcome="cad-send">{sendOutcome.text}{sendNote?.requestId === sentRequest ? sendNote?.text : ''}</div>}
       {adoptionCandidate && <button className="btn"
         type="button"

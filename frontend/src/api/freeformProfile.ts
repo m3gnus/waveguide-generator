@@ -105,3 +105,47 @@ export function compareFreeformProfiles(
 ): Promise<CompareResponse> {
   return post<CompareResponse>('compare', { before: serializeDesign(before), after: serializeDesign(after) }, contentKey, signal, fetcher);
 }
+
+/** Display rounding only; verdicts and limits always use the original measurements. */
+export const previewMm = (value: number): string => value.toFixed(Math.abs(value) < 1 ? 3 : 1);
+
+/** Round display measurements without changing stored or compared values. */
+export function previewMeasurementWords(text: string): string {
+  return text.replace(/(z = )?(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?) mm/gi, (_, z, n) => `${z ?? ''}${z ? Number(n).toFixed(1) : previewMm(Number(n))} mm`)
+    .replace(/(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)°/gi, (_, n) => `${Number(n).toFixed(1)}°`);
+}
+
+export function conversionPreviewText(report: ConversionReport, verdict: ConversionVerdict) {
+  const kept = report.features.some(feature => feature.name === 'Rolled-back lip removed');
+  const maximum = Math.max(report.wall.max_deviation_mm, report.mouth.max_deviation_mm, report.axial_extent_deviation_mm);
+  const headline = verdict === 'match' ? 'Matches the original'
+    : `Close to the original — the ${kept ? 'kept inside' : 'inside'} of the horn changes by at most ${previewMm(maximum)} mm`;
+  const changes = report.features.map(feature => {
+    const message = feature.message;
+    if (feature.name === 'Rolled-back lip removed') {
+      const length = message.match(/(?:length along the horn was |axial length )([\d.e+-]+)/)?.[1];
+      return `The curled-back lip at the mouth is removed${length ? ` (${previewMm(Number(length))} mm long)` : ''}.`;
+    }
+    if (feature.name === 'Rear construction') {
+      const movement = message.match(/rear edge or rear tip: ([\d.e+-]+)/)?.[1];
+      if (movement) return `The rear edge or rear tip moves by up to ${previewMm(Number(movement))} mm.`;
+    }
+    if (feature.name === 'Source-cap angle') return 'The source surface angle and curvature become fixed values.';
+    return previewMeasurementWords(message.split(/(?<=\.)\s/)[0].replace(/^Outer wall changes/, 'The outside of the horn changes'));
+  });
+  if (report.source_cap_angle_before_deg !== report.source_cap_angle_after_deg) {
+    changes.push(`The source surface angle changes from ${report.source_cap_angle_before_deg.toFixed(1)}° to ${report.source_cap_angle_after_deg.toFixed(1)}°.`);
+  }
+  const measured = (label: string, d: ConversionReport['wall']) =>
+    `${label}: ${previewMm(d.max_deviation_mm)} mm change; ${d.azimuth_deg.toFixed(1)}° around the horn; z = ${d.z_mm.toFixed(1)} mm. Exact change: ${d.max_deviation_mm} mm.`;
+  const details = [...new Set([
+    measured('Horizontal profile (H)', report.H), measured('Vertical profile (V)', report.V),
+    measured(kept ? 'Kept wall' : 'Whole wall', report.wall), measured(kept ? 'Kept mouth outline' : 'Mouth outline', report.mouth),
+    `Wall start/end position change along the length: ${previewMm(report.axial_extent_deviation_mm)} mm. Exact change: ${report.axial_extent_deviation_mm} mm.`,
+    'Measurements include Scale. Match requires at most 0.01 mm at the checked points; the wall conversion limit is 0.5 mm.',
+    `Source surface opening angle: ${report.source_cap_angle_before_deg.toFixed(1)}° → ${report.source_cap_angle_after_deg.toFixed(1)}°. Exact angles: ${report.source_cap_angle_before_deg}° → ${report.source_cap_angle_after_deg}°.`,
+    ...(report.curve_deviation_mm == null ? [] : [`Exact profile curve change: ${report.curve_deviation_mm} mm.`]),
+    ...report.features.map(feature => feature.message), report.method.grid, ...report.method.limits,
+  ])];
+  return { headline, changes: [...new Set(changes)], details };
+}

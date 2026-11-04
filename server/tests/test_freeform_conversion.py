@@ -223,6 +223,13 @@ def test_default_rosse_converts_through_fold_and_reports_removed_lip(default_ros
     notice = conversion_notice(result)
     assert lip.message in notice
     assert 'kept' in notice and 'approximate' in notice
+    visible, details = notice.split('\n\n', 1)
+    assert visible.startswith('Close to the original — the kept inside of the horn')
+    assert 'lip at the mouth is removed (5.2 mm long)' in visible
+    assert 'Measurements include Scale' in details
+    assert notice.count('Measurements include Scale') == 1
+    assert '0.01 mm' in details and '0.5 mm' in details
+    assert 'H:' in details and 'z =' in details
 
 
 def test_fold_cut_retains_each_meridians_own_maximum_and_measures_physical_lip():
@@ -293,6 +300,11 @@ def test_ath_rear_plane_change_is_measured_and_prevents_match():
     assert float(re.search(r'length: (-?[\d.]+)', rear.message)[1]) == pytest.approx(-6.33652, abs=1e-4)
     assert '→ -5 mm' in rear.message
     assert float(re.search(r'rear tip: ([\d.]+)', rear.message)[1]) == pytest.approx(1.33652, abs=1e-4)
+    visible, details = conversion_notice(result).split('\n\n', 1)
+    assert visible.startswith('Close to the original — the inside of the horn changes by at most')
+    assert 'rear edge or rear tip moves by up to 1.3 mm' in visible
+    assert 'The outside of the horn changes by up to 0.500 mm' in visible
+    assert rear.message in details
 
 
 def test_comparison_measures_outer_wall_and_rear_changes_with_unchanged_bore():
