@@ -7,7 +7,7 @@
  * input of the design's assembly; this file adds only what an assembly says
  * there beyond an imported model.
  */
-import { assemblyDriverBlocker, assemblyDriverNotice } from '../jobs/importedSubmission';
+import { assemblyDriverBlocker } from '../jobs/importedSubmission';
 import type { AssemblyWoofer, WooferDriveMode } from '../stores/assembly';
 import { assemblyRadiatorLabel } from '../stores/assemblySimulation';
 import { useDesignStore } from '../stores/design';
@@ -47,13 +47,11 @@ export function AssemblyDriverStatus() {
   const ground = useScopedSolveOptions(options => options.groundPlane.enabled);
   const options = { engine, adaptive_frequency_sampling: adaptive, ground_plane: { enabled: ground } } as Parameters<typeof assemblyDriverBlocker>[1];
   const blocker = assemblyDriverBlocker(state, options, id => assemblyRadiatorLabel(design, id));
-  const notice = assemblyDriverNotice(state, options);
   const problems = state.driveChannels.flatMap(channel => {
     const problem = channel.exterior_transducer && exteriorTransducerError(channel.exterior_transducer);
     return problem ? [`${assemblyRadiatorLabel(design, channel.id)}: ${problem}`] : [];
   });
   return <>
-    {notice && <p className="cad-driver-hint" role="status">{notice}</p>}
     {blocker ? <div className="field-error" role="alert">{blocker}</div>
       : problems.map(problem => <p className="field-error" role="status" key={problem}>{problem}</p>)}
   </>;

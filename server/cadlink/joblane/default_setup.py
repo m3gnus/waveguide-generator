@@ -336,6 +336,7 @@ def default_setup(
                 # No driver: every channel is solved at the model's own drive,
                 # as a first-time manual solve is, so no drive voltage either.
                 "drive_channels": channels,
+                "excitation_normalization": "rms_velocity",
                 "mesh": default_mesh(manifest),
                 "skipped_source_ids": [],
                 "exterior_only": cad["exterior_only"],

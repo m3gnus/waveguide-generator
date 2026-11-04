@@ -1,3 +1,4 @@
+import { resolveEngineLabel } from './engineLabel';
 import type { CadSolveSetup } from '../api/cadOperations';
 import { effectiveImportedSetup, importedModelBlocker, useImportedModelStore } from '../stores/importedModel';
 import { exteriorTransducerError } from '../stores/exteriorTransducer';
@@ -190,7 +191,7 @@ export function exteriorModeBlocker(state: Parameters<typeof combineWire>[0] & P
   label: (id: string) => string = id => id): string | null {
   if (!state.driveChannels.some(channel => channel.exterior_transducer)) return null;
   const fem = !state.exteriorOnly && (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0;
-  const policy = resolveExteriorDriverPolicy(state.driveChannels, solveStore, 'block', fem);
+  const policy = resolveExteriorDriverPolicy(state.driveChannels, solveStore, 'cad', fem);
   if (policy.blocker) return policy.blocker;
   if (!policy.coupled) return null;
   if (!fem && state.driveChannels.some(channel => !channel.source_ids.length)) {
@@ -214,9 +215,8 @@ export function exteriorModeBlocker(state: Parameters<typeof combineWire>[0] & P
 /**
  * Channels this solve will run without a driver model.
  *
- * A channel with no driver is solved at unit acceleration -- no voltage, no
- * ohms, no cone -- which is what WG did for every channel before drivers
- * existed and is a perfectly good basis. It is only worth saying because the
+ * A channel with no driver is solved at fixed RMS velocity -- no voltage, no
+ * ohms or cone model. It is only worth saying because the
  * consequences are invisible until afterwards: that channel has no power,
  * current or excursion to show, and in a combined output its level was matched
  * rather than derived from a driver.
@@ -260,8 +260,7 @@ export function importedSubmissionNotices(
   const combining = combineEnabledEffective(state);
   const members = new Set(combineSpecEffective(state)?.members ?? []);
   // Only the mixture is worth a word. A solve with no drivers at all is the
-  // ordinary unit-acceleration solve this product did for years and still
-  // does; saying "no power or current" about every channel of it would be
+  // ordinary prescribed-source solve; saying "no power or current" about every channel would be
   // noise on the majority of runs, and noise is what gets a notice ignored on
   // the run where it matters.
   if (!undriven.length || !driven) return [];
@@ -272,8 +271,8 @@ export function importedSubmissionNotices(
     + `no driver model, so ${undrivenLabels.length === 1 ? 'it has' : 'they have'} no power, current or excursion to report.`,
   );
   // The mixed case is the one worth spelling out. A driven channel's field is
-  // scaled to the cone acceleration its voltage produces; an undriven one is
-  // left at unit acceleration. The two are not in the same units, and it is
+  // scaled to the cone motion its voltage produces; an undriven one is
+  // left at fixed RMS velocity. The two are not in the same units, and it is
   // level matching -- not physics -- that puts them on one chart.
   if (combining) {
     const mixedMembers = undriven.filter((id) => members.has(id)
@@ -319,9 +318,9 @@ export function incompleteDriverBlocker(state: Pick<SimulationData, 'driveChanne
 /** Channel physics has one wire owner for CAD and file inputs. */
 export function simulationDriverGeometry(state: Pick<SimulationData, 'driveChannels' | 'channelDrivers' | 'driveVoltageV' | 'maxDriveVoltageV'>, retained?: Pick<ImportedSetup['geometry'], 'excitation_normalization' | 'drive_voltage_v'>): Pick<ImportedSetup['geometry'], 'drive_channels' | 'drive_voltage_v' | 'max_drive_voltage_v' | 'excitation_normalization'> {
   return {
-      // An omitted normalization decodes as the legacy acceleration basis, so CAD and
-      // file setups state it only when a retained setup already did.
-      ...(retained?.excitation_normalization === undefined ? {}
+      // Preserve retained conventions, including an omitted legacy field.
+      ...(!retained ? { excitation_normalization: 'rms_velocity' as const }
+        : retained.excitation_normalization === undefined ? {}
         : { excitation_normalization: retained.excitation_normalization }),
       drive_channels: state.driveChannels.map((channel) => {
         const driver = submittedDriver(state, channel);
@@ -378,7 +377,7 @@ export function resolveCadImportedSetup(
   const nativeError = exteriorModeBlocker(state, solveStore);
   if (nativeError) throw new Error(nativeError);
   const fem = !state.exteriorOnly && (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0;
-  const policy = resolveExteriorDriverPolicy(state.driveChannels, solveStore, 'block', fem);
+  const policy = resolveExteriorDriverPolicy(state.driveChannels, solveStore, 'cad', fem);
   const model = useImportedModelStore.getState();
   const retained = model.input === 'cad' && model.prepared?.ingest_id === state.ingestRecord?.ingest_id
     ? model.setup ?? model.setupEditBase?.retained : null;
@@ -433,51 +432,42 @@ export function buildImportedSubmission(
 
 type AssemblyDriverOptions = Pick<ImportedSolveSubmission['options'], 'engine' | 'adaptive_frequency_sampling' | 'ground_plane'>;
 
-type UnsupportedDriverPolicy = 'block' | 'fixed_velocity';
-// Owner decision pending: set this to 'block' or 'fixed_velocity' to unify
-// every adapter. 'requested' preserves the existing requested fallback intent.
-const UNSUPPORTED_ENGINE_DRIVERS: UnsupportedDriverPolicy | 'requested' = 'requested';
-
-/** One capability/policy owner. The caller states the requested fallback,
- * never a geometry producer. Fixed velocity has already been the assembly
- * adapter's contract; CAD/file requests continue to ask for coupled drivers. */
+/** One capability/policy owner for every geometry origin. */
 export function resolveExteriorDriverPolicy(channels: CadDriveChannel[], options: Pick<AssemblyDriverOptions, 'engine'>,
-  requested: UnsupportedDriverPolicy = 'block', fem = false, wiring = false): {
+  origin: 'cad' | 'assembly' = 'cad', fem = false, wiring = false): {
     coupled: boolean; channels: CadDriveChannel[]; blocker: string | null; notice: string | null;
   } {
   const engine = String(options.engine ?? 'auto');
   const coupled = (fem && !wiring ? ['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] : ['auto', 'beat-cpu', 'beat-metal']).includes(engine);
-  const policy = UNSUPPORTED_ENGINE_DRIVERS === 'requested' ? requested : UNSUPPORTED_ENGINE_DRIVERS;
   const unsupported = channels.some(channel => channel.exterior_transducer) && !coupled;
-  const fixed = unsupported && policy === 'fixed_velocity' && !wiring;
+  const engineName = resolveEngineLabel(engine);
   return {
     coupled,
-    channels: fixed ? channels.map(({ exterior_transducer: _driver, exterior_driver_inputs: _inputs, ...channel }) => channel) : channels,
+    channels,
     blocker: wiring && !coupled
       ? 'Wired woofers need BEAT CPU or BEAT Metal; choose Automatic or a coupled engine in Advanced, or remove the wiring.'
-      : unsupported && !fixed ? (fem
-      ? 'Choose Auto or BEAT CPU, Metal, CUDA or ROCm for FEM drivers.'
+      : unsupported ? (origin === 'assembly'
+      ? `${engineName} cannot solve the woofer drivers. Choose BEAT CPU or BEAT Metal under Solver, or set the woofers' Drive to Fixed velocity.`
+      : fem ? 'Choose Auto or BEAT CPU, Metal, CUDA or ROCm for FEM drivers.'
       : 'Choose BEAT CPU or BEAT Metal for coupled exterior drivers.') : null,
-    notice: fixed
-      ? `This engine solves every woofer at ${engine === 'bempp' ? 'unit acceleration (1 m/s²)' : 'fixed velocity (1 m/s RMS)'}, without its driver. To solve the drivers, set Advanced backend under Solver to Automatic, BEAT CPU or BEAT Metal.`
-      : null,
+    notice: null,
   };
 }
 
-/** What an engine that cannot couple drivers does with them instead, said before Solve and with it. */
+/** Shared actionable refusal shown beside assembly driver controls. */
 export function assemblyDriverNotice(state: Pick<SimulationData, 'driveChannels'>, options: Pick<AssemblyDriverOptions, 'engine'>): string | null {
-  return resolveExteriorDriverPolicy(state.driveChannels, options, 'fixed_velocity').notice;
+  return resolveExteriorDriverPolicy(state.driveChannels, options, 'assembly').blocker;
 }
 
 /**
  * Why a design assembly with woofer drivers cannot be solved as set up, with the
  * fix: the same driver check as CAD and file inputs, said at design time. An
- * engine that cannot couple drivers is not refused; it solves at fixed velocity.
+ * engine that cannot couple drivers refuses the requested solve.
  */
 export function assemblyDriverBlocker(state: Pick<SimulationData, 'driveChannels'>, options: AssemblyDriverOptions,
   label: (id: string) => string = id => id): string | null {
   const driven = state.driveChannels.filter(channel => channel.exterior_transducer);
-  const policy = resolveExteriorDriverPolicy(state.driveChannels, options, 'fixed_velocity');
+  const policy = resolveExteriorDriverPolicy(state.driveChannels, options, 'assembly');
   if (policy.blocker) return policy.blocker;
   if (!driven.length || !policy.coupled) return null;
   for (const channel of driven) {
@@ -492,16 +482,15 @@ export function assemblyDriverBlocker(state: Pick<SimulationData, 'driveChannels
 
 export interface AssemblySetupResolution {
   setup: ImportedSetup;
-  /** Set when the chosen engine solves the radiators at prescribed velocity instead. */
+  /** Optional solve information; unsupported drivers are refused before submission. */
   notice: string | null;
 }
 
 /**
  * The setup a design assembly's Solve sends, from the same wire owner as CAD
  * and file inputs. Channels are the record's radiators; signal groups carry
- * their members' processing; the sweep is the design's. An engine that cannot
- * couple exterior drivers solves the radiators at prescribed velocity, and
- * says so, rather than being refused for drivers it cannot take.
+ * their members' processing; the sweep is the design's. Unsupported engines
+ * refuse drivers through the same policy as CAD and file inputs.
  */
 export function resolveAssemblySetup(
   state: Parameters<typeof combineWire>[0] & Pick<SimulationData, 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'> & { sources: readonly RoleSource[] },
@@ -512,7 +501,7 @@ export function resolveAssemblySetup(
   label?: (id: string) => string,
 ): AssemblySetupResolution {
   const wiring = assembly.wiring_groups ?? [];
-  const policy = resolveExteriorDriverPolicy(state.driveChannels, options, 'fixed_velocity', false, wiring.length > 0);
+  const policy = resolveExteriorDriverPolicy(state.driveChannels, options, 'assembly', false, wiring.length > 0);
   if (policy.blocker) throw new Error(policy.blocker);
   if (wiring.length) {
     const active = new Set(state.driveChannels.map(channel => channel.id));
@@ -541,7 +530,6 @@ export function resolveAssemblySetup(
       geometry: {
         ...drivers, required_features: ['wg-design-assembly-v1'],
         excitation_normalization: 'rms_velocity',
-        excitation_normalization_by_engine: { bempp: 'acceleration_legacy' },
         ...(wiring.length ? { wiring_groups: structuredClone(wiring) } : {}),
         driver_groups: groups, skipped_source_ids: [], exterior_only: false, ...effects,
       },

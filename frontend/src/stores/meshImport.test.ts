@@ -235,7 +235,7 @@ describe('standalone imported mesh', () => {
     const snapshot = fileSubmissionSnapshot();
     const press = modelSolvePress(snapshot, 'speaker1', 'p1');
     expect(fileMeshSubmission()).toEqual(planSubmission(snapshot));
-    expect(press.setup?.geometry.excitation_normalization).toBeUndefined();
+    expect(press.setup?.geometry.excitation_normalization).toBe('rms_velocity');
     const legacyPress = structuredClone(press);
     delete legacyPress.setup?.geometry.excitation_normalization;
     const legacySubmission = fileMeshSubmission();

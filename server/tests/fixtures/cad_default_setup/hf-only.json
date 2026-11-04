@@ -25,6 +25,7 @@
           ]
         }
       ],
+      "excitation_normalization": "rms_velocity",
       "exterior_only": false,
       "mesh": {
         "rigid_size_mm": 25,

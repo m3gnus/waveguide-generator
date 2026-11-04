@@ -237,7 +237,7 @@ describe('assembly as the shared Simulation input', () => {
 describe('assembly solve setup', () => {
   beforeEach(() => { counter = 0; resetDesignStore(); resetAssemblyBuild(); });
 
-  it('negotiates the assembly, carries member processing and falls back to prescribed off BEAT', () => {
+  it('negotiates the assembly, carries member processing and refuses drivers off BEAT', () => {
     const { first, second } = setup();
     commitAssembly(setMemberProcessing(useDesignStore.getState().design.assembly!, second, { weight: 0.5, delay_ms: 0.25, invert: true }));
     assemblyImportedSetup().setExteriorTransducer(first, { ...DRIVER, motion_axis: [0, 0, 1] });
@@ -253,9 +253,8 @@ describe('assembly solve setup', () => {
     expect(coupled.setup.geometry.driver_groups?.find(group => group.channel_ids.includes(second))?.member_processing)
       .toEqual({ [second]: { weight: 0.5, delay_ms: 0.25, invert: true } });
     expect(coupled.setup.options).toMatchObject({ frequency_range: [design.simulation.f1, design.simulation.f2], solver_mode: 'full_3d' });
-    const prescribed = resolveAssemblySetup(assemblyImportedSetup(), design.assembly!, { engine: 'metal', polar_config: {} } as never, design.simulation);
-    expect(prescribed.notice).toMatch(/fixed velocity \(1 m\/s RMS\).*BEAT CPU or BEAT Metal/);
-    expect(prescribed.setup.geometry.drive_channels.some(channel => channel.exterior_transducer)).toBe(false);
+    expect(() => resolveAssemblySetup(assemblyImportedSetup(), design.assembly!, { engine: 'metal', polar_config: {} } as never, design.simulation))
+      .toThrow("Metal-BEM cannot solve the woofer drivers. Choose BEAT CPU or BEAT Metal under Solver, or set the woofers' Drive to Fixed velocity.");
     // The driver stays bound to its radiator in the design either way.
     expect(useDesignStore.getState().design.assembly!.drivers?.[first]).toBeDefined();
   });

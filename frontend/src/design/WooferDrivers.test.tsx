@@ -149,8 +149,8 @@ describe('a design assembly in the shared Drivers section', () => {
     enter('Resistance', '6');
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('Woofer 1 needs its driver: Enter inductance in the stated units.');
     act(() => useSolveOptionsStore.getState().setEngine('metal'));
-    expect(host.textContent).toContain('set Advanced backend under Solver to Automatic, BEAT CPU or BEAT Metal');
-    expect(host.textContent).toContain('Woofer 1: Enter inductance in the stated units.');
+    expect(host.textContent).toContain('Metal-BEM cannot solve the woofer drivers. Choose BEAT CPU or BEAT Metal under Solver');
+    expect(drivers()?.[woofer].exterior_transducer?.re_ohm).toBe(6);
   });
 
   it('shares one state with the Sources and baffle drive choice', () => {

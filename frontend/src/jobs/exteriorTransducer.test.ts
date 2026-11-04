@@ -174,18 +174,17 @@ it.each(['beat-cuda', 'beat-rocm'] as const)('keeps non-FEM driver restrictions 
     .toBe('Choose BEAT CPU or BEAT Metal for coupled exterior drivers.');
 });
 
-it.each(['metal', 'bempp', 'beat-cuda', 'beat-rocm'] as const)('owns both unsupported-driver intents on %s', engine => {
+it.each(['metal', 'bempp', 'beat-cuda', 'beat-rocm'] as const)('blocks unsupported drivers for every origin on %s', engine => {
   enable();
   const channels = useCadReturnStore.getState().driveChannels;
   const before = structuredClone(channels);
-  const coupled = resolveExteriorDriverPolicy(channels, { engine }, 'block');
+  const coupled = resolveExteriorDriverPolicy(channels, { engine }, 'cad');
   expect(coupled.blocker).toContain('Choose BEAT');
   expect(coupled.channels).toEqual(before);
-  const fixed = resolveExteriorDriverPolicy(channels, { engine }, 'fixed_velocity');
-  expect(fixed.blocker).toBeNull();
-  expect(fixed.notice).toContain(engine === 'bempp' ? 'unit acceleration (1 m/s²)' : 'fixed velocity (1 m/s RMS)');
-  if (engine === 'bempp') expect(fixed.notice).not.toContain('1 m/s RMS');
-  expect(fixed.channels[0].exterior_transducer).toBeUndefined();
+  const fixed = resolveExteriorDriverPolicy(channels, { engine }, 'assembly');
+  expect(fixed.blocker).toContain('cannot solve the woofer drivers. Choose BEAT CPU or BEAT Metal under Solver');
+  expect(fixed.notice).toBeNull();
+  expect(fixed.channels).toEqual(before);
   expect(channels).toEqual(before);
 });
 

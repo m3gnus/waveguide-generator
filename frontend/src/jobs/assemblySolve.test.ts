@@ -178,7 +178,7 @@ describe('assembly Solve press', () => {
     expect(prepared.press.label).toBe('Speaker1');
     const { label: _label, ...legacyPress } = structuredClone(prepared.press);
     expect(legacyPress.setup?.geometry.excitation_normalization).toBe('rms_velocity');
-    expect(legacyPress.setup?.geometry.excitation_normalization_by_engine).toEqual({ bempp: 'acceleration_legacy' });
+    expect(legacyPress.setup?.geometry.excitation_normalization_by_engine).toBeUndefined();
     // Pin the original press bytes separately from the new explicit contract.
     delete legacyPress.setup?.geometry.excitation_normalization;
     delete legacyPress.setup?.geometry.excitation_normalization_by_engine;
