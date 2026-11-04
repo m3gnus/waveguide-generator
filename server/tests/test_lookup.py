@@ -1,7 +1,6 @@
 """Consumer coverage for the pinned experimental whole-meridian profile."""
 from __future__ import annotations
 
-import json
 import re
 
 import pytest
