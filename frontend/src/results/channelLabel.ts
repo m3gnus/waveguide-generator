@@ -26,6 +26,8 @@ export function channelRole(result: ResultPayload, channelId: string): string | 
 export function channelLabel(result: ResultPayload, channelId: string, importOrigin?: unknown): string {
   if (channelId === combinedChannelId(result)) return 'Combined';
   if (channelId === PASSIVE_CARDIOID_CHANNEL_ID) return 'Cardioid';
+  const metadata = channelPayload(result, channelId)?.metadata;
+  if (metadata?.wiring && typeof metadata.label === 'string' && metadata.label.trim()) return metadata.label;
   const origin = importOrigin ?? result.metadata?.import_origin;
   const file = origin === 'mesh-file' || origin === 'design-assembly';
   const combinedId = combinedChannelId(result);

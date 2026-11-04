@@ -61,6 +61,7 @@ button.front-source[aria-pressed="true"] { border-color: rgba(var(--acc-rgb), .4
 .front-clearances dt::before { content: 'Clear of '; }
 .front-clearances dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .front-clearances .problem { color: var(--red); }
+.front-wiring-children { margin-left: var(--space-8); padding-left: var(--space-4); border-left: 1px solid var(--hair-soft); }
 
 /* Messages sit above the panel so the drawing keeps its size when one appears. */
 .front-messages { position: sticky; top: 0; z-index: 1; display: grid; gap: var(--space-4); background: var(--surface-panel); }

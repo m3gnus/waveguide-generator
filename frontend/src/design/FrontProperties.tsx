@@ -7,7 +7,7 @@ import { Notice } from '../shell/Notice';
  * parameters, written as the Geometry panel writes them.
  */
 import {
-  DEFAULT_WOOFER_GAP_MM, commitAssembly, deleteWoofer, setMemberProcessing, setPlacement, setWooferDrive, updateWoofer, wooferById, wooferDriveMode,
+  DEFAULT_WOOFER_GAP_MM, commitAssembly, deleteWoofer, setMemberProcessing, setPlacement, setWooferDrive, updateWoofer, wiringDriverIds, wooferById, wooferDriveMode,
   type AssemblyAnchor, type AssemblyPlacement, type AssemblyWoofer, type DesignAssembly,
 } from '../stores/assembly';
 import { isNativeFamily, useDesignStore, type DesignDocument } from '../stores/design';
@@ -22,6 +22,7 @@ import { ToggleRow } from './SolveOptionsSections';
 import { WooferDriveSelect } from './WooferDrivers';
 import { assemblyDriverForm } from '../stores/assemblySimulation';
 import { exteriorTransducerError } from '../stores/exteriorTransducer';
+import { WiringProperties } from './WiringProperties';
 
 type Session = WorkspaceSession<DesignAssembly, FrontCommand>;
 const ANCHORS: Array<[AssemblyAnchor, string]> = [['above', 'Above the mouth'], ['below', 'Below the mouth'], ['free', 'Free position']];
@@ -55,6 +56,7 @@ function WooferProperties({ assembly, id, session, resolved, select }: { assembl
   const woofer = wooferById(assembly, id)!;
   const placement = woofer.placement;
   const processing = member(assembly, id);
+  const wired = (assembly.wiring_groups ?? []).some(group => wiringDriverIds(group.network).includes(id));
   const others = (assembly.woofers ?? []).filter(item => item.id !== id);
   const place = (next: AssemblyPlacement) => run(session, 'Move woofer', current => setPlacement(current, id, next));
   const drive = wooferDriveMode(assembly, id);
@@ -128,11 +130,14 @@ function WooferProperties({ assembly, id, session, resolved, select }: { assembl
 
     {processing && <>
       <h4>Signal</h4>
+      {wired && <p className="section-note">This woofer is wired. Set DSP for its signal group in Simulation, and polarity with Invert under Wiring.</p>}
       <NumberField label="Weight" value={processing.weight ?? 1} min={0} max={100} precision={3}
+        disabled={wired}
         onCommit={weight => run(session, 'Woofer weight', current => setMemberProcessing(current, id, { weight }))}/>
       <NumberField label="Delay" unit="ms" value={processing.delay_ms ?? 0} min={0} max={1000} precision={3}
+        disabled={wired}
         onCommit={delay_ms => run(session, 'Woofer delay', current => setMemberProcessing(current, id, { delay_ms }))}/>
-      <ToggleRow id="front-woofer-polarity" label="Invert polarity" help="Reverses this woofer's polarity in the combined result." checked={!!processing.invert}
+      <ToggleRow id="front-woofer-polarity" label="Invert polarity" help="Reverses this woofer's polarity in the combined result." checked={!!processing.invert} disabled={wired}
         onChange={invert => run(session, 'Woofer polarity', current => setMemberProcessing(current, id, { invert }))}/>
     </>}
   </>;
@@ -221,6 +226,9 @@ export function frontViewProperties(resolved: () => FrontViewContext | undefined
     if (selected.length === 1) {
       sections.push({ id: `woofer:${selected[0]}`, title: wooferById(state, selected[0])!.label,
         render: () => <WooferProperties key={selected[0]} assembly={state} id={selected[0]} session={session} resolved={resolved()} select={actions.setSelection}/> });
+    }
+    if ((state.woofers ?? []).some(woofer => woofer.enabled !== false && wooferDriveMode(state, woofer.id) === 'driver')) {
+      sections.push({ id: 'wiring', title: 'Wiring', render: () => <WiringProperties assembly={state} selection={selected} run={(label, edit) => run(session, label, edit)}/> });
     }
     sections.push({ id: 'baffle', title: 'Baffle', render: () => <BaffleProperties/> });
     return sections;

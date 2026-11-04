@@ -265,38 +265,48 @@ export function wiringDriverIds(node: AssemblyWiringNode): string[] {
     : 'children' in node ? node.children.flatMap(wiringDriverIds) : [];
 }
 
-/** The same electrical membership rules as the saved-design and solve contracts. */
-export function validateAssemblyWiring(assembly: DesignAssembly): void {
+export interface AssemblyWiringProblem { groupId: string; path: number[]; message: string; kind: 'network' | 'member-processing' }
+
+/** Electrical validation and its location, shared by commits and the wiring editor. */
+export function assemblyWiringProblems(assembly: DesignAssembly): AssemblyWiringProblem[] {
+  const problems: AssemblyWiringProblem[] = [];
   const seen = new Set<string>();
   const identities = new Set([...woofers(assembly).map(item => item.id), ...groups(assembly).map(item => item.id)]);
   for (const group of assembly.wiring_groups ?? []) {
-    if (!UUID.test(group.id) || identities.has(group.id)) throw new Error('Use a unique UUID for each wiring network.');
+    const problem = (path: number[], message: string, kind: AssemblyWiringProblem['kind'] = 'network') => problems.push({ groupId: group.id, path, message, kind });
+    if (!UUID.test(group.id) || identities.has(group.id)) problem([], 'Use a unique UUID for each wiring network.');
     identities.add(group.id);
-    if (!group.label.trim() || group.label.length > 80 || /[\r\n]/.test(group.label)) throw new Error('Give the wiring network a label of 1–80 characters on one line.');
-    function validate(node: AssemblyWiringNode): void {
-      if ('children' in node) {
-        if (node.children.length < 2) throw new Error('Series and parallel connections need at least two children.');
-        node.children.forEach(validate);
-      } else if ('value' in node && (!Number.isFinite(node.value) || node.value <= 0)) {
-        throw new Error('Passive parts need a positive finite value in ohms, henry or farad.');
-      }
-    }
-    validate(group.network);
+    if (!group.label.trim() || group.label.length > 80 || /[\r\n]/.test(group.label)) problem([], 'Give the wiring network a label of 1–80 characters on one line.');
     const ids = wiringDriverIds(group.network);
-    if (!ids.length) throw new Error('A wiring network needs a woofer with a T/S driver.');
-    for (const id of ids) {
-      if (seen.has(id)) throw new Error('A driver may appear only once in wiring; remove its duplicate connection.');
-      seen.add(id);
-      if (!assembly.drivers?.[id]) throw new Error('Every wired woofer needs a T/S driver; assign its driver or remove the wiring.');
-    }
     const owners = groups(assembly).filter(signal => ids.every(id => signal.members.some(member => member.radiator_id === id)));
-    if (owners.length !== 1) throw new Error('Move all woofers of a wiring network into the same signal group.');
-    for (const member of owners[0].members.filter(item => ids.includes(item.radiator_id))) {
-      if (member.delay_ms || member.invert || (member.weight ?? 1) !== 1) {
-        throw new Error('Wired woofers cannot have member weight, delay or polarity; reset member processing and use signal-group DSP or wiring polarity.');
+    function validate(node: AssemblyWiringNode, path: number[]): void {
+      if ('children' in node) {
+        if (node.children.length < 2) problem(path, 'Series and parallel connections need at least two children; add a woofer or a passive part, or remove the connection.');
+        node.children.forEach((child, index) => validate(child, [...path, index]));
+      } else if ('value' in node && (!Number.isFinite(node.value) || node.value <= 0)) {
+        problem(path, 'Passive parts need a positive finite value; enter a value greater than zero in the shown units.');
+      } else if (node.kind === 'driver') {
+        const id = node.radiator_id;
+        if (seen.has(id)) problem(path, 'A driver may appear only once in wiring; remove its duplicate connection.');
+        seen.add(id);
+        if (!assembly.drivers?.[id]) problem(path, 'Every wired woofer needs a T/S driver; assign its driver or remove the wiring.');
+        const member = owners[0]?.members.find(item => item.radiator_id === id);
+        if (member && (member.delay_ms || member.invert || (member.weight ?? 1) !== 1)) {
+          problem(path, 'Wired woofers cannot have member weight, delay or polarity; reset member processing and use signal-group DSP or wiring polarity.', 'member-processing');
+        }
       }
     }
+    validate(group.network, []);
+    if (!ids.length) problem([], 'A wiring network needs a woofer with a T/S driver; add a driver woofer or remove the network.');
+    if (owners.length !== 1) problem([], 'Move all woofers of a wiring network into the same signal group.');
   }
+  return problems;
+}
+
+/** The same electrical membership rules as the saved-design and solve contracts. */
+export function validateAssemblyWiring(assembly: DesignAssembly): void {
+  const problem = assemblyWiringProblems(assembly)[0];
+  if (problem) throw new Error(problem.message);
 }
 
 /** Add or replace a wiring network by identity; call commitAssembly for one Undo. */
@@ -314,6 +324,32 @@ export function removeWiringGroup(assembly: DesignAssembly, id: string): DesignA
   next.wiring_groups = (next.wiring_groups ?? []).filter(item => item.id !== id);
   if (!next.wiring_groups.length) delete next.wiring_groups;
   return next;
+}
+
+/** Edit by tree path, collapsing a connection when removal leaves only one child. */
+export function editWiringNode(assembly: DesignAssembly, groupId: string, path: number[],
+  edit: (node: AssemblyWiringNode) => AssemblyWiringNode | null): DesignAssembly {
+  const group = assembly.wiring_groups?.find(item => item.id === groupId);
+  if (!group) throw new ProgramFault('Unknown wiring network.');
+  function visit(node: AssemblyWiringNode, remaining: number[]): AssemblyWiringNode | null {
+    if (!remaining.length) return edit(structuredClone(node));
+    const [index, ...rest] = remaining;
+    if (!('children' in node) || !node.children[index]) throw new ProgramFault('Unknown wiring node.');
+    const child = visit(node.children[index], rest);
+    const children = node.children.flatMap((item, i) => i === index ? child ? [child] : [] : [item]);
+    return child === null && children.length === 1 ? children[0] : { ...node, children };
+  }
+  const network = visit(group.network, path);
+  // A remaining single driver is individual again; no empty electrical group is saved.
+  if (!network || !('children' in network) || !wiringDriverIds(network).length) return removeWiringGroup(assembly, groupId);
+  return setWiringGroup(assembly, { ...group, network });
+}
+
+/** Join only these drivers to the first driver's signal group, preserving their processing. */
+export function joinWiringDrivers(assembly: DesignAssembly, ids: string[], targetId = ids[0]): DesignAssembly {
+  const target = groups(assembly).find(group => group.members.some(member => member.radiator_id === targetId));
+  if (!target) throw new ProgramFault('Unknown wiring signal group.');
+  return ids.reduce((next, id) => moveToGroup(next, id, target.id), assembly);
 }
 
 /** Apply one assembly edit as one project history step (or one frame of a drag). */
