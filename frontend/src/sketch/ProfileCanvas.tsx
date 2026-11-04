@@ -188,18 +188,20 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
       </select></label>}
     </div>
     <p className="profile-canvas-caption">{legacy ? 'Authored: exact legacy LOOKUP polyline (corners only)' : 'Authored: mesher curve'} · Generated: thin line{generated.samples && equalProfiles(generated.samples) ? ' · Generated H = V' : ''}{isSharedProfile(design) ? ' · Authored H = V (stored V inactive)' : legacy ? ' · Authored H = V' : ' · H blue / V amber'}{design.scale !== 1 ? ` · ${scaled ? 'Plot in scaled mm' : 'Design mm before Scale'} (Scale = ${design.scale}).` : ''}</p>
-    <div role="status" className="profile-canvas-freshness" data-stale={!legacy && currentCurves.stale || generated.stale || unfinished || undefined}>
-      {(!legacy ? currentCurves.error : undefined) ?? generated.error ?? (invalidInputs ? 'Fix the marked values. Showing the last valid profile.' : !legacy && currentCurves.stale || generated.stale ? 'Updating… — last valid profile' : '')}
-    </div>
-    {anyDraft && <div className="sketch-conflict-banner" role="status"><span>Custom profile draft — Solve is blocked. {generated.samples ? 'Showing the last valid generated shape.' : 'No validated generated profile yet.'}</span>
-      <button type="button" className="btn" onClick={() => getProfileDraft()?.open()}>Open sketch</button><button type="button" className="btn" onClick={() => getProfileDraft()?.revert()}
-        disabled={Boolean(curveError && lastValid.current?.identity !== identity && !preview && !dragging && !invalidInputs)}
-        title={curveError && lastValid.current?.identity !== identity ? 'This document has no previously validated profile. Fix its table values.' : undefined}>Revert to last valid</button></div>}
     <div className="source-editor-columns">
       <div className="source-workspace"><Workspace adapter={adapter} state={displayState} session={session} selection={selection} onSelectionChange={setSelection} fitRequest={fitRequest} slots={{ properties: propertiesHost }} onEscape={close}/></div>
       <aside aria-label="Profile properties and preview">
         <div ref={setPropertiesHost}/>
+        <div role="status" className="profile-canvas-freshness" data-stale={!legacy && currentCurves.stale || generated.stale || unfinished || undefined}>
+          {(!legacy ? currentCurves.error : undefined) ?? generated.error ?? (invalidInputs ? 'Fix the marked values. Showing the last valid profile.' : !legacy && currentCurves.stale || generated.stale ? 'Updating… — last valid profile' : '')}
+        </div>
         {actionError && <p className="field-error" role="alert">{actionError}</p>}
+        {anyDraft && !preview && !dragging && <div role="status">
+          <p className="profile-canvas-caption">{invalidInputs || curveError ? 'Fix the marked values or revert to the last valid profile.' : 'Finish the profile or revert to the last valid profile.'} Solve is blocked.</p>
+          <button type="button" className="btn" onClick={() => getProfileDraft()?.revert()}
+            disabled={Boolean(curveError && lastValid.current?.identity !== identity && !invalidInputs)}
+            title={curveError && lastValid.current?.identity !== identity ? 'This document has no previously validated profile. Fix its table values.' : undefined}>Revert to last valid</button>
+        </div>}
         <ProfileEditPreviewPanel edit={edit}/>
       </aside>
     </div>

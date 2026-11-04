@@ -83,6 +83,8 @@ describe('profile canvas UI', () => {
     const before = structuredClone(useDesignStore.getState().design), at = xy(anchorId('H', 1));
     await pointer(point(anchorId('H', 1)), 'pointerdown', at);
     await pointer(svg(), 'pointermove', { x: at.x + 12, y: at.y - 10 });
+    expect(document.querySelector('.sketch-conflict-banner')).toBeNull();
+    expect(button('Open sketch')).toBeUndefined();
     await pointer(svg(), 'pointermove', { x: at.x + 18, y: at.y - 20 });
     await act(async () => { await vi.advanceTimersByTimeAsync(20); await flush(); });
     expect(xy(anchorId('H', 1))).not.toEqual(at);
@@ -184,6 +186,10 @@ describe('profile canvas UI', () => {
     const start = xy(anchorId('H', 0)), end = xy(anchorId('H', 2));
     const at = { x: start.x + (end.x - start.x) * 21.407 / 120, y: start.y + (end.y - start.y) * (20.125 - 12.7) / (140 - 12.7) };
     await act(async () => button('Insert exact').click()); await pointer(svg(), 'pointerdown', at); await pointer(svg(), 'pointerup', at);
+    expect(button('Open sketch')).toBeUndefined();
+    expect(document.querySelector('.sketch-conflict-banner')).toBeNull();
+    expect(button('Accept').closest('aside')).not.toBeNull();
+    expect(profileDraftBlocker()).toContain('unfinished');
     expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith('/insert') && JSON.parse(String(init?.body)).mode === 'exact')).toBe(true);
     await act(async () => { button('Accept').click(); await flush(); }); await tick();
     expect(useDesignStore.getState().design.profile_h!.points).toHaveLength(4);
@@ -194,7 +200,7 @@ describe('profile canvas UI', () => {
     expect(useDesignStore.temporal.getState().pastStates).toHaveLength(2);
   });
 
-  it('makes one live drag into one accepted Undo step and supports Open sketch / Revert', async () => {
+  it('makes one live drag into one accepted Undo step and keeps recovery outside the dialog', async () => {
     await mount(); await tick(); const before = structuredClone(useDesignStore.getState().design), at = xy(anchorId('H', 1));
     await pointer(point(anchorId('H', 1)), 'pointerdown', at);
     await pointer(svg(), 'pointermove', { x: at.x + 12, y: at.y - 10 });
@@ -202,15 +208,21 @@ describe('profile canvas UI', () => {
     await pointer(svg(), 'pointerup', { x: at.x + 18, y: at.y - 20 });
     expect(document.body.textContent).toContain('Preview: Move point'); expect(useDesignStore.getState().design).toEqual(before);
     expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0); expect(profileDraftBlocker()).toBeTruthy();
-    await act(async () => { button('Open sketch').click(); }); expect(document.activeElement).toBe(svg());
+    expect(button('Open sketch')).toBeUndefined();
+    expect(document.querySelector('.sketch-conflict-banner')).toBeNull();
+    expect(button('Accept').closest('aside')).not.toBeNull();
+    await act(async () => { getProfileDraft()!.open(); }); expect(document.activeElement).toBe(svg());
     await act(async () => { button('Accept').click(); await flush(); });
     expect(profileDraftBlocker()).toBeNull(); expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
     const moved = structuredClone(useDesignStore.getState().design);
+    expect(document.querySelector('aside')?.textContent).toContain('Move point: applied. Undo restores the previous profile.');
     await act(async () => { useDesignStore.getState().undo(); await flush(); }); expect(useDesignStore.getState().design).toEqual(before);
+    expect(document.querySelector('aside')?.textContent).not.toContain('applied. Undo restores');
     await act(async () => { useDesignStore.getState().redo(); await flush(); }); expect(useDesignStore.getState().design).toEqual(moved);
+    expect(document.querySelector('aside')?.textContent).not.toContain('applied. Undo restores');
     await tick(); await choose(anchorId('H', 1));
     await act(async () => { button('Delete point').click(); await flush(); });
-    await act(async () => { button('Revert to last valid').click(); await flush(); });
+    await act(async () => { getProfileDraft()!.revert(); await flush(); });
     expect(profileDraftBlocker()).toBeNull(); expect(useDesignStore.getState().design).toEqual(moved);
     expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
   });
@@ -224,7 +236,9 @@ describe('profile canvas UI', () => {
       input.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '-1');
       input.dispatchEvent(new Event('input', { bubbles: true })); await flush();
     });
-    expect(profileDraftBlocker()).toContain('invalid'); expect(button('Revert to last valid')).toBeTruthy();
+    expect(profileDraftBlocker()).toContain('invalid'); expect(button('Revert to last valid').closest('aside')).not.toBeNull();
+    expect(document.querySelector('.profile-canvas-freshness')?.closest('aside')).not.toBeNull();
+    expect(document.querySelector('.sketch-conflict-banner')).toBeNull();
     await act(async () => { button('Revert to last valid').click(); await flush(); });
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     expect(profileDraftBlocker()).toBeNull(); expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0); unregister?.();
@@ -271,8 +285,9 @@ describe('profile canvas UI', () => {
     expect(profileDraftBlocker()).toContain('unfinished');
     await act(async () => getProfileDraft()!.open());
     expect(document.querySelector('[role="dialog"][aria-label="Custom profile canvas"]')).not.toBeNull();
-    expect(button('Open sketch')).toBeTruthy(); expect(button('Revert to last valid')).toBeTruthy();
-    await act(async () => { button('Revert to last valid').click(); await flush(); });
+    expect(button('Open sketch')).toBeUndefined();
+    expect(document.querySelector('.sketch-conflict-banner')).toBeNull();
+    await act(async () => { getProfileDraft()!.revert(); await flush(); });
     expect(profileDraftBlocker()).toBeNull(); expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
     expect(useDesignStore.getState().design.profile_h!.points[1].join).toBeUndefined();
   });

@@ -20,5 +20,4 @@
 .profile-anchor-properties { border: 1px solid var(--hair); background: var(--surface-raised); border-radius: 4px; padding: 8px; font-size: 11px; }
 .profile-anchor-fields { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .profile-anchor-fields > label, .profile-anchor-fields > div { display: grid; gap: 4px; width: 110px; }
-.profile-canvas .sketch-conflict-banner { flex-wrap: wrap; font-size: 11px; }
 .profile-canvas-launch { grid-column: 1 / -1; }

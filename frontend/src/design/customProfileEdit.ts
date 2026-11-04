@@ -786,7 +786,10 @@ function messageOf(reason: unknown): string {
 /** Preview, cancel and accept one edit at a time; stale results are dropped. */
 export function useProfileEdit({ fetcher = fetch }: ProfileEditFetchers = {}) {
   const [preview, setPreview] = useState<ProfileEditPreview | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNoticeState] = useState<{ message: string; origin?: EditOrigin } | null>(null);
+  const setNotice = useCallback((message: string | null) => {
+    setNoticeState(message === null ? null : { message });
+  }, []);
   const controller = useRef<AbortController | null>(null);
   const active = useRef<ProfileEditPreview | null>(null);
   active.current = preview;
@@ -797,13 +800,14 @@ export function useProfileEdit({ fetcher = fetch }: ProfileEditFetchers = {}) {
   useEffect(() => stop, [stop]);
   // Any edit, Undo, Redo or Open after the proposal makes it stale.
   useEffect(() => {
+    setNoticeState(current => current?.origin && !isCurrentOrigin(current.origin) ? null : current);
     const current = active.current;
     if (current && !isCurrentOrigin(current.origin)) {
       stop();
       setPreview(null);
       setNotice('The preview was discarded because the design changed. Nothing was applied.');
     }
-  }, [generation, revision, stop]);
+  }, [generation, revision, setNotice, stop]);
 
   const propose = useCallback((label: string, build: EditBuilder) => {
     stop();
@@ -839,9 +843,9 @@ export function useProfileEdit({ fetcher = fetch }: ProfileEditFetchers = {}) {
         inspectProfileSamples(after, origin.revision, abort.signal, fetcher),
       ]).then(([first, second]) => update({ generated: { status: 'ready', value: compareProfileSamples(first, second) } }), failed('generated'));
     })();
-  }, [fetcher, stop]);
+  }, [fetcher, setNotice, stop]);
 
-  const cancel = useCallback(() => { stop(); setPreview(null); setNotice(null); }, [stop]);
+  const cancel = useCallback(() => { stop(); setPreview(null); setNotice(null); }, [setNotice, stop]);
   const accept = useCallback(() => {
     const current = active.current;
     if (!current || !previewAcceptable(current)) return;
@@ -849,14 +853,14 @@ export function useProfileEdit({ fetcher = fetch }: ProfileEditFetchers = {}) {
       commitProfileEdit(current.origin, current.before!, current.after!);
       stop();
       setPreview(null);
-      setNotice(`${current.label}: applied. Undo restores the previous profile.`);
+      setNoticeState({ message: `${current.label}: applied. Undo restores the previous profile.`, origin: currentEditOrigin() });
     } catch (reason) {
       stop();
       setPreview(null);
       setNotice(messageOf(reason));
     }
-  }, [stop]);
-  return { preview, notice, propose, cancel, accept, dismissNotice: () => setNotice(null) };
+  }, [setNotice, stop]);
+  return { preview, notice: notice && (!notice.origin || isCurrentOrigin(notice.origin)) ? notice.message : null, propose, cancel, accept, dismissNotice: () => setNotice(null) };
 }
 
 /** Accept needs a valid candidate and both measurements; otherwise the old design stays. */

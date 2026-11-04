@@ -312,6 +312,23 @@ describe('Custom profile commit and preview', () => {
       expect(edit.notice).toMatch(/Undo restores/);
     });
 
+    it.each(['undo', 'undo/redo', 'edit', 'open'] as const)('clears the applied note after %s', async change => {
+      load(custom());
+      act(() => root.render(<Probe fetcher={routes()} />));
+      await act(async () => { edit.propose('Delete', design => deleteAnchor(design, 'H', 2)); });
+      await vi.waitFor(() => expect(edit.preview?.generated.status).toBe('ready'));
+      act(() => edit.accept());
+      expect(edit.notice).toMatch(/Delete: applied/);
+      act(() => {
+        const store = useDesignStore.getState();
+        if (change === 'undo' || change === 'undo/redo') store.undo();
+        if (change === 'undo/redo') store.redo();
+        if (change === 'edit') store.updateValue('scale', 2);
+        if (change === 'open') load(custom());
+      });
+      expect(edit.notice).toBeNull();
+    });
+
     it('keeps the old design when the candidate is refused and shows the server reason', async () => {
       load(custom());
       const fetcher = routes({ '/curves': (body) => new Response(JSON.stringify({ content_key: body.content_key, detail: 'FREEFORM profileH span 2 is infeasible' }), { status: 422 }) });
