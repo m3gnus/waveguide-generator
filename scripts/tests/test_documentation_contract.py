@@ -124,13 +124,17 @@ def test_doc_07_cad_status_and_solve_live_in_results() -> None:
     assert "has no Solve button" not in section
 
 
-def test_doc_08_manual_describes_file_mesh_cutting_and_fallback() -> None:
+def test_doc_08_manual_describes_retired_file_mesh_cutting_and_retained_replays() -> None:
+    # aceb4e4dc retired cutting for new mesh imports; replay and CAD keep their contracts.
     section = _words("docs/USER-MANUAL.md", "## 3. Import", "## 4.")
-    assert "**Auto · cut for speed**" in section
-    assert "**5,000 input triangles**" in section
-    assert "explicit half or quarter" in section
-    assert "valid full mesh remains ready to solve" in section
-    assert "cannot be cut automatically" not in section
+    assert "WG no longer cuts imported meshes" in section
+    assert "**Full model**" in section
+    assert "**Already half**" in section and "**Already quarter**" in section
+    assert "Mirroring from the negative side" in section
+    assert "removing a closed face on a declared plane" in section
+    assert "reopen with their original prepared meshes" in section
+    assert "STEP/CAD Link cutting is unchanged" in section
+    assert "Auto · cut for speed" not in section
 
 
 def test_doc_09_installed_and_checkout_launch_modes() -> None:
