@@ -13,6 +13,7 @@ from server.app import create_app
 from server.jobs import api as jobs_api
 from server.jobs.api import create_jobs_router
 from server.jobs.models import SolveRequest
+from server.jobs.result_basis import with_result_basis
 
 
 async def _request_with_headers(
@@ -492,11 +493,16 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         assert result_headers["etag"] == (
             f'"sha256:{result_headers["x-wg-results-sha256"]}"'
         )
-        stored_result = app.state.jobs_runtime.store.get_results_payload(job_id)
-        assert stored_result == (
+        store = app.state.jobs_runtime.store
+        stored_result = store.get_results_payload(job_id)
+        # Results are served with their read-time excitation identity (6947a69d6);
+        # the stored text and digest stay untouched.
+        assert "excitation_normalization" not in json.loads(stored_result[0])["metadata"]
+        assert with_result_basis(*stored_result, store.get_job_row(job_id)) == (
             raw.decode("utf-8"),
             result_headers["x-wg-results-sha256"],
         )
+        assert results["metadata"]["excitation_normalization"] == "acceleration_legacy"
         stored_mesh = app.state.jobs_runtime.store.get_mesh_artifact(job_id)
         assert stored_mesh is not None
         status, raw, headers = await _request_with_headers(
@@ -504,10 +510,12 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         )
         assert status == 200
         archive_snapshot = json.loads(raw)
+        # An archive keeps the exact stored payload (test_run_archive.py); only
+        # the results endpoint adds the read-time excitation identity.
         assert archive_snapshot == {
             "schema_version": 1,
-            "results": results,
-            "results_sha256": result_headers["x-wg-results-sha256"],
+            "results": json.loads(stored_result[0]),
+            "results_sha256": stored_result[1],
             "mesh_artifact": stored_mesh,
             "pressure_bases": [],
             "radiation_impedance": None,

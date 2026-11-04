@@ -1177,6 +1177,9 @@ $EndElements
         legacy_flags = legacy["metadata"].pop("power_qualification")
         assert legacy_flags["status"] == "unknown"
         legacy["metadata"].pop("power_qualification_version")
+        # Read-time excitation identity for parametric results (6947a69d6).
+        assert legacy["metadata"].pop("excitation_normalization") == "acceleration_legacy"
+        assert legacy["metadata"].pop("source_normalization") == "unit_normal_acceleration"
         assert legacy["metadata"] == {
             "field_plane_available": False,
             "field_trace_bytes": None,
