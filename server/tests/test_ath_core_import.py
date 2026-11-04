@@ -183,10 +183,25 @@ def test_unsupported_or_invalid_new_keys_are_refused_by_name(extra, key):
         parse(BASE + extra)
 
 
-@pytest.mark.parametrize('extra,key', [('Rot=1\n','Rot'), ('Scale=2\n','Scale'),
-    ('Throat.Ext.Length=1\n','Throat.Ext.Length'), ('Throat.Ext.Angle=1\n','Throat.Ext.Angle'),
-    ('Mesh.VerticalOffset=1\n','Mesh.VerticalOffset'), ('Source.Shape=2\n','Source.Shape'),
-    ('ABEC.SimType=1\n','baffle'), ('Mesh.Enclosure = {\nDepth=30\n}\n','Mesh.Enclosure')])
+@pytest.mark.parametrize('extra', [
+    'Rot=1\n', 'Scale=2\n', 'Throat.Ext.Length=1\n', 'Throat.Ext.Angle=1\n',
+    'Mesh.VerticalOffset=1\n', 'Source.Shape=2\n',
+])
+def test_lip_compositions_match_the_measured_mesher_contract(extra):
+    # Mesher b8c584d383a5 intentionally supports these measured ATH compositions.
+    text = BASE + 'Mesh.Roundover = {\nRadius=10\n}\n' + extra
+    expected = parse_text_config(text)
+    expected['mesh']['quadrants'] = 1234
+    reference = resolve_geometry(expected).geometry.inner_points
+    design = parse(text).design
+    for copy in (design, parse(serialize(design)).design):
+        actual = resolve_geometry(design_to_mesher_config(copy)).geometry.inner_points
+        np.testing.assert_array_equal(actual, reference)
+
+
+@pytest.mark.parametrize('extra,key', [
+    ('ABEC.SimType=1\n', 'baffle'), ('Mesh.Enclosure = {\nDepth=30\n}\n', 'Mesh.Enclosure'),
+])
 def test_lip_compositions_keep_mesher_named_refusals(extra, key):
     with pytest.raises(TextConfigError, match=key):
         parse(BASE + 'Mesh.Roundover = {\nRadius=10\n}\n' + extra)
