@@ -55,11 +55,14 @@ keep persistence; `identity.py` owns model identity. Root contracts remain in
 `wgreturn.py`, `operations.py`, `roles.py`, `usage.py`, `ipc.py`, `build_flags.py`,
 `wglink_protocol.py` and `limits.py`. The pinned `wglink_protocol.py` stays at its
 existing path. The parked `onshape/` adapter keeps its own package.
+`retained_files.py` owns the shared checksum verifier for retained CAD downloads
+and returned-STEP exports; it imports only the standard library.
 
 The `cadlink-lanes` contract in `.importlinter` enforces these layers, highest to
 lowest: `api`, `onshape`, independent `joblane | fusion`, `intake`, collaborating
-`store : receipts`, `identity`, `interpretation`, the root leaf contracts, then
-`wglink_protocol : limits`. Onshape and identity sit above the lanes and
+`store : receipts`, `identity`, `interpretation`, the root leaf contracts,
+`snapshot_mesh`, `wglink_protocol : limits`, then `retained_files`.
+Onshape and identity sit above the lanes and
 interpretation respectively because of existing indirect imports through other
 server packages. Fusion currently imports only persistence and root contracts.
 A separate forbidden contract prevents interpretation from reaching persistence

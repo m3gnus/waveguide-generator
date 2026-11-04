@@ -1,7 +1,9 @@
-"""Interpretation functions cannot accept persistence or preparation contexts."""
+"""CAD Link keeps its lane boundaries and pure interpretation functions."""
 
 import ast
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -9,6 +11,23 @@ import pytest
 _CADLINK = Path(__file__).resolve().parents[1] / "cadlink"
 _INTERPRETATION = _CADLINK / "interpretation"
 _PURE_PATHS = sorted(_INTERPRETATION.rglob("*.py"))
+
+
+def test_cadlink_lane_import_contract_is_kept() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from importlinter.cli import lint_imports_command; lint_imports_command()",
+            "--contract", "cadlink-lanes", "--no-cache",
+        ],
+        cwd=_CADLINK.parents[1],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 @pytest.mark.parametrize("path", _PURE_PATHS, ids=lambda path: path.stem)
