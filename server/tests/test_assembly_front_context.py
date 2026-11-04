@@ -78,12 +78,27 @@ def resolve(dump):
     return {key: context[key] for key in ("mouth_bottom_mm", "mouth_top_mm", "woofers")}
 
 
+def geometry_snapshot(value):
+    """Allow platform roundoff in millimetres, keeping the complete JSON contract."""
+    if isinstance(value, float):
+        return pytest.approx(value, abs=1e-9, rel=0)
+    if isinstance(value, dict):
+        return {key: geometry_snapshot(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [geometry_snapshot(item) for item in value]
+    return value
+
+
+@pytest.fixture
+def resolved_context_cases():
+    return json.loads((Path(__file__).parent / "fixtures/assembly_front_context_resolved.json").read_text())
+
+
 @pytest.mark.parametrize(("name", "resolutions"), [("ordinary", 1), ("ath-envelope", 2)])
-def test_front_context_reuses_resolved_geometry_without_changing_its_answer(name, resolutions, monkeypatch):
+def test_front_context_reuses_resolved_geometry_without_changing_its_answer(name, resolutions, monkeypatch, resolved_context_cases):
     from hornlab_mesher import config_builder
 
-    cases = json.loads((Path(__file__).parent / "fixtures/assembly_front_context_resolved.json").read_text())
-    case = cases[name]
+    case = resolved_context_cases[name]
     calls = []
     original = config_builder.resolve_geometry
 
@@ -92,8 +107,38 @@ def test_front_context_reuses_resolved_geometry_without_changing_its_answer(name
         return original(*args, **kwargs)
 
     monkeypatch.setattr(config_builder, "resolve_geometry", counted)
-    assert _assembly_front_context_sync(case["design"]) == case["context"]
+    assert _assembly_front_context_sync(case["design"]) == geometry_snapshot(case["context"])
     assert len(calls) == resolutions
+
+
+@pytest.mark.parametrize("name", ["ordinary", "ath-envelope"])
+def test_front_context_snapshot_accepts_platform_roundoff(name, resolved_context_cases):
+    expected = resolved_context_cases[name]["context"]
+    actual = json.loads(json.dumps(expected), parse_float=lambda value: float(value) + 2e-13)
+    assert actual != expected
+    assert actual == geometry_snapshot(expected)
+
+
+@pytest.mark.parametrize(("path", "value"), [
+    (("mouth_top_mm",), 100.0 + 1e-8),
+    (("woofers", 0, "x_mm"), 1e-8),
+    (("mouth_outline_mm", 0, 0), 100.0 + 1e-8),
+    (("baffle", "x0_mm"), -300.0 + 1e-8),
+    (("clearances", W3, "woofers", W4), 595.0953259363143 + 1e-8),
+    (("minimum_clearance_mm",), 0.1 + 1e-8),
+    (("frame",), "different-frame"),
+    (("woofers", 0, "radiator_id"), W4),
+    (("woofers",), []),
+    (("baffle",), {"x0_mm": -300.0}),
+])
+def test_front_context_snapshot_rejects_other_changes(path, value, resolved_context_cases):
+    expected = resolved_context_cases["ordinary"]["context"]
+    actual = copy.deepcopy(expected)
+    target = actual
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    assert actual != geometry_snapshot(expected)
 
 
 def fixture():
