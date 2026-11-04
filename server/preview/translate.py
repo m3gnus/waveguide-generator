@@ -14,7 +14,6 @@ from server.design.schema import (
     FreeformConfig,
     FreeformProfile,
     ICWConfig,
-    LookupConfig,
     OSSEConfig,
     ROSSEConfig,
     ResolutionExpr,
@@ -281,19 +280,10 @@ def _freeform_profile(
 
 
 def _profile(
-    design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig | LookupConfig, scale: float
+    design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig, scale: float
 ) -> dict[str, Any]:
     """Port v1 ``mesher_adapter.py:200-310`` from typed v2 fields."""
     from hornlab_mesher.errors import control_refusal
-
-    if isinstance(design, LookupConfig):
-        return _clean({
-            "formula": "LOOKUP",
-            "lookupProfile": [[z * scale, r * scale] for z, r in design.lookup_profile],
-            # The UI and catalog default LOOKUP a0 to 0; the mesher's own default
-            # is 15.5, so always say it.
-            "a0": _expr(design.a0) if design.a0 is not None else 0,
-        })
 
     if isinstance(design, FreeformConfig):
         if design.corner_grids or any(
@@ -422,6 +412,11 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
     if root.source.contours is not None and root.source.contours.strip():
         raise ValueError("source.contours is not supported by the HornLab mesher preview")
 
+    return _common_mesher_config(root)
+
+
+def _common_mesher_config(root: Any, *, profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Shared settings translation; import comparison may supply a retired input profile."""
     scale = _scale_factor(root.scale)
     s1, s2 = getattr(root, "s1", None) or 0, getattr(root, "s2", None) or 0
     current_import = uses_current_ath_import(root.text_import_version)
@@ -452,7 +447,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
     config: dict[str, Any] = {
         "formula": root.formula,
         "mode": mode,
-        "profile": _profile(root, profile_scale),
+        "profile": _profile(root, profile_scale) if profile is None else profile,
         "mesh": _clean(
             {
                 "angularSegments": _expr(mesh.angular_segments),

@@ -122,7 +122,7 @@ save/reopen; execution uses unambiguous `log10` and `log` names. The native
 rewrite applies only to expression fields, never filenames or passthrough text,
 and legacy axis migration evaluates expressions in the document's dialect.
 
-The root design is discriminated as `OSSE`, `R-OSSE`, `ICW`, `FREEFORM`, `LOOKUP`, or a [bounded native family](native-formulas.md). Common
+The root design is discriminated as `OSSE`, `R-OSSE`, `ICW`, `FREEFORM`, or a [bounded native family](native-formulas.md). Common
 sections cover scale, throat, morphing, mesh/sizing, sampling, enclosure, source,
 frequency, and simulation options. `MORPH`, `Mesh`, `Source`, and `Simulation` blocks
 are accepted alongside their flat dotted spellings.
@@ -254,38 +254,31 @@ a rewrite. They are removed the first time WG rewrites the design.
 Exporting a config from a finished run writes that run's own recorded solve
 options, never the settings currently on screen.
 
-## Experimental LOOKUP profiles
+## Retired table input
 
-`LOOKUP` stores the whole meridian as `lookup_profile` (input alias
-`lookupProfile`): at least two finite `[z_mm, r_mm]` pairs with strictly
-increasing z. Radius need not increase. Samples are linearly interpolated at
-the mesher's axial stations. The pinned mesher describes this as an experimental
-compatibility input for archived/generated configurations, rather than a stable
-public mesh-builder API.
+Old JSON designs naming `LOOKUP`, including `WG.NativeDesign` payloads in `.mwg`
+files, remain readable input. The importer immediately converts them through the
+same S4 conversion owner into `FREEFORM` (Custom profile); the retired family is
+absent from the runtime schema, editor and catalog.
 
-Analytic profile coefficients, guiding curves, nonzero throat extensions,
-slots and driver adapters are refused. Include extensions and adapters in the
-table itself. Optional `a0` controls the automatic source-cap angle, not the
-meridian; it is always sent to the mesher, as 0 when absent, so the server, CLI
-and UI agree (the mesher's own default would be 15.5). Booleans and strings in
-the table, and ATH-only import fields, are refused. Scale, cross-section, morph, wall, enclosure and surface sampling
-controls retain their ordinary mesher behavior. Solve domains use the usual
-mesher symmetry checks; LOOKUP does not impose the native families' full-domain
-restriction.
+The table is a sequence of finite `[z_mm, r_mm]` pairs with strictly increasing z.
+Collinear intermediate rows merge losslessly; remaining bends keep straight,
+pinned corner spans. If 64 anchors or the mesher's 1 mm interior-corner spacing
+requires fitting, the import reports the maximum authored-curve error against
+the original linear interpolation, including a best-fit explanation when 0.01 mm
+cannot be achieved. The separate generated-grid report is sampled, not an OCC
+surface-distance certificate.
 
-Native `.mwg` files store LOOKUP in the existing `WG.NativeDesign` JSON payload.
-The design serializer also exports a plain JSON copy when explicitly requested
-with a `.json` filename, and the open endpoint, `wg solve` and `wg validate`
-accept that JSON as a design file. The UI exports the parameter config of a
-LOOKUP run as `.mwg`, never `.cfg`. Existing
-pristine native text and JSON are replayed byte-for-byte. ATH `.cfg` requests
-are refused because ATH has no LOOKUP profile; CAD Link transport, which writes
-`.cfg`, is refused with the same explanation. Geometry exports remain available.
+The conversion explicitly preserves the resolved source-cap shape and freezes
+the original snapped morph start and implicit mouth dimensions. Other geometry
+rule changes are named in the first-open notice. An axial origin offset is
+reported as a placement change. Unrelated design settings survive the import.
 
-Switching to LOOKUP starts a conical table from `[0, 12.7]` to `[120, 140]` mm,
-removes incompatible controls, and retains supported shared settings. Geometry
-› Profile provides a numeric table and CSV paste in mm; it preserves row order
-and requires increasing z rather than sorting pasted data.
+File Open, project Open, autosave restore, stored-run editing and server payload
+validation share this import path. Opening does not rewrite the file. Saving or
+exporting the editable design writes normal `Freeform.*` keys in `.cfg`, including
+when the requested old filename ended in `.mwg` or `.json`. Stored run artifacts
+and original snapshot bytes are retained; regenerating geometry uses the import.
 
 ## FREEFORM: disk representation versus typed model
 
@@ -383,7 +376,8 @@ is labelled explicitly. The returned summary omits the sampling grid. Evaluator
 deviation describes the unscaled meridian before morphing, not a comparison of
 the complete wall, mouth outline or source cap. None of these routes builds a mesh.
 Validation failures return 422 with `detail` containing the mesher's message or
-request-validation errors. LOOKUP remains on its legacy schema and translation.
+request-validation errors. Retired table inputs are converted before runtime
+validation.
 
 The reader accepts retired tangent scales, per-anchor strength and overshoot policy
 only long enough to migrate old files. The canonical writer never emits those

@@ -16,7 +16,6 @@ describe('public parameter catalog', () => {
       OSSE: 1,
       ICW: 1,
       FREEFORM: 1,
-      LOOKUP: 1,
     });
   });
 

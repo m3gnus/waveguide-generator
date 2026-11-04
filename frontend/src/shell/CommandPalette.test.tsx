@@ -170,10 +170,10 @@ describe('CommandPalette', () => {
     expect(cad.some((entry) => entry.id === 'parameter-osse.L')).toBe(true);
   });
 
-  it.each(['LOOKUP', ...NATIVE_FAMILIES] as const)('keeps %s controls out of other families while preserving loaded-design reveal', (family) => {
+  it.each([...NATIVE_FAMILIES] as const)('keeps %s controls out of other families while preserving loaded-design reveal', (family) => {
     const design = designForFamily(family);
     const entries = buildParameterPaletteEntries(family, { mode: 'parametric', design });
-    const own = entries.filter((entry) => entry.id.startsWith(family === 'LOOKUP' ? 'parameter-lookup.' : 'parameter-native.'));
+    const own = entries.filter((entry) => entry.id.startsWith('parameter-native.'));
     expect(own.length).toBeGreaterThan(0);
     for (const current of ['OSSE', 'R-OSSE', 'ICW', 'FREEFORM'] as const) {
       const offered = buildParameterPaletteEntries(current, { mode: 'parametric', design: designForFamily(current) });

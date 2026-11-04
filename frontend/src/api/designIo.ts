@@ -300,7 +300,7 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
   const absent: string[] = [];
   const unwrapped = unwrapExpressions(wire, '', expressions, absent) as Record<string, unknown>;
   const formula = unwrapped.formula as DesignFamily;
-  if (!['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES].includes(formula)) {
+  if (!['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES].includes(formula)) {
     throw new Error(`This file uses a horn family WG does not know (${String(unwrapped.formula)}). Update WG, or open another file.`);
   }
   const document = merge(designForFamily(formula), unwrapped);
@@ -334,6 +334,19 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
   if (Object.keys(expressions).length) document._expressions = expressions;
   if (absent.length) document._absent = [...new Set(absent)];
   return refreshAbsentWall(document);
+}
+
+/** Legacy discriminators are accepted only at the server import boundary. */
+export function needsDesignImport(design: { formula?: unknown }): boolean {
+  return design.formula === 'LOOKUP';
+}
+
+export async function importStoredDesign(design: DesignDocument, fetcher: typeof fetch = fetch): Promise<OpenDesignResponse> {
+  return openDesignText(JSON.stringify(serializeDesign(design)), fetcher);
+}
+
+export function importNotice(report: Pick<ImportReport, 'migrationsApplied'>): string | null {
+  return report.migrationsApplied.find((item) => item.name === '007_custom_profile_import')?.note ?? null;
 }
 
 /** An HTTP refusal of the profile export, distinct from a failed request. */

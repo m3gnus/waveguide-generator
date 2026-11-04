@@ -44,7 +44,7 @@ export function hydrateJobDesign(job: Pick<JobItem, 'script_snapshot'>): DesignD
 }
 
 export function replaceWithJobDesign(
-  job: Pick<JobItem, 'script_snapshot'> & Partial<Pick<JobItem, 'design_uid' | 'design_name'>>,
+  job: Pick<JobItem, 'script_snapshot'> & Partial<Pick<JobItem, 'design_uid' | 'design_name'>> & { design_availability?: DesignAvailability | null },
   options?: { keepHistory?: boolean },
 ): boolean {
   const design = hydrateJobDesign(job);
@@ -56,6 +56,7 @@ export function replaceWithJobDesign(
   // Legacy runs without a recorded name keep the name already on screen.
   useDesignStore.getState().replaceDocument(design, {
     ...options,
+    notice: job.design_availability?.note,
     documentState: sameDocument ? undefined : {
       designUid: job.design_uid ?? mintDesignUid(),
       designName: job.design_name ?? useDocumentStore.getState().designName,

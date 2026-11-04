@@ -12,7 +12,7 @@ import { osseFeatures, osseFormula, type OsseFeatures } from '../design/osseFeat
 import type { DesignAssembly } from './assembly';
 
 export { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
-export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | 'LOOKUP' | NativeFamily;
+export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | NativeFamily;
 export const isNativeFamily = (family: DesignFamily): family is NativeFamily => (NATIVE_FAMILIES as readonly string[]).includes(family);
 // A new design stays Off until accuracy sizing is explicitly requested.
 export const DEFAULT_SURFACE_DEVIATION_MM: number | undefined = undefined;
@@ -127,7 +127,6 @@ export interface DesignDocument {
   icw_coeffs?: (number | string)[];
   icw_S?: number;
   length?: number;
-  lookup_profile?: [number, number][];
   throat_profile?: number;
   rotation?: number;
   circ_arc_radius?: number;
@@ -359,7 +358,6 @@ export function designForFamily(family: DesignFamily): DesignDocument {
     }
     return native;
   }
-  if (family === 'LOOKUP') return { ...shared, formula: family, lookup_profile: [[0, 12.7], [120, 140]], a0: 0 };
   if (family === 'R-OSSE') return { ...structuredClone(seedDesign), formula: family };
   if (family === 'OSSE') {
     return {
@@ -409,7 +407,6 @@ const FAMILY_SPECIFIC_FIELDS = {
     'r_aperture', 'x_aperture', 'x_setback', 'kappa0', 'kappa_abs_max',
     'dkappa_ds_abs_max', 'theta_max_deg', 'pin_mouth_radius', 'icw_seed', 'icw_coeffs', 'icw_S',
   ],
-  LOOKUP: ['lookup_profile', 'a0'],
   FREEFORM: [
     'length', 'profile_h', 'profile_v', 'shared_profile', 'cross_sections', 'inflection_policy',
     'corner_grids',
@@ -466,7 +463,6 @@ function pairedScalarCarry(
 }
 
 function compatibleFamilyValues(design: DesignDocument): CompatibleFamilyValues {
-  if (design.formula === 'LOOKUP') return {};
   if (design.formula !== 'FREEFORM') {
     return {
       throatRadius: scalarCarry(design, 'r0', design.r0),
@@ -558,7 +554,6 @@ function applyCompatibleFamilyValues(
   target: DesignDocument,
   compatible: CompatibleFamilyValues,
 ): void {
-  if (target.formula === 'LOOKUP') return;
   if (target.formula === 'FREEFORM') {
     const horizontalMouthIndex = target.profile_h!.points.length - 1;
     const verticalMouthIndex = target.profile_v!.points.length - 1;
@@ -739,19 +734,6 @@ function mergeFamilyParameters(current: DesignDocument, family: DesignFamily, op
     // A new Custom profile edits one table; its V copy stays inactive until separated.
     next.shared_profile = true;
   }
-  if (family === 'LOOKUP') {
-    // LOOKUP starts from a conical whole meridian, not an analytic conversion.
-    next.throat_ext_angle = 0; next.throat_ext_length = 0; next.slot_length = 0;
-    // The hydrate defaults, so the payload does not depend on how the design was reached.
-    next.length_mode = 'profile'; next.coverage_mode = 'auto';
-    delete next.text_import_version; delete next.ath_axial_sampling_rule;
-    delete next.ath_nac_present; delete next.ath_nac;
-    delete next.mesh.ath_roundover; delete next.mesh.ath_rear_shape;
-    delete next.mesh.ath_rear_front_offset; delete next.mesh.ath_rear_step;
-    for (const key of Object.keys(next._expressions ?? {})) {
-      if (['throat_ext_angle', 'throat_ext_length', 'slot_length'].includes(key) || key.startsWith('mesh.ath_')) delete next._expressions![key];
-    }
-  }
   applyCompatibleFamilyValues(next, compatible);
   if (['OSSE', 'R-OSSE'].includes(current.formula) && ['OSSE', 'R-OSSE'].includes(family)) {
     for (const key of ['s1', 's2'] as const) {
@@ -850,6 +832,7 @@ interface DesignStore {
   designRevision: number;
   /** Bumps when a design is loaded or replaced, never on an edit. */
   loadGeneration: number;
+  loadNotice: string | null;
   dragSnapshot: DesignDocument | null;
   updateField: (path: string, value: number) => void;
   updateValue: (path: string, value: DesignValue) => void;
@@ -869,6 +852,7 @@ interface DesignStore {
     keepHistory?: boolean;
     documentState?: HistoryDocument;
     loadSource?: DesignLoadSource;
+    notice?: string | null;
     revision?: number;
   }) => void;
   commitEmbedded: (updates: EmbeddedDesignUpdates, mode: 'step' | 'amend' | 'drag') => void;
@@ -1002,6 +986,7 @@ export const useDesignStore = create<DesignStore>()(
       design: structuredClone(seedDesign),
       designRevision: 1,
       loadGeneration: 0,
+      loadNotice: null,
       dragSnapshot: null,
       updateField: (path, value) => get().updateValue(path, value),
       updateValue: (path, value) => {
@@ -1077,6 +1062,7 @@ export const useDesignStore = create<DesignStore>()(
           design: nextDesign,
           designRevision: options?.revision ?? state.designRevision + 1,
           loadGeneration: state.loadGeneration + 1,
+          loadNotice: options?.notice ?? null,
         }));
         // Opening a file starts a new document, so its history starts empty.
         // Browsing to a previous run does not: that is a step inside the current

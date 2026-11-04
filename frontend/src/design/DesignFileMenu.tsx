@@ -568,7 +568,7 @@ export function DesignFileMenu() {
 
   const documentName = model.kind === 'file' && meshFilename ? meshFilename : model.label;
   const cadLink = model.kind === 'parametric' && classification ? CLASSIFICATION_DISPLAY[classification] : null;
-  const fileExtension = design.formula === 'LOOKUP' ? '.mwg' : '.cfg';
+  const fileExtension = '.cfg';
   const cadSendLimit = nativeCadLimitation(design.formula);
 
   return <div ref={root} className="design-file-menu">
@@ -630,7 +630,7 @@ export function DesignFileMenu() {
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
         {geometryReason && <div className="design-menu-item" role="note">Imported models cannot export geometry or profiles. Switch to Parametric to export them.</div>}
         {copyReason && !geometryReason && <div className="design-menu-item" role="note">{copyReason}</div>}
-        <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={() => void exportCopy()}><span>Design file</span><kbd>{design.formula === 'LOOKUP' ? 'mwg' : 'cfg'}</kbd></button>
+        <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={() => void exportCopy()}><span>Design file</span><kbd>cfg</kbd></button>
         {/* The .wglink bundle and its handoff are Fusion's transport; Onshape
             sends live in the CAD Link panel and go through its own adapter. */}
         {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason) || Boolean(cadSendLimit)} onClick={() => void sendToCad()} title={geometryReason ?? cadSendLimit ?? `Save this CAD model (.wglink) in the selected workspace.${omitsWoofers}`}><span>Send to CAD</span><span>.wglink</span></button>}

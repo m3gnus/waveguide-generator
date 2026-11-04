@@ -26,8 +26,10 @@ the ones that are missing.
 
 Start with a new OSSE, R-OSSE, ICW, or FREEFORM design, or open an ATH-style
 `.cfg`/`.txt` file. Legacy `.mwg` files use the same text grammar and remain readable.
-The Family picker lists OSSE, R-OSSE, ICW and **Custom profile** (FREEFORM). Existing LOOKUP and
-SOURCE-DISK designs keep their current-only Family entry.
+The Family picker lists OSSE, R-OSSE, ICW and **Custom profile** (FREEFORM).
+Retired table designs open as Custom profiles with a nonblocking deviation notice.
+Their original files remain untouched until Save, which writes normal `Freeform.*`
+keys in `.cfg`. SOURCE-DISK designs keep their current-only Family entry.
 
 **Custom profile** starts a blank design with an editable anchor table under
 **Profile**. The table includes the throat and mouth, positions and radii in

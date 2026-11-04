@@ -831,34 +831,14 @@ describe('ParamPanel inventory UX', () => {
     }
   });
 
-  it('keeps a loaded LOOKUP design selected with its whole-meridian editor', () => {
-    const loaded = hydrateDesignDocument({ ...serializeDesign(designForFamily('LOOKUP')), lookup_profile: [[0, 18], [50, 40], [160, 150]] });
-    act(() => useDesignStore.getState().replaceDocument(loaded));
-    const family = host.querySelector<HTMLSelectElement>('#family')!;
-    const option = family.querySelector<HTMLOptionElement>('option[value="LOOKUP"]')!;
-    expect(option.textContent).toBe('Legacy straight-line profile');
-    expect(host.textContent).toContain('It is not converted to a Custom profile.');
-    expect(option.selected).toBe(true);
-    expect(family.value).toBe('LOOKUP');
-    expect(serializeDesign(useDesignStore.getState().design)).toEqual(serializeDesign(loaded));
-    expect(host.querySelector('.experimental-badge')).not.toBeNull();
+  it('shows an imported Custom profile notice without a retired family option', () => {
+    const loaded = designForFamily('FREEFORM');
+    act(() => useDesignStore.getState().replaceDocument(loaded, { notice: 'Opened as Custom profile. Profile curve unchanged. Maximum generated-grid change 0.2 mm.' }));
+    expect(host.querySelector<HTMLSelectElement>('#family')!.value).toBe('FREEFORM');
+    expect(host.querySelector('option[value="LOOKUP"]')).toBeNull();
+    expect(host.querySelector('.conversion-notice')?.textContent).toContain('Maximum generated-grid change 0.2 mm');
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('.conversion-notice button')].find((button) => button.textContent === 'Dismiss')!.click());
     expect(host.querySelector('.conversion-notice')).toBeNull();
-    const table = host.querySelector('[data-parameter-id="lookup.profile"]')!;
-    expect(table.closest('section')?.getAttribute('data-section')).toBe('Profile');
-    expect(table.querySelectorAll('tbody tr')).toHaveLength(3);
-    expect(host.querySelector('[data-parameter-id="common.throat_ext_length"]')).toBeNull();
-    expect(host.querySelector('[data-parameter-id="rosse.R"]')).toBeNull();
-    expect(host.querySelector('[data-parameter-id="guide.curve_type"]')).toBeNull();
-    expect(host.querySelector('[data-parameter-id="morph.target_shape"]')).not.toBeNull();
-    act(() => {
-      family.value = 'OSSE'; family.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(family.value).toBe('OSSE');
-    expect(family.querySelector('option[value="LOOKUP"]')).toBeNull();
-    act(() => useDesignStore.getState().undo());
-    expect(family.value).toBe('LOOKUP');
-    expect(family.querySelector<HTMLOptionElement>('option[value="LOOKUP"]')?.selected).toBe(true);
-    expect(serializeDesign(useDesignStore.getState().design)).toEqual(serializeDesign(loaded));
   });
 
   it('preserves ATH SuperFormula tuple editing through the parameter panel', () => {
@@ -2788,7 +2768,7 @@ describe('ParamPanel inventory UX', () => {
     expect((serializeDesign(useDesignStore.getState().design).simulation as Record<string, unknown>).sim_type).toBe('freestanding');
   });
 
-  it.each(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES] as const)('renders every visible Mesh field in declared order for %s', (family) => {
+  it.each(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES] as const)('renders every visible Mesh field in declared order for %s', (family) => {
     const design = designForFamily(family);
     design.mesh.sampling_mode = 'zmap';
     design.enclosure.depth = 120;

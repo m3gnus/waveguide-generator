@@ -61,7 +61,7 @@ describe('frontend result and status labels', () => {
   it('shows the tracked design filename instead of a path placeholder', () => {
     expect(documentLabel('loaded-design.cfg')).toBe('loaded-design.cfg');
     expect(documentLabel('   ')).toBe('untitled design');
-    expect(documentLabel('lk.cfg', 'LOOKUP')).toBe('lk.mwg');
+    expect(documentLabel('lk.cfg', 'LOOKUP')).toBe('lk.cfg');
     expect(documentLabel('lk.mwg', 'OSSE')).toBe('lk.cfg');
   });
 

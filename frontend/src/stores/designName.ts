@@ -68,9 +68,9 @@ export function designFilename(name: string, family?: string): string {
   return `${stem || UNTITLED_SLUG}.${designFileExtension(family)}`;
 }
 
-/** LOOKUP has no ATH form, so its design files are native `.mwg`. */
-export function designFileExtension(family?: string): 'cfg' | 'mwg' {
-  return family === 'LOOKUP' ? 'mwg' : 'cfg';
+/** Editable design files use the normal WG config format. */
+export function designFileExtension(_family?: string): 'cfg' {
+  return 'cfg';
 }
 
 /** The design name a picked file carries, in the file's own spelling. */

@@ -79,7 +79,7 @@ export function engineStatusLabel(
 
 export function documentLabel(filename: string, family?: string): string {
   // The stored filename was derived when the name was set; the extension
-  // follows the family on screen now (LOOKUP saves as .mwg, never .cfg).
+  // follows the editable design on screen now.
   const named = family ? filename.replace(/\.(cfg|mwg)$/i, `.${designFileExtension(family)}`) : filename;
   return named.trim() || 'untitled design';
 }

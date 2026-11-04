@@ -24,7 +24,6 @@ const TRACEABILITY_KEYS = {
   'R-OSSE': ['scale', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
   OSSE: ['scale', 'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h'],
   ICW: ['scale', 'r0', 'a0', 'L', 'R', 'coverage_angle', 'hold_start', 'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth', 'r_aperture', 'x_aperture', 'x_setback', 'kappa0', 'kappa_abs_max', 'dkappa_ds_abs_max', 'theta_max_deg', 'pin_mouth_radius', 'icw_S', 'icw_seed', 'icw_coeffs'],
-  LOOKUP: ['scale', 'lookupProfile', 'lookupSourceAngle'],
   FREEFORM: ['scale', 'length', 'throatRadius', 'throatAngle', 'mouthRadiusH', 'mouthAngleH', 'interiorH', 'mouthRadiusV', 'mouthAngleV', 'interiorV', 'crossSections', 'inflectionPolicy'],
   COMMON: [
     'throatExtAngle', 'throatExtLength', 'slotLength',
@@ -122,14 +121,14 @@ describe('complete parameter registry', () => {
 
   it('covers every current family-qualified traceability entry with no deferrals', () => {
     const encodedCount = Object.values(TRACEABILITY_KEYS).reduce<number>((count, keys) => count + keys.length, 0);
-    expect(encodedCount).toBe(119);
-    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(119);
+    expect(encodedCount).toBe(116);
+    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(116);
     expect(TRACEABILITY_PARAMETER_INVENTORY.every(traceEntryIsRegistered)).toBe(true);
 
     for (const [family, keys] of Object.entries(TRACEABILITY_KEYS)) {
       for (const key of keys) {
         expect(PARAMETER_REGISTRY.some((field) => field.legacyKey === key && (
-          family === 'COMMON' || !field.families || field.families.includes(family as 'R-OSSE' | 'OSSE' | 'ICW' | 'FREEFORM' | 'LOOKUP')
+          family === 'COMMON' || !field.families || field.families.includes(family as 'R-OSSE' | 'OSSE' | 'ICW' | 'FREEFORM')
         )), `${family}.${key}`).toBe(true);
       }
     }
@@ -371,7 +370,7 @@ describe('complete parameter registry', () => {
       kind: 'number',
       min: 2,
       max: 16,
-      families: ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM', 'LOOKUP'],
+      families: ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'],
     });
   });
 

@@ -1334,7 +1334,7 @@ class ICWConfig(DesignCommon):
 
 
 class LookupConfig(DesignCommon):
-    """Experimental precomputed whole meridian, in intrinsic millimetres."""
+    """Input-only retired table shape, converted before DesignConfig validation."""
 
     formula: Literal["LOOKUP"]
     lookup_profile: list[tuple[float, float]] = Field(
@@ -1611,7 +1611,7 @@ class SourceDiskConfig(NativeDesignCommon):
     source_body: SourceBody = Field(default_factory=SourceBody)
 
 DesignVariant = Annotated[
-    OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig | LookupConfig | NativeOSSEConfig | SourceDiskConfig,
+    OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig | NativeOSSEConfig | SourceDiskConfig,
     Field(discriminator="formula"),
 ]
 
@@ -1651,8 +1651,6 @@ class DesignConfig(RootModel[DesignVariant]):
             for key in ("s1", "s2"):
                 if key not in migrated:
                     continue
-                if migrated.get("formula") == "LOOKUP" and migrated[key] is not None:
-                    raise _profile_family_refusal("formula LOOKUP does not accept OSSE/R-OSSE profile keys")
                 number = coefficient(migrated[key], key) if migrated[key] is not None else 0
                 if number != 0:
                     formula = migrated.get("formula")

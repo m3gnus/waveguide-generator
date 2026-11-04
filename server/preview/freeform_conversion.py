@@ -1,7 +1,7 @@
 """Explicit conversion, measured on the profile export's generated inner grid.
 
-This module fits authored data, never builds geometry or evaluates splines of
-its own. Coordinates and reported tolerances are finished (scaled) millimetres.
+This module fits authored data; production sampling and wall comparison stay
+with the mesher. Coordinates and tolerances are finished (scaled) millimetres.
 """
 from __future__ import annotations
 
@@ -11,8 +11,9 @@ from typing import Literal
 
 import numpy as np
 from scipy.optimize import minimize_scalar
+from scipy.interpolate import PchipInterpolator
 
-from server.design.schema import DesignCommon, DesignConfig, Expr, StrictModel
+from server.design.schema import DesignCommon, DesignConfig, Expr, LookupConfig, StrictModel
 from server.design.native import NATIVE_FORMULAS, has_native_roundover
 from server.design.text_import import uses_current_ath_import
 from server.exports.core import _bare_grid_config, _inner_grid
@@ -59,6 +60,7 @@ class GeneratedComparison(StrictModel):
     source_cap_angle_before_deg: float
     source_cap_angle_after_deg: float
     features: list[FeatureChange]
+    curve_deviation_mm: float | None = None
     method: GeneratedComparisonMethod
 
 
@@ -88,7 +90,40 @@ def _active_morph(design: DesignConfig) -> bool:
     return target is not None and target.constant_value() != 0
 
 
+def legacy_lookup_source(payload: dict) -> DesignConfig:
+    """Input-only shape. Never hand this wrapper to a runtime build endpoint."""
+    return DesignConfig.model_construct(root=LookupConfig.model_validate(payload, context={"expression_dialect": "wg-v1"}))
+
+
+def _legacy_config(source: DesignConfig) -> dict:
+    from server.preview.translate import _common_mesher_config
+    scale = _number(source.root.scale, 1)
+    return _common_mesher_config(source.root, profile={
+        'formula': 'LOOKUP', 'lookupProfile': [[z*scale, r*scale] for z, r in source.root.lookup_profile],
+        'a0': _expr(source.root.a0) if source.root.a0 is not None else 0,
+    })
+
+
+def _legacy_grid(source: DesignConfig, *, authored: bool = False) -> tuple[np.ndarray, dict]:
+    from hornlab_mesher.config_builder import build_geometry_params
+    from hornlab_mesher.profile_sampling import build_point_grid_arrays
+    config = _legacy_config(source)
+    config['mode'] = 'bare'
+    config.pop('enclosure', None)
+    config['mesh'].update(quadrants=1234, wallThickness=0, verticalOffset=0, scaleToMetres=False,
+                          angularSegments=ANGULAR)
+    if not authored and not _active_morph(source):
+        config['mesh']['lengthSegments'] = AXIAL
+    else:
+        config['mesh']['lengthSegments'] = max(1, int(math.floor(_number(source.root.mesh.length_segments, 40)+.5)))
+    params, formula, _ = build_geometry_params(config)
+    grid = build_point_grid_arrays(params)
+    return np.asarray(grid['inner_grid']), grid
+
+
 def _sample(design: DesignConfig) -> np.ndarray:
+    if isinstance(design.root, LookupConfig):
+        return _legacy_grid(design)[0]
     # Morph start snapping is a property of the authored axial table. Increasing
     # that count would silently change the very source we promise to convert.
     authored = (design.formula in NATIVE_FORMULAS or _active_morph(design) or design.root.mesh.ath_roundover is not None
@@ -134,7 +169,8 @@ def _cap_angle(design: DesignConfig, points: np.ndarray) -> float:
     from hornlab_mesher.preview.source_cap import _source_geometry
     from hornlab_mesher.builders.point_grid_sources import _source_cap_height, _source_cap_radius
 
-    config = design_to_mesher_config(design) if design.formula in NATIVE_FORMULAS else _bare_grid_config(design)
+    config = (_legacy_config(design) if isinstance(design.root, LookupConfig) else
+              design_to_mesher_config(design) if design.formula in NATIVE_FORMULAS else _bare_grid_config(design))
     params, _, _ = build_geometry_params(config)
     geometry = _source_geometry(params, design.formula, points)
     throat = float(np.mean(np.linalg.norm(points[:, 0, :2], axis=1)))
@@ -143,7 +179,7 @@ def _cap_angle(design: DesignConfig, points: np.ndarray) -> float:
     return math.degrees(math.asin(min(1, throat / max(radius, throat * 1.001)))) if height > 1e-12 else 0.0
 
 
-def _radial_difference(left: np.ndarray, right: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _radial_difference(left: np.ndarray, right: np.ndarray, *, align_disjoint: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """Symmetric radial distance of all branches at each common z.
 
     Comparison can inspect a rollback even though conversion must refuse it.
@@ -151,6 +187,14 @@ def _radial_difference(left: np.ndarray, right: np.ndarray) -> tuple[np.ndarray,
     """
     lo = max(left[:, 0].min(), right[:, 0].min())
     hi = min(left[:, 0].max(), right[:, 0].max())
+    if hi < lo and align_disjoint:
+        # Import always opens the best representation, including translated
+        # tables. Compare relative meridians and retain the physical movement
+        # independently in the extent and 3D mouth report.
+        right = right.copy()
+        right[:, 0] += left[:, 0].min()-right[:, 0].min()
+        lo = max(left[:, 0].min(), right[:, 0].min())
+        hi = min(left[:, 0].max(), right[:, 0].max())
     if hi < lo:
         _refuse('The generated profiles have no common axial range.',
                 'Keep the original design or move the throat and mouth into the same axial range before converting.')
@@ -183,6 +227,7 @@ def _radial_difference(left: np.ndarray, right: np.ndarray) -> tuple[np.ndarray,
 def compare_generated_designs(
     before: DesignConfig, after: DesignConfig, *, features: list[FeatureChange] | None = None,
     before_points: np.ndarray | None = None, after_points: np.ndarray | None = None,
+    align_disjoint: bool = False,
 ) -> GeneratedComparison:
     """Compare any two buildable ring-grid families using the export owner.
 
@@ -196,7 +241,7 @@ def compare_generated_designs(
     extent = 0.0
     for phi, left, right in zip(AZIMUTHS, a, b):
         extent = max(extent, abs(left[:, 0].min()-right[:, 0].min()), abs(left[:, 0].max()-right[:, 0].max()))
-        grid, delta = _radial_difference(left, right)
+        grid, delta = _radial_difference(left, right, align_disjoint=align_disjoint)
         peak = int(np.argmax(delta))
         deviations.append(WallDeviation(max_deviation_mm=float(delta[peak]), azimuth_deg=float(phi),
                                         z_mm=float(grid[peak]), sample_count=len(grid)))
@@ -218,7 +263,8 @@ def compare_generated_designs(
                     'The bare inner grid excludes the outer wall, enclosure, baffle, rear body and source surface; source-cap opening angle is checked separately.',
                     'Active morphs, explicit axial maps and ATH lips retain the authored axial count to preserve snapping and construction; other profiles use 1024 axial segments.',
                     'Native constructions use their resolved inner-wall grid at the native owner’s density; the actual axial count is reported above.',
-                    'Radial errors use the common z range and all fold branches; axial extent error and 3D mouth-ring displacement at a common azimuth are reported separately.']),
+                    'Radial errors use the common z range and all fold branches; axial extent error and 3D mouth-ring displacement at a common azimuth are reported separately.',
+                    *(['Disjoint imported axial ranges are aligned at the throat for radial comparison; the actual translation remains in the extent and mouth measurements.'] if align_disjoint else [])]),
     )
 
 
@@ -243,7 +289,7 @@ def _feature_changes(before: DesignConfig, after: DesignConfig) -> list[FeatureC
 
 def _preserve_shared(source: DesignConfig) -> tuple[dict, list[FeatureChange]]:
     """One preservation rule for conversion; unrelated authored values survive."""
-    payload = source.model_dump(mode='json')
+    payload = source.root.model_dump(mode='json')
     common = {key: value for key, value in payload.items() if key in DesignCommon.model_fields}
     features: list[FeatureChange] = []
     def feature(name: str, message: str, change: str = 'baked') -> None:
@@ -259,8 +305,6 @@ def _preserve_shared(source: DesignConfig) -> tuple[dict, list[FeatureChange]]:
     common['cross_section'] = {'exponent': 2, 'aspect_ratio': 1}
     if _active_morph(source):
         feature('Mouth morph', 'The generated morph is baked into the profiles and cross-section stations; the original morph controls no longer drive it.', 'removed')
-        if source.formula == 'LOOKUP':
-            feature('LOOKUP morph-start snapping', 'The fit uses the authored axial table so its snapped morph start is baked into the stations.')
         m = source.root.morph
         if m.target_width is None or m.target_height is None:
             feature('Implicit mouth rounding', 'The generated implicit mouth dimensions are baked into the fit instead of being rounded again by the original family.')
@@ -338,7 +382,112 @@ def _end_angle(samples: np.ndarray, mouth: bool = False, linear: bool = False) -
     return float(np.clip(math.degrees(math.atan(slope)), -90, 90))
 
 
-def _fit_plane(samples: np.ndarray, seed_z: list[float], all_corners: bool, scale: float, check: Callable) -> dict:
+def _merge_straight_rows(rows: np.ndarray) -> np.ndarray:
+    """Remove only collinear intermediate rows, within floating point roundoff."""
+    kept = [0]
+    for i in range(1, len(rows)-1):
+        left, middle, right = rows[kept[-1]], rows[i], rows[i+1]
+        predicted = left[1] + (right[1]-left[1])*(middle[0]-left[0])/(right[0]-left[0])
+        if abs(predicted-middle[1]) > 32*np.finfo(float).eps*max(1, abs(predicted), abs(middle[1])):
+            kept.append(i)
+    return rows[[*kept, len(rows)-1]]
+
+
+def _polyline_fit(rows: np.ndarray, scale: float, check: Callable) -> tuple[dict, float]:
+    """Exact straight runs first; bounded scalar PCHIP handles only at the limits.
+
+    The cubic-minus-polyline maximum checks every original interval's ends and
+    derivative roots. The reported curve error is independent of the wall grid.
+    """
+    from hornlab_mesher.freeform import MIN_INTERIOR_CORNER_SPACING_MM
+    original = rows
+    rows = _merge_straight_rows(rows)
+    length = float(rows[-1, 0])
+    # The mesher's spacing is measured in finished millimetres.
+    spacing = MIN_INTERIOR_CORNER_SPACING_MM + 1e-10
+    knot_spacing = length*1.1e-7
+    exact = len(rows) <= 64 and np.min(np.diff(rows[:, 0])) >= knot_spacing and (len(rows) <= 3 or np.min(np.diff(rows[1:-1, 0])) >= spacing-2e-10)
+    if exact:
+        selected = list(range(len(rows)))
+        corners = set(selected)
+    else:
+        angles = np.arctan2(np.diff(rows[:, 1]), np.diff(rows[:, 0]))
+        strength = abs(np.diff(angles))
+        corners = {0, len(rows)-1}
+        for i in np.argsort(-strength)+1:
+            if (strength[i-1] < math.radians(1) or len(corners) >= 32
+                or min(rows[i, 0], length-rows[i, 0]) < knot_spacing):
+                continue
+            if all(abs(rows[i, 0]-rows[j, 0]) >= spacing for j in corners if j not in (0, len(rows)-1)):
+                corners.add(int(i))
+        selected = sorted(corners)
+    def fit():
+        check()
+        chosen = rows[selected].copy()
+        previous_corner = None
+        for j, index in enumerate(selected[1:-1], 1):
+            if index not in corners:
+                continue
+            # Normalized t -> physical z can round an exactly 1 mm gap just
+            # below the mesher guard. Correct only floating-point roundoff.
+            position = chosen[j, 0]/length*(length/scale)*scale
+            if previous_corner is not None:
+                gap = previous_corner+MIN_INTERIOR_CORNER_SPACING_MM-position
+                if 0 <= gap < 1e-8:
+                    chosen[j, 0] += gap+1e-10
+                    position = chosen[j, 0]
+            previous_corner = position
+        points = [{'t': float(z/length), 'r': float(r/scale),
+                   'join': 'corner' if i in corners else 'smooth'} for i, (z, r) in zip(selected, chosen)]
+        boundaries = [selected.index(i) for i in sorted(corners)]
+        polynomials = []
+        for lo, hi in zip(boundaries[:-1], boundaries[1:]):
+            run = chosen[lo:hi+1]
+            polynomial = PchipInterpolator(run[:, 0], run[:, 1])
+            slopes = polynomial.derivative()(run[:, 0])
+            for j in range(lo, hi):
+                dz = (chosen[j+1, 0]-chosen[j, 0])/3/scale
+                points[j]['handle_out'] = [float(dz), float(slopes[j-lo]*dz)]
+                points[j+1]['handle_in'] = [-float(dz), -float(slopes[j-lo+1]*dz)]
+                polynomials.append((chosen[j, 0], chosen[j+1, 0], polynomial.c[:, j-lo]))
+        worst, worst_z = 0., float(rows[0, 0])
+        for z0, z1, coefficients in polynomials:
+            first = max(0, np.searchsorted(original[:, 0], z0, side='right')-1)
+            last = min(len(original)-2, np.searchsorted(original[:, 0], z1, side='left'))
+            for i in range(first, last+1):
+                left, right = max(z0, original[i, 0]), min(z1, original[i+1, 0])
+                if right < left:
+                    continue
+                slope = (original[i+1, 1]-original[i, 1])/(original[i+1, 0]-original[i, 0])
+                difference = coefficients.copy()
+                difference[2] -= slope
+                difference[3] -= original[i, 1]+slope*(z0-original[i, 0])
+                roots = np.roots(np.trim_zeros(np.array([3*difference[0], 2*difference[1], difference[2]]), 'f'))
+                probes = [left-z0, right-z0, *[float(v.real) for v in roots if abs(v.imag) < 1e-10 and left-z0 <= v.real <= right-z0]]
+                for value in probes:
+                    error = abs(float(np.polyval(difference, value)))
+                    if error > worst:
+                        worst, worst_z = error, value+z0
+        return {'points': points, 'throat_angle_deg': _end_angle(rows, linear=True),
+                'mouth_angle_deg': _end_angle(rows, mouth=True, linear=True)}, worst, worst_z
+    for _ in range(128):
+        profile, error, position = fit()
+        if error <= MATCH_MM or exact:
+            return profile, error
+        available = [i for i in range(1, len(rows)-1) if i not in selected
+                     and all(abs(rows[i, 0]-rows[j, 0]) >= knot_spacing for j in selected)]
+        if available and len(selected) < 64:
+            selected = sorted([*selected, min(available, key=lambda i: abs(rows[i, 0]-position))])
+            continue
+        eligible = [i for i in selected[1:-1] if i not in corners and all(
+            abs(rows[i, 0]-rows[j, 0]) >= spacing for j in corners if j not in (0, len(rows)-1))]
+        if not eligible:
+            return profile, error
+        corners.add(min(eligible, key=lambda i: abs(rows[i, 0]-position)))
+    return profile, error
+
+
+def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Callable) -> dict:
     from hornlab_mesher import freeform_evaluate_profile
     from hornlab_mesher.freeform import MIN_INTERIOR_CORNER_SPACING_MM
     from server.preview.freeform import _params
@@ -352,13 +501,13 @@ def _fit_plane(samples: np.ndarray, seed_z: list[float], all_corners: bool, scal
     selected = sorted(set([0, len(z)-1, *[int(np.argmin(abs(z-v))) for v in seed_z]]))
     if len(selected) > 64:
         selected = [0, len(z)-1]
-    throat, mouth = _end_angle(samples, linear=all_corners), _end_angle(samples, True, linear=all_corners)
+    throat, mouth = _end_angle(samples), _end_angle(samples, True)
     slopes = np.degrees(np.arctan(np.gradient(r, z, edge_order=2)))
     slopes[0], slopes[-1] = throat, mouth
     while True:
         check()
         points = [{'t': float(z[i]/length), 'r': float(r[i]/scale),
-                   'join': 'corner' if all_corners or any(abs(z[i]-v) < 1e-8 for v in seed_z) else 'smooth'} for i in selected]
+                   'join': 'corner' if any(abs(z[i]-v) < 1e-8 for v in seed_z) else 'smooth'} for i in selected]
         for i, point in zip(selected, points):
             if point['join'] == 'smooth':
                 point['angle_deg'] = float(slopes[i])
@@ -376,15 +525,6 @@ def _fit_plane(samples: np.ndarray, seed_z: list[float], all_corners: bool, scal
                     position += gap+1e-10
                     point['t'] = float(position/length)
             previous_corner = position
-        if all_corners:
-            # Two un-angled corners are a straight span by the mesher contract.
-            # Pin those documented one-third chord handles so large tables do
-            # not enter the automatic tangent-speed recovery search.
-            for left, right in zip(points[:-1], points[1:]):
-                dz = (right['t']-left['t'])*length/scale/3
-                dr = (right['r']-left['r'])/3
-                left['handle_out'] = [float(dz), float(dr)]
-                right['handle_in'] = [-float(dz), -float(dr)]
         profile = {'points': points, 'throat_angle_deg': throat, 'mouth_angle_deg': mouth}
         # Use the edit API's translator and production spline inversion,
         # precedence, tangent shrinking and validation, in physical mm.
@@ -401,10 +541,6 @@ def _fit_plane(samples: np.ndarray, seed_z: list[float], all_corners: bool, scal
             'cross_sections': [{'t': 0, 'shape': 'ellipse'}, {'t': 1, 'shape': 'ellipse'}]})
         evaluated = freeform_evaluate_profile(_params(trial), 'H', z)
         error = abs(evaluated-r)
-        if all_corners:
-            eligible = np.zeros(len(z), dtype=bool)
-            eligible[[int(np.argmin(abs(z-v))) for v in seed_z]] = True
-            error[~eligible] = 0
         for chosen in selected:
             error[abs(z-z[chosen]) < length*1.1e-7] = 0
         if float(error.max()) <= MATCH_MM * .65 or len(selected) == 64:
@@ -461,7 +597,7 @@ def _fit_stations(wall: np.ndarray, length: float, scale: float, check: Callable
 
 
 def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
-                    progress: Callable) -> ConvertResponse:
+                    progress: Callable, importing: bool = False) -> ConvertResponse:
     from hornlab_mesher.errors import ConfigError, UserRefusal
     if source.formula == 'FREEFORM':
         _refuse('This design is already a Custom profile.', 'Edit its existing profile anchors instead of converting it.')
@@ -480,9 +616,9 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
     _monotone(wall, ' with the ATH Mesh.Roundover rollback lip' if source.root.mesh.ath_roundover else '')
     progress('sample')
     origins = wall[:, 0, 0].copy()
-    if np.max(abs(origins)) > REFUSE_MM:
+    if np.max(abs(origins)) > REFUSE_MM and not importing:
         _refuse('The generated throat is more than 0.5 mm from z = 0; a Custom profile starts at zero.',
-                'Shift the LOOKUP table so its first z is zero, then convert again.')
+                'Shift the imported table so its first z is zero, then convert again.')
     wall[:, :, 0] -= origins[:, None]
     length = float(wall[0, -1, 0])
     scale = _number(source.root.scale, 1)
@@ -490,45 +626,92 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
     if np.max(abs(origins)) > 1e-8:
         features.append(FeatureChange(name='Axial origin', change='changed',
             message='The throat moves to z = 0; its translation is included in the axial extent and mouth-outline deviations.'))
-    shared = _axisymmetric(source)
-    seed_z: list[float] = []
-    lookup = source.formula == 'LOOKUP'
+    lookup = isinstance(source.root, LookupConfig)
+    curve_error = None
     if lookup:
-        seed_z = [row[0]*scale-origins[0] for row in source.root.lookup_profile]
-        # Ask the existing sampler for the real LOOKUP row locations too; do
-        # not round a kink to its nearest uniform sample.
-        payload = source.model_dump(mode='json')
-        t = np.unique(np.r_[np.linspace(0,1,AXIAL+1), np.array(seed_z)/length])
-        payload['mesh']['length_segments'] = len(t)-1
-        payload['mesh']['sampling_mode'] = 'zmap'
-        payload['mesh']['z_map_points'] = ','.join(f'{v:.17g}' for v in t)
-        if not _active_morph(source):
-            original = _inner_grid(DesignConfig.model_validate(payload), profile_sampling=True)
-            wall = _meridians(original)
-            wall[:, :, 0] -= origins[:, None]
-    def seeds(phi: float) -> list[float]:
-        if lookup:
-            return seed_z
-        # Evaluate the original expression with the production evaluator. The
-        # planes can have different extension/slot crease positions.
-        extension = _at(source.root.throat_ext_length, phi)*scale
-        slot = _at(source.root.slot_length, phi)*scale
-        return [v for v in (extension, extension+slot) if 0 < v < length]
-    h = _fit_plane(wall[0], seeds(0), lookup and not _active_morph(source), scale, check)
-    v = h if shared else _fit_plane(wall[ANGULAR//4], seeds(math.pi/2), lookup and not _active_morph(source), scale, check)
-    v['points'][0]['r'] = h['points'][0]['r']
-    if np.ptp(wall[:, 0, 1]) > 1e-8:
-        features.append(FeatureChange(name='Throat outline', change='changed',
-            message='The generated throat is fitted as one circle; its outline change is included in the wall and source-cap measurements.'))
-    stations = ([{'t': 0, 'shape': 'ellipse'}, {'t': 1, 'shape': 'ellipse'}] if shared
-                else _fit_stations(wall, length, scale, check))
-    candidate = DesignConfig.model_validate({**common, 'formula': 'FREEFORM', 'length': length/scale,
-        'profile_h': h, 'profile_v': v, 'shared_profile': shared, 'cross_sections': stations, 'inflection_policy': 'warn'})
+        from hornlab_mesher.config_builder import build_geometry_params
+        from hornlab_mesher.preview.source_cap import _source_geometry
+        from hornlab_mesher.builders.point_grid_sources import _source_cap_height, _source_cap_radius
+        rows = np.asarray(source.root.lookup_profile, dtype=float)*scale
+        rows[:, 0] -= rows[0, 0]
+        length = float(rows[-1, 0])
+        h, curve_error = _polyline_fit(rows, scale, check)
+        # Keep the authored meridian, and freeze family-specific construction
+        # settings explicitly instead of fitting a second morphed meridian.
+        common['morph'] = source.root.morph.model_dump(mode='json')
+        features = [f for f in features if f.name not in ('Mouth morph', 'Implicit mouth rounding')]
+        config = _legacy_config(source)
+        params, formula, _ = build_geometry_params(config)
+        cap = _source_geometry(params, formula, original)
+        throat = float(np.mean(np.linalg.norm(original[:, 0, :2], axis=1)))
+        height, radius = _source_cap_height(throat, cap), _source_cap_radius(throat, cap)
+        if height <= 1e-12 or not math.isfinite(radius):
+            common['source']['shape'] = 2
+        else:
+            common['source']['radius'] = radius/scale
+        features.append(FeatureChange(name='Source-cap angle', change='baked',
+            message='Source shape preserved explicitly, including the resolved source-cap angle and curvature.'))
+        if _active_morph(source):
+            _, construction = _legacy_grid(source, authored=True)
+            start = float(construction['morph_start'])
+            common['morph']['fixed_part'] = start
+            features.append(FeatureChange(name='Morph-start snapping', change='baked',
+                message=f'Morph-start snapping is frozen at {start:.12g} of the authored axial table; Custom profile uses that continuous start.'))
+            from hornlab_mesher.profile_morph import _resolve_morph_half_dimensions, _morph_target_shape
+            shape_only = _morph_target_shape(params, 0) == 3
+            half_width, half_height = _resolve_morph_half_dimensions(params, 0, rows[-1, 1], rows[-1, 1], round_implicit_up=not shape_only)
+            for field, half in (('target_width', half_width), ('target_height', half_height)):
+                value = getattr(source.root.morph, field)
+                if value is None or value.constant_value() == 0:
+                    common['morph'][field] = 2*half/scale
+                    label = 'Implicit mouth dimensions' if shape_only else 'Implicit mouth rounding'
+                    features.append(FeatureChange(name=label, change='baked',
+                        message=f'{label} frozen as {field.replace("_", " ")} {2*half:.12g} mm.'))
+        exponent = source.root.cross_section.exponent
+        stations = [{'t': 0, 'shape': 'ellipse'}, {'t': 1, 'shape': 'ellipse'}]
+        if exponent != 2:
+            # The generic section scales only growth past a circular throat.
+            # Reuse S4's station fitter against that actual construction rather
+            # than pretending a linear exponent ramp is the same outline.
+            base = DesignConfig.model_construct(root=source.root.model_copy(update={
+                'morph': source.root.morph.model_copy(update={'target_shape': Expr(value=0)})}))
+            base_wall = _meridians(_legacy_grid(base)[0])
+            base_wall[:, :, 0] -= base_wall[:, :1, 0]
+            stations = _fit_stations(base_wall, length, scale, check)
+            features.append(FeatureChange(name='Cross-section exponent', change='baked',
+                message='The cross-section exponent and circular-throat growth rule are fitted into the cross-section stations; the outline fit is included in the generated-grid comparison.'))
+        if source.root.cross_section.aspect_ratio != 1:
+            features.append(FeatureChange(name='Cross-section aspect', change='changed',
+                message='The shared authored meridian is retained; the former aspect scaling differs and is included in the generated-wall comparison.'))
+        features.append(FeatureChange(name='Axial map / interpolate fit', change='changed',
+            message='The ATH solve z-map / interpolate surface fit is replaced by the Custom profile corner-wall fit; the generated-grid comparison is sampled, not an OCC wall-distance certificate.'))
+        candidate = DesignConfig.model_validate({**common, 'formula': 'FREEFORM', 'length': length/scale,
+            'profile_h': h, 'profile_v': h, 'shared_profile': True, 'cross_sections': stations, 'inflection_policy': 'warn'})
+    else:
+        shared = _axisymmetric(source)
+        def seeds(phi: float) -> list[float]:
+            # Evaluate the original expression with the production evaluator. The
+            # planes can have different extension/slot crease positions.
+            extension = _at(source.root.throat_ext_length, phi)*scale
+            slot = _at(source.root.slot_length, phi)*scale
+            return [v for v in (extension, extension+slot) if 0 < v < length]
+        h = _fit_plane(wall[0], seeds(0), scale, check)
+        v = h if shared else _fit_plane(wall[ANGULAR//4], seeds(math.pi/2), scale, check)
+        v['points'][0]['r'] = h['points'][0]['r']
+        if np.ptp(wall[:, 0, 1]) > 1e-8:
+            features.append(FeatureChange(name='Throat outline', change='changed',
+                message='The generated throat is fitted as one circle; its outline change is included in the wall and source-cap measurements.'))
+        stations = ([{'t': 0, 'shape': 'ellipse'}, {'t': 1, 'shape': 'ellipse'}] if shared
+                    else _fit_stations(wall, length, scale, check))
+        candidate = DesignConfig.model_validate({**common, 'formula': 'FREEFORM', 'length': length/scale,
+            'profile_h': h, 'profile_v': v, 'shared_profile': shared, 'cross_sections': stations, 'inflection_policy': 'warn'})
     progress('fit')
     check()
-    report = compare_generated_designs(source, candidate, features=features, before_points=original)
+    report = compare_generated_designs(source, candidate, features=features, before_points=original, align_disjoint=importing)
     maximum = max(report.wall.max_deviation_mm, report.mouth.max_deviation_mm, report.axial_extent_deviation_mm)
-    if maximum > REFUSE_MM:
+    if curve_error is not None:
+        report.curve_deviation_mm = curve_error
+    if maximum > REFUSE_MM and not importing:
         _refuse(f'The best Custom profile differs by {maximum:.4f} mm, above the 0.5 mm conversion limit (up to 64 anchors and 32 stations).',
                 'Keep the original family, or simplify the profile/morph and try again; no geometry was cropped or substituted.')
     progress('compare')
@@ -538,9 +721,9 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
 
 
 def convert_design(source: DesignConfig, content_key: str, *, check: Callable = lambda: None,
-                   progress: Callable = lambda stage: None) -> ConvertResponse:
+                   progress: Callable = lambda stage: None, importing: bool = False) -> ConvertResponse:
     try:
-        return _convert_design(source, content_key, check=check, progress=progress)
+        return _convert_design(source, content_key, check=check, progress=progress, importing=importing)
     except ValueError as exc:
         # This mesher spacing refusal predates UserRefusal. Match only this
         # documented constraint; unexpected ValueErrors remain program faults.
@@ -548,3 +731,14 @@ def convert_design(source: DesignConfig, content_key: str, *, check: Callable = 
             _refuse('The generated profile needs anchors closer together than a Custom profile can build.',
                     'Keep the original family, or soften the nearly vertical end or tightly spaced features before converting again.')
         raise
+
+
+def conversion_notice(result: ConvertResponse) -> str:
+    report = result.report
+    maximum = max(report.wall.max_deviation_mm, report.mouth.max_deviation_mm, report.axial_extent_deviation_mm)
+    curve = report.curve_deviation_mm or 0
+    fit = 'Profile curve unchanged.' if curve < 1e-9 else f'Maximum profile curve change {curve:.6g} mm.'
+    limit = ' The fit exceeds the 0.01 mm profile tolerance.' if curve > MATCH_MM else ''
+    refusal = ' This exceeds the 0.5 mm explicit-conversion limit; opened with the best fit.' if maximum > REFUSE_MM else ''
+    return (f'Opened as Custom profile. {fit} Maximum generated-grid change {maximum:.6g} mm.'
+            f'{limit}{refusal} ' + ' '.join(f.message for f in report.features))

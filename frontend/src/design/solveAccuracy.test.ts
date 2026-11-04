@@ -3,7 +3,7 @@ import { hydrateDesignDocument } from '../api/designIo';
 import { NATIVE_FAMILIES, designForFamily, mergeDesignForFamily, serializeDesign, type DesignFamily } from '../stores/design';
 
 describe('solve surface deviation', () => {
-  it.each(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES] as const)('starts a new %s design Off', (family) => {
+  it.each(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES] as const)('starts a new %s design Off', (family) => {
     const fresh = designForFamily(family);
     expect(fresh.mesh.surface_deviation_mm ?? null).toBeNull();
     expect(serializeDesign(fresh).mesh).not.toHaveProperty('surface_deviation_mm');
@@ -24,7 +24,7 @@ describe('solve surface deviation', () => {
   });
 });
 
-const families: DesignFamily[] = ['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES];
+const families: DesignFamily[] = ['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES];
 it.each(families)('preserves accuracy intent when switching from %s', (from) => {
   for (const to of families) {
     for (const value of [undefined, null, 0.2]) {

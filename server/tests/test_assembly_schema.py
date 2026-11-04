@@ -160,11 +160,9 @@ def test_assembly_driver_mass_provenance_roundtrips_cfg() -> None:
     assert reopened.root.assembly.drivers[W1].exterior_transducer == DRIVER
 
 
-@pytest.mark.parametrize("formula", ["OSSE-NATIVE", "LOOKUP"])
+@pytest.mark.parametrize("formula", ["OSSE-NATIVE"])
 def test_native_payload_designs_carry_the_assembly_in_their_json(formula: str) -> None:
-    payload = ({"formula": "LOOKUP", "lookup_profile": [[0, 12.7], [120, 140]], "a0": 0}
-               if formula == "LOOKUP" else
-               {"formula": formula, "L": 120, "r0": 12.7, "a": 40, "a0": 15.5, "k": 1, "s": 0,
+    payload = ({"formula": formula, "L": 120, "r0": 12.7, "a": 40, "a0": 15.5, "k": 1, "s": 0,
                 "axial_scale": 1.2, "mesh": {"mouth_roundover_radius_mm": 25, "wall_thickness": 5}})
     design = DesignConfig.model_validate({**payload, "assembly": _assembly()})
     text = serialize(design)

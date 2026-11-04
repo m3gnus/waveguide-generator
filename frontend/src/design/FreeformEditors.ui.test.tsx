@@ -6,7 +6,7 @@ import type { ParameterDefinition } from './parameterRegistry';
 import { stubProfileServer } from '../testing/customProfileServer';
 import { rememberUnseparatedVertical } from './customProfileEdit';
 import { hydrateDesignDocument } from '../api/designIo';
-import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableLookupTable, EditableStationTable, FREEFORM_IMPORT_HINT } from './FreeformEditors';
+import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableStationTable, FREEFORM_IMPORT_HINT } from './FreeformEditors';
 
 const stationField: ParameterDefinition = {
   id: 'freeform.crossSections', legacyKey: 'cross_sections', section: 'Profile',
@@ -51,88 +51,6 @@ describe('FREEFORM numeric tables', () => {
     act(() => root.unmount());
     vi.restoreAllMocks();
     host.remove();
-  });
-
-  it('edits, adds, removes and pastes LOOKUP pairs without changing their units', () => {
-    act(() => useDesignStore.getState().setFamily('LOOKUP'));
-    const field: ParameterDefinition = { id: 'lookup.profile', legacyKey: 'lookupProfile', section: 'Profile', label: 'Lookup profile points', kind: 'table' };
-    const render = () => act(() => root.render(<EditableLookupTable field={field} points={useDesignStore.getState().design.lookup_profile!}/>));
-    render();
-    expect(host.querySelectorAll('tbody tr')).toHaveLength(2);
-    expect(host.querySelector<HTMLButtonElement>('[aria-label="Remove lookup point 1"]')!.disabled).toBe(true);
-    const z = inputWithLabel(host, 'Lookup point 1 z');
-    act(() => enterDraft(z, '120'));
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe('lookupProfile z values must be strictly increasing');
-    act(() => z.blur());
-    expect(useDesignStore.getState().design.lookup_profile![0][0]).toBe(0);
-    const radius = inputWithLabel(host, 'Lookup point 1 radius');
-    act(() => enterDraft(radius, '15'));
-    act(() => radius.blur());
-    expect(useDesignStore.getState().design.lookup_profile![0][1]).toBe(15);
-    render();
-    act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Add point')!.click());
-    expect(useDesignStore.getState().design.lookup_profile).toEqual([[0, 15], [60, 77.5], [120, 140]]);
-    render();
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Remove lookup point 2"]')!.click());
-    expect(useDesignStore.getState().design.lookup_profile).toHaveLength(2);
-    render();
-    const paste = host.querySelector<HTMLTextAreaElement>('[aria-label="Paste lookup points"]')!;
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(paste, 'z,r\n0,18\n40,25\n100,20');
-      paste.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Import points')!.click());
-    expect(useDesignStore.getState().design.lookup_profile).toEqual([[0, 18], [40, 25], [100, 20]]);
-    act(() => useDesignStore.getState().undo());
-    expect(useDesignStore.getState().design.lookup_profile).toEqual([[0, 15], [120, 140]]);
-  });
-
-  it('keeps the z input mounted across its own commit and warns about non-positive radii', () => {
-    useDesignStore.getState().replaceDocument({ ...designForFamily('LOOKUP'), lookup_profile: [[0, 12.7], [50, 20], [120, 140]] });
-    const field: ParameterDefinition = { id: 'lookup.profile', legacyKey: 'lookupProfile', section: 'Profile', label: 'Lookup profile points', kind: 'table' };
-    const render = () => act(() => root.render(<EditableLookupTable field={field} points={useDesignStore.getState().design.lookup_profile!}/>));
-    render();
-    const before = inputWithLabel(host, 'Lookup point 2 z');
-    act(() => before.focus());
-    act(() => enterDraft(before, '60'));
-    act(() => before.blur());
-    render();
-    expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(60);
-    expect(inputWithLabel(host, 'Lookup point 2 z')).toBe(before);
-    expect(host.querySelector('.field-warning')).toBeNull();
-    const radius = inputWithLabel(host, 'Lookup point 2 radius');
-    act(() => enterDraft(radius, '0'));
-    act(() => radius.blur());
-    render();
-    expect(host.querySelector('.field-warning')?.textContent).toContain('Radius at point 2 is zero or negative');
-  });
-
-  it('keeps a z scrub inside its neighbours and makes it one undo step', () => {
-    useDesignStore.getState().replaceDocument({ ...designForFamily('LOOKUP'), lookup_profile: [[0, 12.7], [50, 20], [120, 140]] });
-    const field: ParameterDefinition = { id: 'lookup.profile', legacyKey: 'lookupProfile', section: 'Profile', label: 'Lookup profile points', kind: 'table' };
-    const render = () => act(() => root.render(<EditableLookupTable field={field} points={useDesignStore.getState().design.lookup_profile!}/>));
-    render();
-    const frames: FrameRequestCallback[] = [];
-    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => { frames.push(callback); return frames.length; });
-    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
-    const label = [...host.querySelectorAll('label')].find((item) => item.textContent === 'Lookup point 2 z')!;
-    Object.defineProperty(label, 'setPointerCapture', { value: vi.fn() });
-    const move = (clientX: number) => {
-      act(() => label.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX })));
-      act(() => frames.splice(0).forEach((frame) => frame(0)));
-      render();
-    };
-    act(() => label.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientX: 0 })));
-    move(100);
-    expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(60);
-    // Far past the next row: held just short of it, so z stays strictly increasing.
-    move(5000);
-    expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(119.9999);
-    move(150);
-    expect(useDesignStore.getState().design.lookup_profile![1][0]).toBe(65);
-    act(() => label.dispatchEvent(new PointerEvent('lostpointercapture', { bubbles: true, pointerId: 1 })));
-    act(() => useDesignStore.getState().undo());
-    expect(useDesignStore.getState().design.lookup_profile).toEqual([[0, 12.7], [50, 20], [120, 140]]);
   });
 
   it('explains and reverts out-of-range, blank, or unparsable station values without updating the design', () => {

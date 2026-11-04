@@ -112,12 +112,13 @@ def test_stamp_preserves_saved_design_hash_and_current_classification(tmp_path, 
         store.close()
 
 
-def test_lookup_json_copy_omits_uid_but_mwg_retains_it():
+def test_converted_table_exports_cfg_with_uid():
     from server.tests.test_lookup import design
 
     payload = {"design": design().model_dump(mode="json"), "designUid": UID}
     json_copy = asyncio.run(serialize_design({**payload, "filename": "lookup.json"}))
-    assert parse(json_copy["text"]).design_uid is None
+    assert json_copy["suggestedFilename"] == "lookup.cfg"
+    assert parse(json_copy["text"]).design_uid == UID
     assert parse(serialize(parse(json_copy["text"]), design_uid=UID)).design_uid == UID
     mwg = asyncio.run(serialize_design({**payload, "filename": "lookup.mwg"}))
     assert parse(mwg["text"]).design_uid == UID

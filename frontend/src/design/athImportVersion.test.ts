@@ -23,7 +23,7 @@ describe('ATH import interpretation', () => {
 });
 
 
-it.each<DesignFamily>(['ICW', 'FREEFORM', 'LOOKUP', 'OSSE-NATIVE'])('clears unsupported ATH controls when switching to %s', (formula) => {
+it.each<DesignFamily>(['ICW', 'FREEFORM', 'OSSE-NATIVE'])('clears unsupported ATH controls when switching to %s', (formula) => {
   const design = hydrateDesignDocument({
     formula: 'R-OSSE', text_import_version: 'ath-2026-09a-v3', ath_axial_scale: 2,
     rotation: { value: null, raw: '10+sin(p)' }, mesh: { ath_throat_ext_segments: 4 },

@@ -1721,10 +1721,11 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             payload = None
         if isinstance(payload, dict) and payload.get("formula") == "LOOKUP":
             try:
+                payload, applications = apply_migrations(payload)
                 design = DesignConfig.model_validate(payload)
             except (ValueError, TypeError) as exc:
-                raise TextConfigError(f"invalid LOOKUP JSON design: {exc}") from exc
-            return ParsedDesign(design=design, dialect="mwg", source_text=text)
+                raise TextConfigError(f"invalid Custom profile input: {exc}") from exc
+            return ParsedDesign(design=design, dialect="mwg", migrations=applications)
     repeated: list[tuple[str, _RawBlock]] = []
     flat, blocks, comments, raw_values = _lex(text.removeprefix("\ufeff"), repeated)
     for comment in comments:
@@ -1799,11 +1800,12 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
                     payload.setdefault("extra_blocks", {})[name] = ConfigBlock(
                         items=block.items, lines=block.lines, comments=block.comments, entries=block.entries
                     ).model_dump()
+            payload, applications = apply_migrations(payload)
             design = DesignConfig.model_validate(payload)
         except (ValueError, TypeError) as exc:
             raise TextConfigError(f"invalid native design: {exc}") from exc
         return ParsedDesign(
-            design=design, dialect="mwg", comments=comments, source_text=text,
+            design=design, dialect="mwg", comments=comments, source_text=None if applications else text, migrations=applications,
             cadlink=cadlink, _initial_fingerprint=_semantic_fingerprint(design),
         )
     geometry_dialect = "mwg" if version == NATIVE_GEOMETRY_VERSION else "ath" if version in TEXT_IMPORT_VERSIONS else dialect
@@ -2140,7 +2142,7 @@ def _serialize_canonical(
         lines.extend(cadlink.block_lines())
     from .native import NATIVE_FORMULAS
 
-    if config.formula in NATIVE_FORMULAS | {"LOOKUP"}:
+    if config.formula in NATIVE_FORMULAS:
         # JSON retains all native literal controls at full precision, including
         # independent cubic pairs. Escape semicolons for the CFG comment lexer.
         payload = config.model_dump(mode="json")

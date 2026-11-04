@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizedImportedPoints, parseLookupPaste, parsePointPaste, withStationShape } from './FreeformEditors';
+import { normalizedImportedPoints, parsePointPaste, withStationShape } from './FreeformEditors';
 
 describe('FREEFORM editor workflows', () => {
   it('keeps a station parameter the new shape still takes and drops one it does not', () => {
@@ -44,14 +44,13 @@ it.each(['0;1,000;2\n12;14;10', '0\t1.234,5\n120\t140', '0 12,7\n120 140'])('ref
   expect(() => parsePointPaste(text)).toThrow();
 });
 
-describe('legacy LOOKUP and Custom profile paste limits', () => {
-  it('keeps LOOKUP paste unlimited while a Custom profile paste stops at 64 anchors with a reason', () => {
+describe('Custom profile paste limits', () => {
+  it('limits Custom profile paste to 64 anchors and keeps plain pairs', () => {
     const rows = Array.from({ length: 200 }, (_value, index) => `${index},${12.7 + index / 2}`).join('\n');
-    expect(parseLookupPaste(rows)).toHaveLength(200);
-    expect(() => parsePointPaste(rows)).toThrow('at most 64 anchors including the throat and mouth. Larger straight-line tables stay in legacy LOOKUP designs.');
-    const lookupStyle = parsePointPaste('z (mm), r (mm)\n0,12.7\n60,40\n120,140');
-    expect(lookupStyle.lookupStyle).toBe(true);
-    expect(lookupStyle.points).toHaveLength(3);
-    expect(parsePointPaste('0 12.7 15\n120 140').lookupStyle).toBe(false);
+    expect(() => parsePointPaste(rows)).toThrow('at most 64 anchors including the throat and mouth.');
+    const pairStyle = parsePointPaste('z (mm), r (mm)\n0,12.7\n60,40\n120,140');
+    expect(pairStyle.pairStyle).toBe(true);
+    expect(pairStyle.points).toHaveLength(3);
+    expect(parsePointPaste('0 12.7 15\n120 140').pairStyle).toBe(false);
   });
 });

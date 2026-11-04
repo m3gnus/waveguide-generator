@@ -191,20 +191,6 @@ describe('design hydration', () => {
     expect((wire.profile_h as typeof profile).points[1]).not.toHaveProperty('handle_out');
   });
 
-  it('opens, saves untouched, and reopens legacy LOOKUP without converting its table', async () => {
-    const original = {
-      formula: 'LOOKUP', lookup_profile: [[0, 12.7], [40, 30], [120, 140]],
-      a0: { value: 22, raw: '11 * 2' }, scale: null, mesh: { wall_thickness: null },
-    };
-    const wire = await untouchedRoundTrip(original);
-    expect(wire.formula).toBe('LOOKUP');
-    expect(wire.lookup_profile).toEqual(original.lookup_profile);
-    expect(wire.a0).toEqual(original.a0);
-    expect(wire.scale).toBeNull();
-    expect((wire.mesh as Record<string, unknown>).wall_thickness).toBeNull();
-    expect(wire).not.toHaveProperty('shared_profile');
-    expect(wire).not.toHaveProperty('profile_h');
-  });
 
   it('opens, saves untouched, and reopens a Custom profile with shared mode, joins, angles and handles', async () => {
     const h = {
@@ -580,13 +566,6 @@ describe('Send to CAD requests', () => {
   });
 });
 
-it('downloads a LOOKUP native copy with a .mwg filename', async () => {
-  const fetcher = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ text: 'native', suggestedFilename: 'lookup.mwg' }), { status: 200 }));
-  await serializeDesignDocument(designForFamily('LOOKUP'), 'lookup', fetcher, undefined, null);
-  const request = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
-  expect(request.filename).toBe('lookup.mwg');
-  expect(request.design.lookup_profile).toEqual([[0, 12.7], [120, 140]]);
-});
 
 it('uses an explicitly supplied CAD document uid and never borrows the live document uid', async () => {
   const { useDocumentStore } = await import('../stores/document');

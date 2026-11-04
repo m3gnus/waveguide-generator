@@ -84,7 +84,7 @@ export function canExportRun(job: JobItem): boolean {
   return job.status === 'complete' && (modelKindForRun(job) === 'cad' || job.config_summary.geometry_type === 'imported' || job.config_summary.import_origin === 'mesh-file' || job.has_results || canLoadJobDesign(job));
 }
 
-/** The parameter config is a native .mwg for LOOKUP, which has no ATH form. */
+/** Parameter configs use the editable WG config format. */
 function trailingFor(item: CatalogItem, family?: string): string {
   return item.format === 'mwg_config' ? `.${designFileExtension(family)}` : item.trailing;
 }

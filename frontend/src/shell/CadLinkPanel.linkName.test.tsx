@@ -112,7 +112,7 @@ describe('CadLinkPanel Fusion connection', () => {
     expect(host.querySelector('[aria-label="Linked Fusion instance"]')).toBeNull();
   });
 
-  it.each([...NATIVE_FAMILIES, 'LOOKUP'] as const)('disables Fusion sends for %s with its limitation note', (formula) => {
+  it.each([...NATIVE_FAMILIES] as const)('disables Fusion sends for %s with its limitation note', (formula) => {
     useDesignStore.getState().setFamily(formula);
     const send = vi.fn().mockResolvedValue(undefined);
     const note = nativeCadLimitation(formula)!;
@@ -127,7 +127,7 @@ describe('CadLinkPanel Fusion connection', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it.each([...NATIVE_FAMILIES, 'LOOKUP'] as const)('disables Onshape sends for %s in every link state', (formula) => {
+  it.each([...NATIVE_FAMILIES] as const)('disables Onshape sends for %s in every link state', (formula) => {
     useDesignStore.getState().setFamily(formula);
     preferencesStore.setOnshapeAvailable(true);
     preferencesStore.update({ cadApplication: 'onshape' });

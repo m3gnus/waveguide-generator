@@ -1,6 +1,6 @@
 import { mintDesignUid } from '../stores/designUid';
 import { getCadLinkedDesign } from '../api/cadlink';
-import { hydrateDesignDocument, openDesignText, type CadLinkOpenState } from '../api/designIo';
+import { hydrateDesignDocument, openDesignText, importNotice, type CadLinkOpenState } from '../api/designIo';
 import { currentDocumentLoad, useDesignStore, type DesignLoadSource } from '../stores/design';
 import { designNameForOpenedFile } from '../stores/designName';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
@@ -40,7 +40,7 @@ export function applyOpenedDesign(
   loadSource: DesignLoadSource = 'ordinary',
 ): OpenedDesign {
   const openedDesign = hydrateDesignDocument(opened.design);
-  useDesignStore.getState().replaceDocument(openedDesign, { loadSource });
+  useDesignStore.getState().replaceDocument(openedDesign, { loadSource, notice: importNotice(opened) });
   restoreSolveSettingsFromBlocks(openedDesign.extra_blocks, openedDesign);
   const document = useDocumentStore.getState();
   // One name for the whole document: the opened file's, unless the file's own

@@ -6,7 +6,6 @@
     "OSSE",
     "ICW",
     "FREEFORM",
-    "LOOKUP",
     "OSSE-ADAPTER",
     "OSSE-ADAPTER-CONTROLS",
     "OSSE-ADAPTER-AXIAL",
@@ -37,8 +36,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -95,8 +93,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -146,8 +143,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -197,8 +193,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -263,8 +258,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -314,8 +308,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -1825,8 +1818,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -1834,8 +1826,7 @@
         "R-OSSE": 1,
         "OSSE": 1,
         "ICW": 1,
-        "FREEFORM": 1,
-        "LOOKUP": 1
+        "FREEFORM": 1
       },
       "editor_bounds": {
         "minimum": 0.1,
@@ -3469,66 +3460,6 @@
       "description": "Kept so an imported file round-trips unchanged. The ICW solver does not read it — use Termination and Rollback curl angle to curl the mouth."
     },
     {
-      "id": "lookup.profile",
-      "legacy_key": "lookupProfile",
-      "path": "lookup_profile",
-      "mirror_paths": [],
-      "label": "Lookup profile points",
-      "section": "Profile Dimensions",
-      "symbol": null,
-      "kind": "table",
-      "unit": null,
-      "families": [
-        "LOOKUP"
-      ],
-      "accepts_expression": false,
-      "writable": true,
-      "default_by_family": {
-        "LOOKUP": [
-          [
-            0,
-            12.7
-          ],
-          [
-            120,
-            140
-          ]
-        ]
-      },
-      "editor_bounds": null,
-      "step": null,
-      "precision": null,
-      "options": [],
-      "description": "Experimental whole meridian in millimetres, linearly interpolated between [z, r] samples. Supply at least two finite pairs with strictly increasing z. Include any extension or adapter in this table. Radius may rise or fall."
-    },
-    {
-      "id": "lookup.a0",
-      "legacy_key": "lookupSourceAngle",
-      "path": "a0",
-      "mirror_paths": [],
-      "label": "Automatic source-cap angle",
-      "section": "Profile Dimensions",
-      "symbol": null,
-      "kind": "number",
-      "unit": "°",
-      "families": [
-        "LOOKUP"
-      ],
-      "accepts_expression": false,
-      "writable": true,
-      "default_by_family": {
-        "LOOKUP": 0
-      },
-      "editor_bounds": {
-        "minimum": -90,
-        "maximum": 90
-      },
-      "step": 0.1,
-      "precision": 2,
-      "options": [],
-      "description": "Angle used for the automatic source cap; it does not reshape the lookup meridian."
-    },
-    {
       "id": "freeform.length",
       "legacy_key": "length",
       "path": "length",
@@ -4025,8 +3956,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -4034,8 +3964,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": null,
       "step": null,
@@ -4090,8 +4019,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": true,
       "writable": true,
@@ -4099,8 +4027,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": {
         "minimum": 0,
@@ -4130,8 +4057,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": true,
       "writable": true,
@@ -4139,8 +4065,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": {
         "minimum": 0,
@@ -4170,8 +4095,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": true,
       "writable": true,
@@ -4204,8 +4128,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": true,
       "writable": true,
@@ -4213,8 +4136,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": {
         "minimum": 0,
@@ -4244,8 +4166,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": true,
       "writable": true,
@@ -4253,8 +4174,7 @@
         "R-OSSE": 3,
         "OSSE": 3,
         "ICW": 3,
-        "FREEFORM": 3,
-        "LOOKUP": 3
+        "FREEFORM": 3
       },
       "editor_bounds": {
         "minimum": 0,
@@ -4284,8 +4204,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": true,
       "writable": true,
@@ -4293,8 +4212,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": {
         "minimum": 0,
@@ -4324,8 +4242,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -4333,8 +4250,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": null,
       "step": null,
@@ -4955,8 +4871,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -4964,8 +4879,7 @@
         "R-OSSE": 1,
         "OSSE": 1,
         "ICW": 1,
-        "FREEFORM": 1,
-        "LOOKUP": 1
+        "FREEFORM": 1
       },
       "editor_bounds": null,
       "step": null,
@@ -5004,8 +4918,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5013,8 +4926,7 @@
         "R-OSSE": -1,
         "OSSE": -1,
         "ICW": -1,
-        "FREEFORM": -1,
-        "LOOKUP": -1
+        "FREEFORM": -1
       },
       "editor_bounds": {
         "minimum": -1,
@@ -5039,8 +4951,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5048,8 +4959,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": null,
       "step": null,
@@ -5096,8 +5006,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5105,8 +5014,7 @@
         "R-OSSE": 1,
         "OSSE": 1,
         "ICW": 1,
-        "FREEFORM": 1,
-        "LOOKUP": 1
+        "FREEFORM": 1
       },
       "editor_bounds": {
         "minimum": 0,
@@ -5136,8 +5044,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5145,8 +5052,7 @@
         "R-OSSE": "normal",
         "OSSE": "normal",
         "ICW": "normal",
-        "FREEFORM": "normal",
-        "LOOKUP": "normal"
+        "FREEFORM": "normal"
       },
       "editor_bounds": null,
       "step": null,
@@ -5193,8 +5099,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5202,8 +5107,7 @@
         "R-OSSE": "",
         "OSSE": "",
         "ICW": "",
-        "FREEFORM": "",
-        "LOOKUP": ""
+        "FREEFORM": ""
       },
       "editor_bounds": null,
       "step": null,
@@ -5224,16 +5128,14 @@
       "families": [
         "OSSE",
         "R-OSSE",
-        "ICW",
-        "LOOKUP"
+        "ICW"
       ],
       "accepts_expression": false,
       "writable": true,
       "default_by_family": {
         "OSSE": 2,
         "R-OSSE": 2,
-        "ICW": 2,
-        "LOOKUP": 2
+        "ICW": 2
       },
       "editor_bounds": null,
       "step": 0.1,
@@ -5275,16 +5177,14 @@
       "families": [
         "OSSE",
         "R-OSSE",
-        "ICW",
-        "LOOKUP"
+        "ICW"
       ],
       "accepts_expression": false,
       "writable": true,
       "default_by_family": {
         "OSSE": 1,
         "R-OSSE": 1,
-        "ICW": 1,
-        "LOOKUP": 1
+        "ICW": 1
       },
       "editor_bounds": null,
       "step": 0.1,
@@ -5327,8 +5227,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5336,8 +5235,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": {
         "minimum": 0,
@@ -5367,8 +5265,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5398,8 +5295,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5407,8 +5303,7 @@
         "R-OSSE": 18,
         "OSSE": 18,
         "ICW": 18,
-        "FREEFORM": 18,
-        "LOOKUP": 18
+        "FREEFORM": 18
       },
       "editor_bounds": {
         "minimum": 0,
@@ -5438,8 +5333,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5447,8 +5341,7 @@
         "R-OSSE": 1,
         "OSSE": 1,
         "ICW": 1,
-        "FREEFORM": 1,
-        "LOOKUP": 1
+        "FREEFORM": 1
       },
       "editor_bounds": null,
       "step": null,
@@ -5492,8 +5385,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5501,8 +5393,7 @@
         "R-OSSE": 25,
         "OSSE": 25,
         "ICW": 25,
-        "FREEFORM": 25,
-        "LOOKUP": 25
+        "FREEFORM": 25
       },
       "editor_bounds": {
         "minimum": 0,
@@ -5532,8 +5423,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5541,8 +5431,7 @@
         "R-OSSE": 25,
         "OSSE": 25,
         "ICW": 25,
-        "FREEFORM": 25,
-        "LOOKUP": 25
+        "FREEFORM": 25
       },
       "editor_bounds": {
         "minimum": 0,
@@ -5572,8 +5461,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5581,8 +5469,7 @@
         "R-OSSE": 25,
         "OSSE": 25,
         "ICW": 25,
-        "FREEFORM": 25,
-        "LOOKUP": 25
+        "FREEFORM": 25
       },
       "editor_bounds": {
         "minimum": 0,
@@ -5612,8 +5499,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5621,8 +5507,7 @@
         "R-OSSE": 25,
         "OSSE": 25,
         "ICW": 25,
-        "FREEFORM": 25,
-        "LOOKUP": 25
+        "FREEFORM": 25
       },
       "editor_bounds": {
         "minimum": 0,
@@ -5652,8 +5537,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5661,8 +5545,7 @@
         "R-OSSE": 25,
         "OSSE": 25,
         "ICW": 25,
-        "FREEFORM": 25,
-        "LOOKUP": 25
+        "FREEFORM": 25
       },
       "editor_bounds": null,
       "step": 0.1,
@@ -5689,8 +5572,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5698,8 +5580,7 @@
         "R-OSSE": 40,
         "OSSE": 40,
         "ICW": 40,
-        "FREEFORM": 40,
-        "LOOKUP": 40
+        "FREEFORM": 40
       },
       "editor_bounds": null,
       "step": 0.1,
@@ -5726,8 +5607,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5735,8 +5615,7 @@
         "R-OSSE": 40,
         "OSSE": 40,
         "ICW": 40,
-        "FREEFORM": 40,
-        "LOOKUP": 40
+        "FREEFORM": 40
       },
       "editor_bounds": {
         "minimum": 0,
@@ -5761,8 +5640,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5770,8 +5648,7 @@
         "R-OSSE": 20,
         "OSSE": 20,
         "ICW": 20,
-        "FREEFORM": 20,
-        "LOOKUP": 20
+        "FREEFORM": 20
       },
       "editor_bounds": {
         "minimum": 0,
@@ -5796,8 +5673,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5805,8 +5681,7 @@
         "R-OSSE": 4,
         "OSSE": 4,
         "ICW": 4,
-        "FREEFORM": 4,
-        "LOOKUP": 4
+        "FREEFORM": 4
       },
       "editor_bounds": {
         "minimum": 0,
@@ -5831,8 +5706,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5840,8 +5714,7 @@
         "R-OSSE": "uniform",
         "OSSE": "uniform",
         "ICW": "uniform",
-        "FREEFORM": "uniform",
-        "LOOKUP": "uniform"
+        "FREEFORM": "uniform"
       },
       "editor_bounds": null,
       "step": null,
@@ -5888,8 +5761,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5897,8 +5769,7 @@
         "R-OSSE": "",
         "OSSE": "",
         "ICW": "",
-        "FREEFORM": "",
-        "LOOKUP": ""
+        "FREEFORM": ""
       },
       "editor_bounds": null,
       "step": null,
@@ -5925,8 +5796,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5934,8 +5804,7 @@
         "R-OSSE": 6,
         "OSSE": 6,
         "ICW": 6,
-        "FREEFORM": 6,
-        "LOOKUP": 6
+        "FREEFORM": 6
       },
       "editor_bounds": {
         "minimum": 0.01,
@@ -5960,8 +5829,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -5969,8 +5837,7 @@
         "R-OSSE": 15,
         "OSSE": 15,
         "ICW": 15,
-        "FREEFORM": 15,
-        "LOOKUP": 15
+        "FREEFORM": 15
       },
       "editor_bounds": {
         "minimum": 0.01,
@@ -5996,7 +5863,6 @@
         "OSSE",
         "ICW",
         "FREEFORM",
-        "LOOKUP",
         "OSSE-ADAPTER",
         "OSSE-ADAPTER-CONTROLS",
         "OSSE-ADAPTER-AXIAL",
@@ -6028,8 +5894,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6057,8 +5922,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6066,8 +5930,7 @@
         "R-OSSE": 40,
         "OSSE": 40,
         "ICW": 40,
-        "FREEFORM": 40,
-        "LOOKUP": 40
+        "FREEFORM": 40
       },
       "editor_bounds": {
         "minimum": 0.01,
@@ -6092,8 +5955,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6101,8 +5963,7 @@
         "R-OSSE": 1,
         "OSSE": 1,
         "ICW": 1,
-        "FREEFORM": 1,
-        "LOOKUP": 1
+        "FREEFORM": 1
       },
       "editor_bounds": {
         "minimum": 1,
@@ -6132,8 +5993,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6141,8 +6001,7 @@
         "R-OSSE": 50000,
         "OSSE": 50000,
         "ICW": 50000,
-        "FREEFORM": 50000,
-        "LOOKUP": 50000
+        "FREEFORM": 50000
       },
       "editor_bounds": {
         "minimum": 1,
@@ -6167,8 +6026,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6176,8 +6034,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": null,
       "step": null,
@@ -6219,8 +6076,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6228,8 +6084,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": {
         "minimum": -10000,
@@ -6254,8 +6109,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6263,8 +6117,7 @@
         "R-OSSE": 5,
         "OSSE": 5,
         "ICW": 5,
-        "FREEFORM": 5,
-        "LOOKUP": 5
+        "FREEFORM": 5
       },
       "editor_bounds": {
         "minimum": 0,
@@ -6305,7 +6158,6 @@
         "OSSE",
         "ICW",
         "FREEFORM",
-        "LOOKUP",
         "OSSE-ADAPTER",
         "OSSE-ADAPTER-CONTROLS",
         "OSSE-ADAPTER-AXIAL",
@@ -6322,7 +6174,6 @@
         "OSSE": 50,
         "ICW": 50,
         "FREEFORM": 50,
-        "LOOKUP": 50,
         "OSSE-ADAPTER": 50,
         "OSSE-ADAPTER-CONTROLS": 50,
         "OSSE-ADAPTER-AXIAL": 50,
@@ -6356,7 +6207,6 @@
         "OSSE",
         "ICW",
         "FREEFORM",
-        "LOOKUP",
         "OSSE-ADAPTER",
         "OSSE-ADAPTER-CONTROLS",
         "OSSE-ADAPTER-AXIAL",
@@ -6373,7 +6223,6 @@
         "OSSE": 16000,
         "ICW": 16000,
         "FREEFORM": 16000,
-        "LOOKUP": 16000,
         "OSSE-ADAPTER": 16000,
         "OSSE-ADAPTER-CONTROLS": 16000,
         "OSSE-ADAPTER-AXIAL": 16000,
@@ -6407,7 +6256,6 @@
         "OSSE",
         "ICW",
         "FREEFORM",
-        "LOOKUP",
         "OSSE-ADAPTER",
         "OSSE-ADAPTER-CONTROLS",
         "OSSE-ADAPTER-AXIAL",
@@ -6424,7 +6272,6 @@
         "OSSE": 32,
         "ICW": 32,
         "FREEFORM": 32,
-        "LOOKUP": 32,
         "OSSE-ADAPTER": 32,
         "OSSE-ADAPTER-CONTROLS": 32,
         "OSSE-ADAPTER-AXIAL": 32,
@@ -6457,8 +6304,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6466,8 +6312,7 @@
         "R-OSSE": "freestanding",
         "OSSE": "freestanding",
         "ICW": "freestanding",
-        "FREEFORM": "freestanding",
-        "LOOKUP": "freestanding"
+        "FREEFORM": "freestanding"
       },
       "editor_bounds": null,
       "step": null,
@@ -6507,7 +6352,6 @@
         "OSSE",
         "ICW",
         "FREEFORM",
-        "LOOKUP",
         "OSSE-ADAPTER",
         "OSSE-ADAPTER-CONTROLS",
         "OSSE-ADAPTER-AXIAL",
@@ -6524,7 +6368,6 @@
         "OSSE": 1234,
         "ICW": 1234,
         "FREEFORM": 1234,
-        "LOOKUP": 1234,
         "OSSE-ADAPTER": 1234,
         "OSSE-ADAPTER-CONTROLS": 1234,
         "OSSE-ADAPTER-AXIAL": 1234,
@@ -6554,8 +6397,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6563,8 +6405,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": {
         "minimum": 0,
@@ -6589,8 +6430,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6598,8 +6438,7 @@
         "R-OSSE": 0.5,
         "OSSE": 0.5,
         "ICW": 0.5,
-        "FREEFORM": 0.5,
-        "LOOKUP": 0.5
+        "FREEFORM": 0.5
       },
       "editor_bounds": {
         "minimum": 0.01,
@@ -6624,8 +6463,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6633,8 +6471,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": null,
       "step": null,
@@ -6673,8 +6510,7 @@
         "R-OSSE",
         "OSSE",
         "ICW",
-        "FREEFORM",
-        "LOOKUP"
+        "FREEFORM"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -6682,8 +6518,7 @@
         "R-OSSE": 0,
         "OSSE": 0,
         "ICW": 0,
-        "FREEFORM": 0,
-        "LOOKUP": 0
+        "FREEFORM": 0
       },
       "editor_bounds": null,
       "step": null,
@@ -6723,7 +6558,6 @@
         "OSSE",
         "ICW",
         "FREEFORM",
-        "LOOKUP",
         "OSSE-ADAPTER",
         "OSSE-ADAPTER-CONTROLS",
         "OSSE-ADAPTER-AXIAL",
@@ -6757,7 +6591,6 @@
         "OSSE",
         "ICW",
         "FREEFORM",
-        "LOOKUP",
         "OSSE-ADAPTER",
         "OSSE-ADAPTER-CONTROLS",
         "OSSE-ADAPTER-AXIAL",
@@ -6791,7 +6624,6 @@
         "OSSE",
         "ICW",
         "FREEFORM",
-        "LOOKUP",
         "OSSE-ADAPTER",
         "OSSE-ADAPTER-CONTROLS",
         "OSSE-ADAPTER-AXIAL",
@@ -6825,7 +6657,6 @@
         "OSSE",
         "ICW",
         "FREEFORM",
-        "LOOKUP",
         "OSSE-ADAPTER",
         "OSSE-ADAPTER-CONTROLS",
         "OSSE-ADAPTER-AXIAL",

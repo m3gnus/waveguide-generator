@@ -1,3 +1,4 @@
+import { hydrateDesignDocument, importNotice, importStoredDesign, needsDesignImport } from '../api/designIo';
 import { isDesignUid } from './designUid';
 import { NATIVE_FAMILIES, useDesignStore, type DesignDocument } from './design';
 import { DESIGN_CONTENT_KEY_VERSION } from './designContentKey';
@@ -64,7 +65,7 @@ function isRecord(value: unknown): value is AutosaveRecord {
     && Number.isInteger(record.designRevision) && Number(record.designRevision) > 0
     && (record.savedRevision === null || (Number.isInteger(record.savedRevision) && Number(record.savedRevision) > 0))
     && Boolean(design)
-    && ['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES].includes(String(design?.formula))
+    && (['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', ...NATIVE_FAMILIES].includes(String(design?.formula)) || needsDesignImport(design ?? {}))
     && typeof design?.mesh === 'object'
     && typeof design?.simulation === 'object'
     && typeof design?.source === 'object';
@@ -102,9 +103,18 @@ function storedOpenedContentKey(record: AutosaveRecord): string | null {
     : null;
 }
 
+// A pending or failed import must survive tab hiding and shutdown. A real
+// editor/document change supersedes it; a notice-only state change does not.
+let importedDraft: { design: DesignDocument; revision: number; document: ReturnType<typeof useDocumentStore.getState> } | null = null;
+
 export function writeAutosave(storage: DraftStorage | null = defaultStorage()): boolean {
   if (!storage) return false;
   const { design, designRevision } = useDesignStore.getState();
+  if (importedDraft) {
+    if (design === importedDraft.design && designRevision === importedDraft.revision
+      && useDocumentStore.getState() === importedDraft.document) return false;
+    importedDraft = null;
+  }
   const {
     designName, filename, openedContentKey, identity, classification, designUid, legacyDesignName,
   } = useDocumentStore.getState();
@@ -136,6 +146,8 @@ export function writeAutosave(storage: DraftStorage | null = defaultStorage()): 
  * stored beside the draft, so a draft still equal to what was last
  * opened or written stays kept after a restart, and an edited one does not.
  * No key is ever derived from the draft itself. */
+let restoreGeneration = 0;
+
 export function restoreAutosave(storage: DraftStorage | null = defaultStorage()): boolean {
   if (!storage) return false;
   let raw: string | null;
@@ -144,24 +156,47 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
   try {
     const record: unknown = JSON.parse(raw);
     if (!isRecord(record) || !hasValidCadLink(record)) throw new ProgramFault('Invalid autosave record');
-    useDocumentStore.getState().restoreDocumentState({
-      // A draft written before the rename unification only has the filename;
-      // its stem is the same name, one slugging away.
-      designName: typeof record.designName === 'string'
-        ? record.designName
-        : designNameFromFilename(record.filename),
-      openedContentKey: storedOpenedContentKey(record),
-      designUid: record.designUid,
-      legacyDesignName: record.legacyDesignName,
-      identity: record.identity ? { ...record.identity } : null,
-      classification: record.classification ?? null,
-    });
-    // Announced last, once the document state it pairs with is in place, so a
-    // restore after mount reloads the preview and resets its revision floor.
-    useDesignStore.getState().replaceDocument(record.design, {
-      revision: record.designRevision,
-      loadSource: 'autosave-restore',
-    });
+    const generation = ++restoreGeneration;
+    const initialDesign = useDesignStore.getState();
+    const initialDocument = useDocumentStore.getState();
+    const apply = (design: DesignDocument, notice: string | null = null) => {
+      useDocumentStore.getState().restoreDocumentState({
+        // A draft written before the rename unification only has the filename;
+        // its stem is the same name, one slugging away.
+        designName: typeof record.designName === 'string'
+          ? record.designName
+          : designNameFromFilename(record.filename),
+        openedContentKey: storedOpenedContentKey(record),
+        designUid: record.designUid,
+        legacyDesignName: record.legacyDesignName,
+        identity: record.identity ? { ...record.identity } : null,
+        classification: record.classification ?? null,
+      });
+      // Announced last, once the document state it pairs with is in place, so a
+      // restore after mount reloads the preview and resets its revision floor.
+      useDesignStore.getState().replaceDocument(design, {
+        revision: record.designRevision,
+        loadSource: 'autosave-restore',
+        notice,
+      });
+    };
+    if (needsDesignImport(record.design)) {
+      importedDraft = { design: initialDesign.design, revision: initialDesign.designRevision, document: initialDocument };
+      // Never install a retired family in live editor state. Keep the saved
+      // draft until the same server importer used by file Open has succeeded.
+      void importStoredDesign(record.design).then((opened) => {
+        if (generation !== restoreGeneration || initialDesign !== useDesignStore.getState()
+          || initialDocument !== useDocumentStore.getState()) return;
+        const design = hydrateDesignDocument(opened.design);
+        const notice = importNotice(opened);
+        importedDraft = null;
+        apply(design, notice);
+      }).catch(() => {
+        if (generation === restoreGeneration && initialDesign === useDesignStore.getState()) {
+          useDesignStore.setState({ loadNotice: 'The saved draft could not be imported. It is retained; restart WG to try restoring it again.' });
+        }
+      });
+    } else apply(record.design);
     return true;
   } catch {
     try { storage.removeItem(AUTOSAVE_KEY); } catch { /* unavailable storage stays non-fatal */ }

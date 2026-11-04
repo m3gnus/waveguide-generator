@@ -28,8 +28,8 @@ export interface ParsedPointPaste {
   points: FreeformPoint[];
   pointsByPlane?: { H: FreeformPoint[]; V: FreeformPoint[] };
   importedLength: number;
-  /** Every row is a plain `z, r` pair, as a LOOKUP table pastes. */
-  lookupStyle?: boolean;
+  /** Every row is a plain `z, r` pair, in the plain pair paste format. */
+  pairStyle?: boolean;
 }
 
 /** A header is a first row with no numeric cell at all: "z,r", "z (mm), r (mm)". */
@@ -59,7 +59,7 @@ export function parsePointPaste(text: string): ParsedPointPaste {
     if (points.some((point, index) => index > 0 && point.z <= points[index - 1].z)) {
       throw new Error('Each z must be larger than the one before it. Change or remove the repeated row.');
     }
-    if (points.length > 64) throw new Error('A Custom profile supports at most 64 anchors including the throat and mouth. Larger straight-line tables stay in legacy LOOKUP designs.');
+    if (points.length > 64) throw new Error('A Custom profile supports at most 64 anchors including the throat and mouth.');
   };
   if (compact) {
     const H = parsed.map(([z, h]) => ({ z: z * 10, r: h * 10 }));
@@ -82,98 +82,15 @@ export function parsePointPaste(text: string): ParsedPointPaste {
   return {
     points: points.map(({ z, ...point }) => ({ t: z / importedLength, ...point })),
     importedLength,
-    lookupStyle: parsed.every((values) => values.length === 2),
+    pairStyle: parsed.every((values) => values.length === 2),
   };
-}
-
-const LOOKUP_ORDER_MESSAGE = 'lookupProfile z values must be strictly increasing';
-
-/** A pasted or tabled radius at or below zero: the mesher accepts it, the geometry is rarely meant. */
-export function lookupRadiusWarning(radii: readonly number[], lines?: readonly number[]): string | undefined {
-  const bad = radii.map((radius, index) => (radius <= 0 ? (lines?.[index] ?? index + 1) : 0)).filter(Boolean);
-  if (!bad.length) return undefined;
-  const where = lines ? 'line' : 'point';
-  return `${bad.length === 1 ? `Radius at ${where} ${bad[0]} is` : `Radii at ${where}s ${bad.join(', ')} are`} zero or negative, so the horn will not be a physical surface. Enter a positive radius.`;
-}
-
-/** LOOKUP preserves authored order and mm; it has no spline endpoints or angle column. */
-export function parseLookupPaste(text: string): [number, number][] {
-  return parseLookupPasteRows(text).pairs.map(({ z, r }): [number, number] => [z, r]);
-}
-
-/** Parsed rows keep the line they came from, so a warning can name it. */
-export function parseLookupPasteRows(text: string): { pairs: { z: number; r: number; line: number }[] } {
-  const rows = text.split(/\r?\n/)
-    .map((raw, index) => ({ text: raw.trim(), line: index + 1 }))
-    .filter((row) => row.text && !row.text.startsWith('#'));
-  if (rows.length && isHeaderRow(rows[0].text)) rows.shift();
-  if (rows.length < 2) throw new Error('Enter at least two rows of z and r in mm.');
-  const pairs = rows.map((row) => {
-    const values = numericCells(row.text, row.line - 1);
-    if (values.length !== 2) throw new Error(`Line ${row.line} must contain exactly z and r in mm.`);
-    return { z: values[0], r: values[1], line: row.line };
-  });
-  const unordered = pairs.findIndex(({ z }, index) => index > 0 && z <= pairs[index - 1].z);
-  if (unordered > 0) throw new Error(`${LOOKUP_ORDER_MESSAGE} (line ${pairs[unordered].line})`);
-  return { pairs };
-}
-
-export function EditableLookupTable({ field, points }: { field: ParameterDefinition; points: [number, number][] }) {
-  const updateValue = useDesignStore((state) => state.updateValue);
-  const beginDrag = useDesignStore((state) => state.beginDrag);
-  const endDrag = useDesignStore((state) => state.endDrag);
-  const [text, setText] = useState('');
-  const parsed = useMemo(() => {
-    try { return text.trim() ? parseLookupPasteRows(text).pairs : null; }
-    catch (reason) { return reason instanceof Error ? reason : new Error(String(reason)); }
-  }, [text]);
-  const positionError = (index: number, z: number) => lookupPositionError(points, index, z);
-  const write = (index: number, axis: 0 | 1, value: number) => {
-    // A label scrub bypasses `validate`, so the order rule is enforced here too.
-    if (axis === 0 && positionError(index, value)) return;
-    const result = editLookupAnchor(useDesignStore.getState().design, { kind: 'move', index, [axis === 0 ? 'z' : 'r']: value });
-    updateValue('lookup_profile', result.after.lookup_profile!);
-  };
-  const tableWarning = lookupRadiusWarning(points.map(([, r]) => r));
-  const pasteWarning = parsed && !(parsed instanceof Error) ? lookupRadiusWarning(parsed.map(({ r }) => r), parsed.map(({ line }) => line)) : undefined;
-  const add = () => {
-    let gap = 0;
-    for (let index = 1; index < points.length - 1; index += 1) {
-      if (points[index + 1][0] - points[index][0] > points[gap + 1][0] - points[gap][0]) gap = index;
-    }
-    const result = editLookupAnchor(useDesignStore.getState().design, { kind: 'insert', z: (points[gap][0] + points[gap + 1][0]) / 2 });
-    updateValue('lookup_profile', result.after.lookup_profile!);
-  };
-  return <div className="editable-parameter-table" role="group" aria-label={field.label}>
-    <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{points.length} points</span></div>
-    <table><thead><tr><th>z mm</th><th>r mm</th><th /></tr></thead><tbody>
-      {points.map(([z, r], index) => <tr key={index}>
-        <td><NumberField label={`Lookup point ${index + 1} z`} value={z} step={.1} precision={4} unit="mm"
-          min={index > 0 ? points[index - 1][0] + 1e-4 : -Infinity} max={index < points.length - 1 ? points[index + 1][0] - 1e-4 : Infinity}
-          formatRangeError={() => LOOKUP_ORDER_MESSAGE}
-          validate={(value) => positionError(index, value)} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => write(index, 0, value)} /></td>
-        <td><NumberField label={`Lookup point ${index + 1} radius`} value={r} step={.1} precision={4} unit="mm" onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => write(index, 1, value)} /></td>
-        <td><button className="icon-button" type="button" aria-label={`Remove lookup point ${index + 1}`} disabled={points.length <= 2} onClick={() => updateValue('lookup_profile', editLookupAnchor(useDesignStore.getState().design, { kind: 'delete', index }).after.lookup_profile!)}>−</button></td>
-      </tr>)}
-    </tbody></table>
-    {tableWarning && <div className="field-warning" role="status">{tableWarning}</div>}
-    <button className="btn" type="button" onClick={add} disabled={points.length < 2}>Add point</button>
-    <div className="point-paste">
-      <textarea aria-label="Paste lookup points" rows={4} value={text} onChange={(event) => setText(event.target.value)} placeholder={'z_mm,r_mm\n0,12.7\n120,140'} />
-      {parsed instanceof Error && <div className="field-error" role="alert">{parsed.message}</div>}
-      {pasteWarning && <div className="field-warning" role="status">{pasteWarning}</div>}
-      <button className="btn" type="button" disabled={!parsed || parsed instanceof Error} onClick={() => {
-        if (parsed && !(parsed instanceof Error)) updateValue('lookup_profile', parsed.map(({ z, r }): [number, number] => [z, r]));
-      }}>Import points</button>
-    </div>
-  </div>;
 }
 
 export { normalizedImportedPoints } from './customProfileEdit';
 
 export const FREEFORM_POSITION_NOTE = 'Anchor and station positions are measured from the throat along Length, in mm before Scale. Changing Length asks whether to stretch the profile or move only the mouth.';
 export const CUSTOM_PROFILE_TABLE_HELP = 'Every anchor, throat and mouth included, at z mm from the throat before Scale. A smooth anchor has one tangent (automatic unless an angle or handle pins it); a corner may take different incoming and outgoing angles, and two neighbouring corners without facing angles join with a straight span. Each edit is previewed with its curve deviation and generated-profile change before it applies.';
-export const FREEFORM_IMPORT_HINT = 'One anchor per line in mm: z r [angle °], with commas, tabs or spaces; lookup z,r tables paste as they are. Lines starting with # and a header row are ignored. A row at z = 0 sets the throat radius; the last row sets the mouth radius and the length. Both planes at once: z;H;V in centimetres.';
+export const FREEFORM_IMPORT_HINT = 'One anchor per line in mm: z r [angle °], with commas, tabs or spaces; plain z,r tables paste as they are. Lines starting with # and a header row are ignored. A row at z = 0 sets the throat radius; the last row sets the mouth radius and the length. Both planes at once: z;H;V in centimetres.';
 
 /** Why a profile-level endpoint angle is ignored in one plane (precedence: handle, point angle, corner chord). */
 export function endpointAngleOverride(design: DesignDocument, plane: Plane, end: 'throat' | 'mouth'): string | undefined {
@@ -451,7 +368,7 @@ export function CustomProfilePaste() {
   const valid = parsed && !(parsed instanceof Error) ? parsed : null;
   const bothPlanes = Boolean(valid?.pointsByPlane) && !shared;
   const effectiveTarget = shared ? 'H' : bothPlanes ? 'both' : target;
-  const join = joinChoice ?? (valid?.lookupStyle ? 'corner' : 'smooth');
+  const join = joinChoice ?? (valid?.pairStyle ? 'corner' : 'smooth');
   const targetLabel = shared ? 'the profile (both planes)' : effectiveTarget === 'both' ? 'both profiles' : effectiveTarget === 'H' ? 'the horizontal profile' : 'the vertical profile';
   const targetLength = valid && adoptLength ? valid.importedLength : currentLength;
   const error = parsed instanceof Error ? parsed.message : valid && (targetLength < 20 || targetLength > 1_000) ? 'Imported length must be between 20 and 1000 mm.' : undefined;
@@ -467,7 +384,7 @@ export function CustomProfilePaste() {
     </fieldset>}
     {bothPlanes && <p className="section-note">This z;H;V paste contains both planes, so it imports into Both.</p>}
     {shared && valid?.pointsByPlane && <p className="section-note">One profile shapes both planes, so only the H column is used. Turn on Separate vertical profile to import V as well.</p>}
-    {valid && <div className="paste-meta">{valid.points.length} rows · pasted length {valid.importedLength} mm · current {currentLength} mm{valid.lookupStyle ? ' · z,r rows' : ''}</div>}
+    {valid && <div className="paste-meta">{valid.points.length} rows · pasted length {valid.importedLength} mm · current {currentLength} mm{valid.pairStyle ? ' · z,r rows' : ''}</div>}
     {valid && <fieldset className="point-paste-choices">
       <legend>Joins</legend>
       <label className="ui-check"><input type="radio" name={`${id}-join`} checked={join === 'corner'} onChange={() => setJoinChoice('corner')} />Corners (straight lines between rows without angles)</label>

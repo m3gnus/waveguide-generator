@@ -49,9 +49,8 @@ import type { SymmetryMode } from '../stores/solveOptions';
 import { SolveOptionsStoreProvider, useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, solveOptionsSummary, polarSummary, ToggleRow } from './SolveOptionsSections';
-import { ExperimentalBadge } from './ExperimentalBadge';
 import { convertToCustomProfileBuilder, rememberUnseparatedVertical, useProfileEdit } from './customProfileEdit';
-import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableLookupTable, EditableStationTable, FREEFORM_POSITION_NOTE, freeformAngleDisabledReason, freeformAngleOverride, ProfileEditPreviewPanel } from './FreeformEditors';
+import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableStationTable, FREEFORM_POSITION_NOTE, freeformAngleDisabledReason, freeformAngleOverride, ProfileEditPreviewPanel } from './FreeformEditors';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
 import { MeshTriangleEstimate } from './MeshTriangleEstimate';
@@ -417,7 +416,7 @@ export function previewErrorForParameter(
 
 /** User-facing family names; the persisted formula keys do not change. */
 function familyLabel(family: DesignFamily): string {
-  return family === 'FREEFORM' ? 'Custom profile' : family === 'LOOKUP' ? 'Legacy straight-line profile' : family;
+  return family === 'FREEFORM' ? 'Custom profile' : family;
 }
 
 function FieldControl({ field, design, serverError }: { field: ParameterDefinition; design: DesignDocument; serverError?: string }) {
@@ -486,7 +485,6 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
     </HelpTipRow>;
   }
   if (field.kind === 'table') {
-    if (field.id === 'lookup.profile') return <EditableLookupTable field={field} points={design.lookup_profile ?? []} />;
     if (field.id === 'freeform.crossSections') return <EditableStationTable field={field} stations={Array.isArray(value) ? value : []} />;
     return <CustomProfileTable field={field} plane={field.id.endsWith('V') ? 'V' : 'H'} />;
   }
@@ -1194,6 +1192,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   const [freeformChoice, setFreeformChoice] = useState(false);
   const conversionEdit = useProfileEdit();
   const [conversionNotice, setConversionNotice] = useState<string | null>(null);
+  const loadNotice = useDesignStore((state) => state.loadNotice);
   const searching = Boolean(query.trim());
   const definitions = useMemo(() => (workspaceMode === 'cad' ? CAD_PARAMETER_SECTION_DEFINITIONS : PARAMETER_SECTION_DEFINITIONS)
     .filter((definition) => definition.tab === tab)
@@ -1376,17 +1375,15 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
         if (family === 'OSSE' && osseFeatures(design.formula)) return;
         setConversionNotice(null);
         if (family === 'FREEFORM' && design.formula !== 'FREEFORM') setFreeformChoice(true);
-        else { setFreeformChoice(false); setFamily(family); setConversionNotice(family === 'LOOKUP' ? 'LOOKUP starts with a conical table defining the whole meridian (12.7 mm throat to 140 mm mouth over 120 mm, scaled by the current Scale). Edit or paste [z, r] samples in Profile. Analytic coefficients, throat extensions, slots, adapters and imported ATH geometry controls were removed.' : sectionResetNotice(family)); }
+        else { setFreeformChoice(false); setFamily(family); setConversionNotice(sectionResetNotice(family)); }
       }}>
         <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option value="FREEFORM">{familyLabel('FREEFORM')}</option>
-        {/* A saved LOOKUP stays editable under its own straight-line rules; it is never offered for a new design. */}
-        {(design.formula === 'LOOKUP' || design.formula === 'SOURCE-DISK') && <option value={design.formula}>
+        {design.formula === 'SOURCE-DISK' && <option value={design.formula}>
           {familyLabel(design.formula)}
         </option>}
       </select>
     </SelectRow>
-    {design.formula === 'LOOKUP' && <><ExperimentalBadge /><p className="section-note">A saved LOOKUP table: linear between its z, r samples, with its own morph, mouth, source-cap and sampling rules. It is not converted to a Custom profile.</p></>}
-    {conversionNotice && <Notice tone="warning" className="conversion-notice" actions={<button className="btn" onClick={() => setConversionNotice(null)}>Dismiss</button>}>{conversionNotice}</Notice>}
+    {(loadNotice || conversionNotice) && <Notice tone="warning" className="conversion-notice" actions={<button className="btn" onClick={() => { setConversionNotice(null); useDesignStore.setState({ loadNotice: null }); }}>Dismiss</button>}>{loadNotice || conversionNotice}</Notice>}
     {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Start a Custom profile">
       <b>Start a Custom profile</b><span>Start blank, or preview a conversion of the current design with its generated-wall, mouth and source-cap report.</span>
       <div><button className="btn" onClick={() => { setFamily('FREEFORM'); rememberUnseparatedVertical(useDesignStore.getState().design); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button className="btn" onClick={() => { setFreeformChoice(false); conversionEdit.propose('Convert to Custom profile', convertToCustomProfileBuilder()); }}>Convert current design</button><button className="btn" onClick={() => setFreeformChoice(false)}>Cancel</button></div>

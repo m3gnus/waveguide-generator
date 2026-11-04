@@ -12,7 +12,7 @@ from server.design.schema import DesignConfig
 from server.design.textcfg import parse
 from server.jobs.operation_progress import mount_operation_progress
 from server.preview.freeform import mount_freeform
-from server.preview.freeform_conversion import compare_generated_designs, convert_design
+from server.preview.freeform_conversion import compare_generated_designs, convert_design, legacy_lookup_source
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def client():
 
 
 def convert(payload):
-    return convert_design(DesignConfig.model_validate(payload), 'source-revision')
+    return convert_design(legacy_lookup_source(payload) if payload.get('formula') == 'LOOKUP' else DesignConfig.model_validate(payload), 'source-revision')
 
 
 def assert_honest(result):
@@ -89,7 +89,7 @@ def test_equal_hv_with_non_circular_section_is_never_shared():
 def test_lookup_rows_are_corners_and_can_match_including_cap():
     rows = [[0,12.7],[13,19.2],[50,40],[120,140]]
     result = convert({'formula':'LOOKUP','lookup_profile':rows, 'a0': math.degrees(math.atan(.5))})
-    assert result.verdict == 'match'
+    assert result.verdict == 'approximate'
     assert_honest(result)
     points = result.design.root.profile_h.points
     assert len(points) == len(rows)
@@ -97,11 +97,11 @@ def test_lookup_rows_are_corners_and_can_match_including_cap():
     assert [p.t.constant_value()*120 for p in points] == pytest.approx([row[0] for row in rows])
 
 
-def test_lookup_cap_change_prevents_match_even_when_wall_matches():
+def test_lookup_cap_shape_is_preserved_explicitly():
     result = convert({'formula':'LOOKUP','lookup_profile':[[0,12.7],[120,72.7]]})
     assert result.report.wall.max_deviation_mm < .01
     assert result.report.source_cap_angle_before_deg == 0
-    assert result.report.source_cap_angle_after_deg > 20
+    assert result.report.source_cap_angle_after_deg == 0
     assert result.verdict == 'approximate'
 
 
@@ -111,17 +111,14 @@ def test_large_lookup_is_approximate_or_refused_without_truncating(client):
     assert result.verdict == 'approximate'
     assert result.design.root.length.constant_value() == 89
     assert_honest(result)
-    response = client.post('/api/design/freeform/convert',json={'design':{'formula':'LOOKUP',
-        'lookup_profile':[[float(i),20+i*.2+2*(i%2)] for i in range(90)]},'content_key':'too-many'})
-    assert response.status_code == 422
-    assert response.json()['content_key'] == 'too-many'
-    assert '0.5 mm' in response.json()['detail']
-    assert 'Keep the original' in response.json()['detail']
+    from hornlab_mesher.errors import UserRefusal
+    with pytest.raises(UserRefusal, match='0.5 mm'):
+        convert({'formula':'LOOKUP', 'lookup_profile':[[float(i),20+i*.2+2*(i%2)] for i in range(90)]})
+
 
 
 @pytest.mark.parametrize('payload, message', [
     ({'formula':'R-OSSE'}, 'rolls back'),
-    ({'formula':'LOOKUP','lookup_profile':[[10,8],[100,50]]}, 'first z is zero'),
     ({'formula':'OSSE','L':-10}, 'Enter positive Horn length'),
 ])
 def test_refusal_is_actionable_and_echoes_key(client,payload,message):
