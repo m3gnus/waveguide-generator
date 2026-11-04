@@ -550,13 +550,19 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
       const opened = await openMeshReplay(text, fetcher);
       if (!importedMeshStore.isCurrentGeneration(generation)) return false;
       const setup = importedSetupOf(opened.request);
-      assertFileRecord(opened.record, setup, opened.request.geometry.ingest_id);
+      if (!setup) throw new Error('WG could not read this run’s settings. Select the run again.');
+      if (opened.record.ingest_id !== opened.request.geometry.ingest_id) throw new Error('WG could not match this mesh to its run. Select the run again.');
       if (opened.request.geometry.manifest_sha256 !== opened.record.manifest_sha256
         || opened.request.geometry.artifact_sha256 !== opened.record.artifact_sha256) {
         throw new Error('WG could not open this mesh again. Select the run again.');
       }
-      if (!fillFileRail(opened.record, setup, generation)) return false;
-      await openImported({ kind: 'file', prepared: opened.record, setup });
+      if (opened.record.producer === 'cad') {
+        if (!await openImported({ kind: 'cad-replay', record: opened.record, setup }, fetcher)) return false;
+      } else {
+        assertFileRecord(opened.record, setup, opened.request.geometry.ingest_id);
+        if (!fillFileRail(opened.record, setup, generation)) return false;
+        await openImported({ kind: 'file', prepared: opened.record, setup });
+      }
       useMeshImportStore.setState({ notice: 'Solve setup opened. Solve keeps its settings. Edits keep the other settings.' });
       return true;
     } catch (error) {

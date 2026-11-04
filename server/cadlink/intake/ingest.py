@@ -30,7 +30,7 @@ from server.cadlink.intake.isolated import (
 from server.cadlink.intake.isolation import ChildRefusal, MESH_BUDGET
 from server.cadlink.build_flags import fem_regions_enabled
 from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
-from server.cadlink.store import CadLinkStore
+from server.cadlink.store import CadLinkStore, StaleAttempt
 from server.cadlink.snapshot_mesh import SnapshotMesh, snapshot_mesh
 from server.design.textcfg import parse
 from server.preview.geometry_identity import geometry_hash_for_design
@@ -1523,6 +1523,8 @@ def _ingest_bundle(
     commit_guard: Callable[[Any], bool] | None = None,
     retained_copy: bool = False,
     resolve_confirmed_frame: bool = False,
+    validate_record: Callable[[dict[str, Any]], None] | None = None,
+    reuse_existing: bool = False,
 ) -> dict[str, Any]:
     """Run the nine ingestion stages and persist the immutable WG verdict.
 
@@ -1536,7 +1538,9 @@ def _ingest_bundle(
     (``CadLinkStore.attempt_is_current``): it runs inside the transaction that
     publishes the record, so an attempt that lost its operation commits nothing.
     ``retained_copy`` says ``bundle_path`` is WG's retained copy of a return
-    (``retain_snapshot``), which carries no captured CAD document.
+    (``retain_snapshot``), which carries no captured CAD document. Replay's
+    ``validate_record`` checks the reconstructed interpretation before publication;
+    with ``reuse_existing`` it also judges any retained candidate before reuse.
 
     ``defer_viewport`` publishes the record as soon as the solver mesh exists,
     leaving the display tessellation to :func:`build_deferred_viewport`. That
@@ -1551,6 +1555,26 @@ def _ingest_bundle(
     except Exception as exc:
         raise IngestRefusal("stage 1 bundle validation", str(exc)) from exc
     manifest = bundle.manifest
+    # Portable replay asks this same owner to adopt an intact preparation of
+    # the originals. Its callback checks the entire requested interpretation,
+    # not only the bundle identity. No packaged row is ever inserted.
+    if reuse_existing and validate_record is not None:
+        for raw in store.ingest_records():
+            candidate = json.loads(raw)
+            if (candidate.get("manifest_sha256") != bundle.manifest_sha256
+                    or candidate.get("artifact_sha256") != bundle.artifact_sha256):
+                continue
+            try:
+                validate_record(candidate)
+                retained = read_snapshot(candidate["bundle_store_path"], retained=True)
+                if retained.manifest_sha256 != bundle.manifest_sha256 or retained.artifact_sha256 != bundle.artifact_sha256:
+                    continue
+            except (OSError, ValueError):
+                continue
+            if commit_guard is not None and not commit_guard(None):
+                raise StaleAttempt("the preparation was superseded before reuse")
+            store.touch_ingest(candidate["ingest_id"])
+            return candidate
     admitted: list[str | None] = []
     prepared = mesh_preparation(
         store, bundle, mesh, skipped_source_ids, prep_options,
@@ -2106,9 +2130,6 @@ def _ingest_bundle(
     )
 
     def publish(ingest_id: str, created_at: str) -> str:
-        _publish_staged_bundle(
-            bundle_destination, staged_bundle, replace_existing=replacing_bundle
-        )
         anchor_instance_id = built["normalisation"].get("anchor_instance_id")
         anchor_instance = next(
             (
@@ -2267,7 +2288,15 @@ def _ingest_bundle(
             record["fem_regions"] = fem_regions
         if coupled_exterior is not None:
             record["coupled_exterior"] = coupled_exterior
-        return seal_prepared_record(record, producer="cad")
+        # Replay validates a freshly reconstructed record before either the row
+        # or its retained bundle becomes visible, like file registration does.
+        if validate_record is not None:
+            validate_record(record)
+        sealed = seal_prepared_record(record, producer="cad")
+        _publish_staged_bundle(
+            bundle_destination, staged_bundle, replace_existing=replacing_bundle
+        )
+        return sealed
 
     try:
         row = store.allocate_ingest(

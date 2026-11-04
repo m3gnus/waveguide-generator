@@ -908,6 +908,90 @@
         "title": "CadMeshLimit",
         "type": "object"
       },
+      "CadMeshReplayPackage": {
+        "additionalProperties": false,
+        "properties": {
+          "axial_contract": {
+            "title": "Axial Contract",
+            "type": "string"
+          },
+          "content_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "interpretation": {
+            "$ref": "#/components/schemas/CadReplayInterpretation"
+          },
+          "kind": {
+            "const": "wg-cad-mesh-replay",
+            "title": "Kind",
+            "type": "string"
+          },
+          "manifest_text": {
+            "maxLength": 1048576,
+            "minLength": 1,
+            "title": "Manifest Text",
+            "type": "string"
+          },
+          "members_base64": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Members Base64",
+            "type": "object"
+          },
+          "numerical_contract": {
+            "const": "imported-free-space-v1",
+            "title": "Numerical Contract",
+            "type": "string"
+          },
+          "preparation": {
+            "$ref": "#/components/schemas/CadReplayPreparation"
+          },
+          "request": {
+            "$ref": "#/components/schemas/SolveRequest"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "solve_model_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Solve Model Sha256",
+            "type": "string"
+          },
+          "solver_msh_text": {
+            "maxLength": 33554432,
+            "minLength": 1,
+            "title": "Solver Msh Text",
+            "type": "string"
+          },
+          "solver_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Solver Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "kind",
+          "numerical_contract",
+          "axial_contract",
+          "manifest_text",
+          "members_base64",
+          "preparation",
+          "interpretation",
+          "solver_msh_text",
+          "solver_sha256",
+          "solve_model_sha256",
+          "request",
+          "content_sha256"
+        ],
+        "title": "CadMeshReplayPackage",
+        "type": "object"
+      },
       "CadOperationSnapshotSummary": {
         "additionalProperties": false,
         "properties": {
@@ -1207,6 +1291,159 @@
           "updatedAt"
         ],
         "title": "CadOperationSummary",
+        "type": "object"
+      },
+      "CadReplayInterpretation": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Anchor",
+            "type": "object"
+          },
+          "domain_decision": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Domain Decision",
+            "type": "object"
+          },
+          "domain_interpretation": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Domain Interpretation",
+            "type": "object"
+          },
+          "identity": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Identity",
+            "type": "object"
+          },
+          "normalisation": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Normalisation",
+            "type": "object"
+          },
+          "polar_grid_derivation": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Polar Grid Derivation",
+            "type": "object"
+          },
+          "post_cut_source_areas": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Post Cut Source Areas",
+            "type": "object"
+          },
+          "role_resolution": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Role Resolution",
+            "type": "object"
+          },
+          "source_tags": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Source Tags",
+            "type": "object"
+          },
+          "sources": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "symmetry": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Symmetry",
+            "type": "object"
+          },
+          "tag_map": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Tag Map",
+            "type": "object"
+          }
+        },
+        "required": [
+          "normalisation",
+          "symmetry",
+          "domain_interpretation",
+          "domain_decision",
+          "sources",
+          "source_tags",
+          "tag_map",
+          "identity",
+          "anchor",
+          "polar_grid_derivation",
+          "role_resolution",
+          "post_cut_source_areas"
+        ],
+        "title": "CadReplayInterpretation",
+        "type": "object"
+      },
+      "CadReplayPreparation": {
+        "additionalProperties": false,
+        "properties": {
+          "solver_frame": {
+            "enum": [
+              "+x",
+              "-x",
+              "+y",
+              "-y",
+              "+z",
+              "-z"
+            ],
+            "title": "Solver Frame",
+            "type": "string"
+          },
+          "surface_deviation_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surface Deviation Mm"
+          },
+          "symmetry_mode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "full",
+              "half",
+              "quarter"
+            ],
+            "title": "Symmetry Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "solver_frame"
+        ],
+        "title": "CadReplayPreparation",
         "type": "object"
       },
       "CadReturnIdentity": {
@@ -19052,7 +19289,22 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MeshReplayPackage"
+                "discriminator": {
+                  "mapping": {
+                    "wg-cad-mesh-replay": "#/components/schemas/CadMeshReplayPackage",
+                    "wg-file-mesh-replay": "#/components/schemas/MeshReplayPackage"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MeshReplayPackage"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CadMeshReplayPackage"
+                  }
+                ],
+                "title": "Body"
               }
             }
           },

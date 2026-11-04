@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "kind": "wg-file-mesh-replay",
+  "numerical_contract": "imported-free-space-v1",
+  "axial_contract": "per-source-axis-v2",
+  "registration": {
+    "units": "cm",
+    "forward": "+x",
+    "up": "+z",
+    "source_tags": [
+      2
+    ],
+    "filename": "tetra.msh",
+    "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$PhysicalNames\n2\n2 1 \"Rigid\"\n2 2 \"HF\"\n$EndPhysicalNames\n$Nodes\n4\n1 0 0 0\n2 100 0 0\n3 0 100 0\n4 0 0 100\n$EndNodes\n$Elements\n4\n1 2 2 2 2 1 3 2\n2 2 2 1 1 1 2 4\n3 2 2 1 1 1 4 3\n4 2 2 1 1 2 3 4\n$EndElements\n"
+  },
+  "original_sha256": "sha256:2913c2163c542b4f14471abd8a948940f60d8fa8ca8b079209d22baf47b97273",
+  "solver_msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$PhysicalNames\n2\n2 1 \"Rigid\"\n2 2 \"HF\"\n$EndPhysicalNames\n$Nodes\n4\n1 0 0 0\n2 0 0 1\n3 1 0 0\n4 0 1 0\n$EndNodes\n$Elements\n4\n1 2 2 2 2 1 3 2\n2 2 2 1 1 1 2 4\n3 2 2 1 1 1 4 3\n4 2 2 1 1 2 3 4\n$EndElements\n",
+  "solver_sha256": "sha256:2197d3ddf2599eb0caefb18e6f126c46406b2fca841ec7bcd9a9405e31e88785",
+  "request": {
+    "geometry": {
+      "type": "imported",
+      "ingest_id": "wgi_01M6JXC7QH60TJJ4QPHK6CX7KF",
+      "manifest_sha256": "sha256:018fcd3e45d2097e26039cee511376c2af87aa52b6662cdd77bc46ef5ff54b8a",
+      "artifact_sha256": "sha256:2913c2163c542b4f14471abd8a948940f60d8fa8ca8b079209d22baf47b97273",
+      "drive_channels": [
+        {
+          "id": "group_2",
+          "source_ids": [
+            "group_2"
+          ],
+          "motion": "normal",
+          "driver": null
+        }
+      ],
+      "combine": null,
+      "drive_voltage_v": 1.7,
+      "rg_ohm": 0.0,
+      "max_drive_voltage_v": null,
+      "mesh": null,
+      "acknowledged_findings": [],
+      "skipped_source_ids": [],
+      "exterior_only": false,
+      "passive_cardioid_rear_volume_l": null,
+      "passive_cardioid_port_length_mm": null,
+      "model_port_area_m2": null,
+      "bem_port_area_m2": null,
+      "port_area_source": null,
+      "passive_cardioid_foam_resistance_pa_s_m3": null,
+      "passive_cardioid_invert_port": true,
+      "passive_cardioid_coupled": false
+    },
+    "options": {
+      "engine": "metal",
+      "accuracy": "fast",
+      "solver_mode": "full_3d",
+      "symmetry": "auto",
+      "frequency_range": null,
+      "num_frequencies": null,
+      "frequency_spacing": "log",
+      "frequencies_hz": [
+        103.0,
+        201.5,
+        1001.0
+      ],
+      "verbose": false,
+      "mesh_ladder": "off",
+      "mesh_validation_mode": "warn",
+      "polar_config": {
+        "angle_range": [
+          -180.0,
+          180.0,
+          73
+        ],
+        "angle_step": null,
+        "distance": 3.25,
+        "norm_angle": 5.0,
+        "inclination": 45.0,
+        "enabled_axes": [
+          "horizontal",
+          "vertical",
+          "diagonal"
+        ],
+        "observation_origin": "mouth",
+        "spherical_sampling": false,
+        "field_plane": true,
+        "spherical_theta_count": 37,
+        "spherical_phi_count": 72
+      },
+      "ground_plane": {
+        "enabled": false,
+        "axis": "y",
+        "height_m": 1.0
+      },
+      "stage_delay_ms": 30
+    },
+    "label": "mesh test",
+    "parent_job_id": null,
+    "client_request_id": null,
+    "client_metadata": {}
+  },
+  "result_provenance": {
+    "schema_version": 1,
+    "wg_version": "0.3.7",
+    "dependency_shas": {
+      "beat-engine": "a008a034033028e65d79aaf595e191e1a9515bd0",
+      "hornlab-bempp-bem": "5d82a932bbebd65c441746098dad20a517ec0430",
+      "hornlab-metal-bem": "80a2d5ead7a07d51443ab2549bd7707f60492310",
+      "hornlab-plots": "9462f4b8ee92ad87eb839173eac2aaacef5e8b55",
+      "hornlab-sim": "bf50b3b5fa20775fe9c248646a46efbe014d4a99",
+      "hornlab-waveguide-mesher": "63b62c2246844a81092c1d293cbf43c71b58aa19"
+    },
+    "installed_dependency_shas": {
+      "beat-engine": "a008a034033028e65d79aaf595e191e1a9515bd0",
+      "hornlab-bempp-bem": "8e6910602ece9abb2e9ce0db7a637f4bedf17f53",
+      "hornlab-metal-bem": "7c461f739656a69a2d42d882d782fa2472b3e776",
+      "hornlab-plots": "9e4a6d0dd2ccb6e735dd00233dccccb50d12ed44",
+      "hornlab-sim": "b21d2bd4d410cfaa6271b6a6499878a0cd4b0c6f",
+      "hornlab-waveguide-mesher": "7b803c635242553a8e3bb6a9bef4cf3d179ed2a7"
+    },
+    "dependency_drift": [
+      "hornlab-bempp-bem",
+      "hornlab-metal-bem",
+      "hornlab-plots",
+      "hornlab-sim",
+      "hornlab-waveguide-mesher"
+    ],
+    "request_identity": "execution",
+    "execution_request_sha256": "1691d15d8b32e4f55b99ac7d5fb5391ae0b88cf04b38d99253b62619bb98ffae",
+    "execution_geometry_sha256": "1854814b7e38c3b6862154fac657a0f331cb60146026c226a8bc72830e16a280",
+    "execution_solve_options_sha256": "b0a59cdd8dad06a9c7e7a2a9bdcdb578d34dfb6e25f899d082a205a2c521452c",
+    "effective_request_sha256": "1691d15d8b32e4f55b99ac7d5fb5391ae0b88cf04b38d99253b62619bb98ffae",
+    "effective_geometry_sha256": "1854814b7e38c3b6862154fac657a0f331cb60146026c226a8bc72830e16a280",
+    "effective_solve_options_sha256": "b0a59cdd8dad06a9c7e7a2a9bdcdb578d34dfb6e25f899d082a205a2c521452c",
+    "request_sha256": "1691d15d8b32e4f55b99ac7d5fb5391ae0b88cf04b38d99253b62619bb98ffae",
+    "geometry_sha256": "1854814b7e38c3b6862154fac657a0f331cb60146026c226a8bc72830e16a280",
+    "solve_options_sha256": "b0a59cdd8dad06a9c7e7a2a9bdcdb578d34dfb6e25f899d082a205a2c521452c",
+    "resolved_engine": "metal",
+    "solver_fingerprints": [
+      {
+        "package": null,
+        "version": null,
+        "commit": null,
+        "source_sha256": null,
+        "build_sha256": null,
+        "backend": "metal"
+      }
+    ]
+  },
+  "content_sha256": "sha256:d2f48f468c591181ee14931e3029a78d9154adac66c39c1d2831f7f990a61d93"
+}

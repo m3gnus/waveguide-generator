@@ -209,16 +209,17 @@ def test_export_checks_recorded_axial_semantics_instead_of_relabelling(tmp_path,
     asyncio.run(scenario())
 
 
-def test_cad_runs_are_not_relabelled_as_portable_file_meshes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("producer", ["native", "design-assembly", "cadlink"])
+def test_cad_runs_are_not_relabelled_as_portable_file_meshes(tmp_path, monkeypatch, producer):
     async def scenario():
         from server.jobs import mesh_replay
 
         app, store, runtime, _ = app_for(tmp_path)
         try:
             record, job_id, _ = await exported(app, store, runtime)
-            monkeypatch.setattr(mesh_replay, "get_prepared_mesh", lambda *_: {**record, "producer": "cadlink"})
+            monkeypatch.setattr(mesh_replay, "get_prepared_mesh", lambda *_: {**record, "producer": producer})
             response = await call(app, "GET", f"/api/jobs/{job_id}/mesh-replay", expected=409)
-            assert "CAD models" in response["detail"]
+            assert f"Replay for {producer} models" in response["detail"]
         finally:
             await runtime.shutdown()
             store.close()
@@ -306,3 +307,140 @@ def test_reflected_role_mesh_replays_its_reduced_domain_in_a_fresh_store(tmp_pat
             await runtime.shutdown()
             store.close()
     asyncio.run(scenario())
+
+
+def test_base_v1_fixture_opens_without_changing_historical_checksums(tmp_path):
+    # Captured by the unmodified 1ade1eec7 exporter, before this change.
+    raw = (Path(__file__).parent / 'fixtures/mesh_replay/file-v1.wgreplay').read_bytes()
+    package = json.loads(raw)
+
+    async def scenario():
+        app, store, runtime, _ = app_for(tmp_path)
+        try:
+            opened = await call(app, 'POST', '/api/mesh-replay', package)
+            assert opened['record']['msh_text'] == package['solver_msh_text']
+            expected = deepcopy(package['request'])
+            expected['geometry']['ingest_id'] = opened['record']['ingest_id']
+            assert opened['request'] == expected
+            assert runtime.store.list_jobs()[1] == 0
+            assert (Path(__file__).parent / 'fixtures/mesh_replay/file-v1.wgreplay').read_bytes() == raw
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('planes', [('y0',), ('x0', 'y0')])
+def test_cad_reduced_replay_rebuilds_originals_offline_and_solves_exactly(tmp_path, planes):
+    from server.cadlink.intake.ingest import ingest_bundle
+    from server.cadlink.intake.readings import ensure_frame_suggestion, decide_record_frame, store_frame_decision
+    from test_cadlink_ingest_symmetry import _reduced_bundle, _SIZES
+
+    async def scenario():
+        app, store, runtime, engine = app_for(tmp_path / 'origin')
+        bundle = _reduced_bundle(tmp_path, 'half', planes=planes, unlinked=True)
+        member_name = 'assembly.step'
+        if len(planes) == 2:
+            # Bundle collision keys are case-folded; actual members retain case.
+            member_name = 'Geometry/Assembly.STEP'
+            (bundle / 'Geometry').mkdir()
+            (bundle / 'assembly.step').rename(bundle / member_name)
+            manifest_path = bundle / 'wgreturn.json'
+            manifest = json.loads(manifest_path.read_text())
+            manifest['assembly']['file'] = member_name
+            manifest['files'][member_name] = manifest['files'].pop('assembly.step')
+            manifest_path.write_text(json.dumps(manifest))
+        try:
+            record = await asyncio.to_thread(ingest_bundle, bundle, _SIZES, [], store, app.state.data_dir,
+                                            prep_options={'symmetry_mode': 'auto'}, defer_viewport=True)
+            suggestion = ensure_frame_suggestion(store, record)
+            choice = decide_record_frame(store, record, suggestion)
+            assert choice.axis == '+z'
+            store_frame_decision(store, record, choice, suggestion)
+            body = request(record, mesh=record['mesh_sizes'], drive_channels=[{
+                'id': 'hf-channel', 'source_ids': ['source-hf'], 'motion': 'normal',
+            }])
+            body.geometry.drive_voltage_v = 2.7
+            body.options.symmetry = 'auto'
+            body.options.polar_config.distance = 3.25
+            job_id = await runtime.submit(body)
+            await runtime.wait_idle()
+            assert runtime.store.get_job_row(job_id)['status'] == 'complete'
+            original_request = runtime.store.get_job_row(job_id)['config_json']
+            package = await call(app, 'GET', f'/api/jobs/{job_id}/mesh-replay')
+            assert package['kind'] == 'wg-cad-mesh-replay'
+            assert package['solver_msh_text'] == engine.calls[0][1]
+            assert 'store_path' not in json.dumps(package)
+            # Removal keeps replay unavailable and does not mislabel it as a file.
+            Path(record['bundle_store_path'], member_name).unlink()
+            failure = await call(app, 'GET', f'/api/jobs/{job_id}/mesh-replay', expected=409)
+            assert 'retained CAD originals' in failure['detail']
+        finally:
+            await runtime.shutdown()
+            store.close()
+        app, store, runtime, engine = app_for(tmp_path / 'fresh')
+        try:
+            assert runtime.store.list_jobs()[1] == 0
+            opened, second = await asyncio.gather(call(app, 'POST', '/api/mesh-replay', package),
+                                                  call(app, 'POST', '/api/mesh-replay', package))
+            assert opened == second
+            assert len(store.ingest_records()) == 1
+            assert runtime.store.list_jobs()[1] == 0
+            expected = deepcopy(original_request)
+            expected['geometry']['ingest_id'] = opened['record']['ingest_id']
+            expected['client_request_id'] = expected['parent_job_id'] = None
+            assert opened['request'] == expected
+            assert opened['record']['symmetry'] == record['symmetry']
+            assert set(planes) <= set(record['symmetry']['domain_planes'])
+            assert opened['record']['solve_model_sha256'] == record['solve_model_sha256']
+            assert opened['record']['sources'] == record['sources']
+            assert opened['record']['domain_decision'] == record['domain_decision']
+            assert opened['record']['normalisation'] == record['normalisation']
+            store.close()
+            store.initialize()
+            assert await call(app, 'POST', '/api/mesh-replay', package) == opened
+            # Checksums are not capabilities: rehashed false physics must fail too.
+            changes = [
+                (lambda p: p.update(solver_msh_text=p['solver_msh_text'] + 'changed'), False),
+                (lambda p: p['members_base64'].update({member_name: 'dGFtcGVy'}), True),
+                (lambda p: p.update(solve_model_sha256='sha256:' + '0' * 64), True),
+                (lambda p: p['interpretation']['normalisation'].update(assembly_frame_is_solver_frame=False), True),
+                (lambda p: p['interpretation']['source_tags'].update({'source-hf': 102}), True),
+                (lambda p: p['request']['geometry'].update(drive_channels=[]), True),
+                (lambda p: p['request']['options'].update(symmetry='full'), True),
+                (lambda p: p['preparation'].update(solver_frame='+x'), True),
+                (lambda p: p['members_base64'].update({'../escape.step': 'AA=='}), True),
+                (lambda p: p.update(mesh_store_path='/untrusted/mesh'), True),
+                (lambda p: p['request']['options'].update(engine='auto'), True),
+                (lambda p: p['request']['options'].update(solver_mode='fem'), True),
+            ]
+            for change, hash_again in changes:
+                corrupted = deepcopy(package)
+                change(corrupted)
+                if hash_again:
+                    rehash(corrupted)
+                await call(app, 'POST', '/api/mesh-replay', corrupted, expected=422)
+                assert len(store.ingest_records()) == 1
+                assert runtime.store.list_jobs()[1] == 0
+            accepted = await call(app, 'POST', '/api/solve', opened['request'])
+            await runtime.wait_idle()
+            assert runtime.store.get_job_row(accepted['job_id'])['status'] == 'complete'
+            assert len(engine.calls) == 1
+            assert engine.calls[0][1] == package['solver_msh_text']
+            assert engine.calls[0][0]['options'] == original_request['options']
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("field,value", [("fem_regions", [{}]), ("coupled_exterior", {"mesh_size_bytes": 1}),
+                                         ("evidence", {"fem_air_volumes": [{}]})])
+def test_typed_surface_replay_refuses_all_retained_fem_evidence(field, value):
+    from server.jobs.mesh_replay import _validate_cad_request
+    record = {"producer": "cad", field: value}
+    body = request({"ingest_id": "wgi_" + "0" * 26, "manifest_sha256": "sha256:" + "1" * 64,
+                    "artifact_sha256": "sha256:" + "2" * 64},
+                   mesh={"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {"group_2": 8}})
+    with pytest.raises(ValueError, match="FEM/coupled replay is not available"):
+        _validate_cad_request(body, record)

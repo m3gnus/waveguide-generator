@@ -2,10 +2,11 @@ import { activityOperation } from '../shell/activityOperation';
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import { refusalText } from './httpError';
 import type { RegisteredMesh } from './meshImport';
+import type { CadReturnIngestRecord } from './cadlink';
 
 export const MAX_MESH_REPLAY_BYTES = 64 * 1024 * 1024;
 export interface OpenedMeshReplay {
-  record: RegisteredMesh;
+  record: RegisteredMesh | (CadReturnIngestRecord & { producer: 'cad'; msh_text: string });
   request: ImportedSolveSubmission;
 }
 

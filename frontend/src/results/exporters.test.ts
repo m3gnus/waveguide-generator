@@ -1243,6 +1243,7 @@ describe('result exporters', () => {
         schema_version: 1, results: finalResult, results_sha256: 'c'.repeat(64),
         mesh_artifact: null, pressure_bases: [], radiation_impedance: null,
       }), { status: 200 });
+      if (path.endsWith('/mesh-replay')) return new Response(JSON.stringify({ detail: 'Retained CAD originals unavailable' }), { status: 409 });
       if (path === '/api/cadlink/runs/archive-document') {
         expect(records).toHaveLength(0);
         expect(JSON.parse(String(init?.body))).toEqual({ jobId: job.id });
@@ -1316,12 +1317,12 @@ describe('result exporters', () => {
       .toBe('9_Mesh_Run.msh');
   });
 
-  it.each([200, 409, 503])('archives replay bytes or an explicit refusal, retrying transient failures (%s)', async status => {
+  it.each([['mesh-file', 200], ['mesh-file', 409], ['mesh-file', 503], ['cad', 200], ['cad', 409], ['native', 409], ['design-assembly', 409]] as const)('archives %s replay bytes or an explicit refusal (%s)', async (origin, status) => {
     const job = {
       id: 'archive-replay', archive_folder: 'Driver', archive_run: '9_Driver', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
       stage: null, stage_message: null, created_at: '2026-08-20T10:00:00Z', queued_at: '2026-08-20T10:00:00Z',
       started_at: '2026-08-20T10:00:01Z', completed_at: '2026-08-20T10:02:00Z',
-      config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' },
+      config_summary: { geometry_type: 'imported', import_origin: origin },
       solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: true,
       label: 'Mesh Run', error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null,
       design_revision: 1, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null,

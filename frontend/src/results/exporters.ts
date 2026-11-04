@@ -1269,7 +1269,7 @@ export async function archiveRunToWorkspace(
       throw new Error([...new Set(bundle.failures.map(({ reason }) => reason))].join(' '));
     }
     let replay: { filename: string | null; reason?: string } | undefined;
-    if (job.config_summary.import_origin === 'mesh-file') {
+    if (job.config_summary.geometry_type === 'imported') {
       const filename = `${exportStemForJob(archiveJob)}.wgreplay`;
       try {
         const blob = await fetchMeshReplay(job.id, fetcher);

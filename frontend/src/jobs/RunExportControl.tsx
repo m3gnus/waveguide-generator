@@ -81,7 +81,7 @@ const CATALOG_BY_FORMAT = new Map(
 );
 
 export function canExportRun(job: JobItem): boolean {
-  return job.status === 'complete' && (modelKindForRun(job) === 'cad' || job.config_summary.import_origin === 'mesh-file' || job.has_results || canLoadJobDesign(job));
+  return job.status === 'complete' && (modelKindForRun(job) === 'cad' || job.config_summary.geometry_type === 'imported' || job.config_summary.import_origin === 'mesh-file' || job.has_results || canLoadJobDesign(job));
 }
 
 /** The parameter config is a native .mwg for LOOKUP, which has no ATH form. */
@@ -322,7 +322,7 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   });
 
   const items: ActionMenuItem[] = [
-    ...(job.status === 'complete' && job.config_summary.import_origin === 'mesh-file' ? [{
+    ...(job.status === 'complete' && job.config_summary.geometry_type === 'imported' ? [{
       id: 'mesh-replay', label: 'Solve setup', trailing: '.wgreplay', group: 'Geometry & design',
       disabled: operation.busy, onSelect: async () => { await exportReplay(); },
     }] : []),

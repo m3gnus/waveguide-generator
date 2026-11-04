@@ -3104,6 +3104,43 @@ export interface components {
             /** Triangles */
             triangles: number;
         };
+        /** CadMeshReplayPackage */
+        CadMeshReplayPackage: {
+            /** Axial Contract */
+            axial_contract: string;
+            /** Content Sha256 */
+            content_sha256: string;
+            interpretation: components["schemas"]["CadReplayInterpretation"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "wg-cad-mesh-replay";
+            /** Manifest Text */
+            manifest_text: string;
+            /** Members Base64 */
+            members_base64: {
+                [key: string]: string;
+            };
+            /**
+             * Numerical Contract
+             * @constant
+             */
+            numerical_contract: "imported-free-space-v1";
+            preparation: components["schemas"]["CadReplayPreparation"];
+            request: components["schemas"]["SolveRequest"];
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Solve Model Sha256 */
+            solve_model_sha256: string;
+            /** Solver Msh Text */
+            solver_msh_text: string;
+            /** Solver Sha256 */
+            solver_sha256: string;
+        };
         /** CadOperationSnapshotSummary */
         CadOperationSnapshotSummary: {
             /** Bundlepath */
@@ -3160,6 +3197,73 @@ export interface components {
             state: string;
             /** Updatedat */
             updatedAt: string | null;
+        };
+        /** CadReplayInterpretation */
+        CadReplayInterpretation: {
+            /** Anchor */
+            anchor: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Domain Decision */
+            domain_decision: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Domain Interpretation */
+            domain_interpretation: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Identity */
+            identity: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Normalisation */
+            normalisation: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Polar Grid Derivation */
+            polar_grid_derivation: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Post Cut Source Areas */
+            post_cut_source_areas: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Role Resolution */
+            role_resolution: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Source Tags */
+            source_tags: {
+                [key: string]: number;
+            };
+            /** Sources */
+            sources: {
+                [key: string]: components["schemas"]["JsonValue"];
+            }[];
+            /** Symmetry */
+            symmetry: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Tag Map */
+            tag_map: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+        };
+        /** CadReplayPreparation */
+        CadReplayPreparation: {
+            /**
+             * Solver Frame
+             * @enum {string}
+             */
+            solver_frame: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+            /** Surface Deviation Mm */
+            surface_deviation_mm?: number | null;
+            /**
+             * Symmetry Mode
+             * @default auto
+             * @enum {string}
+             */
+            symmetry_mode?: "auto" | "full" | "half" | "quarter";
         };
         /**
          * CadReturnIdentity
@@ -5855,8 +5959,8 @@ export interface components {
             /** Content Sha256 */
             content_sha256: string;
             /**
-             * Kind
-             * @constant
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
              */
             kind: "wg-file-mesh-replay";
             /**
@@ -10394,7 +10498,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["MeshReplayPackage"];
+                "application/json": components["schemas"]["MeshReplayPackage"] | components["schemas"]["CadMeshReplayPackage"];
             };
         };
         responses: {

@@ -587,3 +587,22 @@ it('replaces the prior physics when another run of the shown mesh has a non-exac
   expect(useCadReturnStore.getState().driveVoltageV).toBe(5);
   expect(effectiveImportedSetup('cad', record.ingest_id, () => next).geometry.drive_voltage_v).toBe(5);
 });
+
+it('opens a portable CAD replay through the existing CAD rail and preserves the whole request', async () => {
+  const { loadMeshReplay } = await import('../../stores/meshImport');
+  const request = archivedRequest();
+  const replayRecord = { ...record, producer: 'cad', model_id: 'wgl_replay', msh_text: mesh };
+  const fetcher = vi.fn<typeof fetch>(async input => {
+    if (String(input).endsWith('/mesh-replay')) return json({ record: replayRecord, request });
+    if (String(input).endsWith('/viewport-mesh')) return new Response(mesh);
+    return json({ setup: null });
+  });
+  expect(await loadMeshReplay('{}', fetcher)).toBe(true);
+  expect(workspaceModeStore.getSnapshot().importedInput).toBe('cad');
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+  expect(useImportedModelStore.getState().modelId).toBe('wgl_replay');
+  const submitted = buildImportedSubmission();
+  expect(submitted?.options).toEqual(request.options);
+  expect(submitted?.geometry).toEqual({ ...request.geometry, acknowledged_findings: [] });
+});

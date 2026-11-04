@@ -119,7 +119,7 @@ export const cadImportedView: ImportedView = {
     const documentLoad = currentDocumentLoad();
     // A new target owns Solve before any request can fail or stall.
     const preparedId = source.kind === 'cad-preparation' ? source.preparedId
-      : source.kind === 'run' ? source.job.cad_source?.ingest_id : source.kind === 'model' ? source.preparedId : null;
+      : source.kind === 'run' ? source.job.cad_source?.ingest_id : source.kind === 'model' ? source.preparedId : source.kind === 'cad-replay' ? source.record.ingest_id : null;
     const keepPrepared = preparedId && useCadReturnStore.getState().ingestRecord?.ingest_id === preparedId
       && importedMeshStore.getSnapshot().cad?.ingestId === preparedId;
     // Loading a setup does not change the mesh already on screen. In particular,
@@ -170,7 +170,7 @@ export const cadImportedView: ImportedView = {
         if (!opened.setup) seedImportedSolveOptionsFromParametric();
         await migrateCadProfiles(fetcher);
         if (!current()) return null;
-        const draft = restoreCadProjectSettings(opened.setup, record, source.kind !== 'run', opened.revisionId);
+        const draft = restoreCadProjectSettings(opened.setup, record, source.kind !== 'run' && source.kind !== 'cad-replay', opened.revisionId);
         if (draft) { opened.setup = null; opened.revisionId = null; }
         if (importedMeshStore.getSnapshot().cad?.ingestId !== record.ingest_id) {
           await showIngestedMesh(record, name, reportViewportNotice, fetcher, generation);

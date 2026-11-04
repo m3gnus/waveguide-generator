@@ -174,6 +174,7 @@ export type ImportedSource =
   /** A file just registered or prepared (null: a new file not yet prepared), with the setup a replay carries. */
   | { kind: 'file'; prepared: (ImportedPrepared & { source_file?: { filename?: string; transform: { units: string; forward: string; up: string }; source_tags: number[] } }) | null;
     setup?: ImportedSetup | null }
+  | { kind: 'cad-replay'; record: CadReturnIngestRecord; setup: ImportedSetup; display?: ImportedDisplay }
   | { kind: 'cad'; record: CadReturnIngestRecord };
 
 /** One open of a rail: it owns the rail from `begin` until it fills or fails. */
@@ -284,8 +285,13 @@ interface ModelOpenRead {
   setup?: Awaited<ReturnType<typeof readImportedSetup>>;
 }
 
-async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model' | 'cad-preparation' }>, input: ImportedInput,
+async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model' | 'cad-preparation' | 'cad-replay' }>, input: ImportedInput,
   fetcher: typeof fetch, initial?: ModelOpenRead): Promise<OpenedModel> {
+  if (source.kind === 'cad-replay') {
+    const modelId = importedModelId(source.record);
+    return { input: 'cad', model: null, modelId, prepared: { ...source.record, producer: 'cad', model_id: modelId },
+      originalAvailable: true, setup: source.setup, revisionId: null, exact: true, note: null, cadRecord: source.record };
+  }
   if (source.kind === 'cad-preparation') {
     const { getIngest } = await import('../api/cadlink');
     const record = await getIngest(source.preparedId, fetcher);
@@ -346,7 +352,7 @@ async function openImportedWithRead(source: ImportedSource, fetcher: typeof fetc
   if (source.kind === 'file' || source.kind === 'cad') { openKnown(source); return true; }
   // An unnumbered CAD preparation is not an archived run.
   if (source.kind === 'run' && (source.job.config_summary.geometry_type !== 'imported' || source.job.run_number === null)) return false;
-  const input: ImportedInput = source.kind === 'cad-preparation' ? 'cad' : source.kind === 'run'
+  const input: ImportedInput = source.kind === 'cad-preparation' || source.kind === 'cad-replay' ? 'cad' : source.kind === 'run'
     ? inputOf(source.job.config_summary.import_origin as string | undefined)
     : (source.modelId.startsWith('design-assembly:') ? 'assembly' : source.modelId.startsWith('mesh-file:') ? 'file' : 'cad');
   const view = views[input];
@@ -358,7 +364,7 @@ async function openImportedWithRead(source: ImportedSource, fetcher: typeof fetc
     workspaceModeStore.setImportedInput(input);
     const previous = useImportedModelStore.getState();
     const preparedId = source.kind === 'run' ? source.job.cad_source?.ingest_id
-      : source.preparedId;
+      : source.kind === 'cad-replay' ? source.record.ingest_id : source.preparedId;
     const retained = input === 'cad' && previous.input === input && previous.phase === 'ready'
       && previous.prepared?.ingest_id === preparedId && importedMeshStore.getSnapshot().cad?.ingestId === preparedId;
     useImportedModelStore.setState({ ...(retained ? previous : emptyState(input)), generation, phase: 'loading' });

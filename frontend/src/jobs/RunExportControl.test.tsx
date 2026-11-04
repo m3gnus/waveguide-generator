@@ -965,10 +965,10 @@ describe('RunExportControl', () => {
     expect(patchMetadata).toHaveBeenCalledWith(job.id, { exported_files: ['earlier.csv', '/chosen/1_stored_horn_v07.wgreplay'] });
   });
 
-  it('never offers file replay for a CAD imported job', () => {
+  it('offers the existing solve setup export for a CAD imported job', () => {
     render(completeJob({ config_summary: { geometry_type: 'imported' }, script_snapshot: null }));
     openMenu();
-    expect(document.querySelector('[role="menu"]')?.textContent).not.toContain('Solve setup');
+    expect(document.querySelector('[role="menu"]')?.textContent).toContain('Solve setup');
   });
 
 });
