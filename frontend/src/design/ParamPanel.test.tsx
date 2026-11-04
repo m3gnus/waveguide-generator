@@ -328,15 +328,10 @@ describe('ParamPanel inventory UX', () => {
     act(() => useDesignStore.getState().updateValue('morph.target_width', 600));
     expect(host.querySelector('[data-parameter-id="morph.target_width"]')).toBeNull();
     expect(host.querySelector('[data-section="Mouth"] .modified')).toBeNull();
-    const search = host.querySelector<HTMLInputElement>('.parameter-search input')!;
-    const searchFor = (value: string) => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(search, value);
-      search.dispatchEvent(new Event('input', { bubbles: true }));
-    };
-    act(() => searchFor('Target width'));
+    act(() => requestParameterReveal({ id: 'morph.target_width', tab: 'geometry', query: 'Target width' }));
     expect(host.querySelector<HTMLInputElement>('[data-parameter-id="morph.target_width"] input')?.value).toBe('600.00');
     expect(host.querySelector('.filter-note')?.textContent).toContain('normally hidden');
-    act(() => searchFor(''));
+    act(() => host.querySelector<HTMLButtonElement>('.parameter-reveal-filter button')!.click());
     expect(host.querySelector('[data-parameter-id="morph.target_width"]')).toBeNull();
     act(() => useDesignStore.getState().updateValue('morph.target_shape', 1));
     expect(host.querySelector('[data-parameter-id="morph.corner_radius"]')).not.toBeNull();
@@ -581,11 +576,7 @@ describe('ParamPanel inventory UX', () => {
 
   it.each([undefined, 'ath-2026-08c-v1'] as const)('hides ATH lip and rear for %s, including search', (version) => {
     act(() => useDesignStore.getState().replaceDocument(hydrateDesignDocument({ formula: 'OSSE', text_import_version: version })));
-    const search = host.querySelector<HTMLInputElement>('input[type="search"]')!;
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'ATH');
-      search.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    act(() => requestParameterReveal({ id: 'mesh.ath_rear_shape', tab: 'geometry', query: 'ATH' }));
     expect(host.querySelector('[data-parameter-id^="mesh.ath_"]')).toBeNull();
   });
 
@@ -823,15 +814,12 @@ describe('ParamPanel inventory UX', () => {
     const family = host.querySelector<HTMLSelectElement>('#family')!;
     expect(family.value).toBe(current);
     expect([...family.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM']);
-    const filter = host.querySelector<HTMLInputElement>('input[type="search"]')!;
     for (const query of ['LOOKUP', ...NATIVE_FAMILIES]) {
-      act(() => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(filter, query);
-        filter.dispatchEvent(new Event('input', { bubbles: true }));
-      });
-      expect([...family.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM']);
+      act(() => requestParameterReveal({ id: '', tab: 'geometry', query }));
       expect(host.querySelector('[data-parameter-id="lookup.profile"], [data-parameter-id^="native."]')).toBeNull();
       expect(useDesignStore.getState().design.formula).toBe(current);
+      act(() => host.querySelector<HTMLButtonElement>('.parameter-reveal-filter button')!.click());
+      expect([...host.querySelector<HTMLSelectElement>('#family')!.options].map((option) => option.value)).toEqual(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM']);
     }
   });
 
@@ -1124,8 +1112,8 @@ describe('ParamPanel inventory UX', () => {
     await act(async () => { select.value = 'on'; select.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(validate).not.toHaveBeenCalled();
     expect(useDesignStore.getState().design).toEqual(original);
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('set Scale.Z equal to Scale');
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('re-import');
+    expect(host.querySelector('[data-section="OSSE features"] [role="alert"]')?.textContent).toContain('set Scale.Z equal to Scale');
+    expect(host.querySelector('[data-section="OSSE features"] [role="alert"]')?.textContent).toContain('re-import');
   });
 
   it('does not copy a displayed fallback for a missing OSSE dimension', async () => {
@@ -1152,7 +1140,7 @@ describe('ParamPanel inventory UX', () => {
     expect(validate).toHaveBeenCalledOnce();
     expect(useDesignStore.getState().design).toEqual(original);
     expect(select.value).toBe('plain');
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('current design was kept');
+    expect(host.querySelector('[data-section="OSSE features"] [role="alert"]')?.textContent).toContain('current design was kept');
   });
 
   it('does not apply a validation result to a design edited while the request was pending', async () => {
@@ -1174,11 +1162,7 @@ describe('ParamPanel inventory UX', () => {
   ] as const)('disables an inactive composite control revealed by search: %s', (features, query, id) => {
     const design = mergeDesignForOsseFeatures(designForFamily('OSSE-NATIVE'), features);
     act(() => useDesignStore.getState().replaceDocument(design));
-    const search = host.querySelector<HTMLInputElement>('input[type="search"]')!;
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, query);
-      search.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    act(() => requestParameterReveal({ id, tab: 'geometry', query }));
     expect(host.querySelector<HTMLInputElement>(`[data-parameter-id="${id}"] input`)?.disabled).toBe(true);
     expect(host.textContent).toContain('Select this feature in OSSE features before editing.');
     expect(useDesignStore.getState().design).toEqual(design);
@@ -1188,12 +1172,14 @@ describe('ParamPanel inventory UX', () => {
     act(() => useDesignStore.getState().replaceDocument(designForFamily('OSSE')));
     const before = JSON.stringify(serializeDesign(useDesignStore.getState().design));
     const entry = buildParameterPaletteEntries('OSSE').find((item) => item.id === 'parametric-control-osse-features')!;
+    expect(entry.detail).toBe('Profile');
     expect(entry.matches?.('terminating arc')).toBe(true);
     act(() => entry.run());
     await vi.waitFor(() => {
       expect(host.querySelector('#osse-feature-throat')).not.toBeNull();
       expect(document.activeElement?.id).toBe('osse-feature-throat');
     });
+    expect(host.querySelector('#osse-feature-throat')?.closest('[data-section]')?.getAttribute('data-section')).toBe('OSSE features');
     expect(host.textContent).not.toContain('No parameter labels');
     expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before);
     expect(buildParameterPaletteEntries('SOURCE-DISK').some((item) => item.id === entry.id)).toBe(false);
@@ -1210,12 +1196,8 @@ describe('ParamPanel inventory UX', () => {
     });
     for (const tab of ['geometry', 'simulation'] as const) {
       act(() => root.render(withQueryClient(<ParamPanel tab={tab} />)));
-      const filter = host.querySelector<HTMLInputElement>('input[type="search"]')!;
       for (const query of ['', 'morph', 'enclosure', 'infinite baffle']) {
-        act(() => {
-          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(filter, query);
-          filter.dispatchEvent(new Event('input', { bubbles: true }));
-        });
+        act(() => requestParameterReveal({ id: '', tab, query }));
         expect(host.querySelector('#outer-body-mode')).toBeNull();
         expect(host.querySelector('[data-parameter-id^="morph."]')).toBeNull();
         expect(host.querySelector('[data-parameter-id^="enclosure."]')).toBeNull();
@@ -1308,24 +1290,15 @@ describe('ParamPanel inventory UX', () => {
 
   it('filters across labels and ATH/v1 keys, including a mode-hidden field', () => {
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    const input = host.querySelector<HTMLInputElement>('#parameter-filter-simulation')!;
-    const setInputValue = (value: string) => Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
-    act(() => {
-      setInputValue('zMapPoints');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    act(() => requestParameterReveal({ id: 'mesh.z_map_points', tab: 'simulation', query: 'zMapPoints' }));
     const entries = host.querySelectorAll('[data-parameter-id]');
     expect(entries).toHaveLength(1);
     expect(entries[0].getAttribute('data-parameter-id')).toBe('mesh.z_map_points');
     expect(host.textContent).toContain('normally hidden by the active mode');
   });
 
-  it('keeps each dock panel filter scoped to its own parameter category', () => {
-    const input = host.querySelector<HTMLInputElement>('#parameter-filter-geometry')!;
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'mesh');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+  it('keeps each dock panel reveal query scoped to its own parameter category', () => {
+    act(() => requestParameterReveal({ id: '', tab: 'geometry', query: 'mesh' }));
     expect(host.querySelector('[data-parameter-id="mesh.angular_segments"]')).toBeNull();
     expect(host.querySelector('[data-parameter-id="mesh.throat_resolution"]')).toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
@@ -1340,10 +1313,70 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).not.toContain('complete design inventory');
   });
 
+  it.each(['geometry', 'simulation'] as const)('omits the rail search input and description toggle in %s', (tab) => {
+    act(() => root.render(withQueryClient(<ParamPanel tab={tab} />)));
+    expect(host.querySelector('input[type="search"]')).toBeNull();
+    expect(host.querySelector('input[placeholder="Filter labels or keys…"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Show section descriptions"]')).toBeNull();
+    expect(host.querySelector('.parameter-reveal-filter')).toBeNull();
+  });
+
+  it('shows the reveal query and restores the complete rail with Show all', () => {
+    const before = serializeDesign(useDesignStore.getState().design);
+    const sections = [...host.querySelectorAll<HTMLElement>('[data-section]')].map(section => section.dataset.section);
+    expect(host.querySelector('[data-parameter-id="morph.target_width"]')).toBeNull();
+
+    act(() => requestParameterReveal({ id: 'morph.target_width', tab: 'geometry', query: '  Target width  ' }));
+    const status = host.querySelector<HTMLElement>('.parameter-reveal-filter')!;
+    expect(status.getAttribute('role')).toBe('status');
+    expect(status.querySelector('span')?.textContent).toBe('Showing matches for “Target width”');
+    expect(host.querySelector('[data-parameter-id="morph.target_width"]')).not.toBeNull();
+    expect(host.querySelector('[data-section="Throat"]')).toBeNull();
+    const showAll = status.querySelector<HTMLButtonElement>('button')!;
+    expect(showAll.textContent).toBe('Show all');
+    act(() => showAll.click());
+
+    expect(host.querySelector('.parameter-reveal-filter')).toBeNull();
+    expect([...host.querySelectorAll<HTMLElement>('[data-section]')].map(section => section.dataset.section)).toEqual(sections);
+    expect(host.querySelector('[data-parameter-id="morph.target_width"]')).toBeNull();
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
+  });
+
+  it('shows the section description when hovering its title and dismisses it on leave', () => {
+    vi.useFakeTimers();
+    try {
+      const title = host.querySelector<HTMLElement>('[data-section="Model Type"] .section-name')!;
+      expect(document.querySelector('[role="tooltip"]')).toBeNull();
+      expect(host.querySelector('.section-description')).toBeNull();
+      act(() => title.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' })));
+      expect(document.querySelector('[role="tooltip"]')).toBeNull();
+      act(() => vi.advanceTimersByTime(400));
+      const tip = document.querySelector<HTMLElement>('[role="tooltip"]')!;
+      expect(tip.textContent).toBe('Select the horn family that defines the profile equation and its primary dimensions.');
+      expect(tip.parentElement).toBe(document.body);
+      expect(title.getAttribute('aria-describedby')).toBe(tip.id);
+      act(() => title.dispatchEvent(new PointerEvent('pointerout', { bubbles: true })));
+      expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('places OSSE features immediately after Profile with its existing controls', () => {
+    act(() => useDesignStore.getState().setFamily('OSSE'));
+    const profile = host.querySelector('[data-section="Profile"]')!;
+    const features = host.querySelector('[data-section="OSSE features"]')!;
+    expect(profile.nextElementSibling).toBe(features);
+    expect(features.querySelector('#osse-feature-throat')).not.toBeNull();
+    expect(features.querySelector('#osse-feature-mouth')).not.toBeNull();
+    expect(features.querySelector('#osse-feature-axial')).not.toBeNull();
+    expect(host.querySelector('[data-section="Model Type"] .osse-features')).toBeNull();
+  });
+
   it('preserves the complete parametric section set', () => {
     act(() => useDesignStore.getState().setFamily('OSSE'));
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
-    expect(titles()).toEqual(['Model Type', 'Profile', 'Throat', 'Mouth', 'Cross-section', 'Mounting']);
+    expect(titles()).toEqual(['Model Type', 'Profile', 'OSSE features', 'Throat', 'Mouth', 'Cross-section', 'Mounting']);
     expect(host.querySelector('[data-section="Realized dimensions"]')).toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(titles()).toEqual(['Frequency sweep', 'Directivity map', 'Source excitation', 'Solver', 'Mesh', 'Element size', 'Surface accuracy', 'Surface sampling', 'Limits and checks', 'Export']);
@@ -1421,13 +1454,9 @@ describe('ParamPanel inventory UX', () => {
     expect(useDesignStore.getState().design.mesh.quadrants).toBe(storedValue);
   });
 
-  it('finds and reveals the semantic Solve domain control through rail and palette search', async () => {
+  it('finds and reveals the semantic Solve domain control through a reveal request and palette search', async () => {
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    const filter = host.querySelector<HTMLInputElement>('#parameter-filter-simulation')!;
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(filter, 'Solve domain');
-      filter.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    act(() => requestParameterReveal({ id: 'parametric.solve-domain', target: 'control', tab: 'simulation', query: 'Solve domain' }));
     expect(host.querySelector('#solve-symmetry')).not.toBeNull();
 
     const design = useDesignStore.getState().design;
@@ -1438,7 +1467,7 @@ describe('ParamPanel inventory UX', () => {
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     });
 
-    expect(host.querySelector<HTMLInputElement>('#parameter-filter-simulation')?.value).toBe('Solve domain');
+    expect(host.querySelector('.parameter-reveal-filter')?.textContent).toContain('Showing matches for “Solve domain”');
     expect(document.activeElement).toBe(host.querySelector('#solve-symmetry'));
   });
 
@@ -1497,7 +1526,7 @@ describe('ParamPanel inventory UX', () => {
     expect(entries.some(({ id }) => id === 'cad-control-cad.mesh.skip-source')).toBe(true);
   });
 
-  it('omits the empty geometry filter for a CAD-authored model', () => {
+  it('omits the geometry filter for CAD-authored and linked models', () => {
     act(() => {
       setCadReady({ linked: false });
       workspaceModeStore.setMode('cad');
@@ -1505,7 +1534,7 @@ describe('ParamPanel inventory UX', () => {
     });
     expect(host.querySelector('#parameter-filter-geometry')).toBeNull();
     act(() => setCadReady({ linked: true }));
-    expect(host.querySelector('#parameter-filter-geometry')).not.toBeNull();
+    expect(host.querySelector('#parameter-filter-geometry')).toBeNull();
   });
 
   it('hides an empty Mesh detail target until actionable content appears', () => {
@@ -2585,11 +2614,7 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
     const matchingSections = (query: string) => {
-      const input = host.querySelector<HTMLInputElement>('#parameter-filter-simulation')!;
-      act(() => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, query);
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-      });
+      act(() => requestParameterReveal({ id: '', tab: 'simulation', query }));
       return [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
     };
 
@@ -2617,7 +2642,7 @@ describe('ParamPanel inventory UX', () => {
     const entry = host.querySelector<HTMLElement>('[data-parameter-id="simulation.f1"]')!;
     expect(entry).not.toBeNull();
     expect(document.activeElement).toBe(entry.querySelector('input'));
-    expect(host.querySelector<HTMLInputElement>('#parameter-filter-simulation')?.value).toBe('Sweep start');
+    expect(host.querySelector('.parameter-reveal-filter')?.textContent).toContain('Showing matches for “Sweep start”');
   });
 
   it('routes the moved ATH quadrants palette entry to its read-only passthrough row', async () => {
@@ -2638,7 +2663,7 @@ describe('ParamPanel inventory UX', () => {
     const target = host.querySelector<HTMLElement>('[data-parameter-id="mesh.quadrants"]')!;
     expect(target.closest('[data-section]')?.getAttribute('data-section')).toBe('Export');
     expect(document.activeElement).toBe(target);
-    expect(host.querySelector<HTMLInputElement>('#parameter-filter-simulation')?.value).toBe('Stored ATH Mesh.Quadrants');
+    expect(host.querySelector('.parameter-reveal-filter')?.textContent).toContain('Showing matches for “Stored ATH Mesh.Quadrants”');
   });
 
   it('switches to CAD mode and claims a non-registry palette reveal', async () => {
@@ -2662,7 +2687,7 @@ describe('ParamPanel inventory UX', () => {
     const target = host.querySelector<HTMLElement>('[data-control-reveal-id="cad.frequency.start"]')!;
     expect(target).not.toBeNull();
     expect(document.activeElement).toBe(target.querySelector('input'));
-    expect(host.querySelector<HTMLInputElement>('#parameter-filter-simulation')?.value).toBe('Sweep start');
+    expect(host.querySelector('.parameter-reveal-filter')?.textContent).toContain('Showing matches for “Sweep start”');
   });
 
   it('persists section collapse state', () => {
@@ -2789,11 +2814,7 @@ describe('ParamPanel inventory UX', () => {
     };
     assertHidden();
     for (const query of ['source contour', 'assembly', 'sketch']) {
-      act(() => {
-        const filter = host.querySelector<HTMLInputElement>('input[type="search"]')!;
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(filter, query);
-        filter.dispatchEvent(new Event('input', { bubbles: true }));
-      });
+      act(() => requestParameterReveal({ id: '', tab: 'geometry', query }));
       assertHidden();
     }
     const design = useDesignStore.getState().design;

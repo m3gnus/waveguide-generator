@@ -18,7 +18,8 @@ import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { adoptDesignBuild, resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { ParamPanel } from './ParamPanel';
+import { ParamPanel, requestParameterReveal } from './ParamPanel';
+import { CAD_CONTROLS } from './cadControlRegistry';
 
 let host: HTMLDivElement;
 let root: Root;
@@ -170,9 +171,7 @@ it('finds the existing editor by its shared filter and alignment search terms', 
   render();
   for (const query of ['crossover', 'time align', 'filter']) {
     act(() => {
-      const input = host.querySelector<HTMLInputElement>('#parameter-filter-simulation')!;
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, query);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+      requestParameterReveal({ ...CAD_CONTROLS.crossover.reveal, tab: 'simulation', query });
     });
     expect(host.querySelector('#cad-combine')).not.toBeNull();
     expect(host.textContent).not.toContain('No parameter labels or keys match');

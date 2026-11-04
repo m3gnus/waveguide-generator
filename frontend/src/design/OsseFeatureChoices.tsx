@@ -51,9 +51,7 @@ export function OsseFeatureChoices({ design, onChanged }: { design: DesignDocume
   };
 
   return <fieldset className="osse-features" aria-busy={pending} data-control-reveal-id={PARAMETRIC_CONTROLS.osseFeatures.reveal.id}>
-    <legend>OSSE features</legend>
-    <p className="section-note">Combine an authored throat adapter, a mouth end and axial scale. Controls adapters remain separate. Switching is undoable.</p>
-    <p className="section-note">A new axial override starts 10% away from the transverse scale. For composites, setting it equal to the transverse scale removes the override.</p>
+    <legend className="sr-only">OSSE features</legend>
     {choices.map(({ key, label, options }) => <SelectRow key={key}>
       <label htmlFor={`osse-feature-${key}`}>{label}</label>
       <select id={`osse-feature-${key}`} value={features[key]} disabled={pending} onChange={(event) => {

@@ -985,12 +985,14 @@ describe('jobs panel run list', () => {
     expect(designMocks.replaceWithJobDesign).toHaveBeenCalledOnce();
   });
 
-  it.each(['parametric', 'cad'] as const)('keeps current-model naming out of %s history', async mode => {
+  it.each(['parametric', 'cad'] as const)('heads %s history with the design name only in parametric', async mode => {
     workspaceModeStore.setMode(mode);
     publishJobs([]);
     await act(async () => root.render(<JobsPanel/>));
-    expect(host.querySelector('.run-name-field')).toBeNull();
+    if (mode === 'parametric') expect(host.querySelector('.run-name-field [aria-label="Design name"]')).not.toBeNull();
+    else expect(host.querySelector('.run-name-field')).toBeNull();
     expect(host.querySelector('[aria-label="CAD document name"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Job preferences"]')).not.toBeNull();
   });
 
 });

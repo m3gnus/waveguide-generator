@@ -18,6 +18,7 @@ import { selectJob } from '../jobs/selectJob';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
+import { RunNameField } from './RunNameField';
 import { runProvenanceMarker, solveFailureWords } from '../model/currentModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
@@ -336,6 +337,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const preferences = usePreferences();
+  const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [exportPreferencesOpen, setExportPreferencesOpen] = useState(false);
   const [blockedDeletion, setBlockedDeletion] = useState<{ job: JobItem; reason: string } | null>(null);
@@ -427,6 +429,13 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
         </div>
       </div>
     </div>, document.body)}
+    {/* The design name and the next run's name head the runs they name. CAD
+        runs are named by their CAD document, so CAD keeps only the gear. */}
+    {workspaceMode === 'parametric'
+      ? <RunNameField now={namingNow}>
+        <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>
+      </RunNameField>
+      : <div className="jobs-history-actions"><button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button></div>}
     <OutputFolderBar/>
     {/* Only when there is something to report. This rail used to carry a
         permanent "0 active · connected · 31/31 shown" strip: a zero, a state
@@ -448,10 +457,9 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       now={namingNow}
     />}
     {exportPreferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setExportPreferencesOpen(false)}/>}
-    <div className="jobs-history-actions">
-      {failedCount > 0 && <button className="panel-text-action" title={`Remove ${failedCount} failed run${failedCount === 1 ? '' : 's'}`} onClick={clearFailed}>Clear failed</button>}
-      <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>
-    </div>
+    {failedCount > 0 && <div className="jobs-history-actions">
+      <button className="panel-text-action" title={`Remove ${failedCount} failed run${failedCount === 1 ? '' : 's'}`} onClick={clearFailed}>Clear failed</button>
+    </div>}
     <div className="jobs-filter"><Icon name="search"/><input aria-label="Filter runs" placeholder="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)}/><button className={`jobs-kept-toggle${preferences.minRating > 0 ? ' on' : ''}`} aria-label="Show kept runs only" aria-pressed={preferences.minRating > 0} title="Show kept runs only" onClick={() => preferencesStore.update({ minRating: preferences.minRating > 0 ? 0 : lastMinimumRating.current })}>★</button></div>
     {(showSource || showProject || showModel || filtering) && <div className="jobs-scope-filter">
       {showSource && <select aria-label="Run source" value={source} onChange={e => useRunFilters.setState({ source: e.target.value as typeof source, model: '' })}>

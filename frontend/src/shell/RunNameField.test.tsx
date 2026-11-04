@@ -28,7 +28,7 @@ describe('the parametric document name', () => {
     act(() => enter(input, 'winner'));
     act(() => input.blur());
 
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · winner1');
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('Next · winner1');
     expect(input.title).toContain('design file');
     expect(input.title).not.toContain('saves as');
     // The design file's name follows the same edit -- this is the whole
@@ -37,7 +37,7 @@ describe('the parametric document name', () => {
 
     // Editing the geometry does not rename anything any more.
     act(() => useDesignStore.getState().updateField('R', 141));
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · winner1');
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('Next · winner1');
   });
 
   it('shows the exact dated label that submission will use while editing only the name', async () => {
@@ -48,6 +48,29 @@ describe('the parametric document name', () => {
 
     expect(host.querySelector<HTMLInputElement>('[aria-label="Design name"]')?.value).toBe('horn');
     expect(host.querySelector('.run-name-preview')?.textContent)
-      .toBe(`next · ${currentJobLabel(undefined, now)}`);
+      .toBe(`Next · ${currentJobLabel(undefined, now)}`);
+  });
+
+  it('sets the next run number for the design on screen and hides it when numbering is off', async () => {
+    act(() => useDocumentStore.getState().setDesignName('horn'));
+    await act(async () => root.render(<RunNameField/>));
+    const number = host.querySelector<HTMLInputElement>('[aria-label="Next run number"]')!;
+    expect(number.value).toBe('1');
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(number, '7');
+      number.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(host.querySelector('.run-name-preview')!.textContent).toBe('Next · horn7');
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'horn', runSequenceNext: 7 });
+    act(() => preferencesStore.update({ runNameNumberPosition: 'off' }));
+    expect(host.querySelector('[aria-label="Next run number"]')).toBeNull();
+    expect(host.querySelector('.run-name-preview')!.textContent).toBe('Next · horn');
+  });
+
+  it('places the Job preferences button beside the design name', async () => {
+    await act(async () => root.render(<RunNameField><button aria-label="Job preferences"/></RunNameField>));
+    expect(host.querySelector('.run-name-row [aria-label="Design name"]')).not.toBeNull();
+    expect(host.querySelector('.run-name-row [aria-label="Job preferences"]')).not.toBeNull();
   });
 });

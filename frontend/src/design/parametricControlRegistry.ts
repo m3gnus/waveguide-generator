@@ -21,7 +21,7 @@ export interface ParametricControlDescriptor {
  */
 export const PARAMETRIC_CONTROLS = {
   osseFeatures: {
-    id: 'osse-features', label: 'OSSE features', section: 'Model Type', tab: 'geometry',
+    id: 'osse-features', label: 'OSSE features', section: 'Profile', tab: 'geometry',
     keywords: ['throat', 'adapter authored', 'adapter controls', 'mouth end', 'roundover', 'terminating arc', 'axial scale', 'OSSE-ADAPTER', 'OSSE-ADAPTER-CONTROLS', 'OSSE-ADAPTER-AXIAL', 'OSSE-ROUNDOVER', 'OSSE-AXIAL', 'OSSE-ARC'],
     reveal: { id: 'parametric.osse-features', target: 'control' },
   },

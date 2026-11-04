@@ -15,6 +15,7 @@ import { entryMatches } from './CommandPalette';
 import { buildParameterPaletteEntries } from './TopBar';
 import { resetWorkspaceNavigationForTests, workspaceNavigation } from './workspaceNavigation';
 import { ImportedWorkspacePanel } from './ImportedWorkspacePanel';
+import { JobsPanel } from './JobsPanel';
 
 let host: HTMLDivElement, root: Root, client: QueryClient;
 const initialFile = useMeshImportStore.getState();
@@ -99,8 +100,8 @@ it.each([false, true])('routes connection search to CAD Link with Geometry mount
   expect(document.activeElement).toBe(section);
   expect(workspaceNavigation.getRevealTarget()).toBeNull();
 });
-const mount = () => act(async () => root.render(<QueryClientProvider client={client}>
-  <ImportedWorkspacePanel/><ParamPanel tab="simulation"/>
+const mount = (withJobs = false) => act(async () => root.render(<QueryClientProvider client={client}>
+  <ImportedWorkspacePanel/><ParamPanel tab="simulation"/>{withJobs && <JobsPanel/>}
 </QueryClientProvider>));
 
 it('mounts file geometry and simulation controls once and preserves drafts across repeated switches', async () => {
@@ -110,7 +111,7 @@ it('mounts file geometry and simulation controls once and preserves drafts acros
   useImportedModelStore.setState({ input: 'file', fileDraft: { units: 'cm', forward: '+x', up: '+z', selected: [17] } });
   const draft = useImportedModelStore.getState().fileDraft;
   const sweep = useImportedSolveOptionsStore.getState().sweepCount;
-  await mount();
+  await mount(true);
   for (let index = 0; index < 3; index++) {
     expect(host.querySelectorAll('[aria-label="Imported mesh geometry"]')).toHaveLength(1);
     expect(host.querySelectorAll('[aria-label="Imported mesh simulation"]')).toHaveLength(1);
@@ -136,6 +137,8 @@ it('mounts file geometry and simulation controls once and preserves drafts acros
     expect(host.querySelectorAll('[aria-label="Imported mesh input"]')).toHaveLength(1);
     await act(async () => workspaceModeStore.setMode('parametric'));
     expect(host.querySelectorAll('[aria-label="Design name"]')).toHaveLength(1);
+    expect(host.querySelector('.jobs-panel [aria-label="Design name"]')).not.toBeNull();
+    expect(host.querySelector('[data-param-tab] .run-name-field')).toBeNull();
     expect(host.querySelector('.cadlink-panel')).toBeNull();
     await act(async () => { workspaceModeStore.setMode('cad'); workspaceModeStore.setImportedInput('file'); });
   }

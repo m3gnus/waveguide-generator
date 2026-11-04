@@ -1,11 +1,7 @@
-.parameter-search { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--hair-soft); background: var(--surface-panel); }
-.parameter-search input { width: 100%; height: 24px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--surface-raised); color: var(--fg); font: var(--text-micro) var(--mono); }
-.parameter-search input:focus { border-color: rgba(var(--acc-rgb), .5); outline: 0; box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .08); }
-.parameter-search button { width: 23px; }
-.osse-features { min-inline-size: 0; margin: 4px 0; padding: 0; border: 0; }
-.osse-features legend { padding: 0; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; }
+.osse-features { min-inline-size: 0; margin: 0; padding: 0; border: 0; }
+.parameter-reveal-filter { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--hair); background: var(--surface-panel); color: var(--fg3); font-size: var(--text-micro); }
+.parameter-reveal-filter span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .family-row { margin: 2px 0 6px; padding-bottom: 5px; border-bottom: 1px solid var(--hair-soft); }
-.section-description { margin: 2px 0 6px; color: var(--fg4); font-size: var(--text-micro); line-height: 1.4; }
 .outer-body-mode { margin: 2px 0 6px; padding-bottom: 7px; border-bottom: 1px solid var(--hair-soft); }
 .resolved-mode { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin-top: 4px; padding: 4px 6px; border-radius: var(--r3); background: var(--ov1); color: var(--fg3); font-size: var(--text-micro); }
 .resolved-mode b { color: var(--green); font-weight: 560; }
@@ -171,10 +167,6 @@
 
 /* Shared dense-control scale. Keep the rail compact without dropping below a
    readable engineering UI baseline. */
-.parameter-search { gap: 6px; padding: 8px 8px; }
-.parameter-search input { height: var(--field-h); padding-inline: 8px; border-radius: var(--r3); font-size: var(--text-base); }
-.parameter-search button { width: var(--field-h); height: var(--field-h); }
-.section-description { margin: 4px 0 8px; font-size: var(--text-base); line-height: 1.45; }
 .disabled-reason,
 .lambda-hint,
 .schema-gap small { font-size: var(--text-micro); line-height: 1.4; }
@@ -204,10 +196,6 @@
 .editable-parameter-table td button { width: 24px; height: 24px; border-radius: var(--r3); }
 .point-paste textarea { padding: 8px; border-radius: var(--r3); font-size: var(--text-base); line-height: 1.45; }
 
-.parameter-help-toggle { flex: none; width: var(--field-h); height: var(--field-h); border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg3); }
-.parameter-help-toggle svg { width: 15px; height: 15px; }
-.parameter-help-toggle:hover { border-color: var(--hair-hi); color: var(--fg1); }
-.parameter-help-toggle.on { border-color: var(--inv-bg); background: var(--inv-bg); color: var(--inv-fg); }
 
 /* The rail is resizable, so its field layout answers to its own width rather
    than the window's: dragged past ~430px it pairs fields into two columns and
@@ -223,7 +211,6 @@
   }
   /* Anything that is not a single labelled control keeps the full width. */
   .section-body > .param-section,
-  .section-body > .section-description,
   .section-body > .readonly-parameter-table,
   .section-body > .editable-parameter-table,
   .section-body > .axis-toggles,

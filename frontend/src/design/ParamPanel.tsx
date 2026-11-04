@@ -55,8 +55,7 @@ import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
 import { MeshTriangleEstimate } from './MeshTriangleEstimate';
 import { SelectRow } from './SelectRow';
-import { HelpTipRow } from './HelpTip';
-import { Icon } from '../shell/icons';
+import { HelpTipRow, useHelpTip } from './HelpTip';
 import {
   LEGACY_PARAMETER_REGISTRY,
   CAD_PARAMETER_SECTION_DEFINITIONS,
@@ -94,7 +93,6 @@ import {
   parametricControlIsAvailable,
 } from './parametricControlRegistry';
 import './paramPanel.css';
-import { RunNameField } from '../shell/RunNameField';
 import { MeshImportPanel } from './MeshImportPanel';
 import { failureWords, rowSentence } from '../api/httpError';
 
@@ -171,40 +169,6 @@ function writeSectionState(title: string, open: boolean): void {
   } catch { /* storage is optional */ }
 }
 
-/**
- * Section blurbs explain the rail once and then cost height on every scroll —
- * a third of a metre of prose across the geometry tab. They are off by default
- * and toggled for the whole rail at once, so the explanation stays one click
- * away instead of permanently between the reader and the next field.
- */
-const helpStorage = namespaceStorage('paramHelp');
-
-function storedHelpVisible(): boolean {
-  try { return helpStorage.getItem('paramHelp') === 'true'; } catch { return false; }
-}
-
-class ParameterHelpStore {
-  private value = storedHelpVisible();
-  private readonly listeners = new Set<() => void>();
-  getSnapshot = (): boolean => this.value;
-  subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  };
-  toggle(): void {
-    this.value = !this.value;
-    try { helpStorage.setItem('paramHelp', String(this.value)); } catch { /* storage is optional */ }
-    this.listeners.forEach((listener) => listener());
-  }
-  resetForTests(): void { this.value = false; }
-}
-
-export const parameterHelpStore = new ParameterHelpStore();
-
-export function useParameterHelp(): boolean {
-  return useSyncExternalStore(parameterHelpStore.subscribe, parameterHelpStore.getSnapshot, parameterHelpStore.getSnapshot);
-}
-
 function Section({ title, summary, description, children, forceOpen, revealId, defaultOpen, cad = false }: SectionProps) {
   const storageKey = cad ? revealId ?? `cad.${title}` : title;
   const [open, setOpen] = useState(() => storedSectionState(storageKey, defaultOpen));
@@ -219,7 +183,7 @@ function Section({ title, summary, description, children, forceOpen, revealId, d
     update();
     return () => observer.disconnect();
   }, [cad]);
-  const helpVisible = useParameterHelp();
+  const { triggerProps: descriptionTip, tip } = useHelpTip(description);
   const shownOpen = forceOpen || open;
   const toggle = () => {
     const next = !open;
@@ -236,13 +200,12 @@ function Section({ title, summary, description, children, forceOpen, revealId, d
           carries the state. */}
       <h3 className="section-heading">
         <button className="section-head" onClick={toggle} aria-expanded={shownOpen}>
-          <span className="chevron" aria-hidden="true">⌄</span><span className="section-name">{title}</span><span className="spacer" />
+          <span className="chevron" aria-hidden="true">⌄</span><span className="section-name" {...descriptionTip}>{title}{tip}</span><span className="spacer" />
           {!shownOpen && invalid && <span className="field-error" aria-label="Has a value to fix">!</span>}
           {summary && <span className="section-summary">{summary}</span>}
         </button>
       </h3>
       {(shownOpen || cad) && <div className="section-body" hidden={!shownOpen}>
-        {description && helpVisible && <p className="section-description">{description}</p>}
         {children}
       </div>}
     </section>
@@ -1222,7 +1185,6 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   const developer = useDeveloperDetails();
   const waveguideLinked = useWaveguideDefinitionApplies();
   const setFamily = useDesignStore((state) => state.setFamily);
-  const helpVisible = useParameterHelp();
   const [filterQuery, setQuery] = useState('');
   const query = workspaceMode === 'cad' && tab === 'geometry' && !waveguideLinked ? '' : filterQuery;
   const [freeformChoice, setFreeformChoice] = useState(false);
@@ -1375,6 +1337,18 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
     ? `${familyLabel(family)} uses its own section shape. The base cross-section exponent and aspect ratio were reset to 2 and 1.`
     : null;
 
+  const osseFeaturesSection = workspaceMode === 'parametric' && tab === 'geometry' && osseFeatures(design.formula)
+    && (!searching || matchingParametricSections.has('Profile'))
+    ? <Section
+      key="osse-features"
+      title="OSSE features"
+      description="Combine an authored throat adapter, a mouth end and axial scale. Controls adapters remain separate. Switching is undoable. A new axial override starts 10% away from the transverse scale; for composites, setting it equal to the transverse scale removes the override."
+      forceOpen={searching}
+    >
+      <OsseFeatureChoices design={design} onChanged={() => setConversionNotice(OSSE_SWITCH_NOTICE)} />
+    </Section>
+    : null;
+
   const modelTypeSection = <Section
     title="Model Type"
     description="Select the horn family that defines the profile equation and its primary dimensions."
@@ -1397,7 +1371,6 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
         </option>}
       </select>
     </SelectRow>
-    {osseFeatures(design.formula) && <OsseFeatureChoices design={design} onChanged={() => setConversionNotice(OSSE_SWITCH_NOTICE)} />}
     {design.formula === 'LOOKUP' && <><ExperimentalBadge /><p className="section-note">A saved LOOKUP table: linear between its z, r samples, with its own morph, mouth, source-cap and sampling rules. It is not converted to a Custom profile.</p></>}
     {conversionNotice && <Notice tone="warning" className="conversion-notice" actions={<button className="btn" onClick={() => setConversionNotice(null)}>Dismiss</button>}>{conversionNotice}</Notice>}
     {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Start a Custom profile">
@@ -1417,21 +1390,15 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   return (
     <SolveOptionsStoreProvider mode={workspaceMode}>
     <div ref={registerParameterPanel} className={`param-panel${embedded ? '' : ' panel-scroll'}`} data-param-tab={tab}>
-      {workspaceMode === 'parametric' && tab === 'geometry' && <RunNameField/>}
-      {(workspaceMode !== 'cad' || tab !== 'geometry' || waveguideLinked) && <div className="parameter-search">
-        <label className="sr-only" htmlFor={`parameter-filter-${tab}`}>Filter {tab} parameters</label>
-        <input id={`parameter-filter-${tab}`} type="search" value={query} placeholder="Filter labels or keys…" onChange={(event) => setQuery(event.target.value)} />
-        {query && <button className="btn" aria-label="Clear parameter filter" onClick={() => setQuery('')}>×</button>}
-        <button
-          className={`parameter-help-toggle${helpVisible ? ' on' : ''}`}
-          aria-label="Show section descriptions"
-          aria-pressed={helpVisible}
-          title={helpVisible ? 'Hide section descriptions' : 'Show section descriptions'}
-          onClick={() => parameterHelpStore.toggle()}
-        ><Icon name="info" /></button>
+      {searching && <div className="parameter-reveal-filter" role="status">
+        <span>Showing matches for “{query.trim()}”</span>
+        <button className="panel-text-action" onClick={() => setQuery('')}>Show all</button>
       </div>}
       {workspaceMode === 'parametric' && tab === 'geometry' && (!searching || (osseFeatures(design.formula) && matchingParametricSections.has('Model Type'))) && modelTypeSection}
-      {workspaceMode === 'parametric' ? definitions.map(renderRegistrySection)
+      {workspaceMode === 'parametric' ? definitions.map((definition) => <Fragment key={definition.title}>
+        {renderRegistrySection(definition)}
+        {definition.title === 'Profile' && osseFeaturesSection}
+      </Fragment>)
         : <>
           {definitions.map(renderRegistrySection)}
           {tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.realizedDimensions.section) && <RealizedDimensionsCard forceOpen={searching}/>}
