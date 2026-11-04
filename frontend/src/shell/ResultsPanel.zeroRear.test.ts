@@ -29,14 +29,6 @@ const heatmapCells = (result: ResultPayload) => {
 };
 
 describe('zero-radiation rear hemisphere', () => {
-  it('prepares the source only once for both solved and contour grids', () => {
-    const result = payload('zero_radiation');
-    const horizontal = result.directivity!.horizontal;
-    let reads = 0;
-    Object.defineProperty(result.directivity, 'horizontal', { get: () => { reads += 1; return horizontal; } });
-    heatmapOption(result, tokens, 'horizontal', -6);
-    expect(reads).toBe(1);
-  });
   it('reads the flag only from directivity_index.rear_hemisphere', () => {
     expect(hasZeroRadiationRear(payload('zero_radiation'))).toBe(true);
     expect(hasZeroRadiationRear(payload('sampled'))).toBe(false);

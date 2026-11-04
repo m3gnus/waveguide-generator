@@ -6,7 +6,6 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
-import { RETURNED_STEP_UNAVAILABLE } from '../api/returnedStep';
 import { compareSelection, provisionalResults, resultsCache } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { resultViewStore } from '../stores/resultView';
@@ -130,25 +129,6 @@ describe('atomic results display transitions', () => {
     provisionalResults.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-  });
-
-  it('retains active comparison payloads beyond the history cache and when removing an overlay', async () => {
-    const rows = Array.from({ length: 18 }, (_, index) => ({ ...job(`compare-${index}`), has_radiation_impedance_artifact: true }));
-    publishJobs(rows);
-    compareSelection.setPrimary(rows[0].id);
-    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/presentation')
-      ? new Response(JSON.stringify({ schema_version: 1, frequencies: [100], aperture_names: [], matrix: { real: [], imaginary: [] } }))
-      : response([100]));
-    vi.stubGlobal('fetch', fetcher);
-    await act(async () => root.render(<ResultsPanel/>));
-    for (const row of rows.slice(1)) await act(async () => compareSelection.toggleOverlay(row.id));
-    expect(fetcher.mock.calls.filter(([url]) => String(url).startsWith('/api/results/'))).toHaveLength(18);
-    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/presentation'))).toHaveLength(18);
-    expect(resultsCache.keys()).toHaveLength(15);
-    const count = fetcher.mock.calls.length;
-    await act(async () => compareSelection.toggleOverlay(rows[1].id));
-    expect(fetcher).toHaveBeenCalledTimes(count);
-    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe(rows[0].id);
   });
 
   it('shows a new warming solve once alongside the previous results', async () => {
@@ -436,21 +416,7 @@ describe('atomic results display transitions', () => {
     }
   });
 
-  it.each([false, true])('exports available preferences with skipped reasons and the shared CAD menu in the Results toolbar (returned STEP=%s)', async (stepAvailable) => {
-    const fetcher = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation((input, init) => {
-      if (String(input) === '/api/export/runs/old/step/availability') {
-        return Promise.resolve(new Response(JSON.stringify({
-          available: stepAvailable, reason: stepAvailable ? null : RETURNED_STEP_UNAVAILABLE,
-        }), { headers: { 'Content-Type': 'application/json' } }));
-      }
-      return fetcher(input, init);
-    });
-    exportMocks.runWorkspaceExportBundle.mockResolvedValue({
-      directory: '/exports',
-      files: ['/exports/old.csv', ...(stepAvailable ? ['/exports/old.step'] : [])],
-      failures: [],
-    });
+  it('exports available preferences with skipped reasons and the shared CAD menu in the Results toolbar', async () => {
     vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
     preferencesStore.update({ exportFormats: ['csv', 'step'] });
     workspaceModeStore.setImportedInput('cad'); workspaceModeStore.setMode('cad');
@@ -467,27 +433,14 @@ describe('atomic results display transitions', () => {
     expect(trigger.textContent).toBe('Export CSV + STEP');
     expect(trigger.title).toContain('STEP solid (.step)');
     await act(async () => { trigger.click(); });
-    expect(fetch).toHaveBeenCalledWith('/api/export/runs/old/step/availability', expect.objectContaining({ method: 'POST' }));
-    expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledOnce();
-    expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: 'old', selectedRun: expect.objectContaining({ cad_source: { ingest_id: 'wgi_old' } }) }),
-      stepAvailable ? ['csv', 'step'] : ['csv'], 'confirm',
-    );
-    if (stepAvailable) {
-      expect(host.querySelector('[role="alert"]')).toBeNull();
-      expect(host.querySelector('[role="status"]')?.textContent).toContain('2 files written');
-    } else {
-      expect(host.querySelector('[role="alert"]')?.textContent).toContain(RETURNED_STEP_UNAVAILABLE);
-      expect(host.querySelector('[role="alert"]')?.textContent).toContain('Skipped STEP');
-      expect(host.querySelector('[role="alert"]')?.textContent).toContain('1 file written');
-    }
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('STEP export is not available for imported models.');
+    expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv'], 'confirm');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Skipped STEP');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('1 file written');
     expect(document.querySelector('[role="menu"]')).toBeNull();
-    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click(); });
+    act(() => host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click());
     const menu = document.querySelector('[role="menu"]')!;
-    const step = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-      .find((item) => item.textContent?.includes('STEP solid'))!;
-    expect(step.getAttribute('aria-disabled')).toBe(stepAvailable ? null : 'true');
-    if (!stepAvailable) expect(step.textContent).toContain(RETURNED_STEP_UNAVAILABLE);
+    expect(menu.textContent).toContain('STEP export is not available for imported models.');
     for (const label of ['Send to CAD', 'Parameter config', 'STL mesh', 'Fusion curves']) {
       expect(menu.textContent).not.toContain(label);
     }

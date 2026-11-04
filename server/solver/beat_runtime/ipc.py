@@ -8,6 +8,7 @@ import errno
 import json
 import math
 
+import numpy as np
 import os
 from pathlib import Path
 import re
@@ -19,6 +20,10 @@ from typing import Any
 from . import paths
 
 _HEADER = struct.Struct("!I")
+_OVERFLOW = re.compile(rb"[eE][+]?0*[0-9]{3}|[0-9]{309}")
+# A shorter positive exponent can overflow a long integral mantissa too:
+# 210 integral digits shifted by e99 can exceed the largest finite float.
+_LONG_MANTISSA = re.compile(rb"[0-9]{210}")
 MAX_FRAME_BYTES = 512 * 1024 * 1024
 CONTROL_FRAME_BYTES = 1024 * 1024
 MAX_UNIX_PATH_BYTES = 100
@@ -81,12 +86,25 @@ def _invalid_constant(value: str) -> None:
     raise FrameError(f"Invalid JSON constant: {value}")
 
 
-def _finite_float(token: str) -> float:
-    """Validate numeric tokens without scanning binary strings in the frame."""
-    value = float(token)
-    if not math.isfinite(value):
+def _check_finite(value: Any) -> None:
+    """Walk JSON containers; vectorize only long, homogeneous numeric lists."""
+    if isinstance(value, dict):
+        for member in value.values():
+            _check_finite(member)
+    elif isinstance(value, list):
+        if len(value) > 64 and all(isinstance(member, (int, float)) for member in value):
+            try:
+                array = np.asarray(value)
+            except (OverflowError, ValueError):
+                array = None
+            if array is not None and array.dtype.kind in "biuf":
+                if not np.isfinite(array).all():
+                    raise FrameError("Nonfinite JSON number")
+                return
+        for member in value:
+            _check_finite(member)
+    elif isinstance(value, float) and not math.isfinite(value):
         raise FrameError("Nonfinite JSON number")
-    return value
 
 
 def receive_frame(
@@ -109,8 +127,9 @@ def receive_frame(
         raise FrameError("Invalid host frame length")
     body = _receive_exactly(connection, length, deadline=deadline, cancelled=cancelled)
     try:
-        decoded = json.loads(body.decode("utf-8"), parse_constant=_invalid_constant,
-                             parse_float=_finite_float)
+        decoded = json.loads(body.decode("utf-8"), parse_constant=_invalid_constant)
+        if _OVERFLOW.search(body) or _LONG_MANTISSA.search(body):
+            _check_finite(decoded)
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise FrameError("Malformed host JSON frame") from exc
     if not isinstance(decoded, dict):

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isActiveJobStatus, JobModelProtectionError, JobsSocketManager, type JobItem, type JobsWebSocketLike } from '../api/jobsSocket';
-import { compareSelection, provisionalResults, resultsCache, type JobResults } from '../api/results';
+import { compareSelection, provisionalResults } from '../api/results';
 
 class MockSocket implements JobsWebSocketLike {
   readyState = 1;
@@ -37,18 +37,6 @@ async function flush(): Promise<void> { await Promise.resolve(); await Promise.r
 describe('jobs websocket state machine', () => {
   beforeEach(() => { vi.useFakeTimers(); compareSelection.clear(); provisionalResults.clear(); });
   afterEach(() => { provisionalResults.clear(); vi.useRealTimers(); });
-
-  it('invalidates cached payloads when retention removes availability', () => {
-    const socket = new MockSocket();
-    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
-    manager.start();
-    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
-    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job({ status: 'complete', has_results: true })] });
-    resultsCache.set('job-1', { frequencies: [100] } as JobResults);
-    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 2, jobs: [job({ status: 'complete', has_results: false })] });
-    expect(resultsCache.has('job-1')).toBe(false);
-    manager.stop();
-  });
 
   it('keeps a protection-blocked run until deletion explicitly bypasses protection', async () => {
     const socket = new MockSocket();

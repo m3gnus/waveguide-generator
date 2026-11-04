@@ -1,6 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { checkReturnedStep, RETURNED_STEP_UNAVAILABLE, type ReturnedStepAvailability } from '../api/returnedStep';
-import { modelForRun, modelKindForRun } from '../model/currentModel';
+import { modelKindForRun } from '../model/currentModel';
 import { runNormalizationAngle } from '../results/normalization';
 import { solveOptionsStoreForJob } from '../stores/solveOptionsContext';
 import { nativeCadLimitation } from '../design/nativeFamilies';
@@ -81,7 +79,7 @@ const CATALOG_BY_FORMAT = new Map(
 );
 
 export function canExportRun(job: JobItem): boolean {
-  return job.status === 'complete' && (modelKindForRun(job) === 'cad' || job.config_summary.import_origin === 'mesh-file' || job.has_results || canLoadJobDesign(job));
+  return job.status === 'complete' && (job.config_summary.import_origin === 'mesh-file' || job.has_results || canLoadJobDesign(job));
 }
 
 /** The parameter config is a native .mwg for LOOKUP, which has no ATH form. */
@@ -120,7 +118,7 @@ function unavailableFormatReason(
     return cause ? `This run did not keep its complex pressure. ${cause}`
       : 'This run did not keep its complex pressure. Solve the imported model again to get it.';
   }
-  if (item.needsDesign && !(modelKind === 'cad' && item.id === 'step') && !designExportable) return designUnavailableReason;
+  if (item.needsDesign && !designExportable) return designUnavailableReason;
   return undefined;
 }
 
@@ -161,40 +159,13 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   // Another export's own outcome replaces the earlier send's line.
   const designState = jobRerunState(job);
   const modelKind = modelKindForRun(job);
-  const ingestId = modelKind === 'cad' ? modelForRun(job).ingestId : null;
-  const [returnedStep, setReturnedStep] = useState<{ jobId: string; ingestId: string; availability: ReturnedStepAvailability } | null>(null);
-  const stepCheck = useRef<AbortController | null>(null);
-  const refreshReturnedStep = useCallback(async (): Promise<ReturnedStepAvailability> => {
-    if (!ingestId) return { available: false, reason: RETURNED_STEP_UNAVAILABLE };
-    stepCheck.current?.abort();
-    const controller = new AbortController();
-    stepCheck.current = controller;
-    const availability = await checkReturnedStep(job.id, controller.signal);
-    if (!controller.signal.aborted) setReturnedStep({ jobId: job.id, ingestId, availability });
-    return availability;
-  }, [job.id, ingestId]);
-  const checkStepForMenu = useCallback(() => {
-    void refreshReturnedStep().catch(() => { /* A superseded check has no user outcome. */ });
-  }, [refreshReturnedStep]);
-  useEffect(() => {
-    if (ingestId && job.status === 'complete') checkStepForMenu();
-    return () => stepCheck.current?.abort();
-  }, [job.status, ingestId, checkStepForMenu, operation.lastError]);
   const designExportable = modelKind === 'assembly' ? !!resultExportSnapshot(job).design : canLoadJobDesign(job);
   const family = hydrateJobDesign(job)?.formula ?? '';
   const cadLimitation = nativeCadLimitation(family);
   const designAvailability = jobDesignAvailability(job);
   const importedRun = modelKind !== 'parametric';
   const designUnavailableReason = designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.';
-  const currentStepAvailability = returnedStep?.jobId === job.id && returnedStep.ingestId === ingestId ? returnedStep.availability : null;
-  const formatReason = (item: CatalogItem, stepAvailability = currentStepAvailability) => {
-    if (modelKind === 'cad' && item.id === 'step') {
-      if (!ingestId) return RETURNED_STEP_UNAVAILABLE;
-      if (!stepAvailability) return 'Checking this run’s returned STEP…';
-      return stepAvailability.available ? undefined : stepAvailability.reason ?? RETURNED_STEP_UNAVAILABLE;
-    }
-    return unavailableFormatReason(item, job, designExportable, designUnavailableReason);
-  };
+  const formatReason = (item: CatalogItem) => unavailableFormatReason(item, job, designExportable, designUnavailableReason);
 
   const buildContext = async (formats: readonly ExportFormat[]): Promise<ExportContext> => {
     const selected = resultExportSelection(job);
@@ -246,12 +217,9 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   const exportPreferred = () => {
     const preferred = [...preferences.exportFormats];
     return execute(job.id, preferred, async (): Promise<RunExportOutcome> => {
-      // The store owns this export through selection changes and unmounts;
-      // only menu checks use the component's cancellation controller.
-      const stepAvailability = ingestId && preferred.includes('step') ? await checkReturnedStep(job.id) : currentStepAvailability;
       const unavailable = preferred.flatMap((format) => {
         const item = CATALOG_BY_FORMAT.get(format);
-        const reason = item ? formatReason(item, stepAvailability) : 'This format is not available.';
+        const reason = item ? formatReason(item) : 'This format is not available.';
         return reason ? [{ format, reason: `Skipped ${formatLabel(format, family)}: ${reason}` }] : [];
       });
       const skipped = unavailable.map(({ reason }) => reason).join(' ');
@@ -387,7 +355,6 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
       disabled={operation.busy || Boolean(disabledReason)}
       chevronLabel={`More export options for ${jobName(job)}`}
       onPrimary={preferences.exportFormats.length ? async () => { await exportPreferred(); } : undefined}
-      onOpen={ingestId ? checkStepForMenu : undefined}
     />
     {operation.lastError
       ? <div className="design-menu-status run-export-feedback error" role="alert">{operation.lastError}</div>

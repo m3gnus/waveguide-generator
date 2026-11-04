@@ -589,7 +589,6 @@ class PreferenceStore {
     this.listeners.forEach((listener) => listener());
   }
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
-  hasStoredChartTheme = (): boolean => this.chartThemeStored;
   /** Apply the server default without turning it into a saved user choice. */
   setChartThemeDefault(theme: string): void {
     this.serverChartTheme = theme;

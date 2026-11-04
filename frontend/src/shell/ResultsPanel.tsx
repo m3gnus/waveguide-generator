@@ -426,10 +426,6 @@ const MAX_LIVE_INTERPOLATED_CELLS = 16_000;
 
 /** Bilinear interpolation in log-frequency/index space, for contours and axes. */
 export function interpolateDirectivityGrid(result: ResultPayload, plane: string, requestedFactor = 4, maxCells = MAX_CONTOUR_CELLS): InterpolatedDirectivityGrid {
-  return interpolatePreparedDirectivityGrid(prepareDirectivityGrid(result, plane), requestedFactor, maxCells);
-}
-
-function prepareDirectivityGrid(result: ResultPayload, plane: string): InterpolatedDirectivityGrid {
   const source = directivityGrid(result, plane);
   if (!source.frequencies.length || !source.angles.length) return { frequencies: [], angles: [], values: [], factor: 1 };
   const sourceValues = Array.from({ length: source.angles.length }, () => Array<number | null>(source.frequencies.length).fill(null));
@@ -440,20 +436,9 @@ function prepareDirectivityGrid(result: ResultPayload, plane: string): Interpola
     const row = rowOf.get(angle);
     if (column !== undefined && row !== undefined) sourceValues[row][column] = value;
   });
-  return { frequencies: source.frequencies, angles: source.angles, values: sourceValues, factor: 1 };
-}
-
-function directivityDisplayFactor(source: InterpolatedDirectivityGrid, requestedFactor: number, maxCells: number): number {
   let factor = Math.max(1, Math.floor(requestedFactor));
   const cellCount = (candidate: number) => ((source.frequencies.length - 1) * candidate + 1) * ((source.angles.length - 1) * candidate + 1);
   while (factor > 1 && cellCount(factor) > maxCells) factor -= 1;
-  return factor;
-}
-
-function interpolatePreparedDirectivityGrid(source: InterpolatedDirectivityGrid, requestedFactor: number, maxCells: number): InterpolatedDirectivityGrid {
-  if (!source.frequencies.length || !source.angles.length) return { frequencies: [], angles: [], values: [], factor: 1 };
-  const sourceValues = source.values;
-  const factor = directivityDisplayFactor(source, requestedFactor, maxCells);
   const columns = (source.frequencies.length - 1) * factor + 1;
   const rows = (source.angles.length - 1) * factor + 1;
   const interpolateAxis = (values: number[], position: number, logarithmic = false) => {
@@ -774,18 +759,16 @@ export function heatmapOption(
 ): EChartsOption {
   // The solved samples: the bitmap is interpolated from these per pixel, and
   // the tooltip reports them rather than an interpolated value.
-  const source = prepareDirectivityGrid(result, plane);
-  const solved = maskRearHemisphere(interpolatePreparedDirectivityGrid(source, 1, MAX_CONTOUR_CELLS), result);
+  const solved = maskRearHemisphere(interpolateDirectivityGrid(result, plane, 1), result);
   // The display grid carries the category axes and the contours. The exported
   // renderer contours a canonical 500 x 361 interpolation, and a settled chart
   // contours a comparably dense grid: a typical 60 x 37 result resolves to
   // 532 x 325. Boundary Lab draws a lighter surface while a solve is changing,
   // so a live snapshot contours a grid capped to finish well inside the 250 ms
   // publication interval.
-  const maxCells = live ? MAX_LIVE_INTERPOLATED_CELLS : MAX_CONTOUR_CELLS;
-  const factor = directivityDisplayFactor(source, live ? 2 : 12, maxCells);
-  const grid = factor === 1 ? solved
-    : maskRearHemisphere(interpolatePreparedDirectivityGrid(source, factor, maxCells), result);
+  const grid = maskRearHemisphere(live
+    ? interpolateDirectivityGrid(result, plane, 2, MAX_LIVE_INTERPOLATED_CELLS)
+    : interpolateDirectivityGrid(result, plane, 12, MAX_CONTOUR_CELLS), result);
   const floor = mapReference * 5;
   const comparing = Boolean(comparison?.references.length);
   // The overlaid contours are the same runs the line charts draw, so they take
@@ -2448,7 +2431,6 @@ interface ResultDisplaySnapshot {
   ids: string[];
   results: Record<string, ResultPayload>;
   provisionalIds: string[];
-  sources: Record<string, string>;
 }
 
 interface ResultFetchError {
@@ -2553,12 +2535,11 @@ export function ResultsPanel() {
   }, [selection.awaiting, jobs, provisional, coherenceContext.key, coherenceContext.viewportShowing]);
   const ids = resolved.ids;
   const selectionKey = ids.join('\u0000');
-  const resultSources = Object.fromEntries(ids.map((id) => {
+  const resultSourceKey = ids.map((id) => {
     const job = jobs.find((item) => item.id === id);
     const liveRevision = job && job.status !== 'complete' ? provisional.entries[id]?.revision ?? 0 : 0;
-    return [id, `${id}:${job?.status ?? 'missing'}:${job?.has_results ? 1 : 0}:${job?.has_radiation_impedance_artifact ? 1 : 0}:${liveRevision}`];
-  }));
-  const resultSourceKey = ids.map(id => resultSources[id]).join('\u0000');
+    return `${id}:${job?.status ?? 'missing'}:${job?.has_results ? 1 : 0}:${job?.has_radiation_impedance_artifact ? 1 : 0}:${liveRevision}`;
+  }).join('\u0000');
   useEffect(() => {
     let live = true;
     const requestedIds = selectionKey ? selectionKey.split('\u0000') : [];
@@ -2575,9 +2556,6 @@ export function ResultsPanel() {
       const job = jobs.find((item) => item.id === id);
       const provisionalEntry = job?.status !== 'complete' ? provisional.entries[id] : undefined;
       if (provisionalEntry) return { id, result: provisionalEntry.result as ResultPayload, isProvisional: true, radiationArtifact: { status: 'absent' as const } };
-      if (display?.results[id] && !display.provisionalIds.includes(id) && display.sources[id] === resultSources[id]) {
-        return { id, result: display.results[id], isProvisional: false, radiationArtifact: undefined };
-      }
       const result = await fetchJobResults(id) as ResultPayload;
       if (!job?.has_radiation_impedance_artifact) return { id, result, isProvisional: false, radiationArtifact: { status: 'absent' as const } };
       try {
@@ -2604,20 +2582,16 @@ export function ResultsPanel() {
     }))
       .then((pairs) => {
         if (!live) return;
-        setDisplay((current) => ({
+        setDisplay({
           key: selectionKey,
           primaryId: effectivePrimary!,
           ids: requestedIds,
-          results: Object.fromEntries(pairs.map(({ id, result }) => [id,
-            current?.results[id] && !current.provisionalIds.includes(id) && current.sources[id] === resultSources[id]
-              ? current.results[id] : result])),
+          results: Object.fromEntries(pairs.map(({ id, result }) => [id, result])),
           provisionalIds: pairs.filter(({ isProvisional }) => isProvisional).map(({ id }) => id),
-          sources: resultSources,
-        }));
+        });
         setRadiationArtifactLoads((current) => ({
           ...current,
-          ...Object.fromEntries(pairs.filter(({ radiationArtifact }) => radiationArtifact !== undefined)
-            .map(({ id, radiationArtifact }) => [id, radiationArtifact!])),
+          ...Object.fromEntries(pairs.map(({ id, radiationArtifact }) => [id, radiationArtifact])),
         }));
         pairs.forEach(({ id, isProvisional }) => {
           if (!isProvisional) provisionalResults.remove(id);
@@ -2678,20 +2652,14 @@ export function ResultsPanel() {
   // arrangement the pre-solve rail uses just above.
   const shownLabel = display?.primaryId ? labelFor(display.primaryId, jobs) : null;
   const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
-    const payload = updated as ResultPayload;
     setDisplay((current) => current && current.results[jobId]
-      ? { ...current, results: { ...current.results, [jobId]: {
-        ...payload,
-        radiation_impedance: payload.radiation_impedance ?? current.results[jobId].radiation_impedance,
-      } as ResultPayload } }
+      ? { ...current, results: { ...current.results, [jobId]: updated as ResultPayload } }
       : current);
   }, []);
   const displayLabels = display?.ids.map((id) => labelFor(id, jobs)).join('\u0000') ?? '';
-  const displayOrigins = JSON.stringify(display?.ids.map((id) => jobs.find(job => job.id === id)?.config_summary.import_origin) ?? []);
-  const displayedIdsKey = displayed.ids.join('\u0000');
   const named = useMemo(
     () => display?.ids.flatMap((id, index) => {
-      if (!shownRaw || !displayedIdsKey.split('\u0000').includes(id)) return [];
+      if (!shownRaw || !displayed.ids.includes(id)) return [];
       // `ids` is [primary, ...overlays], so index 0 is the run the panel is
       // built around. Flagging its entries here is what lets every chart find
       // the primary without trusting its own, possibly filtered, ordering.
@@ -2700,11 +2668,11 @@ export function ResultsPanel() {
         displayLabels.split('\u0000')[index],
         display.results[id],
         view,
-        JSON.parse(displayOrigins)[index],
+        jobs.find(job => job.id === id)?.config_summary.import_origin,
       );
       return index === 0 ? channels.map((entry) => ({ ...entry, primary: true })) : channels;
     }) ?? NO_NAMED_RESULTS,
-    [display, displayLabels, displayOrigins, view, shownRaw, displayedIdsKey],
+    [display, displayLabels, view, jobs, selectionKey, coherenceContext.key, coherenceContext.kind, coherenceContext.viewportShowing, coherenceContext.unloadedRunId],
   );
   const error = fetchError?.key === selectionKey ? fetchError.message : null;
   const showingPrevious = Boolean(selection.primary && display && display.key !== selectionKey && !error);

@@ -73,45 +73,6 @@ describe('preview socket state machine', () => {
   beforeEach(() => { vi.useFakeTimers(); resetDesignStore(); });
   afterEach(() => vi.useRealTimers());
 
-  it('times actual sends across idle refresh, curvature, throttling and reconnect', () => {
-    vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
-    const sockets: MockSocket[] = [];
-    const manager = new PreviewSocketManager(() => {
-      const socket = new MockSocket(); sockets.push(socket); return socket;
-    });
-    manager.start();
-    const hello = () => sockets.at(-1)!.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
-    const receive = () => {
-      const socket = sockets.at(-1)!;
-      const request = JSON.parse(socket.sent.at(-1)!) as Record<string, unknown>;
-      vi.advanceTimersByTime(20);
-      socket.message(fixtureWithHeader(request));
-      return performance.now() - manager.getSnapshot().frame!.requestStartedAt!;
-    };
-    hello();
-    expect(receive()).toBe(20);
-    vi.advanceTimersByTime(120);
-    expect(receive()).toBe(20);
-    vi.advanceTimersByTime(10_000);
-    manager.refresh();
-    expect(receive()).toBe(20);
-    vi.advanceTimersByTime(10_000);
-    manager.setCurvatureWanted(true);
-    expect(receive()).toBe(20);
-    // Continuous edits can queue a coarse send; its clock starts when sent.
-    useDesignStore.getState().updateField('L', 121);
-    useDesignStore.getState().updateField('L', 122);
-    vi.advanceTimersByTime(33);
-    expect(receive()).toBe(20);
-    sockets.at(-1)!.close();
-    vi.advanceTimersByTime(250);
-    hello(); // server epoch and seq can both repeat on a new connection
-    expect(receive()).toBe(20);
-    expect(manager.getSnapshot().frame!.connectionGeneration).toBe(2);
-    manager.stop();
-    vi.restoreAllMocks();
-  });
-
   it('reconnects when the server never sends hello', () => {
     const sockets: MockSocket[] = [];
     const manager = new PreviewSocketManager(() => { const socket = new MockSocket(); sockets.push(socket); return socket; });

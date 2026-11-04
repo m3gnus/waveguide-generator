@@ -26,19 +26,6 @@ describe('chart theme startup', () => {
     expect(preferencesStore.getSnapshot().chartTheme).toBe(MATCH_INTERFACE_THEME);
   });
 
-  it.each(['vellum', MATCH_INTERFACE_THEME])('starts immediately with a durable %s choice', async (theme) => {
-    vi.useFakeTimers();
-    preferencesStore.adoptDurable(JSON.stringify({ version: 1, preferences: { chartTheme: theme } }));
-    const fetcher = vi.fn(() => new Promise<Response>(() => {}));
-    vi.stubGlobal('fetch', fetcher);
-    let settled = false;
-    void initializeChartThemeDefault().then(() => { settled = true; });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(settled).toBe(true);
-    expect(preferencesStore.getSnapshot().chartTheme).toBe(theme);
-  });
-
   it.each(['offline', 'non-OK', 'invalid JSON'])('keeps Match interface when startup gets %s', async (failure) => {
     if (failure === 'non-OK') vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 503 })));
     if (failure === 'invalid JSON') vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('invalid')));

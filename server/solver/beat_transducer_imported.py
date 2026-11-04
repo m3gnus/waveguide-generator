@@ -200,7 +200,6 @@ def drivers_for(record: Mapping, channels: Sequence) -> list[ExteriorDriver]:
 def package_sweep(
     sweep: TransducerSweep, compiled, request: Any, record: Mapping, *, started: float,
     port_indices: Mapping[str, Sequence[int]] | None = None,
-    solver_engine: Mapping[str, Any] | None = None,
 ) -> dict:
     """Retain native RMS pressure; use the common display mapper without a LEM.
 
@@ -215,7 +214,7 @@ def package_sweep(
     layout, frequencies = compiled.layout, sweep.frequencies_hz
     from .official_beat import engine_version
 
-    solver_engine = dict(solver_engine) if solver_engine is not None else {
+    solver_engine = {
         "engine": f"beat-{compiled.wire['solver_options']['bem_backend']}",
         "provider": "official",
         "package": "beat-engine",
@@ -279,7 +278,7 @@ def package_sweep(
             context=context,
             start_time=started,
             metadata={
-                "solver_backend": solver_engine["engine"],
+                "solver_backend": f"beat-{compiled.wire['solver_options']['bem_backend']}",
                 "solver_engine": solver_engine,
                 "drive_channel_id": channel.id,
                 "source_ids": list(channel.source_ids),
@@ -416,7 +415,7 @@ def package_sweep(
                 sound_speed_m_per_s=343.0,
                 backend_metadata=lambda _combined: {
                     "solver_backend": solver_engine["engine"], "solver_engine": dict(solver_engine),
-                    "engine": solver_engine["package"],
+                    "engine": "beat-engine",
                 },
             )
             channel_order.append(spec.id)
@@ -466,8 +465,24 @@ def _mixed_basis_metadata(compiled, geometry: Any, record: Mapping, indices: Map
     }
 
 
-def compile_request(msh_text: str, request: Any, record: Mapping, *, backend: str):
-    """One translation owner for BEAT and compatible native Metal networks."""
+def solve(
+    msh_text: str,
+    request: Any,
+    record: Mapping,
+    *,
+    backend: str,
+    stage_callback=None,
+    cancellation_callback=None,
+    result_callback=None,
+    worker_manager=None,
+    julia_executable=None,
+) -> dict:
+    from .official_beat import solve_transducer_compiled
+
+    if getattr(request.geometry, "type", None) != "imported":
+        raise ValueError("Exterior transducer jobs require imported geometry")
+    # Revalidate even internal/model_construct callers before entering the runtime.
+    request = type(request).model_validate(request.model_dump(mode="python"))
     refusal = preflight(record, msh_text, request.geometry.drive_channels, backend=backend)
     if refusal:
         raise ValueError(refusal)
@@ -489,35 +504,6 @@ def compile_request(msh_text: str, request: Any, record: Mapping, *, backend: st
         precision=precision,
         symmetry=symmetry.native_plane or "full",
     )
-    return compiled, port_indices
-
-
-def solve(
-    msh_text: str,
-    request: Any,
-    record: Mapping,
-    *,
-    backend: str,
-    stage_callback=None,
-    cancellation_callback=None,
-    result_callback=None,
-    worker_manager=None,
-    julia_executable=None,
-    compiled_solver=None,
-    solver_engine: Mapping[str, Any] | None = None,
-) -> dict:
-    if compiled_solver is None:
-        from functools import partial
-        from .official_beat import solve_transducer_compiled
-
-        compiled_solver = partial(solve_transducer_compiled, worker_manager=worker_manager,
-                                  julia_executable=julia_executable)
-
-    if getattr(request.geometry, "type", None) != "imported":
-        raise ValueError("Exterior transducer jobs require imported geometry")
-    # Revalidate even internal/model_construct callers before entering the runtime.
-    request = type(request).model_validate(request.model_dump(mode="python"))
-    compiled, port_indices = compile_request(msh_text, request, record, backend=backend)
     started = time.time()
 
     def acquired(sweep):
@@ -530,7 +516,7 @@ def solve(
         if result_callback:
             delta = TransducerSweep(sweep.rows[-1:], False, sweep.requested_frequency_count)
             frame = package_sweep(delta, compiled, request, record, started=started,
-                                  port_indices=port_indices, solver_engine=solver_engine)
+                                  port_indices=port_indices)
             frame.pop("_channel_bases_npz", None)
             if request.geometry.combine is not None:
                 # The crossover is the durable final's, from the whole sweep.
@@ -549,13 +535,14 @@ def solve(
                 channel["metadata"].pop("beat_transducer", None)
             result_callback(len(sweep.rows) - 1, frame)
 
-    native = compiled_solver(
+    native = solve_transducer_compiled(
         compiled,
+        worker_manager=worker_manager,
+        julia_executable=julia_executable,
         cancellation_callback=cancellation_callback,
         on_frequency_result=acquired,
         status_callback=(lambda message: stage_callback("solve", 0.0, message))
         if stage_callback
         else None,
     )
-    return package_sweep(native, compiled, request, record, started=started,
-                         port_indices=port_indices, solver_engine=solver_engine)
+    return package_sweep(native, compiled, request, record, started=started, port_indices=port_indices)

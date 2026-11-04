@@ -23,10 +23,12 @@ async function start(): Promise<void> {
   await durableSettings.hydrate({ timeoutMs: 1_500 });
   startDurableSettings();
 
+  const { initializeChartThemeDefault } = await import('./prefs/chartThemes');
+  await initializeChartThemeDefault();
+
   const [{ default: App }, { restoreAutosaveWithLateRetry, startAutosave }] = await Promise.all([
     import('./App'),
     import('./stores/autosave'),
-    import('./prefs/chartThemes').then(({ initializeChartThemeDefault }) => initializeChartThemeDefault()),
   ]);
 
   const stopLateAutosaveRestore = restoreAutosaveWithLateRetry();

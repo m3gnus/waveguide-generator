@@ -334,23 +334,23 @@ export interface CompareSelection {
   awaiting: string | null;
 }
 
-export class ResultsLruCache<T = JobResults> {
-  private readonly entries = new Map<string, T>();
+export class ResultsLruCache {
+  private readonly entries = new Map<string, JobResults>();
   readonly maxEntries: number;
 
   constructor(maxEntries = 15) {
     this.maxEntries = Number.isFinite(maxEntries) ? Math.max(1, Math.min(15, Math.floor(maxEntries))) : 15;
   }
 
-  get(jobId: string): T | undefined {
+  get(jobId: string): JobResults | undefined {
     const value = this.entries.get(jobId);
-    if (value === undefined) return undefined;
+    if (!value) return undefined;
     this.entries.delete(jobId);
     this.entries.set(jobId, value);
     return value;
   }
 
-  set(jobId: string, results: T): void {
+  set(jobId: string, results: JobResults): void {
     this.entries.delete(jobId);
     this.entries.set(jobId, results);
     while (this.entries.size > this.maxEntries) {
@@ -361,24 +361,12 @@ export class ResultsLruCache<T = JobResults> {
   }
 
   has(jobId: string): boolean { return this.entries.has(jobId); }
-  delete(jobId: string): void { this.entries.delete(jobId); }
   keys(): string[] { return [...this.entries.keys()]; }
   clear(): void { this.entries.clear(); }
 }
 
 export const resultsCache = new ResultsLruCache(15);
 const inFlightResults = new Map<string, Promise<JobResults>>();
-const radiationPresentations = new ResultsLruCache<RadiationImpedancePresentation>(15);
-const inFlightRadiation = new Map<string, Promise<RadiationImpedancePresentation | null>>();
-
-/** Retention/deletion invalidates both data owners, including pending replies. */
-export function invalidateJobResults(jobId: string): void {
-  resultsCache.delete(jobId);
-  radiationPresentations.delete(jobId);
-  inFlightResults.delete(jobId);
-  inFlightRadiation.delete(jobId);
-  resultsRequestOrder.delete(jobId);
-}
 
 export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fetch): Promise<JobResults> {
   const cached = resultsCache.get(jobId);
@@ -454,26 +442,12 @@ export async function fetchRadiationImpedancePresentation(
   jobId: string,
   fetcher: typeof fetch = fetch,
 ): Promise<RadiationImpedancePresentation | null> {
-  const cached = radiationPresentations.get(jobId);
-  if (cached) return cached;
-  const pending = inFlightRadiation.get(jobId);
-  if (pending) return pending;
-  const request = (async () => {
-    const response = await deadlineFetch(fetcher, `/api/radiation-impedance/${encodeURIComponent(jobId)}/presentation`);
-    if (response.status === 404) return null;
-    if (!response.ok) {
-      throw new Error(await httpErrorMessage(response, 'WG could not load this run’s port data. Select the run again.'));
-    }
-    return response.json() as Promise<RadiationImpedancePresentation>;
-  })();
-  inFlightRadiation.set(jobId, request);
-  try {
-    const presentation = await request;
-    if (presentation && inFlightRadiation.get(jobId) === request) radiationPresentations.set(jobId, presentation);
-    return presentation;
-  } finally {
-    if (inFlightRadiation.get(jobId) === request) inFlightRadiation.delete(jobId);
+  const response = await deadlineFetch(fetcher, `/api/radiation-impedance/${encodeURIComponent(jobId)}/presentation`);
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, 'WG could not load this run’s port data. Select the run again.'));
   }
+  return response.json() as Promise<RadiationImpedancePresentation>;
 }
 
 /** The recombine body. New requests always send the per-channel v2 form; the
@@ -504,23 +478,21 @@ export interface RecombineSpec {
  * is bounded by concurrency rather than by how many jobs a session touches.
  */
 interface ResultsRequestOrder { issued: number; published: number; inFlight: number }
-interface ResultsRequestToken { revision: number; order: ResultsRequestOrder }
 const resultsRequestOrder = new Map<string, ResultsRequestOrder>();
 
-function issueResultsRequest(jobId: string, kind: 'read' | 'recombine'): ResultsRequestToken {
+function issueResultsRequest(jobId: string, kind: 'read' | 'recombine'): number {
   const order = resultsRequestOrder.get(jobId) ?? { issued: 0, published: 0, inFlight: 0 };
   if (kind === 'recombine') order.issued += 1;
   order.inFlight += 1;
   resultsRequestOrder.set(jobId, order);
-  return { revision: kind === 'recombine' ? order.issued : order.published, order };
+  return kind === 'recombine' ? order.issued : order.published;
 }
 
 /** Publish this reply unless a newer recombine of the job already published,
  * then retire the request. `result` is null when it never became one. */
-function settleResultsRequest(jobId: string, token: ResultsRequestToken, result: JobResults | null): void {
+function settleResultsRequest(jobId: string, revision: number, result: JobResults | null): void {
   const order = resultsRequestOrder.get(jobId);
-  if (order !== token.order) return;
-  const { revision } = token;
+  if (!order) return;
   if (result !== null && revision >= order.published) {
     order.published = revision;
     resultsCache.set(jobId, result);

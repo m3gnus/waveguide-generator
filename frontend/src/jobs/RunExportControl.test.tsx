@@ -11,17 +11,14 @@ import { useRunExportStore } from '../stores/runExports';
 import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
 import { ExportCancelledError } from '../api/exportDestination';
 import { RunExportControl } from './RunExportControl';
-import { RETURNED_STEP_UNAVAILABLE } from '../api/returnedStep';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { JobsPanel } from '../shell/JobsPanel';
 import { useCadSendOutcome } from '../design/useSendToCad';
-import { activityStore } from '../shell/activity';
 
 const mocks = vi.hoisted(() => ({
   fetchJobResults: vi.fn(),
   runWorkspaceExportBundle: vi.fn(),
   sendDesignToCad: vi.fn(),
-  checkReturnedStep: vi.fn(),
 }));
 
 vi.mock('../api/designIo', async (importOriginal) => ({
@@ -32,11 +29,6 @@ vi.mock('../api/designIo', async (importOriginal) => ({
 vi.mock('../api/results', async (importOriginal) => ({
   ...await importOriginal<typeof import('../api/results')>(),
   fetchJobResults: mocks.fetchJobResults,
-}));
-
-vi.mock('../api/returnedStep', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../api/returnedStep')>(),
-  checkReturnedStep: mocks.checkReturnedStep,
 }));
 
 vi.mock('../results/exporters', () => ({
@@ -120,7 +112,6 @@ describe('RunExportControl', () => {
     compareSelection.clear();
     publishJobs([]);
     useRunExportStore.getState().resetForTests();
-    activityStore.reset();
     mocks.fetchJobResults.mockResolvedValue({ frequencies: [1000], spl_on_axis: { spl: [90] } });
     mocks.runWorkspaceExportBundle.mockResolvedValue({
       directory: 'C:/chosen/1_stored_horn_v07',
@@ -132,7 +123,6 @@ describe('RunExportControl', () => {
       bundleId: 'wgb_1', exportId: 'wge_1', sequence: 7,
       designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
     });
-    mocks.checkReturnedStep.mockResolvedValue({ available: false, reason: RETURNED_STEP_UNAVAILABLE });
     patchMetadata = vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
     // The dialog the top bar mounts, standing in for the user answering it.
     provideExportDestinationPrompt(async () => ({
@@ -152,7 +142,6 @@ describe('RunExportControl', () => {
     publishJobs([]);
     document.querySelectorAll('.action-menu-popover, .design-menu-status').forEach((element) => element.remove());
     useRunExportStore.getState().resetForTests();
-    activityStore.reset();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -191,129 +180,9 @@ describe('RunExportControl', () => {
       expect(document.querySelector('[role="menu"]')?.textContent).not.toContain(label);
     }
     expect(menuItem('STEP solid').getAttribute('aria-disabled')).toBe('true');
-    expect(menuItem('STEP solid').textContent).toContain(RETURNED_STEP_UNAVAILABLE);
+    expect(menuItem('STEP solid').textContent).toContain('STEP export is not available for imported models.');
     expect(menuItem('Frequency data').getAttribute('aria-disabled')).toBeNull();
     expect(document.body.textContent).not.toContain('Solved from a Fusion return');
-  });
-
-  function returnedCadJob(overrides: Partial<JobItem> = {}): JobItem {
-    return { ...cadJob(), cad_source: { ingest_id: 'wgi_original', design_id: null, lineage_id: 'original',
-      archive_stem: 'horn', manifest_sha256: 'sha256:original', document_name: 'horn', return_state_hash: 'sha256:model' }, ...overrides };
-  }
-
-  it.each([true, false])('exports a checksum-verified CAD return through the existing run destination flow (results=%s)', async (hasResults) => {
-    mocks.checkReturnedStep.mockResolvedValue({ available: true, reason: null });
-    const job = returnedCadJob({ has_results: hasResults, ...(!hasResults ? { results_discarded_at: '2026-11-03T10:00:00Z' } : {}) });
-    render(job);
-    await act(async () => { await settle(); });
-    openMenu();
-    expect(menuItem('STEP solid').getAttribute('aria-disabled')).toBeNull();
-    if (!hasResults) expect(menuItem('Frequency data').textContent).toContain('removed by retention');
-    await act(async () => { menuItem('STEP solid').click(); await settle(); });
-    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.objectContaining({
-      selectedRun: job, jobId: job.id, design: undefined, destinationToken: 'destination-handle',
-    }), ['step'], 'confirm');
-    expect(mocks.fetchJobResults).not.toHaveBeenCalled();
-    expect(patchMetadata).toHaveBeenCalledOnce();
-  });
-
-  it('shows the server’s factual missing-return remedy', async () => {
-    render(returnedCadJob());
-    await act(async () => { await settle(); });
-    openMenu();
-    expect(menuItem('STEP solid').getAttribute('aria-disabled')).toBe('true');
-    expect(menuItem('STEP solid').textContent).toContain(RETURNED_STEP_UNAVAILABLE);
-    expect(menuItem('STEP solid').textContent).not.toContain('parameters');
-  });
-
-  it('includes returned STEP in preferred CAD exports', async () => {
-    preferencesStore.update({ exportFormats: ['step'] });
-    mocks.checkReturnedStep.mockResolvedValue({ available: true, reason: null });
-    render(returnedCadJob());
-    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
-    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['step'], 'confirm');
-  });
-
-  it.each(['selection', 'unmount', 'Stop'] as const)('keeps a pending preferred STEP check owned by the export across %s', async (change) => {
-    preferencesStore.update({ exportFormats: ['step'] });
-    mocks.checkReturnedStep.mockResolvedValue({ available: true, reason: null });
-    const job = returnedCadJob();
-    render(job);
-    await act(async () => { await settle(); });
-
-    // Exercise the real check and its Stop action while the response is pending.
-    const { checkReturnedStep } = await vi.importActual<typeof import('../api/returnedStep')>('../api/returnedStep');
-    mocks.checkReturnedStep.mockImplementationOnce(checkReturnedStep);
-    const response = deferred<Response>();
-    let requestSignal: AbortSignal | null | undefined;
-    const fetcher = vi.fn<typeof fetch>((_url, init) => {
-      requestSignal = init?.signal;
-      return new Promise<Response>((resolve, reject) => {
-        const abort = () => reject(requestSignal?.reason);
-        if (requestSignal?.aborted) abort();
-        else requestSignal?.addEventListener('abort', abort, { once: true });
-        void response.promise.then(resolve, reject).finally(() => requestSignal?.removeEventListener('abort', abort));
-      });
-    });
-    vi.stubGlobal('fetch', fetcher);
-    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
-    expect(fetcher).toHaveBeenCalledOnce();
-    expect(useRunExportStore.getState().jobs[job.id]).toMatchObject({ busy: true, busyFormats: ['step'] });
-
-    if (change === 'Stop') {
-      act(() => activityStore.getSnapshot()[0].cancel!());
-    } else if (change === 'selection') {
-      render(completeJob({ id: 'other-run' }));
-    } else {
-      act(() => root.render(<RunExportControl key="other-run" job={completeJob({ id: 'other-run' })} onOpenExportSettings={vi.fn()}/>));
-    }
-    await act(async () => {
-      response.resolve(new Response(JSON.stringify({ available: true, reason: null })));
-      await settle();
-    });
-    expect(requestSignal?.aborted).toBe(change === 'Stop');
-    expect(activityStore.getSnapshot()).toHaveLength(0);
-    if (change === 'Stop') {
-      expect(useRunExportStore.getState().jobs[job.id]).toMatchObject({ busy: false, lastNotice: 'Stopped', lastError: null });
-      expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
-      expect(patchMetadata).not.toHaveBeenCalled();
-    } else {
-      expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.objectContaining({
-        selectedRun: job, jobId: job.id, destinationToken: 'destination-handle',
-      }), ['step'], 'confirm');
-      expect(patchMetadata).toHaveBeenCalledWith(job.id, { exported_files: [
-        'earlier.csv', 'C:/chosen/1_stored_horn_v07/1_stored_horn_v07.csv',
-      ] });
-      expect(useRunExportStore.getState().jobs[job.id]).toMatchObject({ busy: false, lastError: null });
-      expect(useRunExportStore.getState().jobs[job.id].lastNotice).toContain('1 file written');
-      expect(useRunExportStore.getState().jobs['other-run']).toBeUndefined();
-    }
-  });
-
-  it('rechecks a previously unavailable STEP when the menu is reopened', async () => {
-    render(returnedCadJob());
-    await act(async () => { await settle(); });
-    openMenu();
-    await act(async () => { await settle(); });
-    expect(menuItem('STEP solid').getAttribute('aria-disabled')).toBe('true');
-    openMenu();
-    mocks.checkReturnedStep.mockResolvedValue({ available: true, reason: null });
-    openMenu();
-    await act(async () => { await settle(); });
-    expect(menuItem('STEP solid').getAttribute('aria-disabled')).toBeNull();
-  });
-
-  it('ignores a capability reply from the previously selected CAD run', async () => {
-    const old = deferred<{ available: boolean; reason: null }>();
-    const current = deferred<{ available: boolean; reason: string }>();
-    mocks.checkReturnedStep.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
-    render(returnedCadJob());
-    render(returnedCadJob({ id: 'other-run' }));
-    await act(async () => { old.resolve({ available: true, reason: null }); await settle(); });
-    openMenu();
-    expect(menuItem('STEP solid').getAttribute('aria-disabled')).toBe('true');
-    await act(async () => { current.resolve({ available: false, reason: RETURNED_STEP_UNAVAILABLE }); await settle(); });
-    expect(menuItem('STEP solid').textContent).toContain(RETURNED_STEP_UNAVAILABLE);
   });
 
   it('exports an assembly run config from its snapshot while refusing whole-assembly geometry', async () => {
@@ -364,7 +233,7 @@ describe('RunExportControl', () => {
   });
 
   it.each([
-    ['step', RETURNED_STEP_UNAVAILABLE],
+    ['step', 'STEP export is not available for imported models.'],
     ['mwg_config', 'Imported models have no WG parameter config to export.'],
     ['stl', 'STL export is not available for imported models.'],
     ['fusion_csv', 'Imported models have no WG profiles to export.'],
@@ -391,7 +260,7 @@ describe('RunExportControl', () => {
     render(cadJob());
     await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
     const alert = host.querySelector('[role="alert"]')?.textContent;
-    expect(alert).toContain(RETURNED_STEP_UNAVAILABLE);
+    expect(alert).toContain('STEP export is not available for imported models.');
     expect(alert).toContain('STL export is not available for imported models.');
     expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
@@ -409,7 +278,7 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv', 'png'], 'confirm');
     const alert = host.querySelector('[role="alert"]')?.textContent;
     expect(alert).toContain('1 file written');
-    expect(alert).toContain(RETURNED_STEP_UNAVAILABLE);
+    expect(alert).toContain('STEP export is not available for imported models.');
     expect(alert).toContain('STL export is not available for imported models.');
     expect(alert).toContain('Chart rendering failed.');
   });
@@ -519,8 +388,7 @@ describe('RunExportControl', () => {
     openMenu();
     await act(async () => { menuItem('Send to CAD').click(); await settle(); });
     expect(useRunExportStore.getState().jobs[job.id]).toMatchObject({ busy: false, lastError: null, lastNotice: 'Stopped' });
-    // A debounced preferences save may run here; cancellation must not log a problem.
-    expect(fetch).not.toHaveBeenCalledWith('/api/diagnostics/client-log', expect.anything());
+    expect(fetch).not.toHaveBeenCalled();
     expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 

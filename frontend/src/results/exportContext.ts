@@ -59,7 +59,6 @@ export const MISSING_RUN_DESIGN_EXPORT_REASON = 'This run did not keep its desig
 /** A retained assembly may export its captured design, but not whole-assembly geometry. */
 export function runExportReason(job: JobItem, format: ExportFormat): string | undefined {
   const kind = modelKindForRun(job);
-  if (kind === 'cad' && format === 'step') return undefined;
   if (kind === 'assembly' && format === 'mwg_config') {
     return hydrateJobDesign(job) ? undefined : MISSING_RUN_DESIGN_EXPORT_REASON;
   }

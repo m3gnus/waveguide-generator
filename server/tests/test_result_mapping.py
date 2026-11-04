@@ -15,50 +15,6 @@ from server.solver.context import SolverContext
 from server.solver.result_mapping import build_solver_response
 
 
-@pytest.mark.parametrize("shape", [(3, 2, 8), (0, 2, 8), (3, 0, 8), (3, 2, 0), (1, 1, 3)])
-@pytest.mark.parametrize("frequency_count", [0, 1, 4])
-def test_phase_mapping_matches_scalar_bytes_with_one_array_call_per_plane(monkeypatch, shape, frequency_count):
-    from server.solver import result_mapping as mapping
-
-    samples = np.array([
-        complex(-1, 0.0), complex(-1, -0.0), complex(0.0, -0.0),
-        complex(float("nan"), 1), complex(float("inf"), 1),
-        complex(-2, 3), complex(1e-300, -1e-300), complex(1, -0.0),
-    ])
-    pressure = np.resize(samples, shape)
-    angles = np.array([-180., -90., float("nan"), 0., 30., float("inf"), 90., 180., 999.])
-    result = SimpleNamespace(
-        pressure_complex=pressure, observation_angles_deg=angles,
-        observation_planes=["horizontal", "vertical", "missing"], frequencies_hz=np.arange(frequency_count),
-    )
-    indices = [i for i, a in enumerate(angles) if np.isfinite(a) and i < shape[2]]
-
-    def scalar_phase(value):
-        amplitude = float(np.abs(value))
-        if not np.isfinite(amplitude) or amplitude <= 0:
-            return None
-        phase = float(np.angle(value, deg=True))
-        return phase if np.isfinite(phase) else None
-
-    expected = {
-        plane: [[[float(angles[i]), scalar_phase(pressure[f, p, i])
-                  if f < shape[0] else None] for i in indices] for f in range(frequency_count)]
-        for p, plane in enumerate(result.observation_planes[:shape[1]])
-    }
-    angle = np.angle
-    calls = []
-
-    def counted(values, **kwargs):
-        calls.append(np.asarray(values).shape)
-        return angle(values, **kwargs)
-
-    monkeypatch.setattr(np, "angle", counted)
-    actual = mapping.directivity_phase(result)
-    assert json.dumps(actual, allow_nan=False) == json.dumps(expected, allow_nan=False)
-    assert len(calls) <= shape[1]
-    assert all(len(call) == 2 for call in calls)
-
-
 def _context(*, spherical: bool = False) -> SolverContext:
     context = SolverContext(
         design=DesignConfig.model_validate({"formula": "OSSE"}),

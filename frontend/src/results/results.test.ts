@@ -1,6 +1,6 @@
 import { keepRefusalOriginals } from '../api/httpError';
 import { describe, expect, it, vi } from 'vitest';
-import { CompareStore, fetchJobArchiveSnapshot, fetchJobResults, fetchRadiationImpedancePresentation, invalidateJobResults, mergeProvisionalResults, parseFinalResultEnvelope, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults, type ResultData } from '../api/results';
+import { CompareStore, fetchJobArchiveSnapshot, fetchJobResults, fetchRadiationImpedancePresentation, mergeProvisionalResults, parseFinalResultEnvelope, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults, type ResultData } from '../api/results';
 import { COMBINED_VIEW } from '../stores/resultView';
 import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, groupDelayValue, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from './mappers';
 import { combinedChannelId, type ResultPayload } from './types';
@@ -107,44 +107,6 @@ describe('results LRU', () => {
     ]);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(first).toBe(second);
-  });
-
-  it('shares and caches radiation presentations, and discards invalidated replies', async () => {
-    let respond!: (response: Response) => void;
-    const presentation = { schema_version: 1, marker: 'same matrix' };
-    const fetcher = vi.fn(() => new Promise<Response>(resolve => { respond = resolve; }));
-    const first = fetchRadiationImpedancePresentation('shared-matrix', fetcher);
-    const second = fetchRadiationImpedancePresentation('shared-matrix', fetcher);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    respond(new Response(JSON.stringify(presentation)));
-    const [a, b] = await Promise.all([first, second]);
-    expect(a).toBe(b);
-    expect(await fetchRadiationImpedancePresentation('shared-matrix', fetcher)).toBe(a);
-    invalidateJobResults('shared-matrix');
-    const stale = fetchRadiationImpedancePresentation('shared-matrix', fetcher);
-    invalidateJobResults('shared-matrix');
-    respond(new Response(JSON.stringify(presentation)));
-    await stale;
-    const fresh = fetchRadiationImpedancePresentation('shared-matrix', fetcher);
-    expect(fetcher).toHaveBeenCalledTimes(3);
-    respond(new Response(JSON.stringify(presentation)));
-    await fresh;
-    invalidateJobResults('shared-matrix');
-  });
-
-  it('does not cache an old result reply after retention invalidated the run', async () => {
-    let respond!: (response: Response) => void;
-    const fetcher = vi.fn(() => new Promise<Response>(resolve => { respond = resolve; }));
-    const old = fetchJobResults('retention-pending', fetcher);
-    const finishOld = respond;
-    invalidateJobResults('retention-pending');
-    const fresh = fetchJobResults('retention-pending', fetcher);
-    respond(new Response(JSON.stringify({ ...result(), frequencies: [200] })));
-    const current = await fresh;
-    finishOld(new Response(JSON.stringify(result())));
-    await old;
-    expect(resultsCache.get('retention-pending')).toBe(current);
-    invalidateJobResults('retention-pending');
   });
 
   it('adopts the parametric v1 identity for a result migrated from the original application', async () => {

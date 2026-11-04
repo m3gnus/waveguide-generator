@@ -3060,7 +3060,7 @@ class JobRuntime:
         """Return exact result text and its persisted SHA-256 off the event loop."""
 
         await self.start()
-        row = await asyncio.to_thread(self._require_job, job_id)
+        row = self._require_job(job_id)
         if row["status"] != "complete":
             raise JobConflictError("This run has not finished. Wait for it, then try again.")
         payload = await asyncio.to_thread(self.store.get_results_payload, job_id)

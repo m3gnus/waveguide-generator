@@ -7,16 +7,9 @@ import os
 import threading
 
 FEM_REGIONS_ENV = "WG2_FEM_REGIONS"
-METAL_EXTERIOR_TRANSDUCERS_ENV = "WG2_METAL_EXTERIOR_TRANSDUCERS"
 logger = logging.getLogger(__name__)
 _warned_fem_values: set[str] = set()
 _fem_warning_lock = threading.Lock()
-
-
-def metal_exterior_transducers_enabled(*, environ: Mapping[str, str] | None = None) -> bool:
-    """Opt in to the backend-only native Metal exterior network route."""
-    env = os.environ if environ is None else environ
-    return env.get(METAL_EXTERIOR_TRANSDUCERS_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def fem_regions_enabled(*, environ: Mapping[str, str] | None = None) -> bool:

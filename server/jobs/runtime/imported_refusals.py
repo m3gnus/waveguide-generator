@@ -252,11 +252,6 @@ async def _imported_preflight_refusal(
     """
 
     from server.solver.beat import BeatEngine
-    from server.solver.metal import MetalEngine
-
-    if isinstance(adapter, MetalEngine) and request is not None and record is not None and msh_text is not None:
-        return await asyncio.to_thread(adapter.imported_preflight, record, msh_text,
-                                       drive_channels=drive_channels, request=request)
 
     if isinstance(adapter, BeatEngine) and record is not None and msh_text is not None:
         transducer = any(getattr(channel, "exterior_transducer", None) is not None
@@ -514,8 +509,6 @@ def _imported_capabilities(
     Accurate exposes every accelerator. An explicitly named ``beat-metal`` is
     exposed in Fast too: Fast and Accurate run the identical BEAT computation.
     Outside FEM, AUTO and the legacy ``beat`` family keep their Fast declarations.
-    Native Metal exterior networks require an explicit engine choice so enabling
-    the experimental server flag cannot reroute a saved AUTO voltage job.
     """
 
     def exposed(info: EngineInfo) -> bool:
@@ -526,14 +519,11 @@ def _imported_capabilities(
             info.name == engine and engine in _BEAT_FAST_IMPORTED_EXPLICIT
         )
 
-    def declared(info: EngineInfo) -> EngineInfo:
-        if info.name == "metal" and engine != "metal" and "exterior-transducers" in info.imported_features:
-            info = replace(info, imported_features=tuple(
-                feature for feature in info.imported_features if feature != "exterior-transducers"
-            ))
-        return replace(info, geometry_sources=(*info.geometry_sources, "imported")) if exposed(info) else info
-
-    return {info.name: declared(info) for info in capabilities}
+    return {
+        info.name: replace(info, geometry_sources=(*info.geometry_sources, "imported"))
+        if exposed(info) else info
+        for info in capabilities
+    }
 
 
 def _imported_accuracy(request: SolveRequest) -> str:

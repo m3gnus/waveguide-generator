@@ -64,7 +64,6 @@ function workspace(jobId: string) {
       schema_version: 1, results: result, results_sha256: 'a'.repeat(64),
       mesh_artifact: 'retained mesh', pressure_bases: [], radiation_impedance: null,
     });
-    if (path === `/api/export/runs/${jobId}/step`) return new Response('returned step bytes');
     if (path === '/api/export/step') return new Response('step bytes', {
       headers: { 'Content-Disposition': 'attachment; filename="9_OSSE.step"' },
     });
@@ -127,17 +126,14 @@ describe('run archive and automatic export in one Workspace', () => {
     const exported = await exportRunAutomatically(job, ['step', 'stl', 'mwg_config', 'fusion_csv', 'csv'], {
       preferences: preferencesStore.getSnapshot(), fetcher,
     });
-    const failedFormats = kind === 'cad' ? ['stl', 'mwg_config', 'fusion_csv'] : ['step', 'stl', 'mwg_config', 'fusion_csv'];
-    expect(exported.failures.map(failure => failure.format)).toEqual(failedFormats);
+    expect(exported.failures.map(failure => failure.format)).toEqual(['step', 'stl', 'mwg_config', 'fusion_csv']);
     const importedModel = kind === 'file' ? 'imported mesh models' : 'imported models';
-    if (kind === 'file') expect(exported.failures[0].reason).toContain(`STEP export is not available for ${importedModel}`);
-    expect(exported.failures.find(failure => failure.format === 'stl')?.reason).toContain(`STL export is not available for ${importedModel}`);
-    expect(exported.failures.filter(failure => ['mwg_config', 'fusion_csv'].includes(failure.format))
-      .every(failure => failure.reason.includes('Imported models'))).toBe(true);
-    expect(exported.files).toHaveLength(kind === 'cad' ? 2 : 1);
-    expect([...files.keys()].every(path => path.endsWith('.csv') || (kind === 'cad' && path.endsWith('.step')))).toBe(true);
-    expect(fetcher.mock.calls.some(([path]) => path === '/api/export/step' || path === '/api/design/serialize')).toBe(false);
-    if (kind === 'cad') expect([...files.values()]).toContain('returned step bytes');
+    expect(exported.failures[0].reason).toContain(`STEP export is not available for ${importedModel}`);
+    expect(exported.failures[1].reason).toContain(`STL export is not available for ${importedModel}`);
+    expect(exported.failures.slice(2).every(failure => failure.reason.includes('Imported models'))).toBe(true);
+    expect(exported.files).toHaveLength(1);
+    expect([...files.keys()].every(path => path.endsWith('.csv'))).toBe(true);
+    expect(fetcher.mock.calls.some(([path]) => String(path).startsWith('/api/export/') || path === '/api/design/serialize')).toBe(false);
   });
 
   it('automatically exports the recorded run normalization despite another imported draft', async () => {

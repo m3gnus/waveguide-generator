@@ -581,20 +581,18 @@ describe('results run coherence', () => {
     expect(host.querySelector('.result-power-check')).toBeNull();
   });
 
-  it.each([false, true])('reports and retries a failed matrix, including while an overlay loads (%s)', async (withOverlay) => {
-    const solved = { ...job(withOverlay ? 'cardioid-overlay' : 'cardioid', 16, liveDesign()), has_radiation_impedance_artifact: true };
+  it('reports a failed radiation-matrix request and retries only that artifact', async () => {
+    const solved = { ...job('cardioid', 16, liveDesign()), has_radiation_impedance_artifact: true };
     publishJobs([solved]);
     compareSelection.setPrimary(solved.id);
     preferencesStore.update({ chartTypes: ['radiation_impedance'] });
     const paths: string[] = [];
     let matrixAttempt = 0;
-    let finishOverlay!: (response: Response) => void;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       paths.push(path);
-      if (path === '/api/results/pending-overlay') return new Promise<Response>(resolve => { finishOverlay = resolve; });
-      if (path === `/api/results/${solved.id}`) return new Response(JSON.stringify(finalResult()), { status: 200 });
-      if (path === `/api/radiation-impedance/${solved.id}/presentation`) {
+      if (path === '/api/results/cardioid') return new Response(JSON.stringify(finalResult()), { status: 200 });
+      if (path === '/api/radiation-impedance/cardioid/presentation') {
         matrixAttempt += 1;
         if (matrixAttempt === 1) return new Response(JSON.stringify({ detail: 'matrix store temporarily unavailable' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
         return new Response(JSON.stringify({
@@ -618,15 +616,9 @@ describe('results run coherence', () => {
       .find((button) => button.textContent === 'Retry')!;
     expect(retry).toBeDefined();
 
-    if (withOverlay) await act(async () => {
-      publishJobs([solved, job('pending-overlay', 17, liveDesign())]);
-      compareSelection.toggleOverlay('pending-overlay');
-    });
-
     await act(async () => { retry.click(); await Promise.resolve(); await Promise.resolve(); });
-    if (withOverlay) await act(async () => finishOverlay(new Response(JSON.stringify(finalResult()), { status: 200 })));
-    expect(paths.filter((path) => path === `/api/results/${solved.id}`)).toHaveLength(1);
-    expect(paths.filter((path) => path === `/api/radiation-impedance/${solved.id}/presentation`)).toHaveLength(2);
+    expect(paths.filter((path) => path === '/api/results/cardioid')).toHaveLength(1);
+    expect(paths.filter((path) => path === '/api/radiation-impedance/cardioid/presentation')).toHaveLength(2);
     expect(host.textContent).not.toContain('WG could not load Radiation Matrix Load');
     expect(host.textContent).not.toContain('needs a retained passive-cardioid');
   });

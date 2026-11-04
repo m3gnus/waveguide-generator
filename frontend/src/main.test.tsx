@@ -1,22 +1,19 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { preferencesStore, resolveChartTheme } from './prefs/preferences';
 
-const startup = vi.hoisted(() => ({ render: vi.fn(), hydrate: vi.fn().mockResolvedValue(undefined), appLoaded: false, autosaveLoaded: false }));
+const startup = vi.hoisted(() => ({ render: vi.fn(), hydrate: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('react-dom/client', () => ({ createRoot: () => ({ render: startup.render }) }));
-vi.mock('./App', () => { startup.appLoaded = true; return { default: () => null }; });
+vi.mock('./App', () => ({ default: () => null }));
 vi.mock('./shell/clientErrors', () => ({ startClientErrorReporting: () => () => undefined }));
 vi.mock('./stores/durableSettings', async (importOriginal) => ({
   ...await importOriginal<typeof import('./stores/durableSettings')>(),
   durableSettings: { get: () => null, subscribe: () => () => undefined, hydrate: startup.hydrate },
   startDurableSettings: () => undefined,
 }));
-vi.mock('./stores/autosave', () => {
-  startup.autosaveLoaded = true;
-  return {
-    restoreAutosaveWithLateRetry: () => () => undefined,
-    startAutosave: () => ({ dispose: () => undefined }),
-  };
-});
+vi.mock('./stores/autosave', () => ({
+  restoreAutosaveWithLateRetry: () => () => undefined,
+  startAutosave: () => ({ dispose: () => undefined }),
+}));
 afterEach(() => { vi.unstubAllGlobals(); });
 
 it('waits for the server theme before rendering charts and export controls', async () => {
@@ -27,7 +24,6 @@ it('waits for the server theme before rendering charts and export controls', asy
   await import('./main');
   await vi.waitFor(() => { expect(fetcher).toHaveBeenCalledWith('/api/themes', expect.anything()); });
   expect(startup.hydrate).toHaveBeenCalledWith({ timeoutMs: 1_500 });
-  await vi.waitFor(() => { expect(startup.appLoaded && startup.autosaveLoaded).toBe(true); });
   expect(startup.render).not.toHaveBeenCalled();
   respond(new Response(JSON.stringify({ themes: ['console', 'vellum'], default: 'vellum' })));
   await vi.waitFor(() => { expect(startup.render).toHaveBeenCalledTimes(1); });
