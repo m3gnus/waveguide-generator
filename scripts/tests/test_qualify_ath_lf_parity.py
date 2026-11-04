@@ -92,7 +92,7 @@ def test_observation_preserves_signed_weights_delay_units_and_exact_arc_count():
     assert obs["arcs"][0]["driving_groups"] == [1001, 1002]
     polar = parity.polar_options(obs["arcs"])
     assert polar["observation_origin"] == "throat" and polar["spherical_sampling"] is True
-    assert polar["angle_range"] == [0, 90, 3]
+    assert polar["angle_range"] == [0, 90, 19]
 
 
 @pytest.mark.parametrize(("old", "new"), [("Acceleration", "Velocity"), ("BasePlane=zx", "BasePlane=xy"),
@@ -102,13 +102,12 @@ def test_unsupported_observations_fail_with_remedy(old, new):
         parity.parse_observation(OBSERVATION.replace(old, new))
 
 
-def test_no_arcs_and_different_grids_are_not_a_default_or_a_pass():
-    with pytest.raises(parity.EvidenceRefusal, match="no polar arcs"):
-        parity.polar_options([])
+def test_harness_observation_does_not_depend_on_ath_arcs():
+    expected = parity.polar_options([])
+    assert expected["distance"] == 2 and expected["angle_range"] == [0, 90, 19]
     arcs = parity.parse_observation(OBSERVATION)["arcs"]
     arcs[1]["distance_m"] = 3
-    with pytest.raises(parity.EvidenceRefusal, match="different grids"):
-        parity.polar_options(arcs)
+    assert parity.polar_options(arcs) == expected
 
 
 def fields():
@@ -303,7 +302,7 @@ def test_same_full_observation_grid_negotiates_assembly_velocity_normalisation()
     assert "required_features" not in setup_a["geometry"]
     assert setup_b["geometry"]["required_features"] == [parity.assembly.ASSEMBLY_RECORD_FEATURE]
     assert setup_a["options"] == setup_b["options"]
-    assert setup_b["options"]["polar_config"]["angle_range"] == [-180, 180, 9]
+    assert setup_b["options"]["polar_config"]["angle_range"] == [-180, 180, 73]
 
 
 def test_triangle_budget_refuses_before_import_or_solver_submission(tmp_path, monkeypatch):
@@ -311,14 +310,16 @@ def test_triangle_budget_refuses_before_import_or_solver_submission(tmp_path, mo
     from server.jobs import models_api
     from server.mesh.file_import import mesh_text
 
-    design = DesignConfig.model_validate(parity.assembly.cases()["horn-woofer"])
+    config = parity.assembly.cases()["horn-woofer"]
+    config["assembly"]["woofers"][0]["ath"] = {"key": "B"}
+    design = DesignConfig.model_validate(config)
     mesh = FileMesh(np.array([[0., 0, 0], [1, 0, 0], [0, 1, 0]]), np.array([[0, 1, 2], [0, 2, 1]]), np.array([2, 1]), {})
     mesh_file = tmp_path / "solve.msh"
     mesh_file.write_text(mesh_text(mesh))
     cfg = tmp_path / "test.cfg"
     cfg.write_text("dummy")
     ref = {"cfg": cfg, "provenance": {}, "drives": [], "arcs": [], "raw_triangles": 2,
-           "boundary": mesh, "interface_triangles_omitted": 0, "boundary_integrity": {}}
+           "boundary": mesh, "interface_triangles_omitted": 0, "boundary_integrity": {}, "solving": {"domain_planes": []}}
     monkeypatch.setattr(parity, "read_reference", lambda *a: ref)
     monkeypatch.setattr("server.design.textcfg.parse", lambda *a: SimpleNamespace(design=design, migration_names=[]))
     monkeypatch.setattr(parity.assembly, "compile_case", lambda *a, **kw: {"mesh_store_path": str(mesh_file), "excitations": []})
@@ -334,8 +335,8 @@ def test_ready_dry_run_never_starts_solver(tmp_path, monkeypatch):
     monkeypatch.setattr(parity.assembly, "_solve", lambda *a, **kw: pytest.fail("dry run started a solve"))
     assert parity.main(["--out", str(tmp_path), "--phase1", str(tmp_path), "--cases", "test", "--dry-run"]) == 0
     summary = json.loads((tmp_path / "summary.json").read_text())
-    assert summary["status"] == "geometry-only" and len(summary["frequencies_hz"]) == 23
-    assert summary["frequencies_hz"][-1] == 16000
+    assert summary["status"] == "geometry-only" and len(summary["frequencies_hz"]) == 12
+    assert summary["frequencies_hz"][-1] == 8000 and summary["frequencies_hz"][0] == 200
 
 
 @pytest.mark.parametrize("case", ["../escape", "bad/name", ""])
@@ -343,3 +344,129 @@ def test_invalid_case_names_cannot_write_outside_output(tmp_path, case):
     with pytest.raises(SystemExit) as exc:
         parity.main(["--out", str(tmp_path), "--phase1", str(tmp_path), "--cases", case])
     assert exc.value.code == 2
+
+
+def test_coarse_cfg_changes_sampling_only_and_does_not_duplicate_lf_resolution():
+    cfg = '''OSSE = { L = 120 }
+Mesh.Quadrants = 1234
+Mesh.ThroatResolution = 6
+Mesh.MouthResolution = 15
+Mesh.Enclosure = {
+FrontResolution = 20,20,20,20
+BackResolution = 30,30,30,30
+LFSource.A = {
+Radius = 50
+DrivingWeight = -0.5
+Resolution = 10
+}
+LFSource.B = {
+Radius = 65
+Spacing = 35
+}
+}
+'''
+    modified = parity.coarse_cfg(cfg, 40)
+    assert cfg.count('Resolution = 40') == 0
+    assert modified.count('\nResolution = 40') == 2
+    assert 'Mesh.Quadrants = 14' in modified
+    for key in ('Mesh.ThroatResolution', 'Mesh.MouthResolution', 'Mesh.RearResolution',
+                'Mesh.InterfaceResolution', 'FrontResolution', 'BackResolution'):
+        assert f'{key} = 40' in modified
+    for geometry in ('L = 120', 'Radius = 50', 'Radius = 65', 'Spacing = 35', 'DrivingWeight = -0.5'):
+        assert geometry in modified
+
+
+def test_existing_weld_closes_duplicate_seam_without_adding_faces_or_filling_a_hole():
+    from server.mesh.file_import import file_mesh_integrity
+
+    points = np.array([[0., 0, 0], [10, 0, 0], [0, 10, 0], [0, 0, 10], [0, 0, 0]])
+    faces = np.array([[0, 2, 1], [4, 1, 3], [1, 2, 3], [2, 4, 3]])
+    original = FileMesh(points, faces, np.ones(4, int), {})
+    fixed, report = parity.weld_reference(original)
+    assert report['max_corner_displacement_mm'] == 0
+    assert len(fixed.triangles) == 4 and len(fixed.points) == 4
+    assert file_mesh_integrity(fixed, [])['open_edge_count'] == 0
+    assert original.triangles.tolist() == faces.tolist()
+    missing = FileMesh(points, faces[:-1], np.ones(3, int), {})
+    still_open, _ = parity.weld_reference(missing)
+    assert file_mesh_integrity(still_open, [])['open_edge_count'] == 3
+
+
+@pytest.mark.parametrize('weight', [0., -.499992, 1.])
+def test_harness_weights_override_omitted_product_default_and_zero_is_rigid(weight):
+    from server.design.schema import DesignConfig
+
+    dump = parity.assembly.cases()['horn-woofer']
+    woofer = dump['assembly']['woofers'][0]
+    woofer['ath'] = {'key': 'B'}
+    original = copy.deepcopy(dump)
+    effective = parity.match_ath_weights(dump, [
+        {'radiator': 'HF', 'weight': 1., 'delay_ms': 0.},
+        *([{'radiator': 'B', 'weight': weight, 'delay_ms': 0.}] if weight else []),
+    ])
+    validated = DesignConfig.model_validate(dump).root.assembly
+    assert effective == {'HF': 1., 'B': weight}
+    assert woofer['drive'] == ('rigid' if weight == 0 else 'prescribed')
+    member = next(m for g in validated.signal_groups for m in g.members if m.radiator_id == woofer['id'])
+    assert member.weight == abs(weight) and member.invert == (weight < 0)
+    assert original['assembly']['woofers'][0].get('drive', 'prescribed') == 'prescribed'
+
+
+def test_hausdorff_percentiles_and_defect_mask_report_where_the_max_is():
+    a = FileMesh(np.array([[-1., 0, 0], [-2, 0, 0], [-1, 1, 0]]), np.array([[0, 1, 2]]), np.array([7]), {7: 'LF cone'})
+    b = copy.deepcopy(a)
+    b.points[:, 2] = 3
+    result = parity.surface_hausdorff(a, b, [{'aperture_center_mm': [0, 0, 0], 'radius_mm': 5.}])
+    assert result['sampled_p95_mm'] == pytest.approx(3)
+    assert result['sampled_p99_mm'] == pytest.approx(3)
+    assert result['sampled_rms_mm'] == pytest.approx(3)
+    assert result['max_surface'] == 'LF cone' and len(result['max_location_mm']) == 3
+    assert result['a_to_b']['excluded_samples'] == 4
+    assert result['max_excluding_defect_region_mm'] == pytest.approx(3)
+
+
+def test_calibration_mode_runs_exactly_one_b_base_b_frequency(tmp_path, monkeypatch):
+    request = SimpleNamespace(geometry=SimpleNamespace(drive_channels=[SimpleNamespace(id='HF')]))
+    plan = {'requests': {'beat-cpu': {'request': request}}}
+
+    def prepare(name, phase1, data_dir, store, freqs, *args):
+        assert name == 'b-base' and freqs == [1000.]
+        return {'case': name, 'status': 'refused', 'issues': ['A unavailable'], 'wg_triangles': 5000}, {'B': plan}
+
+    async def solve(data_dir, report, engines, timeout):
+        assert report['cases'] == {'b-base/B': plan} and timeout <= 115
+        return {'b-base/B/beat-cpu': {'status': 'complete', 'findings': [], 'wall_seconds': 10.}}
+
+    monkeypatch.setattr(parity, 'prepare_case', prepare)
+    monkeypatch.setattr(parity.assembly, '_solve', solve)
+    assert parity.main(['--calibrate-only', '--out', str(tmp_path), '--phase1', str(tmp_path)]) == 0
+    calibration = json.loads((tmp_path / 'calibration.json').read_text())
+    assert json.loads((tmp_path / 'summary.json').read_text())['status'] == 'calibration-complete'
+    assert calibration['channels'] == 1 and calibration['seconds_per_frequency_per_channel'] == 10
+    entries = {'test': {'estimated_beat_cpu_time': {'A': parity._cpu_estimate(5000, 12, 2),
+                                                 'B': parity._cpu_estimate(5000, 12, 2)}}}
+    parity.calibrated_estimates(entries, calibration)
+    assert entries['test']['estimated_pair_minutes'] == 16
+    assert not entries['test']['broker_budget']['under_15_minutes']
+
+
+def test_b_lip_is_explicit_only_and_ath_arcs_are_unused():
+    assert 'b-lip' not in parity.DEFAULT_CASES
+    no_arcs = parity.parse_observation(OBSERVATION.replace('BasePlane=zx', 'BasePlane=xy'), read_arcs=False)
+    assert no_arcs['arcs'] == [] and no_arcs['weights'][1002]['weight'] == -.5
+
+
+def test_unavailable_calibration_cannot_be_reported_as_a_pass(tmp_path, monkeypatch):
+    plan = {'requests': {'beat-cpu': {'request': SimpleNamespace()}}}
+    monkeypatch.setattr(parity, 'prepare_case', lambda *a: (
+        {'case': 'b-base', 'status': 'ready', 'issues': [], 'wg_triangles': 5000}, {'B': plan}))
+
+    async def solve(*args):
+        return {'b-base/B/beat-cpu': {'status': 'not-applicable', 'reason': 'BEAT CPU needs preparing.', 'findings': []}}
+
+    monkeypatch.setattr(parity.assembly, '_solve', solve)
+    assert parity.main(['--calibrate-only', '--out', str(tmp_path), '--phase1', str(tmp_path)]) == 1
+    result = json.loads((tmp_path / 'summary.json').read_text())
+    assert result['status'] == 'incomplete' and result['calibration'] is None
+    assert not (tmp_path / 'calibration.json').exists()
+    assert 'CPU calibration unavailable' in result['cases']['b-base']['issues'][0]

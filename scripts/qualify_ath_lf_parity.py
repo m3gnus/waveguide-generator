@@ -1,10 +1,11 @@
-"""Measure ATH LF import parity: one BEAT CPU solver, two unmodified geometries.
+"""Measure ATH LF import parity with one BEAT CPU solver and common sampling.
 
 Run --dry-run first. Solves belong on the compute broker, run by its owner.
 The external phase-1 corpus is discovered in a workspace ancestor, or supplied
 with --phase1. All generated records and evidence live below --out. No ATH
-geometry is repaired: ABEC's virtual subdomain interfaces are omitted from the
-exterior BEM boundary, and only its declared symmetry planes are used.
+corpus files are modified. Regenerated quadrant-14 references complete ATH's
+declared X symmetry, omit ABEC's virtual interfaces, and reuse WG's imported
+mesh weld for coincident seams. No missing surface is filled or reconstructed.
 """
 
 from __future__ import annotations
@@ -14,10 +15,14 @@ import asyncio
 import configparser
 import copy
 import hashlib
+import importlib.util
 import json
 import math
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 import time
 from typing import Any, Mapping, Sequence
@@ -30,14 +35,14 @@ if str(ROOT) not in sys.path:
 
 from scripts import qualify_assembly as assembly  # noqa: E402
 
-DEFAULT_CASES = ("b-base", "a-explicit", "b-pair", "mtm-q14", "b-morph", "b-lip")
-DEFAULT_FREQS = (100., 125., 160., 200., 250., 315., 400., 500., 630., 800., 1000.,
-                 1250., 1600., 2000., 2500., 3150., 4000., 5000., 6300., 8000., 10000., 12500., 16000.)
+DEFAULT_CASES = ("b-base", "a-explicit", "b-pair", "mtm-q14", "b-morph")
+DEFAULT_FREQS = tuple(float(f) for f in np.geomspace(200, 8000, 12))
 BANDS = (("below_1k", 0, 1000), ("1k_5k", 1000, 5000),
          ("5k_10k", 5000, 10000), ("10k_20k", 10000, 20000.0001))
 NORMALISATION = {
     "basis": "unit RMS acceleration, solver exp(-jwt); A unchanged, B divided by -j*2*pi*f",
     "weights": "ABEC Driving_Values Value * Weight and Delay; no crossover, gain matching or time alignment",
+    "wg_override": "Harness only: WG member weights use ATH effective weights; omitted ATH DrivingWeight is 0 (rigid). Product importer unchanged.",
     "groups": "HF and all LF radiators separately; combined is their coherent equal-weight sum after ATH weights",
     "secondary": "one real gain per geometry and signal group, aligning lowest-frequency on-axis to 0 dB; no phase alignment",
     "di": "full sphere, 19 theta x 36 phi; same throat origin and distance as the polar arcs",
@@ -141,7 +146,7 @@ def parse_solving(text: str) -> dict[str, Any]:
     return {"elements": elements, "drives": drives, "units": scales, "domain_planes": symmetry}
 
 
-def parse_observation(text: str) -> dict[str, Any]:
+def parse_observation(text: str, *, read_arcs: bool = True) -> dict[str, Any]:
     """Read acceleration weights and exact ATH polar grids (third value = count)."""
     from server.design.solve_block import _classify_inclination, _parse_range
 
@@ -164,7 +169,7 @@ def parse_observation(text: str) -> dict[str, Any]:
                     raise EvidenceRefusal("ABEC repeats excitation values. Supply one value per driving group.")
                 weights[group] = {"weight": value * _finite(row.get("weight", "1")),
                                   "delay_ms": _finite(delay[1]) * (1000 if delay[2] == "s" else 1)}
-        elif kind == "BE_Spectrum" and values.get("plottype", "").lower() == "polar":
+        elif read_arcs and kind == "BE_Spectrum" and values.get("plottype", "").lower() == "polar":
             if values.get("baseplane", "").lower() != "zx":
                 raise EvidenceRefusal("Unsupported ABEC polar base plane. Supply BasePlane=zx.")
             raw = values.get("polarrange", "")
@@ -187,18 +192,9 @@ def parse_observation(text: str) -> dict[str, Any]:
     return {"weights": weights, "arcs": arcs}
 
 
-def polar_options(arcs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    if not arcs:
-        raise EvidenceRefusal("ATH supplied no polar arcs. Add explicit ABEC.Polars to a new reference case; keep this reference intact.")
-    first = arcs[0]
-    if any(a["angle_range"] != first["angle_range"] or a["distance_m"] != first["distance_m"] for a in arcs):
-        raise EvidenceRefusal("ATH arcs use different grids or distances. Qualify each observation grid separately.")
-    start, end, count = first["angle_range"]
-    if not start <= 0 <= end or start > 0 or end < 90:
-        raise EvidenceRefusal("ATH arcs do not cover 0–90 degrees. Supply a reference covering that range.")
-    # The vertical companion is an explicitly reported measurement extension
-    # when ATH supplied only a horizontal arc. Both geometries get this grid.
-    return {"angle_range": [start, end, count], "distance": first["distance_m"], "norm_angle": 0,
+def polar_options(arcs: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+    """Harness observation, independent of ATH's optional source-selective arcs."""
+    return {"angle_range": [0, 90, 19], "distance": 2., "norm_angle": 0,
             "observation_origin": "throat", "enabled_axes": ["horizontal", "vertical"],
             "spherical_sampling": True, "spherical_theta_count": 19, "spherical_phi_count": 36,
             "field_plane": False}
@@ -220,12 +216,173 @@ def locate_case(phase1: Path, name: str) -> tuple[Path, Path]:
     return cfg, project
 
 
+def coarse_cfg(text: str, resolution: float) -> str:
+    """Change only the copied reference's sampling and declared X symmetry.
+
+    Quadrant 14 avoids ATH's q1234 missing negative-X LF half. Geometry
+    parameters and excitation stay intact; the original corpus is read-only.
+    WG consumes this very same config through its existing importer.
+    """
+    text, count = re.subn(r'(?m)^Mesh\.Quadrants\s*=.*$', 'Mesh.Quadrants = 14', text)
+    if count != 1:
+        raise EvidenceRefusal("Reference needs one Mesh.Quadrants setting. Supply the phase-1 fixture.")
+    for key in ("Mesh.ThroatResolution", "Mesh.MouthResolution", "Mesh.RearResolution", "Mesh.InterfaceResolution",
+                "FrontResolution", "BackResolution", "Resolution"):
+        pattern = rf'(?m)^{re.escape(key)}\s*=.*$'
+        text = re.sub(pattern, f'{key} = {resolution:g}', text)
+    # The corpus LF blocks contain scalar values only. Insert an absent
+    # resolution without interpreting geometry; import remains textcfg's job.
+    text = re.sub(r'(LFSource\.[AB]\s*=\s*\{)(?![^}]*\bResolution\s*=)',
+                  rf'\1\nResolution = {resolution:g}', text)
+    for key in ("Mesh.RearResolution", "Mesh.InterfaceResolution"):
+        if not re.search(rf'(?m)^{re.escape(key)}\s*=', text):
+            text += f'\n{key} = {resolution:g}\n'
+    return text
+
+
+def regenerate_reference(phase1: Path, name: str, out: Path, resolution: float) -> Path:
+    """Run ATH and phase-1's measurement owner, confined to evidence storage."""
+    cfg, _ = locate_case(phase1, name)
+    copied = coarse_cfg(cfg.read_text(), resolution)
+    generated = out / "references"
+    folder = generated / "ath-runs" / name
+    folder.mkdir(parents=True, exist_ok=True)
+    executable = phase1.parents[1] / "261011-ath-core" / "ath" / "ath202608.exe"
+    wine = Path.home() / "Applications/Wine Staging.app/Contents/Resources/wine/bin/wine"
+    if not executable.is_file() or not wine.is_file():
+        raise EvidenceRefusal("ATH/Wine is unavailable. Restore the phase-1 ATH executable and Wine Staging before regenerating references.")
+    fingerprint = {"cfg_sha256": hashlib.sha256(copied.encode()).hexdigest(), "ath_sha256": _sha(executable)}
+    marker = folder / "generation.json"
+    if marker.is_file() and json.loads(marker.read_text()) == fingerprint and (folder / "measured.json").is_file():
+        return generated
+    prefix = out / "wine-prefix"
+    if not prefix.exists():
+        shutil.copytree(Path.home() / ".wine", prefix, symlinks=True)
+    shutil.copy2(executable, folder / executable.name)
+    (folder / f"{name}.cfg").write_text(copied)
+    output_root = folder / "out"
+    output_root.mkdir(exist_ok=True)
+    (folder / "ath.cfg").write_text('OutputRootDir = "Z:' + str(output_root).replace('/', '\\') + '"\n')
+    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDLLOVERRIDES="mscoree=d;mshtml=d", WINEDEBUG="-all")
+    try:
+        with (folder / "ath.log").open("w") as log:
+            subprocess.run([str(wine), executable.name, f"{name}.cfg"], cwd=folder, env=env,
+                           stdout=log, stderr=subprocess.STDOUT, timeout=100, check=True)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        detail = (folder / "ath.log").read_text(errors="replace").strip()
+        raise EvidenceRefusal(f"ATH regeneration failed: {detail}. Regenerate the copied cfg where Wine can run, then rerun the harness.") from exc
+    # This owner runs Gmsh on the unmodified ATH GEO and measures its circles.
+    spec = importlib.util.spec_from_file_location("phase1_measure", phase1 / "ath-tools" / "measure.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.ROOT = generated
+    previous = Path.cwd()
+    try:
+        module.measure(name)
+    finally:
+        os.chdir(previous)
+    marker.write_text(json.dumps(fingerprint, indent=2) + "\n")
+    return generated
+
+
+def weld_reference(mesh: Any) -> tuple[Any, dict[str, Any]]:
+    """Reuse the imported-mesh repair owner; never fill missing surfaces."""
+    import meshio
+    from hornlab_mesher.mesh_repair_ops import WELD_TOLERANCE_MM
+    from hornlab_mesher.step_import import postprocess_mesh
+    from server.mesh.file_import import FileMesh
+
+    raw = meshio.Mesh(mesh.points, [("triangle", mesh.triangles)], cell_data={"gmsh:physical": [mesh.tags]})
+    processed, repair, _topology = postprocess_mesh(raw, [], symmetry_planes=(), tolerance=.005)
+    points = processed.points
+    faces = processed.cells_dict["triangle"]
+    if len(faces) != len(mesh.triangles):
+        raise EvidenceRefusal("The imported-mesh repair removed facets. Inspect the ATH reference before admitting it for parity.")
+    before = mesh.points[mesh.triangles]
+    after = points[faces]
+    # Winding may reverse a triangle. Match its corners without interpreting
+    # that reordering as geometric movement; repair retains face row order.
+    displacement = float(np.linalg.norm(after[:, :, None] - before[:, None, :], axis=3).min(axis=2).max())
+    welded_vertices = repair["welded_vertices"]
+    return FileMesh(points, faces, mesh.tags, mesh.names), {
+        "owner": "hornlab_mesher.step_import.postprocess_mesh (WG mesh-import repair)",
+        "tolerance_mm": WELD_TOLERANCE_MM, "removed_vertices": len(mesh.points) - len(points),
+        "welded_vertices": welded_vertices,
+        "unused_vertices_removed": len(mesh.points) - len(points) - welded_vertices,
+        "max_corner_displacement_mm": displacement, "triangles_added_or_removed": 0,
+        "repair": repair,
+    }
+
+
+def edge_figure(folder: Path, reference: Mapping[str, Any], after: Any) -> dict[str, Any]:
+    """Locate every open edge in mm, with shared topology and classic styling."""
+    from server.mesh.surface_topology import surface_patches
+    import hornlab_plots as plots
+    from hornlab_plots.style import theme_rc_context
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import LineCollection
+
+    before = reference["boundary"]
+    planes = reference["solving"]["domain_planes"]
+    woofers = reference["measurement"]["woofers"]
+    edges = surface_patches(before.triangles).rim_edges
+    corners = before.points[edges]
+    mids = corners.mean(1)
+    labels = np.full(len(edges), "horn quadrant seam", dtype=object)
+    for woofer in woofers:
+        center = np.asarray(woofer["aperture_center_mm"])
+        radius = woofer["radius_mm"]
+        nearby = np.linalg.norm(mids[:, :2] - center[:2], axis=1) <= radius + 1e-3
+        labels[nearby] = "LF half-diaphragm / aperture"
+        baffle_seam = (np.abs(mids[:, 0]) < 1e-6) & (np.abs(mids[:, 2] - center[2]) < 1e-6) & ~nearby
+        labels[baffle_seam] = "baffle quadrant seam"
+    for plane in planes:
+        on_plane = (np.abs(corners[:, :, {"x0": 0, "y0": 1}[plane]]) < .005).all(1)
+        labels[on_plane] = "declared symmetry rim"
+    detail = {}
+    colors = plots.get_theme("classic").palette
+    groups = sorted(set(labels))
+    with theme_rc_context("classic"):
+        fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+        try:
+            for row, mesh in enumerate((before, after)):
+                opened = surface_patches(mesh.triangles).rim_edges
+                for col, (i, j) in enumerate(((0, 1), (0, 2), (1, 2))):
+                    ax = axes[row, col]
+                    facets = mesh.points[mesh.triangles]
+                    wire = facets[:, [0, 1, 2, 0]][:, :, [i, j]]
+                    ax.add_collection(LineCollection(wire, colors="0.8", linewidths=.2))
+                    if row == 0:
+                        for index, label in enumerate(groups):
+                            selected = labels == label
+                            ax.add_collection(LineCollection(corners[selected][:, :, [i, j]], colors=colors[index % len(colors)],
+                                                             linewidths=1.4, label=f"{label} ({selected.sum()})"))
+                    elif len(opened):
+                        ax.add_collection(LineCollection(mesh.points[opened][:, :, [i, j]], colors=colors[0], linewidths=1.4))
+                    ax.autoscale()
+                    ax.set_aspect("equal")
+                    ax.set_xlabel("XYZ"[i] + " [mm]")
+                    ax.set_ylabel("XYZ"[j] + " [mm]")
+                    ax.set_title(f"{'Retained ATH' if row == 0 else 'Prepared ATH'}: {len(opened)} open edges")
+            axes[0, 0].legend(fontsize=7)
+            fig.suptitle(folder.name + " — ATH boundary after omission of virtual I1-2 interface")
+            fig.tight_layout()
+            fig.savefig(folder / "ath-open-edges.png", dpi=160)
+        finally:
+            plt.close(fig)
+    for label in groups:
+        selected = corners[labels == label]
+        detail[label] = {"edges": len(selected), "bounds_mm": [selected.min(axis=(0, 1)).tolist(), selected.max(axis=(0, 1)).tolist()]}
+    return {"figure": "ath-open-edges.png", "before": detail,
+            "after_open_edges": len(surface_patches(after.triangles).rim_edges)}
+
+
 def read_reference(phase1: Path, name: str) -> dict[str, Any]:
     cfg, project_path = locate_case(phase1, name)
     project = parse_project(project_path.read_text())
     parent = project_path.parent
     solving = parse_solving((parent / project["solving"]).read_text())
-    obs = [parse_observation((parent / p).read_text()) for p in project["observations"]]
+    obs = [parse_observation((parent / p).read_text(), read_arcs=False) for p in project["observations"]]
     weights: dict[int, Any] = {}
     arcs = []
     for item in obs:
@@ -321,7 +478,7 @@ def _triangle_distances(point: np.ndarray, facets: np.ndarray) -> np.ndarray:
     return np.where(inside & (n2 > 0), plane_distance, edge_distance)
 
 
-def surface_hausdorff(a: Any, b: Any) -> dict[str, Any]:
+def surface_hausdorff(a: Any, b: Any, defect_woofers: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """Deterministic sampled lower bound and certified Lipschitz upper bound.
 
     Every used vertex and triangle centroid is tested against the other
@@ -330,7 +487,7 @@ def surface_hausdorff(a: Any, b: Any) -> dict[str, Any]:
     """
     from scipy.spatial import cKDTree
 
-    def directed(source: Any, target: Any) -> dict[str, float]:
+    def directed(source: Any, target: Any) -> tuple[dict[str, Any], np.ndarray]:
         facets = target.points[target.triangles]
         centers = facets.mean(1)
         radii = np.linalg.norm(facets - centers[:, None], axis=2).max(1)
@@ -350,12 +507,36 @@ def surface_hausdorff(a: Any, b: Any) -> dict[str, Any]:
             distances.extend(np.minimum.reduceat(values, offsets).tolist())
         centroid_distances = np.asarray(distances[-len(src_centers):])
         upper = np.max(centroid_distances + np.linalg.norm(src_facets - src_centers[:, None], axis=2).max(1))
-        return {"sampled_max_mm": max(distances), "sampled_rms_mm": float(np.sqrt(np.mean(np.square(distances)))),
-                "upper_bound_mm": float(upper), "samples": len(samples)}
+        values = np.asarray(distances)
+        excluded = np.zeros(len(samples), dtype=bool)
+        for woofer in defect_woofers:
+            center = np.asarray(woofer["aperture_center_mm"])
+            radius = woofer["radius_mm"]
+            excluded |= ((samples[:, 0] <= 1e-3) & (np.linalg.norm(samples[:, :2] - center[:2], axis=1) <= radius + 1e-3)
+                         & (samples[:, 2] <= center[2] + 1e-6) & (samples[:, 2] >= center[2] - radius * .5))
+        index = int(values.argmax())
+        retained = np.flatnonzero(~excluded)
+        kept_max = int(retained[values[retained].argmax()]) if len(retained) else None
+        used = np.unique(source.triangles)
+        tag = int(source.tags[np.flatnonzero((source.triangles == used[index]).any(1))[0]]) if index < len(used) else int(source.tags[index - len(used)])
+        return {"sampled_max_mm": float(values[index]), "sampled_p95_mm": float(np.percentile(values, 95)),
+                "sampled_p99_mm": float(np.percentile(values, 99)), "sampled_rms_mm": float(np.sqrt(np.mean(values**2))),
+                "max_location_mm": samples[index].tolist(), "max_surface": source.names.get(tag, str(tag)),
+                "max_excluding_defect_region_mm": float(values[kept_max]) if kept_max is not None else None,
+                "max_excluding_defect_location_mm": samples[kept_max].tolist() if kept_max is not None else None,
+                "excluded_samples": int(excluded.sum()), "upper_bound_mm": float(upper), "samples": len(samples)}, values
 
-    ab, ba = directed(a, b), directed(b, a)
+    (ab, ab_values), (ba, ba_values) = directed(a, b), directed(b, a)
+    values = np.concatenate([ab_values, ba_values])
+    worst = ab if ab["sampled_max_mm"] >= ba["sampled_max_mm"] else ba
     return {"method": "all used vertices + facet centroids to exact target triangles; Lipschitz whole-facet upper bound",
             "a_to_b": ab, "b_to_a": ba, "lower_bound_mm": max(ab["sampled_max_mm"], ba["sampled_max_mm"]),
+            "sampled_p95_mm": float(np.percentile(values, 95)), "sampled_p99_mm": float(np.percentile(values, 99)),
+            "sampled_rms_mm": float(np.sqrt(np.mean(values**2))), "max_location_mm": worst["max_location_mm"],
+            "max_surface": worst["max_surface"], "max_direction": "A to B" if worst is ab else "B to A",
+            "max_excluding_defect_region_mm": max(v["max_excluding_defect_region_mm"] for v in (ab, ba)
+                                                  if v["max_excluding_defect_region_mm"] is not None),
+            "defect_exclusion": "sample points in negative-X LF aperture footprints including x=0 cut (0.001 mm slack), baffle z - 0.5r through baffle z; target surfaces unchanged",
             "upper_bound_mm": max(ab["upper_bound_mm"], ba["upper_bound_mm"])}
 
 
@@ -386,7 +567,8 @@ def geometry_parity(reference: Mapping[str, Any], record: Mapping[str, Any], wg_
     return {"measurement_owner": "phase1/ath-tools/measure.py (retained measured.json/expected.json)",
             "woofers": woofers, "enclosure_bounds_a_mm": a_bounds.tolist(), "enclosure_bounds_b_mm": b_bounds.tolist(),
             "enclosure_dimensions_delta_mm": (np.ptp(b_bounds, axis=0) - np.ptp(a_bounds, axis=0)).tolist(),
-            "enclosure_bounds_delta_mm": (b_bounds - a_bounds).tolist(), "surface_hausdorff": surface_hausdorff(ath_mesh, wg_mm)}
+            "enclosure_bounds_delta_mm": (b_bounds - a_bounds).tolist(),
+            "surface_hausdorff": surface_hausdorff(ath_mesh, wg_mm, reference["measurement"]["woofers"])}
 
 
 def metric_differences(freqs: Sequence[float], angles: Sequence[float], a: np.ndarray, b: np.ndarray,
@@ -448,12 +630,12 @@ def metric_differences(freqs: Sequence[float], angles: Sequence[float], a: np.nd
 def _make_setup(record: Mapping[str, Any], channels: list[dict[str, Any]], freqs: Sequence[float],
                 polar: Mapping[str, Any]) -> dict[str, Any]:
     # Prepared imports require full polar coverage. Solve a common full circle
-    # and select the exact ATH nodes afterwards, without interpolation.
+    # and select the harness nodes afterwards, without interpolation.
     start, end, count = polar["angle_range"]
     step = (end - start) / (count - 1)
     intervals = 360 / step
     if not math.isclose(intervals, round(intervals), abs_tol=1e-8):
-        raise EvidenceRefusal("ATH angular step does not divide a full circle. Supply a compatible reference grid.")
+        raise EvidenceRefusal("Observation step does not divide a full circle. Choose a compatible harness grid.")
     effective = {**polar, "angle_range": [-180, 180, int(round(intervals)) + 1],
                  "enabled_axes": ["horizontal", "vertical", "diagonal"]}
     geometry = {"drive_channels": channels}
@@ -464,21 +646,32 @@ def _make_setup(record: Mapping[str, Any], channels: list[dict[str, Any]], freqs
 
 
 def _cpu_estimate(count: int, frequencies: int, channels: int) -> dict[str, Any]:
-    # Planning range only: no CPU calibration exists for these geometries.
-    # Keep assumptions explicit instead of labelling the mesher's Metal time
-    # calibration as a BEAT CPU measurement.
-    seconds = frequencies * channels * (count / 1000) ** 2.5
-    return {"lower_minutes": round((30 + seconds) / 60, 2), "upper_minutes": round((120 + 10 * seconds) / 60, 2),
-            "kind": "uncalibrated BEAT CPU planning range, not a benchmark",
-            "assumption": "30–120 s startup plus 1–10 s per frequency/channel at 1000 triangles, N^2.5 scaling",
+    return {"kind": "awaiting b-base/B CPU calibration", "triangles": count,
             "frequencies": frequencies, "channels": channels}
 
 
+def calibrated_estimates(results: Mapping[str, Any], calibration: Mapping[str, Any]) -> None:
+    """Conservative serial A+B estimate; expose scaling and contention margin."""
+    for entry in results.values():
+        estimates = entry.get("estimated_beat_cpu_time", {})
+        for estimate in estimates.values():
+            seconds = (calibration["seconds_per_frequency_per_channel"] * estimate["frequencies"]
+                       * estimate["channels"] * (estimate["triangles"] / calibration["triangles"]) ** 2.5)
+            estimate.update(kind="scaled from one b-base/B CPU frequency, including its startup",
+                            minutes=round(seconds / 60, 2), contention_minutes=round(2 * seconds / 60, 2))
+        if set(estimates) == {"A", "B"}:
+            minutes = sum(item["contention_minutes"] for item in estimates.values())
+            entry["estimated_pair_minutes"] = round(minutes, 2)
+            entry["broker_budget"] = {"under_15_minutes": minutes < 15,
+                                      "assumption": "serial A+B, N^2.5, linear frequencies/channels, 2x shared-CPU margin; estimate only"}
+
+
 def prepare_case(name: str, phase1: Path, data_dir: Path, store: Any, freqs: Sequence[float],
-                 maximum: int, revision: int) -> tuple[dict[str, Any], dict[str, Any]]:
+                 maximum: int, revision: int, resolution: float | None = None,
+                 out: Path | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     from server.design.textcfg import parse
     from server.jobs.models_api import MeshRegistration, register_mesh
-    from server.mesh.file_import import mesh_text, parse_file_mesh
+    from server.mesh.file_import import FileMesh, file_mesh_integrity, mesh_text, parse_file_mesh
 
     reference = read_reference(phase1, name)
     result: dict[str, Any] = {"case": name, "status": "geometry-only", "issues": [], "provenance": reference["provenance"],
@@ -492,22 +685,57 @@ def prepare_case(name: str, phase1: Path, data_dir: Path, store: Any, freqs: Seq
     try:
         parsed = parse(reference["cfg"].read_text())
     except ValueError as exc:
-        result.update(status="refused", issues=[f"WG config import refused: {exc}. Choose a supported reference case; keep this input intact."])
+        result.update(status="not-importable", issues=[f"WG config import refused: {exc}"])
         return result, {}
+    original = reference
+    regeneration_failed = False
+    if resolution is not None:
+        if out is None:
+            raise ValueError("regeneration requires an evidence output directory")
+        try:
+            generated = regenerate_reference(phase1, name, out, resolution)
+            reference = read_reference(generated, name)
+            result["regenerated_provenance"] = reference["provenance"]
+        except EvidenceRefusal as exc:
+            # Continue B's independent mesh/calibration, but never admit a
+            # mixed-resolution or defective A+B comparison as ready.
+            result["issues"].append(str(exc))
+            regeneration_failed = True
+        copied = coarse_cfg(original["cfg"].read_text(), resolution)
+        folder = out / name
+        folder.mkdir(exist_ok=True)
+        (folder / "harness.cfg").write_text(copied)
+        parsed = parse(copied)
+        result["resolution_mm"] = resolution
+    result["ath_original_boundary_integrity"] = original["boundary_integrity"]
+    full = _full_mesh(reference["boundary"], reference["solving"]["domain_planes"])
+    full, weld = weld_reference(full)
+    reference = {**reference, "boundary": full, "solving": {**reference["solving"], "domain_planes": []}}
+    result["ath_weld"] = weld
+    result["ath_boundary_triangles"] = len(full.triangles)
+    result["ath_boundary_integrity"] = file_mesh_integrity(FileMesh(full.points * .001, full.triangles, full.tags, full.names), [])
+    result["ath_reference_regenerated"] = resolution is not None and not regeneration_failed
+    if out is not None:
+        folder = out / name
+        folder.mkdir(exist_ok=True)
+        result["open_edges"] = edge_figure(folder, original, full)
     dump = parsed.design.model_dump(mode="json")
-    result["imported_signal_groups"] = dump["assembly"]["signal_groups"]
+    result["product_imported_signal_groups"] = copy.deepcopy(dump["assembly"]["signal_groups"])
+    result["effective_weights"] = match_ath_weights(dump, reference["drives"])
+    result["parity_signal_groups"] = dump["assembly"]["signal_groups"]
     result["import_notes"] = parsed.migration_names
     # Mesh B even if A is invalid: geometric differences remain useful evidence.
     record_b = assembly.compile_case(store, data_dir, dump, revision=revision)
     mesh_b = parse_file_mesh(assembly.compiled_mesh_text(record_b))
     result["wg_triangles"] = len(mesh_b.triangles)
+    result["wg_boundary_integrity"] = file_mesh_integrity(mesh_b, [])
     result["wg_mesh_sha256"] = _sha(Path(record_b["mesh_store_path"]))
     result["wg_mesher_identity"] = record_b.get("mesh", {}).get("metadata", {}).get("mesher_identity")
     measurement_record = {**record_b, "_qualification_woofers": dump["assembly"]["woofers"]}
     result["geometry"] = geometry_parity(reference, measurement_record, mesh_b)
     result["estimated_beat_cpu_time"] = {"A": _cpu_estimate(len(reference["boundary"].triangles), len(freqs), len(reference["drives"])),
-                                          "B": _cpu_estimate(len(mesh_b.triangles), len(freqs), len(record_b["excitations"]))}
-    if max(reference["raw_triangles"], len(mesh_b.triangles)) > maximum:
+                                          "B": _cpu_estimate(len(mesh_b.triangles), len(freqs), len(reference["drives"]))}
+    if max(0 if regeneration_failed else len(full.triangles), len(mesh_b.triangles)) > maximum:
         result["issues"].append(f"Triangle budget {maximum} exceeded. Increase --max-triangles deliberately or choose a smaller reference.")
         result["status"] = "refused"
         return result, {}
@@ -533,26 +761,45 @@ def prepare_case(name: str, phase1: Path, data_dir: Path, store: Any, freqs: Seq
     by_key = {w["ath"]["key"]: w["id"] for w in dump["assembly"]["woofers"]}
     b_ids = {"HF": assembly.HF_RADIATOR_ID, **by_key}
     plans = {}
-    if record_a is not None and polar is not None:
+    if polar is not None:
+        active_ids = {b_ids[d["radiator"]] for d in reference["drives"] if d["weight"] != 0}
         for variant, record in (("A", record_a), ("B", record_b)):
+            if record is None:
+                continue
             if variant == "A":
                 channels = [{"id": d["radiator"], "source_ids": [f"group_{d['tag']}"], "motion": d["motion"]}
-                            for d in reference["drives"]]
+                            for d in reference["drives"] if d["weight"] != 0]
             else:
                 channels = [{"id": e["id"], "source_ids": e["source_ids"], "motion": e["motion"]}
-                            for e in record["excitations"]]
+                            for e in record["excitations"] if e["id"] in active_ids]
             setup = _make_setup(record, channels, freqs, polar)
             request = assembly.compose(record, setup, client_request_id=f"ath-parity-{name}-{variant}")
             plans[variant] = {"requests": {"beat-cpu": {"request": request, "notice": None, "transducer_channels": []}},
                               "radiator_ids": {d["radiator"]: d["radiator"] if variant == "A" else b_ids[d["radiator"]]
                                                for d in reference["drives"]}, "drives": reference["drives"],
                               "variant": variant, "polar": polar}
-        result["observations"]["effective_polar"] = plans["A"]["requests"]["beat-cpu"]["request"].options.polar_config.model_dump(mode="json")
-        result["observations"]["coverage_note"] = "The imported pipeline requires full-circle polar coverage. Both geometries solve that common superset; metrics select exact ATH arc nodes."
-        result["status"] = "ready"
+        result["observations"]["effective_polar"] = plans["B"]["requests"]["beat-cpu"]["request"].options.polar_config.model_dump(mode="json")
+        result["observations"]["coverage_note"] = "Both geometries use the pipeline's common full-circle superset; metrics select 0–90 degrees every 5 degrees, 2 m from the throat. ATH arcs are metadata only."
+        result["status"] = "ready" if record_a is not None and not regeneration_failed else "refused"
     else:
         result["status"] = "refused"
     return result, plans
+
+
+def match_ath_weights(dump: dict[str, Any], drives: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    """Qualification override only; zero channels are omitted so they stay rigid."""
+    by_key = {w["ath"]["key"]: w["id"] for w in dump["assembly"]["woofers"]}
+    ids = {"HF": assembly.HF_RADIATOR_ID, **by_key}
+    effective = {key: next((float(d["weight"]) for d in drives if d["radiator"] == key), 0.) for key in ids}
+    by_id = {ids[key]: value for key, value in effective.items()}
+    delays = {ids[d["radiator"]]: d["delay_ms"] for d in drives}
+    for woofer in dump["assembly"]["woofers"]:
+        woofer["drive"] = "rigid" if by_id[woofer["id"]] == 0 else "prescribed"
+    for group in dump["assembly"]["signal_groups"]:
+        for member in group["members"]:
+            weight = by_id[member["radiator_id"]]
+            member.update(weight=abs(weight), invert=weight < 0, delay_ms=delays.get(member["radiator_id"], 0.))
+    return effective
 
 
 def grouped_bases(payload: bytes, plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -708,14 +955,22 @@ def _phase1_default() -> Path | None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--cases", nargs="+", default=list(DEFAULT_CASES), help="case names, space or comma separated")
-    parser.add_argument("--freqs", nargs="+", help="Hz, space or comma separated; default 23 nominal third-octave points, 100–16000 Hz")
+    parser.add_argument("--freqs", nargs="+", help="Hz, space or comma separated; default 12 log-spaced points, 200–8000 Hz")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--engine", choices=["beat-cpu"], default="beat-cpu")
-    parser.add_argument("--max-triangles", type=int, default=20000)
+    parser.add_argument("--max-triangles", type=int, default=6500)
+    parser.add_argument("--resolution-mm", type=float, default=40., help="same copied-cfg horn, enclosure and LF characteristic length for A and B; existing mesher chord-error floors still apply")
+    parser.add_argument("--retained-reference", action="store_true", help="diagnose retained meshes without ATH regeneration; never a coarse parity solve")
+    parser.add_argument("--calibrate-only", action="store_true", help="exactly one b-base/B CPU solve at 1000 Hz, at most 115 seconds")
+    parser.add_argument("--calibration", type=Path, help="previous calibration.json used for dry-run planning")
     parser.add_argument("--dry-run", action="store_true", help="import and mesh only; never discover or start a solver")
     parser.add_argument("--phase1", type=Path, default=_phase1_default(), help="external phase-1 evidence directory")
     parser.add_argument("--timeout", type=float, default=3600, help="per-geometry solve timeout in seconds")
     args = parser.parse_args(argv)
+    if args.calibrate_only:
+        if args.dry_run:
+            parser.error("--calibrate-only cannot be combined with --dry-run")
+        args.cases, args.freqs, args.timeout = ["b-base"], ["1000"], min(args.timeout, 115.)
     cases = [part for value in args.cases for part in value.split(",")]
     try:
         freqs = [_finite(part) for value in args.freqs for part in value.split(",")] if args.freqs else list(DEFAULT_FREQS)
@@ -725,6 +980,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--freqs must be positive, finite, strictly increasing Hz")
     if args.max_triangles < 1 or args.timeout <= 0 or not math.isfinite(args.timeout):
         parser.error("--max-triangles and --timeout must be positive")
+    if args.resolution_mm <= 0 or not math.isfinite(args.resolution_mm):
+        parser.error("--resolution-mm must be positive and finite")
+    if args.retained_reference and not args.dry_run:
+        parser.error("--retained-reference requires --dry-run")
     if args.phase1 is None:
         parser.error("phase-1 evidence not found; supply --phase1")
     if any(not re.fullmatch(r'[a-zA-Z0-9_-]+', name) for name in cases):
@@ -758,7 +1017,8 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
             print(f"{name}: importing and compiling", flush=True)
             started = time.monotonic()
             try:
-                entry, plan = prepare_case(name, args.phase1, data_dir, store, freqs, args.max_triangles, revision)
+                entry, plan = prepare_case(name, args.phase1, data_dir, store, freqs, args.max_triangles, revision,
+                                           None if args.retained_reference else args.resolution_mm, out)
             except (EvidenceRefusal, ValueError, OSError) as exc:
                 entry, plan = {"case": name, "status": "refused", "issues": [str(exc)]}, {}
             entry["geometry_wall_seconds"] = round(time.monotonic() - started, 2)
@@ -771,10 +1031,38 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
             print(f"{name}: {entry['status']}; A={entry.get('ath_boundary_triangles', '?')} B={entry.get('wg_triangles', '?')} triangles", flush=True)
     finally:
         store.close()
-    if not args.dry_run:
+    calibration = json.loads(args.calibration.read_text()) if args.calibration else None
+    calibration_success = False
+    if args.calibrate_only:
+        calibration = None
+        if "b-base/B" not in plans:
+            results["b-base"]["issues"].append("B calibration could not be prepared; no solve started.")
+        else:
+            selected = {"b-base/B": plans["b-base/B"]}
+            solved = asyncio.run(assembly._solve(data_dir, {"cases": selected}, [args.engine], args.timeout))
+            outcome = solved["b-base/B/beat-cpu"]
+            results["b-base"]["calibration_solve"] = outcome
+            if outcome["status"] == "complete" and not outcome["findings"]:
+                channels = len(selected["b-base/B"]["requests"]["beat-cpu"]["request"].geometry.drive_channels)
+                calibration = {"case": "b-base/B", "engine": "beat-cpu", "frequency_hz": 1000.,
+                               "channels": channels, "triangles": results["b-base"]["wg_triangles"],
+                               "wall_seconds": outcome["wall_seconds"],
+                               "seconds_per_frequency_per_channel": outcome["wall_seconds"] / channels,
+                               "resolution_mm": args.resolution_mm}
+                _write_json(out / "calibration.json", calibration)
+                calibration_success = True
+            else:
+                reason = outcome.get("reason") or "; ".join(outcome["findings"]) or outcome["status"]
+                results["b-base"]["issues"].append(f"CPU calibration unavailable: {reason}. Prepare the matching BEAT CPU runtime before retrying; no calibration value was invented.")
+    elif not args.dry_run:
         # Refuse the whole batch before the first solve when any reference is
         # invalid or over budget. The coordinator can select the ready subset.
         if all(entry["status"] == "ready" for entry in results.values()):
+            if calibration is None:
+                raise EvidenceRefusal("CPU calibration is missing. Run --calibrate-only once, then supply --calibration.")
+            calibrated_estimates(results, calibration)
+            if any(not entry["broker_budget"]["under_15_minutes"] for entry in results.values()):
+                raise EvidenceRefusal("Estimated A+B exceeds 15 minutes. Coarsen --resolution-mm and prepare both sides again.")
             async def collect(runtime: Any, job_id: str, response: Mapping[str, Any], request: Any) -> Any:
                 plan = next(p for p in plans.values() if p["requests"]["beat-cpu"]["request"] is request)
                 payload = await asyncio.to_thread(runtime.store.get_channel_bases, job_id)
@@ -795,10 +1083,17 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
                 else:
                     entry["status"] = "failed-solve"
                 _write_json(out / name / "case.json", entry)
-    refused = any(entry["status"] in {"refused", "failed-solve", "fail"} for entry in results.values())
+    if calibration is not None:
+        calibrated_estimates(results, calibration)
+    for name, entry in results.items():
+        _write_json(out / name / "case.json", entry)
+    refused = any(entry["status"] in {"not-importable", "refused", "failed-solve", "fail"} for entry in results.values())
+    if args.calibrate_only:
+        refused = not calibration_success
     summary = {"schema": "ath-lf-parity-v1", "dry_run": args.dry_run, "engine": args.engine,
                "frequencies_hz": freqs, "max_triangles": args.max_triangles, "normalisation": NORMALISATION,
-               "status": "incomplete" if refused else "geometry-only" if args.dry_run else "pass",
+               "resolution_mm": args.resolution_mm, "calibration": calibration,
+               "status": "incomplete" if refused else "calibration-complete" if args.calibrate_only else "geometry-only" if args.dry_run else "pass",
                "cases": results}
     _write_json(out / "summary.json", summary)
     print(f"{summary['status']}: {len(results)} cases; summary.json written", flush=True)
