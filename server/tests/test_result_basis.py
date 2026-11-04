@@ -53,3 +53,15 @@ def test_legacy_driver_identity_comes_from_saved_channel_when_public_tag_is_miss
     served, _ = with_result_basis(json.dumps(payload), "stored", {"config_json": request.model_dump(mode="json")})
     assert all(channel["metadata"]["source_normalization"] == "voltage_driven_driver_lem"
                for channel in json.loads(served)["channels"].values())
+
+
+def test_voltage_driven_lem_channel_is_never_tagged_as_a_prescribed_basis():
+    # LEM paths keep the solver's prescribed tag after scaling to the drive voltage.
+    payload = {"channels": {"lem": {"metadata": {"source_normalization": "native_rms_velocity",
+                                                 "impedance_drive": "voltage"}},
+                            "coupled": {"metadata": {"source_normalization": "native_rms_voltage",
+                                                     "impedance_drive": "voltage"}}}}
+    served, _ = with_result_basis(json.dumps(payload), "stored", {})
+    channels = json.loads(served)["channels"]
+    assert channels["lem"]["metadata"]["source_normalization"] == "voltage_driven_driver_lem"
+    assert channels["coupled"]["metadata"]["source_normalization"] == "native_rms_voltage"

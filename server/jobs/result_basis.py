@@ -40,10 +40,16 @@ def with_result_basis(text: str, digest: str, row: Mapping[str, Any]) -> tuple[s
         metadata = channel.setdefault("metadata", {})
         # A combined response inherits its members' identities, never a guessed
         # uniform basis (voltage and prescribed members may coexist).
-        if "combine" in metadata or "source_normalization" in metadata:
+        if "combine" in metadata:
             continue
+        # Driver evidence wins over a prescribed tag: LEM paths keep the solver's
+        # basis tag after scaling the response to the drive voltage.
         if channel_id in drivers or metadata.get("driver") or metadata.get("impedance_drive") in ("rms_voltage", "voltage"):
+            if "voltage" in str(metadata.get("source_normalization", "")):
+                continue
             metadata["source_normalization"] = "voltage_driven_driver_lem"
+        elif "source_normalization" in metadata:
+            continue
         elif normalization is not None:
             metadata["source_normalization"] = (
                 "native_rms_velocity" if normalization == "rms_velocity" else "unit_normal_acceleration"

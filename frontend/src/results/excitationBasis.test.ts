@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { excitationBasisFactor, withExcitationBasis, withRunExcitationBasis } from './excitationBasis';
+import { channelExcitationBasis, excitationBasisFactor, withExcitationBasis, withRunExcitationBasis } from './excitationBasis';
 import { compareResultChannels, selectResultChannels, splSeries } from './mappers';
 import type { ResultPayload } from './types';
 
@@ -83,4 +83,8 @@ describe('stored excitation comparison', () => {
     expect(converted.channels!.combined).toBeUndefined();
     expect(converted.channels!.b.metadata!.source_normalization).toBe('native_rms_voltage');
   });
+});
+
+it('never converts a voltage-driven LEM channel that kept a prescribed tag', () => {
+  expect(channelExcitationBasis({ metadata: { source_normalization: 'native_rms_velocity', impedance_drive: 'voltage' } } as never)).toBe('voltage');
 });

@@ -11,6 +11,9 @@ type ChannelBasis = ExcitationBasis | 'voltage' | null;
 
 export function channelExcitationBasis(result: ResultData): ChannelBasis {
   const metadata = result.metadata;
+  // A voltage-driven LEM channel can keep its solver's prescribed tag.
+  const drive = (metadata as { impedance_drive?: unknown } | undefined)?.impedance_drive;
+  if (drive === 'voltage' || drive === 'rms_voltage') return 'voltage';
   switch (metadata?.source_normalization) {
     case 'native_rms_voltage': case 'voltage_driven_driver_lem': return 'voltage';
     case 'native_rms_velocity': return 'rms_velocity';
