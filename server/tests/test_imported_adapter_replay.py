@@ -8,6 +8,8 @@ import asyncio
 import hashlib
 import io
 import json
+import math
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,6 +26,16 @@ from server.tests.beat_adapter.test_assembly_native_solve import DRIVER, distinc
 from server.tests.test_driver_lem import _spec
 
 FIXTURE = Path(__file__).parent / "fixtures/imported_adapter_replay.json"
+# The oracle was captured on macOS, where every replay reproduces it bit for bit.
+# Linux and Windows libm round the LEM transfer function's transcendental terms
+# differently in the last place: CI saw 1-2 ulp (at most 4.5e-16 relative) in cone
+# excursion, SPL and phase, and different bytes in the LEM-scaled pressure bases.
+# Off macOS every float meets the oracle at REPLAY_RTOL (about 200 times the observed
+# difference) and the pressure bases meet their frozen arrays, which must hash to the
+# oracle; everything else stays exact.
+FROZEN_ARRAYS = FIXTURE.with_name("imported_adapter_replay_arrays.npz")
+EXACT_PLATFORM = sys.platform == "darwin"
+REPLAY_RTOL = 1e-13
 # Compiled assemblies admit exterior transducers, not the legacy DriverSpec LEM.
 # Their driven replay is covered by the coupled and mixed cases below.
 CASES = [(origin, engine, mode) for origin in ("assembly", "cad", "file")
@@ -143,7 +155,8 @@ def characterization(monkeypatch, origin, engine, mode):
     request = saved_request(origin, engine, mode)
     wire, setup, outcome = dispatch(monkeypatch, request, origin)
     with np.load(io.BytesIO(outcome.channel_bases), allow_pickle=False) as archive:
-        arrays = {name: hashlib.sha256(archive[name].tobytes()).hexdigest() for name in archive.files}
+        bases = {name: archive[name] for name in archive.files}
+    arrays = {name: hashlib.sha256(array.tobytes()).hexdigest() for name, array in bases.items()}
     channels = {}
     for name, channel in outcome.results["channels"].items():
         channels[name] = {key: channel[key] for key in ("spl_on_axis", "impedance", "acoustic_impedance") if key in channel}
@@ -154,13 +167,52 @@ def characterization(monkeypatch, origin, engine, mode):
         for name in ("left", "right")}})
     combined = recombine_stored_results(outcome.results, outcome.channel_bases, combine, request)["channels"]["combined"]
     return {"request_json": wire, "setup": setup, "basis_arrays_sha256": arrays, "channels": channels,
-            "recombined_spl": combined["spl_on_axis"]}
+            "recombined_spl": combined["spl_on_axis"]}, bases
+
+
+def assert_replays(actual, expected, path="$"):
+    """Off-macOS oracle comparison: floats within REPLAY_RTOL, everything else exact."""
+    if isinstance(expected, float):
+        assert isinstance(actual, (int, float)) and not isinstance(actual, bool), path
+        assert math.isclose(actual, expected, rel_tol=REPLAY_RTOL, abs_tol=0), f"{path}: {actual!r} != {expected!r}"
+    elif isinstance(expected, (dict, list)):
+        assert type(actual) is type(expected), path
+        assert len(actual) == len(expected), path
+        if isinstance(expected, dict):
+            assert actual.keys() == expected.keys(), path
+        for key in (expected if isinstance(expected, dict) else range(len(expected))):
+            assert_replays(actual[key], expected[key], f"{path}.{key}")
+    else:
+        assert actual == expected, path
 
 
 @pytest.mark.parametrize("origin,engine,mode", CASES)
 def test_frozen_legacy_adapter_replay(monkeypatch, origin, engine, mode):
+    case = f"{origin}/{engine}/{mode}"
+    expected = json.loads(FIXTURE.read_text())[case]
+    actual, bases = characterization(monkeypatch, origin, engine, mode)
+    if EXACT_PLATFORM:
+        assert actual == expected
+        return
+    with np.load(FROZEN_ARRAYS, allow_pickle=False) as archive:
+        frozen = {name.removeprefix(f"{case}/"): archive[name] for name in archive.files if name.startswith(f"{case}/")}
+    hashes, oracle = actual.pop("basis_arrays_sha256"), expected.pop("basis_arrays_sha256")
+    assert hashes.keys() == oracle.keys()
+    for name in hashes:
+        if hashes[name] != oracle[name]:
+            assert name in frozen, f"{name} differs from the oracle and has no frozen array"
+            assert bases[name].dtype == frozen[name].dtype
+            np.testing.assert_allclose(bases[name], frozen[name], rtol=REPLAY_RTOL, atol=0, err_msg=name)
+    assert_replays(actual, expected)
+
+
+def test_frozen_arrays_are_the_oracle_bytes():
     expected = json.loads(FIXTURE.read_text())
-    assert characterization(monkeypatch, origin, engine, mode) == expected[f"{origin}/{engine}/{mode}"]
+    with np.load(FROZEN_ARRAYS, allow_pickle=False) as archive:
+        assert archive.files
+        for key in archive.files:
+            case, name = key.rsplit("/", 1)
+            assert hashlib.sha256(archive[key].tobytes()).hexdigest() == expected[case]["basis_arrays_sha256"][name], key
 
 
 @pytest.mark.parametrize("engine", ["beat-cpu", "bempp", "metal"])
