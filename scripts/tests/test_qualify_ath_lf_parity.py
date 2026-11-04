@@ -845,7 +845,7 @@ def test_dense_commands_use_requested_cpu_python_and_study_budget(tmp_path, caps
 
     executable = tmp_path / "cpu-ready-python"
     assert parity.main(["--print-commands", "--case", "a-explicit", "--freqs", "300", "500", "700", "1500", "2200",
-                        "--command-python", str(executable), "--out", str(tmp_path)]) == 0
+                        "--command-python", str(executable), "--out", str(tmp_path), "--phase1", str(tmp_path)]) == 0
     commands = [shlex.split(line) for line in capsys.readouterr().out.splitlines() if not line.startswith("#")]
     assert len(commands) == 11
     for command in commands[:-1]:

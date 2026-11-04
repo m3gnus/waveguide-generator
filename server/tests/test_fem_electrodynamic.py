@@ -293,10 +293,11 @@ def test_mixed_job_contract_and_exterior_only_revert_guard():
     request = SolveRequest.model_validate(payload)
     assert request.geometry.drive_channels[0].exterior_transducer is None
     assert request.geometry.drive_channels[1].exterior_transducer is not None
-    assert _imported_request_refusal(request, {})[0] == 'exterior_transducer_mixed_channels'
+    # Mixed prescribed and transducer channels solve together on coupling engines.
+    refusal = _imported_request_refusal(request, {})
+    assert refusal is None or refusal[0] != 'exterior_transducer_mixed_channels'
     payload['geometry']['exterior_only'] = True
-    with pytest.raises(ValueError, match='every drive channel'):
-        SolveRequest.model_validate(payload)
+    assert SolveRequest.model_validate(payload).geometry.exterior_only
 
 
 def test_fem_only_job_contract_and_non_fem_revert_guard():

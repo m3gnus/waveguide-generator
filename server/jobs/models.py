@@ -926,8 +926,9 @@ class ImportedGeometrySource(JobModel):
         the other prescribed adapters converted design assemblies to RMS
         velocity. This is a replay decoder, never admission or capability.
         """
-        if engine in (self.excitation_normalization_by_engine or {}):
-            return self.excitation_normalization_by_engine[engine]
+        by_engine = self.excitation_normalization_by_engine or {}
+        if engine in by_engine:
+            return by_engine[engine]
         if self.excitation_normalization is not None:
             return self.excitation_normalization
         return ("rms_velocity" if engine != "bempp" and "wg-design-assembly-v1" in self.required_features
