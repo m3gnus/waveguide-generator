@@ -1302,6 +1302,10 @@ describe('source editor interactions', () => {
     await act(async () => button('Load Expression shape').click()); await settle();
     expect(host.querySelector('.source-load-offer')).not.toBeNull();
     await act(async () => button('Scale it to fit').click()); await settle();
+    // Formulas make the fit a choice; resizing inputs keeps them, as the old single action did.
+    expect(host.querySelector('[role="group"][aria-label="Fit contour to throat"]')).not.toBeNull();
+    expect(changed.mock.calls.at(-1)![0]).toEqual(before);
+    await act(async () => button('Resize inputs, keep formulas').click()); await settle();
     if (invalid) {
       expect(host.querySelector('[role="alert"]')!.textContent).toContain('Expression gives an invalid dimension value');
       expect(changed.mock.calls.at(-1)![0]).toEqual(before);
@@ -1317,6 +1321,34 @@ describe('source editor interactions', () => {
       await act(async () => button('Redo').click()); await settle();
       expect(changed.mock.calls.at(-1)![0].document).toEqual(scaled.document);
     }
+  });
+
+  it('fits a loaded formula shape as an exact copy, turning its formula into the scaled value in one undo step', async () => {
+    const { seedPreset } = await import('../sketch/adapters/sourcePreset');
+    const { serializeSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
+    let state = seedPreset(expandedPreset('cone'), 'cone', presetDefaults.cone);
+    const depth = state.meta.preset!.dimensions.depth_mm;
+    const applied = sourceAdapter.applySourceCommand(state.sketch, state.meta, { kind: 'setDimensionExpression', id: depth, expression: '[Dust-cap radius] + 1' });
+    if ('error' in applied) throw new Error(applied.error);
+    state = applied;
+    vi.mocked(sourceEditorApi.presets).mockResolvedValue([{ id: 'expression', revision: 'r1', name: 'Expression shape', document: expandedPreset('cone'), authoring: serializeSourceAuthoring(state, false) }]);
+    const changed = vi.fn();
+    await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} limit={{ kind: 'throat', radius: 26, hard: true }}
+      host={{ commit: record => changed(record) }}/>)); await settle();
+    const before = changed.mock.calls.at(-1)![0];
+    await act(async () => button('Load Expression shape').click()); await settle();
+    await act(async () => button('Scale it to fit').click()); await settle();
+    const choice = host.querySelector('[role="group"][aria-label="Fit contour to throat"]')!;
+    expect(choice.querySelector('[aria-label="Inputs that change"]')!.textContent).toContain('→');
+    await act(async () => button('Scale exactly').click()); await settle();
+    const scaled = changed.mock.calls.at(-1)![0];
+    const fitted = scaled.authoring.sketch.constraints.find((c: { id: string }) => c.id === depth);
+    expect(fitted.expression).toBeUndefined();
+    expect(scaled.document.contour.points.at(-1).r_mm).toBe(26);
+    expect(host.querySelector('[role="group"][aria-label="Fit contour to throat"]')).toBeNull();
+    expect(host.textContent).toContain('Undo restores the formulas');
+    await act(async () => button('Undo').click()); await settle();
+    expect(changed.mock.calls.at(-1)![0].document).toEqual(before.document);
   });
 
   it('switches the properties panel by selection and edits through the existing point, metadata and dimension commands', async () => {

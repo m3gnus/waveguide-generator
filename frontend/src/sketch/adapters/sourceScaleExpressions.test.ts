@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { applyCommand } from '../ops';
-import { scaleSourceToLimit, fitSourcePreset, lower } from './sourceContour';
+import { scaleSourceToLimit, fitSourcePreset, lower, sourceScaleInputs } from './sourceContour';
 import { seedPreset, presetDefaults } from './sourcePreset';
 import { expandedPreset } from './presetTestSupport';
 import { sourceScaleLegacy, legacyScaledValues, legacyScaledContour } from './fixtures/sourceScaleLegacy';
@@ -94,5 +94,53 @@ describe('source scaling with expressions', () => {
     expect(before.sketch.constraints.find(c => c.id === radius)!.expression).toBe('5 * 2');
     before.sketch.constraints.find(c => c.id === before.meta.preset!.dimensions.depth_mm)!.expression = 'Radius / 2';
     expect(() => fitSourcePreset(before, limit)).toThrow('Clear their expressions before making it a reference dimension.');
+  });
+});
+
+describe('fit contour to throat modes', () => {
+  const withFormula = () => {
+    const before = structuredClone(sourceScaleLegacy);
+    const applied = applyCommand(before.sketch, { kind: 'setDimensionExpression', id: 'depth', expression: '[Cap width] + 1 mm' });
+    if ('error' in applied) throw new Error(applied.error);
+    const params = [
+      applyCommand(applied.sketch, { kind: 'addParameter', name: 'gap', expression: '2', unit: 'mm' }),
+    ][0];
+    if ('error' in params) throw new Error(params.error);
+    let sketch = params.sketch;
+    for (const command of [
+      { kind: 'addParameter', name: 'twice', expression: 'gap * 2', unit: 'mm' },
+      { kind: 'addParameter', name: 'tilt', expression: '5', unit: 'deg' },
+      { kind: 'addParameter', name: 'ratio', expression: '0.5', unit: 'none' },
+      { kind: 'addParameter', name: 'offset', expression: '-2', unit: 'mm' },
+      { kind: 'addParameter', name: 'turn', expression: 'pi', unit: 'mm' },
+    ] as const) { const next = applyCommand(sketch, command); if ('error' in next) throw new Error(next.error); sketch = next.sketch; }
+    return { ...before, sketch };
+  };
+  it('scales an old design without formulas byte-identically in both modes', () => {
+    for (const mode of ['exact', 'inputs'] as const) {
+      const scaled = scaleSourceToLimit(structuredClone(sourceScaleLegacy), limit, mode);
+      expect(JSON.stringify(scaled.sketch.constraints.flatMap(c => 'value' in c ? [c.value] : []))).toBe(legacyScaledValues);
+      expect(JSON.stringify(scaled.sketch)).toBe(JSON.stringify(scaleSourceToLimit(structuredClone(sourceScaleLegacy), limit).sketch));
+    }
+  });
+  it('makes an exact similar copy: formulas become scaled values and parameters stay unchanged', () => {
+    const before = withFormula(), { scale } = sourceScaleInputs(before, limit);
+    const scaled = scaleSourceToLimit(before, limit, 'exact');
+    const depth = scaled.sketch.constraints.find(c => c.id === 'depth')!;
+    expect(depth.expression).toBeUndefined();
+    expect('value' in depth && depth.value).toBeCloseTo((value(before, 'cap-width') + 1) * scale, 9);
+    expect(scaled.sketch.parameters).toEqual(before.sketch.parameters);
+  });
+  it('resizes plain length inputs and sketch-local mm parameters, keeping formulas', () => {
+    const before = withFormula(), inputs = sourceScaleInputs(before, limit);
+    const scaled = scaleSourceToLimit(before, limit, 'inputs');
+    expect(scaled.sketch.constraints.find(c => c.id === 'depth')!.expression).toBe('[Cap width] + 1 mm');
+    const byName = Object.fromEntries((scaled.sketch.parameters ?? []).map(p => [p.name, p.expression]));
+    expect(Number(byName.gap)).toBeCloseTo(2 * inputs.scale, 9);
+    expect(Number(byName.offset)).toBeCloseTo(-2 * inputs.scale, 9);
+    expect(byName).toMatchObject({ twice: 'gap * 2', tilt: '5', ratio: '0.5', turn: 'pi' });
+    expect(inputs.parameters.map(p => p.name)).toEqual(['gap', 'offset']);
+    expect(inputs.dimensions.some(d => d.name.length > 0)).toBe(true);
+    expect(inputs.dimensions.every(d => Math.abs(d.to - d.from * inputs.scale) < 1e-9)).toBe(true);
   });
 });

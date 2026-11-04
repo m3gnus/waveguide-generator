@@ -84,3 +84,11 @@
 .source-table td:nth-child(2) > button { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .source-editor :is(.btn, .btn-primary) { height: auto; padding: 5px 8px; font: inherit; }
+
+/* Fit contour to throat choice */
+.source-fit-choice { display: grid; gap: 8px; padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--hair); border-radius: 4px; background: var(--surface-raised); }
+.source-fit-choice p { margin: 0; }
+.source-fit-option { display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; align-items: start; }
+.source-fit-option small { color: var(--fg3); }
+.source-fit-option ul { grid-column: 2; margin: 0; padding-left: 16px; color: var(--fg2); font-size: 11px; }
+.source-fit-choice > .btn { justify-self: start; }

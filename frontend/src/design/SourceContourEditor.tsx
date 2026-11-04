@@ -1,4 +1,5 @@
 import { Notice } from '../shell/Notice';
+import { formatValue } from '../sketch/formatValue';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { sourceEditorApi, type SourceAttachment, type SourceDocument, type SourcePatch, type SourcePoint, type SourcePreset, type SourceValidation } from '../api/sourceEditor';
@@ -12,7 +13,7 @@ import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, rem
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
 import { isConstraintConflict, SketchController, type Authoring } from '../sketch/controller';
-import { sourceContourAdapter, applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, sourceProgress, scaleSourceToLimit, scaleSourceDimensions, fitSourcePreset, withSourceLimit, withSourceContext, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
+import { sourceContourAdapter, applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, sourceProgress, scaleSourceToLimit, scaleSourceDimensions, sourceHasFormulas, sourceScaleInputs, type SourceScaleMode, fitSourcePreset, withSourceLimit, withSourceContext, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
 import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions, portableSourcePreset } from '../sketch/adapters/sourcePreset';
 import { presetDimensionActive, presetDimensionProblem, presetTopologyMessage, reapplyPresetMessage } from '../sketch/adapters/sourcePresetMapping';
 import { refreshContext, type SketchContext } from '../sketch/context';
@@ -173,6 +174,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
   const pendingLoad = useRef<ContourLoad | undefined>(undefined);
   const [loadOffer, setLoadOffer] = useState(false);
   function clearLoadOffer() { pendingLoad.current = undefined; setLoadOffer(false); }
+  const [fitChoice, setFitChoice] = useState<{ fromLoad: boolean; inputs: ReturnType<typeof sourceScaleInputs> }>();
   const [hoverId, setHoverId] = useState<string>();
   const [pointsOpen, setPointsOpen] = useState(false);
   const [dimensionsOpen, setDimensionsOpen] = useState(false);
@@ -213,6 +215,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: true, onClose: close });
   const key = useMemo(() => JSON.stringify(draft), [draft]);
   const rimRadius = tablePoints.at(-1)?.r_mm;
+  const fitLabel = sourceHasFormulas(displayAuthor.sketch) ? 'Fit contour to throat…' : 'Scale to fit throat';
   const rimMismatch = !!limit.hard && (rimRadius !== undefined && Math.abs(rimRadius - limit.radius) > 1e-8
     || JSON.stringify(author.meta.limit) !== JSON.stringify(limit));
   const contextMatches = useMemo(() => sourceContextMatches(author, context), [author, context]);
@@ -289,18 +292,27 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
     try { void controller.current.replaceContext(state => withSourceContext(withSourceLimit(state, limit), context), notice, limit.hard ? 'The new throat conflicts with: ' : undefined).catch(reason => { if (!isConstraintConflict(reason)) setError(String(reason)); }); }
     catch (reason) { setError(failureWords(reason)); }
   }, [limit.kind, limit.radius, limit.hard, context.fingerprint, classic, generation]);
-  function scaleToFitThroat(fromLoad = false) {
+  /** Formulas make a fit ambiguous: the first call opens the choice, the chosen mode applies it as one undo step. */
+  function scaleToFitThroat(fromLoad = false, mode?: SourceScaleMode) {
+    const source = fromLoad ? pendingLoad.current?.authoring : controller.current?.current;
+    if (!mode && source && sourceHasFormulas(source.sketch)) {
+      try { setFitChoice({ fromLoad, inputs: sourceScaleInputs(source, limitRef.current) }); }
+      catch (reason) { setError(failureWords(reason)); }
+      return;
+    }
+    setFitChoice(undefined);
     void run(async () => {
       if (!controller.current || fromLoad && !pendingLoad.current) return;
       let load: ContourLoad | undefined;
       const adopted = await controller.current.adopt(current => {
         load = fromLoad ? pendingLoad.current : undefined;
         const source = fromLoad ? load?.authoring : current;
-        return source && withSourceContext(scaleSourceToLimit(source, limitRef.current), contextRef.current);
+        return source && withSourceContext(scaleSourceToLimit(source, limitRef.current, mode), contextRef.current);
       }, 'Scale to fit throat', true, true);
       if (!adopted) return;
       if (load) completeLoad(load, controller.current.current);
       else clearLoadOffer();
+      if (mode === 'exact') setNotice('Fitted an exact copy: dimension formulas became their values; named parameters are unchanged. Undo restores the formulas.');
     });
   }
   function editLimit(radius: number) {
@@ -540,7 +552,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
         {selectedDimension && !dimensionsOpen && <section aria-label="Dimension properties"><h3>Dimension</h3><table><tbody>{dimensionRow(selectedDimension)}</tbody></table></section>}
         {canvasSelection.length > 1 && <section aria-label="Selection properties"><h3>Selection</h3><p>{canvasSelection.filter(id => author.sketch.points.some(p => p.id === id)).length} points · {canvasSelection.filter(id => author.sketch.entities.some(e => e.id === id)).length} segments · {canvasSelection.filter(id => author.sketch.constraints.some(c => c.id === id && 'value' in c)).length} dimensions</p></section>}
         <div hidden={!classic && canvasSelection.length > 0}>
-        <details className="source-summary"><summary>Source summary</summary><p className={`source-progress ${progress.state}`}>{progress.state} · {tablePatches.length} patches · rim r {rimRadius?.toFixed(2) ?? '—'} mm</p>{rimMismatch && <button className="btn" type="button" onClick={() => scaleToFitThroat()}>Scale to fit throat</button>}</details>
+        <details className="source-summary"><summary>Source summary</summary><p className={`source-progress ${progress.state}`}>{progress.state} · {tablePatches.length} patches · rim r {rimRadius?.toFixed(2) ?? '—'} mm</p>{rimMismatch && <button className="btn" type="button" onClick={() => scaleToFitThroat()}>{fitLabel}</button>}</details>
         <details className="source-identifiers" open={identifiersOpen} onToggle={(e) => setIdentifiersOpen(e.currentTarget.open)}><summary>Identifiers</summary>
         {(['physical_source_id', 'rim_id'] as const).map((field) => <label key={field}>{field === 'rim_id' ? 'Rim ID' : 'Physical source ID'}<input aria-label={field === 'rim_id' ? 'Rim ID' : 'Physical source ID'} value={draft.contour[field]} onChange={(e) => change({ ...draft, contour: { ...draft.contour, [field]: e.target.value } })}/></label>)}
         <label>Drive channel ID<input aria-label="Drive channel ID" value={draft.drive.channel_id} onChange={(e) => change({ ...draft, drive: { ...draft.drive, channel_id: e.target.value } })}/></label>
@@ -589,6 +601,6 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
         }}>Split selected patch at midpoint</button>
       </aside></div>
     </fieldset>
-    <footer>{loadOffer && <div role="status" className="source-load-offer">Loaded preset conflicts with the throat: <button className="btn" type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat(true)}>Scale it to fit</button> <button className="btn" type="button" disabled={busy || sketchPending} onClick={clearLoadOffer}>Discard</button></div>}{rimMismatch && <div role="status" className="source-throat-mismatch">Rim does not meet the horn throat ({rimRadius?.toFixed(2) ?? '—'} vs {limit.radius.toFixed(2)}) <button className="btn" type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat()}>Scale to fit throat</button></div>}{(!rimMismatch && (classic || sketchProblems.every(p => p.severity === 'warning') && !validationError)) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}<div ref={setStatusHost} className="source-status-host"/>{!onUseDocument && <button className="btn" type="button" disabled={busy || !valid} onClick={close}>Done</button>}{onUseDocument && <button className="btn" type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour</button>}{onUseDocument && <button className="btn" type="button" disabled={busy} onClick={close}>Back to assembly</button>}{busy && <p role="status">Working…</p>}{error && <Notice tone="error" role="alert">{error}</Notice>}{notice && <Notice tone="info" role="status">{notice}</Notice>}<small>{host ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours. Names are stored in the sketch only.</small></footer>
+    <footer>{fitChoice && <div role="group" aria-label="Fit contour to throat" className="source-fit-choice"><p>This contour uses formulas or parameters. Choose how it fits the throat (× {formatValue(fitChoice.inputs.scale)}):</p><div className="source-fit-option"><button className="btn-primary" type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat(fitChoice.fromLoad, 'exact')}>Scale exactly</button><small>The whole shape scales. Dimension formulas become their values; named parameters stay unchanged.</small></div><div className="source-fit-option"><button className="btn" type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat(fitChoice.fromLoad, 'inputs')}>Resize inputs, keep formulas</button><small>Constants inside formulas stay fixed, so proportions may change. These inputs change:</small><ul aria-label="Inputs that change">{[...fitChoice.inputs.dimensions, ...fitChoice.inputs.parameters].map(item => <li key={item.name}>{item.name}: {formatValue(item.from)} → {formatValue(item.to)}</li>)}{!fitChoice.inputs.dimensions.length && !fitChoice.inputs.parameters.length && <li>No plain inputs; only the formulas re-evaluate.</li>}</ul></div><button className="btn" type="button" onClick={() => setFitChoice(undefined)}>Cancel</button></div>}{loadOffer && <div role="status" className="source-load-offer">Loaded preset conflicts with the throat: <button className="btn" type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat(true)}>Scale it to fit</button> <button className="btn" type="button" disabled={busy || sketchPending} onClick={clearLoadOffer}>Discard</button></div>}{rimMismatch && <div role="status" className="source-throat-mismatch">Rim does not meet the horn throat ({rimRadius?.toFixed(2) ?? '—'} vs {limit.radius.toFixed(2)}) <button className="btn" type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat()}>{fitLabel}</button></div>}{(!rimMismatch && (classic || sketchProblems.every(p => p.severity === 'warning') && !validationError)) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}<div ref={setStatusHost} className="source-status-host"/>{!onUseDocument && <button className="btn" type="button" disabled={busy || !valid} onClick={close}>Done</button>}{onUseDocument && <button className="btn" type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour</button>}{onUseDocument && <button className="btn" type="button" disabled={busy} onClick={close}>Back to assembly</button>}{busy && <p role="status">Working…</p>}{error && <Notice tone="error" role="alert">{error}</Notice>}{notice && <Notice tone="info" role="status">{notice}</Notice>}<small>{host ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours. Names are stored in the sketch only.</small></footer>
   </div></div>;
 }

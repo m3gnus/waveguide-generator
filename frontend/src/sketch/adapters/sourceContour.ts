@@ -1,10 +1,12 @@
 import { displayName } from '../displayName';
 import { freezeRemovedExpressionReferences, resolveExpressions } from '../expressions';
+import { parseDecimalInput } from '../../design/decimalInput';
+import { displayValue } from '../dimensionValue';
 import { commandNotice } from '../notices';
 import type { SourceDocument, SourcePatch } from '../../api/sourceEditor';
 import { uniqueProblems } from '../adapter';
 import type { DomainProblem, Lowered, Reference } from '../adapter';
-import { constraintRefs, entityPoints, validateSketch, type Entity, type Sketch } from '../model';
+import { constraintRefs, entityPoints, validateSketch, type Entity, type Parameter, type Sketch } from '../model';
 import { applyCommand, importedSketch, removeEntity } from '../ops';
 import type { Command } from '../commands';
 import { arcGeometry, onArc, refreshReferenceDimensions } from '../geometry';
@@ -84,15 +86,45 @@ export function withSourceLimit(state: { sketch: Sketch; meta: SourceMeta }, lim
 export function scaleSourceDimensions(dimensions: Record<string, number>, scale: number) {
   return Object.fromEntries(Object.entries(dimensions).map(([key, value]) => [key, value * scale]));
 }
-/** The single scaling path, used by the explicit action and by fresh preset seeding only. */
-export function scaleSourceToLimit(state: { sketch: Sketch; meta: SourceMeta }, limit: SourceLimit) {
+/** How a fit treats formulas: an exact similar copy (formulas become values) or resized inputs (formulas kept). */
+export type SourceScaleMode = 'exact' | 'inputs';
+/** Formulas or named parameters make a fit ambiguous, so the user chooses a mode. */
+export function sourceHasFormulas(sketch: Sketch) {
+  return !!sketch.parameters?.length || sketch.constraints.some(c => 'value' in c && !!c.expression);
+}
+function sourceScaleFactor(state: { sketch: Sketch; meta: SourceMeta }, limit: SourceLimit) {
   const rim = contourPointOrder(state.sketch, state.meta).at(-1);
   const radius = state.sketch.points.find(p => p.id === rim)?.x;
   if (!radius || !validLimit(limit)) throw new Error('A nonzero rim and a positive throat are required to scale.');
-  const scale = sourceLimitTarget(limit) / radius, referencePoints = referencePointIds(state.sketch);
-  const sketch = { ...state.sketch,
-    points: state.sketch.points.map(p => referencePoints.has(p.id) ? p : { ...p, x: p.x * scale, y: p.y * scale }),
-    constraints: state.sketch.constraints.map(c => 'value' in c && c.driving && !c.expression && c.kind !== 'angle' ? { ...c, value: c.value * scale } : c),
+  return sourceLimitTarget(limit) / radius;
+}
+/** A typed number (sign and decimal comma allowed); anything else, `pi` included, is a formula. */
+const plainNumber = (text: string) => { const parsed = parseDecimalInput(text.trim()); return parsed.kind === 'number' ? parsed.value : undefined; };
+const scaledNumber = (value: number) => String(Number(value.toPrecision(12)));
+/** Sketch-local length parameters typed as plain numbers are inputs; formulas, angles and unitless values never scale. */
+const scalableParameter = (p: Parameter) => p.unit === 'mm' ? plainNumber(p.expression) : undefined;
+/** What "Resize inputs, keep formulas" changes, for the preview list. */
+export function sourceScaleInputs(state: { sketch: Sketch; meta: SourceMeta }, limit: SourceLimit) {
+  const scale = sourceScaleFactor(state, limit);
+  const dimensions = state.sketch.constraints.flatMap(c => 'value' in c && c.driving && !c.expression && c.kind !== 'angle'
+    ? [{ name: displayName(state.sketch, c.id), from: displayValue(c), to: displayValue({ ...c, value: c.value * scale }) }] : []);
+  const parameters = (state.sketch.parameters ?? []).flatMap(p => { const value = scalableParameter(p); return value === undefined ? [] : [{ name: p.name, from: value, to: value * scale }]; });
+  return { scale, dimensions, parameters };
+}
+/** The single scaling path, used by the explicit action and by fresh preset seeding only. Without formulas both modes are identical. */
+export function scaleSourceToLimit(state: { sketch: Sketch; meta: SourceMeta }, limit: SourceLimit, mode: SourceScaleMode = 'inputs') {
+  const scale = sourceScaleFactor(state, limit), referencePoints = referencePointIds(state.sketch);
+  const evaluated = mode === 'exact' ? resolveExpressions(state.sketch) : undefined;
+  if (evaluated?.errors.length) throw new Error(evaluated.errors.map(e => e.message).join(' '));
+  const start = evaluated?.sketch ?? state.sketch;
+  const sketch = { ...start,
+    points: start.points.map(p => referencePoints.has(p.id) ? p : { ...p, x: p.x * scale, y: p.y * scale }),
+    constraints: start.constraints.map(c => {
+      if (!('value' in c) || mode === 'inputs' && c.expression) return c;
+      const { expression: _formula, ...rest } = c;
+      return c.driving && c.kind !== 'angle' ? { ...rest, value: c.value * scale } : rest;
+    }),
+    ...(mode === 'inputs' && start.parameters?.length ? { parameters: start.parameters.map(p => { const value = scalableParameter(p); return value === undefined ? p : { ...p, expression: scaledNumber(value * scale) }; }) } : {}),
   };
   const resolved = resolveExpressions(sketch);
   if (resolved.errors.length) throw new Error(resolved.errors.map(e => e.message).join(' '));
