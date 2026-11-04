@@ -105,7 +105,7 @@ preview cache identity and symmetry probes; the data never enters saved designs
 or geometry stamps. The strong-expansion OCC triangulation failure and existing
 R-OSSE axial-table residuals at LengthSegments 12/30 remain separate limitations.
 
-The Metal pin `50fd3d3` supplies a BEAT-compatible worker using the existing
+The Metal pin `80a2d5e` supplies a BEAT-compatible worker using the existing
 request compiler and event/result decoder. WG routes its qualified single-source,
 normal-motion exterior Metal solves through that interface, with the existing
 explicit `complex_k` formulation and 0.005 shift. Other Metal features retain
@@ -149,3 +149,5 @@ remain separate from these source comparisons.
 The plots pin `9462f4b` preserves unavailable samples as chart gaps, keeps the signed phase grid and on-axis reference, and supports explicit directivity display ranges. Partial-cap plots state their coverage. These renderer contracts are available to WG export consumers.
 
 The BEM++ pin `5d82a93` serializes overlapping BLAS limit scopes, refuses unsupported baffle combinations, releases streamed traces and retains unavailable directivity samples as unavailable. The existing opt-in compiled facade and native quadrature orders remain.
+
+The Metal pin `80a2d5e` rejects false GMRES success and degenerate geometry and reuses Jacobi factors. Its active tree includes only those solver changes over version 0.2.2. Native process ownership and shader aggregation changes remain excluded; persistent-helper and Metal gap features are not enabled by this pin.
