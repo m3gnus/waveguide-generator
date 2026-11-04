@@ -1,6 +1,12 @@
 # Dependency compatibility
 
-The mesher pin `63b62c22` declares version 0.2.9. It retains the released
+The current mesher adds the measured ATH lip/Opus compositions, throat controls,
+R-OSSE truncation and sketched woofer/HF diaphragms. Geometry qualification at
+`7e0bdcc` passed 9,542 tests with five Windows-only skips and required ATH parity;
+the later target changes only two registered Custom profile labels. Installed
+WG consumer qualification is required separately before this pin lands.
+
+The mesher pin `1a53231aef363d91bb081eb16cb5e269a3644af5` declares version 0.2.9. It retains the released
 `983f5a39` geometry contracts while reusing existing sampling and preview owners.
 It includes version-gated ATH v3 controls and typed public refusals with
 a shipped, checked control-label catalog. Saved v1/v2 retain their prior geometry.
