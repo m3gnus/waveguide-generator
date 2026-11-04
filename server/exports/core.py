@@ -1182,7 +1182,7 @@ def profile_csv(inner_points_mm: np.ndarray, kind: str) -> str:
     return "\r\n".join(rows) + "\r\n"
 
 
-def build_profiles(design: DesignConfig, kind: str) -> str:
+def build_profiles(design: DesignConfig, kind: str, *, cancel_cb: Any = None, progress_cb: Any = None) -> str | dict[str, str]:
     """Rebuild the bare, uniform-ring inner surface without vertical offset."""
 
     if design.formula in NATIVE_FORMULAS:
@@ -1190,10 +1190,23 @@ def build_profiles(design: DesignConfig, kind: str) -> str:
         raise UserRefusal("Export", "Profile CSV cannot represent this horn's complete shape.",
                           "Export STEP instead.",
                           diagnostic=f"{design.formula} cannot export profile CSVs: the ring-grid format cannot represent the complete native construction. Export STEP instead.")
-    return profile_csv(
-        _inner_grid(design, profile_sampling=True),
-        kind,
-    )
+    if cancel_cb is not None:
+        cancel_cb()
+    if progress_cb is not None:
+        progress_cb("resolve")
+    grid = _inner_grid(design, profile_sampling=True)
+    if cancel_cb is not None:
+        cancel_cb()
+    if progress_cb is not None:
+        progress_cb("mesh")
+    outputs = {}
+    for member in (("profiles", "slices") if kind == "pair" else (kind,)):
+        outputs[member] = profile_csv(grid, member)
+        if cancel_cb is not None:
+            cancel_cb()
+    if progress_cb is not None:
+        progress_cb("check")
+    return outputs if kind == "pair" else outputs[kind]
 
 
 __all__ = [

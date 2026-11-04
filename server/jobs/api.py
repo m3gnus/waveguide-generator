@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from server.jobs.fem_field import FemFieldCorrupt, FemFieldInvalidSelection
+from server.jobs.operation_progress import request_operation
 from server.platform.feature_flags import fem_regions_enabled
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
 from server.jobs.json_encoding import json_chunks as _json_chunks
@@ -864,25 +865,38 @@ def create_jobs_router(
         )
 
     @router.get("/api/mesh-artifact/{job_id}", response_class=PlainTextResponse)
-    async def mesh_artifact(job_id: str) -> PlainTextResponse:
-        try:
-            artifact = await runtime.get_mesh_artifact_download(job_id)
-        except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
-        except JobMeshDiscardedError as exc:
-            raise HTTPException(status_code=410, detail=str(exc)) from exc
-        except JobResourceUnavailableError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        headers: dict[str, str] = {}
-        if artifact.regenerated:
-            headers["X-WG2-Mesh-Regenerated"] = "1"
-            if artifact.mesher_version is not None:
-                headers["X-WG2-Mesher-Version"] = artifact.mesher_version
-        return PlainTextResponse(
-            content=artifact.content,
-            media_type="text/plain",
-            headers=headers,
-        )
+    async def mesh_artifact(job_id: str, http_request: Request) -> PlainTextResponse:
+        with request_operation(http_request, ("resolve", "mesh", "check", "write")) as operation:
+            def progress(stage: str, _fraction: float, _message: str) -> None:
+                if stage == "mesh_prepare":
+                    operation.progress("resolve")
+                elif stage == "mesh_validate":
+                    operation.progress("mesh")
+
+            try:
+                artifact = await runtime.get_mesh_artifact_download(
+                    job_id, cancel_cb=operation.check, progress_cb=progress,
+                )
+            except JobNotFoundError as exc:
+                raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
+            except JobMeshDiscardedError as exc:
+                raise HTTPException(status_code=410, detail=str(exc)) from exc
+            except JobResourceUnavailableError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            operation.check()
+            # Retained bytes need no build, but complete the same stage history.
+            operation.progress("resolve")
+            operation.progress("mesh")
+            operation.progress("check")
+            headers: dict[str, str] = {}
+            if artifact.regenerated:
+                headers["X-WG2-Mesh-Regenerated"] = "1"
+                if artifact.mesher_version is not None:
+                    headers["X-WG2-Mesher-Version"] = artifact.mesher_version
+            response = PlainTextResponse(content=artifact.content, media_type="text/plain", headers=headers)
+            operation.progress("write")
+            operation.attach(response)
+            return response
 
     @router.get("/api/results/{job_id}/fem-field", response_model=FemFieldPresentation)
     async def fem_field(

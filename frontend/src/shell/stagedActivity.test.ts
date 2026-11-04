@@ -5,6 +5,38 @@ import { deferred } from './cadlink/selection.fixtures';
 
 afterEach(() => { activityStore.reset(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
+it.each([false, true])('an explicit operation GET reports stages and keeps its lifetime (stop=%s)', async stop => {
+  vi.useFakeTimers();
+  const response = deferred<Response>();
+  let signal: AbortSignal | undefined | null;
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    if (url === '/build-bearing-read') {
+      expect(new Headers(init?.headers).get('X-WG-Operation-Id')).toBeTruthy();
+      signal = init?.signal;
+      signal?.addEventListener('abort', () => response.reject(signal?.reason), { once: true });
+      return response.promise;
+    }
+    return Response.json({ stages: ['resolve'], total: 4 });
+  });
+  const pending = stagedActivity({ kind: 'export', label: 'Exporting' }, fetcher, undefined,
+    async (fetcher, signal) => {
+      await fetcher('/ordinary-read', { signal });
+      return (await fetcher('/build-bearing-read', { signal })).text();
+    }, { method: 'GET', url: '/build-bearing-read' });
+  const outcome = pending.catch(error => error);
+  await vi.advanceTimersByTimeAsync(31_000);
+  expect(new Headers(fetcher.mock.calls[0][1]?.headers).has('X-WG-Operation-Id')).toBe(false);
+  expect(signal?.aborted).toBe(false);
+  expect(activityStore.getSnapshot()[0]).toMatchObject({ label: 'Exporting · Building geometry', progress: { done: 1, total: 4 } });
+  if (stop) activityStore.getSnapshot()[0].cancel!();
+  else response.resolve(new Response('unchanged bytes'));
+  expect(await outcome).toEqual(stop ? expect.objectContaining({ name: 'AbortError' }) : 'unchanged bytes');
+  expect(activityStore.getSnapshot()).toEqual([]);
+  const calls = fetcher.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(fetcher).toHaveBeenCalledTimes(calls);
+});
+
 it.each(['assembly-build', 'export', 'send-to-cad'] as const)('%s receives every server stage in order and stops polling', async kind => {
   vi.useFakeTimers();
   const response = deferred<Response>();

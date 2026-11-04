@@ -606,7 +606,7 @@ def test_discarded_mesh_is_regenerated_from_stored_design_for_each_download(
     calls: list[tuple[float | None, float | None, bool]] = []
     regenerated_mesh = "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n// regenerated\n"
 
-    async def fake_build_solver_mesh(design, options, *, force_rebuild=False):
+    async def fake_build_solver_mesh(design, options, *, force_rebuild=False, cancel_cb=None, progress_cb=None):
         calls.append(
             (
                 design.root.mesh.length_segments.constant_value(),
@@ -664,7 +664,7 @@ def test_discarded_mesh_regenerates_on_the_domain_the_job_solved(
     )
     rebuilt_quadrants: list[float | None] = []
 
-    async def fake_build_solver_mesh(design, options, *, force_rebuild=False):
+    async def fake_build_solver_mesh(design, options, *, force_rebuild=False, cancel_cb=None, progress_cb=None):
         rebuilt_quadrants.append(design.root.mesh.quadrants.constant_value())
         return {"msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n"}
 
@@ -718,7 +718,7 @@ def test_mesh_regeneration_guards_legacy_quadrant_resolution_semantics(
     }})
     calls = []
 
-    async def fake_build(design, options, *, force_rebuild=False):
+    async def fake_build(design, options, *, force_rebuild=False, cancel_cb=None, progress_cb=None):
         calls.append(design)
         return {'msh_text':'regenerated'}
 

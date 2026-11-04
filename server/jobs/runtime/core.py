@@ -80,6 +80,7 @@ from server.jobs.models import (
     SolveRequest,
 )
 from server.jobs.progress import advance_frequency_progress, job_frequency_progress
+from server.jobs.request_cancellation import ClientDisconnected
 from server.jobs.store import ACTIVE_STATUSES, ALLOWED_STATUSES, JobStore
 from server.integration.provenance import canonical_json_sha256, enrich_result_contract
 from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
@@ -3315,8 +3316,13 @@ class JobRuntime:
             for job_id, item in self._partial_results.items()
         ]
 
-    async def get_mesh_artifact_download(self, job_id: str) -> MeshArtifactDownload:
+    async def get_mesh_artifact_download(
+        self, job_id: str, *, cancel_cb: Callable[[], None] | None = None,
+        progress_cb: Callable[[str, float, str], None] | None = None,
+    ) -> MeshArtifactDownload:
         await self.start()
+        if cancel_cb is not None:
+            cancel_cb()
         row = self._require_job(job_id)
         # Real MSH artifacts are multi-megabyte text blobs. Reading one through
         # SQLite on the event loop stalls both WS channels for the full copy.
@@ -3390,10 +3396,14 @@ class JobRuntime:
                 design,
                 _stored_solve_options(config),
                 force_rebuild=True,
+                cancel_cb=cancel_cb,
+                progress_cb=progress_cb,
             )
             content = regenerated.get("msh_text")
             if not isinstance(content, str) or not content:
                 raise RuntimeError("the current mesher returned no MSH payload")
+        except ClientDisconnected:
+            raise
         except Exception as exc:
             raise JobMeshDiscardedError(
                 "Mesh artifact was discarded by retention and cannot be regenerated: "

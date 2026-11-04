@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
@@ -230,21 +230,34 @@ async def export_stl(request: ExportRequest, http_request: Request = None) -> Re
 @router.post("/profiles")
 async def export_profiles(
     request: ExportRequest,
-    kind: Literal["profiles", "slices"] = Query(default="profiles"),
+    kind: Literal["profiles", "slices", "pair"] = Query(default="profiles"),
+    http_request: Request = None,
 ) -> Response:
-    try:
-        content = await asyncio.to_thread(build_profiles, request.design, kind)
-    except Exception as exc:
-        raise _export_error(exc, request.design) from exc
-    suffix = "profiles" if kind == "profiles" else "slices"
-    payload = content.encode("utf-8")
-    return Response(
-        content=payload,
-        media_type="text/csv",
-        headers=_headers(
-            request, f"{normalize_base_name(request.base_name)}_{suffix}.csv", None, payload
-        ),
-    )
+    with request_operation(http_request, ("resolve", "mesh", "check", "write")) as operation:
+        callbacks = {"cancel_cb": operation.check, "progress_cb": operation.progress} if http_request else {}
+        try:
+            content = await asyncio.to_thread(build_profiles, request.design, kind, **callbacks)
+        except ClientDisconnected:
+            raise
+        except Exception as exc:
+            raise _export_error(exc, request.design) from exc
+        operation.check()
+        base_name = normalize_base_name(request.base_name)
+        if kind == "pair":
+            files = []
+            for suffix, text in content.items():
+                filename = f"{base_name}_{suffix}.csv"
+                warning = _headers(request, filename, None, text.encode("utf-8")).get("X-Export-Warning")
+                files.append({"filename": filename, "text": text, **({"warning": warning} if warning else {})})
+            response = JSONResponse({"files": files}, headers={"X-Design-Revision": str(request.design_revision)})
+        else:
+            payload = content.encode("utf-8")
+            response = Response(content=payload, media_type="text/csv", headers=_headers(
+                request, f"{base_name}_{kind}.csv", None, payload,
+            ))
+        operation.progress("write")
+        operation.attach(response)
+        return response
 
 
 @router.post("/wglink")

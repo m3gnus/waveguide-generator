@@ -65,7 +65,7 @@ function workspace(jobId: string) {
       mesh_artifact: 'retained mesh', pressure_bases: [], radiation_impedance: null,
     });
     if (path === `/api/export/runs/${jobId}/step`) return new Response('returned step bytes');
-    if (path === '/api/export/step') return new Response('step bytes', {
+    if (path === '/api/export/step?body=solid') return new Response('step bytes', {
       headers: { 'Content-Disposition': 'attachment; filename="9_OSSE.step"' },
     });
     if (path === '/api/design/serialize') return json({ text: 'cfg text' });

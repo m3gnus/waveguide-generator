@@ -1,5 +1,6 @@
 import { deferred } from '../shell/cadlink/selection.fixtures';
 import { activityStore } from '../shell/activity';
+import { buildGeometryExport } from '../api/designIo';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
 import { designForFamily, serializeDesign } from '../stores/design';
@@ -101,6 +102,36 @@ function workspacePayload(init?: RequestInit) {
 
 describe('result exporters', () => {
   beforeEach(() => { activityStore.reset(); preferencesStore.resetForTests(); });
+  it('preserves design-export bytes, names and warnings through a confirmed multi-format run export', async () => {
+    const design = designForFamily('OSSE');
+    const warning = 'Sizing reached its backstop. Check fine detail in CAD.';
+    const bytes = new Uint8Array([0, 13, 10, 255, 42]);
+    const confirm = vi.fn().mockResolvedValue(true);
+    const published: Blob[][] = [];
+    const fetcher: typeof fetch = async (url, init) => {
+      if (String(url).startsWith('/api/export/')) return new Response(bytes, { headers: {
+        'Content-Disposition': `attachment; filename="server.${String(url).includes('/step') ? 'step' : 'stl'}"`,
+        'X-Export-Warning': warning,
+      } });
+      const payload = workspacePayload(init);
+      published.push(payload.members.map(member => member.blob));
+      if (published.length === 1) return Response.json({ code: 'export_collision', detail: 'Files would be replaced',
+        paths: ['/out/server.step'], directory: '/out' }, { status: 409 });
+      return Response.json({ files: ['/out/server.step', '/out/server.stl'], directory: '/out', replaced: ['/out/server.step'] });
+    };
+    const built = await buildGeometryExport('step', design, 4, 'horn', undefined, 'solid', fetcher);
+    const bundle = await runWorkspaceExportBundle({ design, designRevision: 4, jobStem: 'horn',
+      preferences: preferencesStore.getSnapshot(), fetcher, confirmReplacements: confirm,
+    }, ['step', 'stl'], 'confirm');
+    expect(built.warning).toBe(warning);
+    expect(bundle.warnings).toEqual([warning, warning]);
+    expect(bundle.files).toEqual(['/out/server.step', '/out/server.stl']);
+    expect(bundle.replaced).toEqual(['/out/server.step']);
+    expect(confirm).toHaveBeenCalledOnce();
+    for (const files of published) for (const blob of files) {
+      expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array(await built.blob.arrayBuffer()));
+    }
+  });
   it.each(['stl', 'fusion_csv', 'mwg_config'] as const)('refuses %s generation even if an imported run carries a parametric anchor', async format => {
     const selectedRun = {
       id: 'cad-anchor', config_summary: { geometry_type: 'imported' },
@@ -140,6 +171,19 @@ describe('result exporters', () => {
     const publication = workspacePayload(requests[1].init);
     expect(publication).toMatchObject({ jobId: 'cad-return', destination: 'chosen-destination', existing: 'confirm' });
     expect(new Uint8Array(await publication.members[0].blob.arrayBuffer())).toEqual(bytes);
+  });
+
+  it('keeps returned STEP fallback names scoped to the selected drive channel', async () => {
+    const selectedRun = { id: 'cad-return', config_summary: { geometry_type: 'imported' } } as unknown as JobItem;
+    const wrapped: ResultPayload = { frequencies: [], channels: { 'drive-a': result, 'drive-b': result } };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('returned step bytes'));
+    const saveBlob = vi.fn();
+    expect(await runExportFormat('step', { selectedRun, result: wrapped, channelId: 'drive-b',
+      jobStem: 'saved-run', preferences: preferencesStore.getSnapshot(), fetcher, saveBlob,
+    })).toEqual(['saved-run-drive-b.step']);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0][0]).toBe('/api/export/runs/cad-return/step');
+    expect(await saveBlob.mock.calls[0][0].text()).toBe('returned step bytes');
   });
 
   it('publishes nothing when the returned STEP fails verification', async () => {
@@ -620,13 +664,13 @@ describe('result exporters', () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const path = String(input);
       if (path === '/api/design/serialize') return new Response(JSON.stringify({ text: 'cfg', suggestedFilename: 'horn_1_config.cfg' }), { status: 200 });
-      return new Response('geometry', { status: 200, headers: { 'Content-Disposition': `attachment; filename="file.${path.endsWith('step') ? 'step' : 'stl'}"` } });
+      return new Response('geometry', { status: 200, headers: { 'Content-Disposition': `attachment; filename="file.${path.includes('/step') ? 'step' : 'stl'}"` } });
     });
     const context = { jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), designRevision: 4, fetcher, saveText: vi.fn(), saveBlob: vi.fn() };
     await runExportFormat('mwg_config', context);
     await runExportFormat('step', context);
     await runExportFormat('stl', context);
-    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/design/serialize', '/api/export/step', '/api/export/stl']);
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/design/serialize', '/api/export/step?body=solid', '/api/export/stl']);
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).not.toHaveProperty('identity');
   });
   it('names the parameter config .mwg for LOOKUP, which the server refuses as .cfg', async () => {
@@ -638,25 +682,31 @@ describe('result exporters', () => {
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).filename).toBe('lk_1_config.mwg');
     expect(saveText).toHaveBeenCalledWith('mwg', 'lk_1_config.mwg');
   });
-  it('stages both Fusion CSV responses before downloading either file', async () => {
+  it('prepares the Fusion CSV pair in one request and publishes neither half on failure', async () => {
     const saveBlob = vi.fn();
-    const failedFetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
-      const path = String(input);
-      if (path.endsWith('kind=slices')) return new Response('slices failed', { status: 500 });
-      return new Response('profiles', { status: 200 });
-    });
-    const context = { jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), fetcher: failedFetcher, saveBlob };
-
-    await expect(runExportFormat('fusion_csv', context)).rejects.toThrow('500');
-    expect(saveBlob).not.toHaveBeenCalled();
-
-    const successfulFetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
-      const kind = String(input).endsWith('kind=slices') ? 'slices' : 'profiles';
-      return new Response(kind, { status: 200, headers: { 'Content-Disposition': `attachment; filename="horn_1_${kind}.csv"` } });
-    });
-    const files = await runExportFormat('fusion_csv', { ...context, fetcher: successfulFetcher });
-    expect(files).toEqual(['horn_1_profiles.csv', 'horn_1_slices.csv']);
-    expect(saveBlob).toHaveBeenCalledTimes(2);
+    const context = { jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), saveBlob };
+    const files = [
+      { filename: 'horn_1_profiles.csv', text: '# profiles\r\n1;2;3\r\n' },
+      { filename: 'horn_1_slices.csv', text: '# slices\r\n1;2;3\r\n1;2;3\r\n' },
+    ];
+    for (const response of [new Response('slices failed', { status: 500 }), Response.json({ files: [files[0], { filename: files[1].filename }] })]) {
+      const workspaceResponse = response.clone();
+      await expect(runExportFormat('fusion_csv', { ...context, fetcher: async () => response })).rejects.toThrow();
+      expect(saveBlob).not.toHaveBeenCalled();
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(workspaceResponse);
+      const bundle = await runWorkspaceExportBundle({ ...context, fetcher }, ['fusion_csv']);
+      expect(bundle.files).toEqual([]);
+      expect(bundle.failures).toHaveLength(1);
+      expect(fetcher).toHaveBeenCalledOnce(); // No Workspace publication.
+    }
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ files }));
+    expect(await runExportFormat('fusion_csv', { ...context, fetcher })).toEqual(files.map(file => file.filename));
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0][0]).toBe('/api/export/profiles?kind=pair');
+    for (const [index, file] of files.entries()) {
+      expect(await saveBlob.mock.calls[index][0].text()).toBe(file.text);
+      expect(saveBlob.mock.calls[index][1]).toBe(file.filename);
+    }
   });
   it.each([-3, -6, -9, -12] as const)('passes the selected %s dB map range without changing result arrays', (mapReference) => {
     const before = JSON.stringify(result);
@@ -917,7 +967,8 @@ describe('result exporters', () => {
       id: 'artifact-uuid', run_number: 123, label: 'asro68', config_summary: {},
     }, reportNotice, fetcher, saveBlob);
 
-    expect(fetcher).toHaveBeenCalledWith('/api/mesh-artifact/artifact-uuid', { signal: expect.any(AbortSignal) });
+    expect(fetcher).toHaveBeenCalledWith('/api/mesh-artifact/artifact-uuid', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('X-WG-Operation-Id')).toBeTruthy();
     expect(filename).toBe(expectedName);
     expect(saveBlob).toHaveBeenCalledTimes(1);
     expect(saveBlob.mock.calls[0][1]).toBe(expectedName);
@@ -1500,17 +1551,24 @@ it('counts completed formats and keeps the activity through the final workspace 
   expect(activityStore.getSnapshot()).toHaveLength(0);
 });
 
-it('counts the two files of a standalone Fusion CSV export', async () => {
+it('counts the server stages of a standalone Fusion CSV pair', async () => {
   activityStore.reset();
-  const profiles = deferred<Response>(); const slices = deferred<Response>();
-  const pending = runExportFormat('fusion_csv', { jobStem: 'horn', preferences: preferencesStore.getSnapshot(),
-    design: designForFamily('OSSE'), saveBlob: vi.fn(), fetcher: url => String(url).includes('kind=slices') ? slices.promise : profiles.promise,
+  const response = deferred<Response>();
+  const counts: number[] = [];
+  const unsubscribe = activityStore.subscribe(() => {
+    const done = activityStore.getSnapshot()[0]?.progress?.done;
+    if (done !== undefined && counts.at(-1) !== done) counts.push(done);
   });
-  expect(activityStore.getSnapshot()[0].progress).toEqual({ done: 0, total: 2 });
-  profiles.resolve(new Response('profiles'));
-  await vi.waitFor(() => expect(activityStore.getSnapshot()[0].progress).toEqual({ done: 1, total: 2 }));
-  slices.resolve(new Response('slices'));
+  const pending = runExportFormat('fusion_csv', { jobStem: 'horn', preferences: preferencesStore.getSnapshot(),
+    design: designForFamily('OSSE'), saveBlob: vi.fn(), fetcher: () => response.promise,
+  });
+  expect(activityStore.getSnapshot()[0].progress).toEqual({ done: 0, total: 4 });
+  response.resolve(Response.json({ files: ['profiles', 'slices'].map(kind => ({ filename: `horn_${kind}.csv`, text: kind })) }, {
+    headers: { 'X-WG-Operation-Stages': JSON.stringify({ stages: ['resolve', 'mesh', 'check', 'write'], total: 4 }) },
+  }));
   await pending;
+  unsubscribe();
+  expect(counts).toEqual([0, 1, 2, 3, 4]);
   expect(activityStore.getSnapshot()).toHaveLength(0);
 });
 
@@ -1522,4 +1580,40 @@ it('a cross-realm abort stops a bundle before the next format', async () => {
     design: designForFamily('OSSE'), fetcher: async () => { throw reason; }, saveText,
   }, ['stl', 'mwg_config'])).rejects.toBe(reason);
   expect(saveText).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('MSH preparation can exceed 30 seconds and Stop stays available (stop=%s)', async stop => {
+  vi.useFakeTimers();
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+    const deadline = new AbortController();
+    setTimeout(() => deadline.abort(new DOMException('Deadline expired', 'TimeoutError')), ms);
+    return deadline.signal;
+  });
+  activityStore.reset();
+  const response = deferred<Response>();
+  let signal: AbortSignal | null | undefined;
+  const saved = vi.fn();
+  const fetcher: typeof fetch = async (url, init) => {
+    if (String(url).startsWith('/api/operation-progress/')) return Response.json({ stages: ['resolve'], total: 4 });
+    signal = init?.signal;
+    signal?.addEventListener('abort', () => response.reject(signal?.reason), { once: true });
+    return response.promise;
+  };
+  try {
+    const pending = downloadMeshArtifact({ id: 'slow', run_number: 1, label: 'slow', config_summary: {} }, vi.fn(), fetcher, saved);
+    const outcome = pending.catch(error => error);
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(signal?.aborted).toBe(false);
+    expect(activityStore.getSnapshot()[0].label).toContain('Building geometry');
+    if (stop) activityStore.getSnapshot()[0].cancel!();
+    else response.resolve(new Response('exact msh bytes'));
+    const result = await outcome;
+    if (stop) {
+      expect(result).toMatchObject({ name: 'AbortError' });
+      expect(saved).not.toHaveBeenCalled();
+    } else {
+      expect(Array.from(new Uint8Array(await saved.mock.calls[0][0].arrayBuffer()))).toEqual(Array.from(new TextEncoder().encode('exact msh bytes')));
+    }
+    expect(activityStore.getSnapshot()).toEqual([]);
+  } finally { timeout.mockRestore(); vi.useRealTimers(); }
 });

@@ -1,4 +1,5 @@
 import { activityOperation } from '../shell/activityOperation';
+import { stagedActivity } from '../shell/stagedActivity';
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import { refusalText } from './httpError';
 import type { RegisteredMesh } from './meshImport';
@@ -34,8 +35,9 @@ export async function openMeshReplay(text: string, fetcher: typeof fetch = fetch
 }
 
 export async function fetchMeshReplay(jobId: string, fetcher: typeof fetch = fetch): Promise<Blob> {
-  return activityOperation({ kind: 'export', label: 'Exporting mesh replay' }, fetcher, async (fetcher) => {
-    const response = await checked(await fetcher(`/api/jobs/${encodeURIComponent(jobId)}/mesh-replay`));
+  const url = `/api/jobs/${encodeURIComponent(jobId)}/mesh-replay`;
+  return stagedActivity({ kind: 'export', label: 'Exporting mesh replay' }, fetcher, undefined, async (fetcher, signal) => {
+    const response = await checked(await fetcher(url, { signal }));
     return response.blob();
-  });
+  }, { method: 'GET', url });
 }

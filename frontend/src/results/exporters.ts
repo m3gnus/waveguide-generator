@@ -5,7 +5,7 @@ import { activityOperation } from '../shell/activityOperation';
 import { fetchMeshReplay, MeshReplayRefusal } from '../api/meshReplay';
 import { deadlineFetch } from '../api/deadlineFetch';
 import { samplingComments, samplingProvenance } from './sampling';
-import { downloadBlob, downloadText } from '../api/designIo';
+import { buildGeometryExport, downloadBlob, downloadText, type GeometryExportFile } from '../api/designIo';
 import {
   collisionFrom,
   ExportCollisionError,
@@ -72,6 +72,7 @@ export interface ExportContext {
   fetcher?: typeof fetch;
   saveBlob?: (blob: Blob, filename: string) => void;
   saveText?: (text: string, filename: string, type?: string) => void;
+  reportWarning?: (warning: string) => void;
   now?: Date;
   destination?: 'manual' | 'workspace';
   /**
@@ -98,6 +99,7 @@ export interface ExportFailure { format: ExportFormat; reason: string; blocked?:
 export interface ExportBundleResult {
   files: string[];
   failures: ExportFailure[];
+  warnings?: string[];
   /** Absolute backend destination for Workspace exports. */
   directory?: string;
   /** Files in that destination that already existed and were replaced. */
@@ -352,11 +354,6 @@ async function responseError(response: Response): Promise<Error> {
   return new Error(detail);
 }
 
-interface GeometryDownload {
-  blob: Blob;
-  filename: string;
-}
-
 export interface WorkspaceFile {
   filename: string;
   blob: Blob;
@@ -450,27 +447,23 @@ export async function writeWorkspaceFiles(
     : post(existing);
 }
 
-async function fetchGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<GeometryDownload> {
-  const returnedStep = kind === 'step' && context.selectedRun && modelKindForRun(context.selectedRun) === 'cad';
-  if (!returnedStep && !context.design) throw new Error(MISSING_RUN_DESIGN_EXPORT_REASON);
+async function postGeometry(context: ExportContext, kind: 'step' | 'stl'): Promise<string> {
   const fetcher = context.fetcher ?? fetch;
-  const design = context.design;
-  const baseName = context.jobStem;
-  const query = kind === 'profiles' ? `?kind=${profileKind ?? 'profiles'}` : '';
-  const download = async (fetcher: typeof fetch, signal?: AbortSignal) => {
-    const response = returnedStep
-      ? await fetcher(`/api/export/runs/${encodeURIComponent(context.selectedRun!.id)}/step`, { method: 'POST', signal })
-      : await fetcher(`/api/export/${kind}${query}`, { method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: serializeDesign(design!), designRevision: context.designRevision ?? 0, baseName }) });
-    if (!response.ok) throw await responseError(response);
-    return { blob: await response.blob(), filename: filenameFromResponse(response, filename) };
-  };
-  return kind === 'profiles' ? download(fetcher)
-    : stagedActivity({ kind: 'export', label: `Exporting ${kind.toUpperCase()}` }, fetcher, undefined, download);
-}
-
-async function postGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<string> {
-  const output = await fetchGeometry(context, kind, filename, profileKind);
+  let output: GeometryExportFile;
+  if (kind === 'step' && context.selectedRun && modelKindForRun(context.selectedRun) === 'cad') {
+    output = await stagedActivity({ kind: 'export', label: 'Exporting STEP' }, fetcher, undefined, async (fetcher, signal) => {
+      const response = await fetcher(`/api/export/runs/${encodeURIComponent(context.selectedRun!.id)}/step`, { method: 'POST', signal });
+      if (!response.ok) throw await responseError(response);
+      return { blob: await response.blob(), filename: filenameFromResponse(response, `${exportContextBaseName(context)}.step`),
+        warning: response.headers.get('X-Export-Warning')?.trim() || undefined };
+    });
+  } else {
+    if (!context.design) throw new Error(MISSING_RUN_DESIGN_EXPORT_REASON);
+    output = await buildGeometryExport(kind, context.design, context.designRevision ?? 0,
+      context.jobStem, undefined, 'solid', fetcher);
+  }
   (context.saveBlob ?? downloadBlob)(output.blob, output.filename);
+  if (output.warning) context.reportWarning?.(output.warning);
   return output.filename;
 }
 
@@ -700,7 +693,7 @@ function exportActivityLabel(format: ExportFormat): string {
 }
 
 export async function runExportFormat(format: ExportFormat, context: ExportContext): Promise<string[]> {
-  return activityOperation({ kind: 'export', label: exportActivityLabel(format) }, context.fetcher ?? fetch, async (fetcher, activity) => {
+  return activityOperation({ kind: 'export', label: exportActivityLabel(format) }, context.fetcher ?? fetch, async (fetcher) => {
     context = { ...context, fetcher };
     if (context.selectedRun) {
       const reason = runExportReason(context.selectedRun, format);
@@ -734,23 +727,19 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
       saveText(body.text, filename);
       return [filename];
     }
-    if (format === 'step') return [await postGeometry(context, 'step', `${baseName}.step`)];
-    if (format === 'stl') return [await postGeometry(context, 'stl', `${baseName}.stl`)];
+    if (format === 'step') return [await postGeometry(context, 'step')];
+    if (format === 'stl') return [await postGeometry(context, 'stl')];
     if (format === 'fusion_csv') {
-      // Fetch both halves before triggering either browser download. Otherwise a
-      // failed slices request leaves an untracked profiles file that is duplicated
-      // when the format is retried in a later app session.
-      let done = 0;
-      if (!context.activity) activity.progress(0, 2);
-      const outputs = await Promise.all([
-        fetchGeometry(context, 'profiles', `${baseName}_profiles.csv`, 'profiles'),
-        fetchGeometry(context, 'profiles', `${baseName}_slices.csv`, 'slices'),
-      ].map(async output => {
-        try { return await output; }
-        finally { if (!context.activity) activity.progress(++done, 2); }
-      }));
+      if (!context.design) throw new Error(MISSING_RUN_DESIGN_EXPORT_REASON);
+      // The profile owner samples once and returns both files before either is
+      // published, including when the second formatter fails.
+      const outputs = await buildGeometryExport('profiles', context.design, context.designRevision ?? 0,
+        context.jobStem, 'pair', 'solid', context.fetcher ?? fetch);
       const saveBlob = context.saveBlob ?? downloadBlob;
-      outputs.forEach((output) => saveBlob(output.blob, output.filename));
+      outputs.forEach((output) => {
+        saveBlob(output.blob, output.filename);
+        if (output.warning) context.reportWarning?.(output.warning);
+      });
       return outputs.map((output) => output.filename);
     }
     if (format === 'png') return chartPng(context);
@@ -874,9 +863,9 @@ export async function runExportBundle(inputContext: ExportContext, formats = inp
   return activityOperation({ kind: 'export', label: 'Exporting files' }, inputContext.fetcher ?? fetch, async (fetcher, activity) => {
     inputContext = { ...inputContext, fetcher, activity, activityTotal: formats.length };
     activity.progress(0, formats.length);
-    const { files, failures } = await runAttributedExportBundle(inputContext, formats);
+    const { files, failures, warnings } = await runAttributedExportBundle(inputContext, formats);
     if (failures.length) activity.end(false);
-    return { files, failures };
+    return { files, failures, ...(warnings ? { warnings } : {}) };
   });
 }
 
@@ -890,6 +879,7 @@ async function runAttributedExportBundle(inputContext: ExportContext, formats: r
     : inputContext;
   const files: string[] = [];
   const failures: ExportFailure[] = [];
+  const warnings: string[] = [];
   const formatFiles = new Map<ExportFormat, string[]>();
   const sharedFiles: string[] = [];
   const emitted = new Set<string>();
@@ -930,6 +920,7 @@ async function runAttributedExportBundle(inputContext: ExportContext, formats: r
         // name; the builders are shared, so the duplicate is byte-identical.
         const produced = await runExportFormat(format, {
           ...variant,
+          reportWarning: warning => { warnings.push(warning); variant.reportWarning?.(warning); },
           saveBlob: (blob, filename) => {
             if (emitted.has(filename)) return;
             emitted.add(filename);
@@ -967,7 +958,7 @@ async function runAttributedExportBundle(inputContext: ExportContext, formats: r
     if (!files.includes(filename)) files.push(filename);
     sharedFiles.push(filename);
   }
-  return { files, failures, formatFiles, sharedFiles };
+  return { files, failures, formatFiles, sharedFiles, ...(warnings.length ? { warnings } : {}) };
 }
 
 /** Build every selected format in memory, keyed by relative name. */
@@ -1001,7 +992,7 @@ export async function runWorkspaceExportBundle(
   return activityOperation({ kind: 'export', label: 'Exporting files' }, context.fetcher ?? fetch, async (fetcher, activity) => {
     context = { ...context, fetcher, activity, activityTotal: formats.length + 1 };
     activity.progress(0, formats.length + 1);
-    const { bundle: { failures }, prepared } = await prepareWorkspaceBundle(context, formats);
+    const { bundle: { failures, warnings }, prepared } = await prepareWorkspaceBundle(context, formats);
     if (!prepared.size) {
       if (failures.length) activity.end(false);
       return { files: [], failures };
@@ -1023,6 +1014,7 @@ export async function runWorkspaceExportBundle(
       failures,
       directory: written.directory,
       replaced: written.replaced ?? [],
+      ...(warnings ? { warnings } : {}),
     };
   });
 }
@@ -1091,8 +1083,9 @@ export async function downloadMeshArtifact(
   fetcher: typeof fetch = fetch,
   saveBlob: (blob: Blob, filename: string) => void = downloadBlob,
 ): Promise<string> {
-  return activityOperation({ kind: 'export', label: 'Exporting MSH' }, fetcher, async (fetcher) => {
-    const response = await deadlineFetch(fetcher, `/api/mesh-artifact/${encodeURIComponent(job.id)}`);
+  const url = `/api/mesh-artifact/${encodeURIComponent(job.id)}`;
+  return stagedActivity({ kind: 'export', label: 'Exporting MSH' }, fetcher, undefined, async (fetcher, signal) => {
+    const response = await fetcher(url, { signal });
     if (!response.ok) throw await responseError(response);
     const regenerated = response.headers.get('X-WG2-Mesh-Regenerated') === '1';
     const filename = `${exportStemForJob(job)}${regenerated ? '-regenerated' : ''}.msh`;
@@ -1102,7 +1095,7 @@ export async function downloadMeshArtifact(
       reportNotice(`${runDisplayName(job)}: the original mesh is gone, so WG rebuilt it with the current version${version ? ` (${version})` : ''} and may differ from the mesh that was solved.`);
     }
     return filename;
-  });
+  }, { method: 'GET', url });
 }
 
 export async function saveMeshArtifactToWorkspace(

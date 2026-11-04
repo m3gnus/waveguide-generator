@@ -26,7 +26,7 @@ it.each(['step', 'stl'].flatMap(format => ['request', 'body'].map(phase => ({ fo
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
       if (path.endsWith('/claim')) return response({ claimed: true, token: 'secret', formats: [format], job });
-      if (path === `/api/export/${format}`) {
+      if (path === `/api/export/${format}${format === 'step' ? '?body=solid' : ''}`) {
         requestSignal = init!.signal!;
         const wait = () => new Promise<never>((_resolve, reject) => {
           reading.resolve();
@@ -58,7 +58,7 @@ it('automatic geometry progress reads retain their deadline', async () => {
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const path = String(input);
     if (path.endsWith('/claim')) return response({ claimed: true, token: 'secret', formats: ['step'], job });
-    if (path === '/api/export/step') { started.resolve(); return geometry.promise; }
+    if (path === '/api/export/step?body=solid') { started.resolve(); return geometry.promise; }
     if (path.startsWith('/api/operation-progress/')) return new Promise((_resolve, reject) => {
       const signal = init!.signal!;
       signals.push(signal);
@@ -88,7 +88,7 @@ it('lease loss still aborts a request with a caller signal and releases the clai
     const path = String(input);
     if (path.endsWith('/claim')) return response({ claimed: true, token: 'secret', formats: ['step'], job });
     if (path.endsWith('/heartbeat')) throw new Error('Lease lost');
-    if (path === '/api/export/step') return new Promise((_resolve, reject) => {
+    if (path === '/api/export/step?body=solid') return new Promise((_resolve, reject) => {
       requestSignal = init!.signal!;
       started.resolve();
       requestSignal.addEventListener('abort', () => reject(requestSignal!.reason), { once: true });

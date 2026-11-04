@@ -9772,7 +9772,7 @@ export interface operations {
     export_profiles_api_export_profiles_post: {
         parameters: {
             query?: {
-                kind?: "profiles" | "slices";
+                kind?: "profiles" | "slices" | "pair";
             };
             header?: never;
             path?: never;

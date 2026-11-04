@@ -167,6 +167,22 @@ describe('RunExportControl', () => {
     host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click();
   });
 
+  it.each([false, true])('shows sizing warnings with the existing export notice (preferred=%s)', async preferred => {
+    const warning = 'Sizing reached its backstop. Check fine detail in CAD.';
+    preferencesStore.update({ exportFormats: ['step', 'stl'] });
+    mocks.runWorkspaceExportBundle.mockResolvedValue({ files: ['/out/horn.step'], failures: [],
+      replaced: ['/out/horn.step'], warnings: [warning] });
+    render();
+    await act(async () => {
+      if (preferred) host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click();
+      else { host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click(); }
+      await settle();
+    });
+    if (!preferred) await act(async () => { menuItem('STEP solid').click(); await settle(); });
+    expect(host.textContent).toContain(warning);
+    expect(host.textContent).toContain('Replaced');
+  });
+
   it('names the storage cause when the complex pressure basis could not be saved', () => {
     render(completeJob({ has_pressure_basis_artifact: false, persistence_warnings: ['Pressure-basis artifact could not be saved: disk full'] }));
     openMenu();

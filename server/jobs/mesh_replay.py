@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -14,7 +15,7 @@ import threading
 import tempfile
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from pydantic import Field, JsonValue
 
 from server.contracts import JobModel
@@ -31,6 +32,7 @@ from server.jobs.runtime.cad_lane import _imported_symmetry_metadata
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.file_import import FileMesh, MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh
 from server.jobs.request_cancellation import ClientDisconnected, RequestCancellation
+from server.jobs.operation_progress import request_operation
 from server.mesh.preparation_fence import PreparationSuperseded
 from server.mesh.child import MesherChildError, MesherCrashError
 from server.mesh.prepared_gc import prepared_mesh_use
@@ -234,7 +236,19 @@ def _validate_file_request(request: SolveRequest, record: dict[str, Any] | None 
         _imported_symmetry_metadata(record, requested=request.options.symmetry)
 
 
-def build_mesh_replay(runtime: Any, store: Any, job_id: str, *, prepared: tuple[FileMesh, dict[str, Any]] | None = None, registration_only: bool = False) -> Any:
+@dataclass(frozen=True)
+class CapturedReplayInputs:
+    """Verified, request-local values; encoding never reopens their paths."""
+
+    registration: MeshRegistration
+    request: SolveRequest
+    solver_text: str
+    original_sha256: str
+    solver_sha256: str
+    result_provenance: dict[str, Any]
+
+
+def capture_mesh_replay(runtime: Any, store: Any, job_id: str) -> CapturedReplayInputs | dict[str, Any]:
     snapshot = runtime.store.get_archive_snapshot(job_id)
     if snapshot is None:
         raise LookupError("Run not found.")
@@ -268,7 +282,8 @@ def build_mesh_replay(runtime: Any, store: Any, job_id: str, *, prepared: tuple[
         raise ValueError("The retained original mesh exceeds the mesh import limit.")
     original_text = original.decode("utf-8")
     source = record["source_file"]
-    if _digest(original_text) != source["original_sha256"]:
+    original_sha256 = _digest(original_text)
+    if original_sha256 != source["original_sha256"]:
         raise ValueError("The retained original mesh changed. Reimport and solve it before exporting replay.")
     registration = MeshRegistration(
         filename=source["filename"], msh_text=original_text,
@@ -278,27 +293,33 @@ def build_mesh_replay(runtime: Any, store: Any, job_id: str, *, prepared: tuple[
         domain_planes=source.get("domain_planes", []), reflect_planes=source.get("reflect_planes"),
         remove_lid_planes=source.get("remove_lid_planes", []),
     )
-    if registration_only:
-        return registration
-    mesh, _ = prepared if prepared is not None else prepare_file_mesh(parse_file_mesh(original_text), source["transform"]["units"],
-                                source["transform"]["forward"], source["transform"]["up"],
-                                domain_planes=source.get("domain_planes", []), reflect_planes=source.get("reflect_planes"),
-                                remove_lid_planes=source.get("remove_lid_planes", []), roles=registration.driven_roles(), auto_cut=registration.auto_cut,
-                                historical_reconstruction=True)
-    if mesh_text(mesh) != solver_text:
+    results = json.loads(snapshot["results_text"]) if snapshot["results_text"] else {}
+    return CapturedReplayInputs(registration, request, solver_text, original_sha256,
+                                _digest(solver_text), results.get("provenance") or {})
+
+
+def encode_mesh_replay(captured: CapturedReplayInputs | dict[str, Any], *, prepared: tuple[FileMesh, dict[str, Any]] | None = None) -> dict[str, Any]:
+    if isinstance(captured, dict):
+        return captured
+    registration = captured.registration
+    mesh, _ = prepared if prepared is not None else prepare_file_mesh(
+        parse_file_mesh(registration.msh_text), registration.units, registration.forward, registration.up,
+        domain_planes=registration.domain_planes, reflect_planes=registration.reflect_planes,
+        remove_lid_planes=registration.remove_lid_planes, roles=registration.driven_roles(), auto_cut=registration.auto_cut,
+        historical_reconstruction=True,
+    )
+    if mesh_text(mesh) != captured.solver_text:
         raise ValueError("The original mesh no longer reconstructs the run's solver mesh.")
     # Remove local job ancestry and a spent submission key, keeping the entire
     # resolved geometry/options rather than a lossy display projection.
-    request.parent_job_id = None
-    request.client_request_id = None
-    results = json.loads(snapshot["results_text"]) if snapshot["results_text"] else {}
+    request = captured.request.model_copy(update={"parent_job_id": None, "client_request_id": None})
     inputs = MeshReplayInputs(
         schema_version=1, kind="wg-file-mesh-replay", numerical_contract="imported-free-space-v1",
         axial_contract=AXIAL_CONTRACT_VERSION,
         registration=registration,
-        original_sha256=_digest(original_text), solver_msh_text=solver_text,
-        solver_sha256=_digest(solver_text), request=request,
-        result_provenance=results.get("provenance") or {},
+        original_sha256=captured.original_sha256, solver_msh_text=captured.solver_text,
+        solver_sha256=captured.solver_sha256, request=request,
+        result_provenance=captured.result_provenance,
     )
     return _seal_package(inputs)
 
@@ -309,6 +330,13 @@ def _seal_package(inputs: MeshReplayInputs | CadMeshReplayPackage) -> dict[str, 
     if len(content.encode("utf-8")) + 100 > MAX_REPLAY_BYTES:
         raise ValueError("The mesh replay package exceeds the 64 MiB limit.")
     return {**payload, "content_sha256": _digest(content)}
+
+
+def build_mesh_replay(runtime: Any, store: Any, job_id: str, *, prepared: tuple[FileMesh, dict[str, Any]] | None = None, registration_only: bool = False) -> Any:
+    captured = capture_mesh_replay(runtime, store, job_id)
+    if registration_only and isinstance(captured, CapturedReplayInputs):
+        return captured.registration
+    return encode_mesh_replay(captured, prepared=prepared)
 
 
 def _checked_registration(package: MeshReplayPackage | CadMeshReplayPackage) -> MeshRegistration | None:
@@ -440,17 +468,26 @@ def mount_mesh_replay(application: FastAPI) -> None:
     lock = threading.Lock()
 
     @router.get("/api/jobs/{job_id}/mesh-replay")
-    async def export_package(job_id: str) -> dict[str, Any]:
-        try:
-            registration = await asyncio.to_thread(build_mesh_replay, runtime, store, job_id, registration_only=True)
-            if isinstance(registration, dict):
-                return registration
-            prepared = await prepare_registration(registration, historical_reconstruction=True)
-            return await asyncio.to_thread(build_mesh_replay, runtime, store, job_id, prepared=prepared)
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        except (OSError, UnicodeError, ValueError) as exc:
-            raise HTTPException(409, str(exc)) from exc
+    async def export_package(job_id: str, http_request: Request, response: Response) -> dict[str, Any]:
+        with request_operation(http_request, ("resolve", "mesh", "check", "write")) as operation:
+            try:
+                operation.check()
+                captured = await asyncio.to_thread(capture_mesh_replay, runtime, store, job_id)
+                operation.check()
+                operation.progress("resolve")
+                prepared = await prepare_registration(captured.registration, operation.check, historical_reconstruction=True) if isinstance(captured, CapturedReplayInputs) else None
+                operation.check()
+                operation.progress("mesh")
+                package = await asyncio.to_thread(encode_mesh_replay, captured, prepared=prepared)
+                operation.check()
+                operation.progress("check")
+                operation.progress("write")
+                operation.attach(response)
+                return package
+            except LookupError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise HTTPException(409, str(exc)) from exc
 
     @router.post("/api/mesh-replay")
     async def open_package(body: ReplayPackage, http_request: Request) -> dict[str, Any]:

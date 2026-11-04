@@ -145,13 +145,13 @@ function jobName(job: JobItem): string {
 
 function workspaceNotice(
   label: string,
-  result: Pick<ExportBundleResult, 'directory' | 'files' | 'replaced'>,
+  result: Pick<ExportBundleResult, 'directory' | 'files' | 'replaced' | 'warnings'>,
 ): string {
   const count = `${result.files.length} file${result.files.length === 1 ? '' : 's'}`;
   const written = result.directory
     ? `${label} · ${count} written to ${result.directory}`
     : `${label} · ${count} written to Workspace`;
-  return `${written}${replacedNotice(result.replaced)}`;
+  return [written + replacedNotice(result.replaced), ...(result.warnings ?? [])].join(' · ');
 }
 
 export function RunExportControl({ job, compact = false, disabledReason, result, channelId, onOpenExportSettings }: RunExportControlProps) {

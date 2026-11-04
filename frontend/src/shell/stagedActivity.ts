@@ -15,6 +15,7 @@ const nextStep: Record<string, string> = {
 export function stagedActivity<T>(
   start: StartActivity, fetcher: typeof fetch, signal: AbortSignal | undefined,
   work: (fetcher: typeof fetch, signal: AbortSignal) => Promise<T>,
+  operationGet?: { method: 'GET'; url: string },
 ): Promise<T> {
   return abortableActivity(start, fetcher, signal, async (scoped, signal, activity, abort) => {
     const id = crypto.randomUUID();
@@ -66,11 +67,14 @@ export function stagedActivity<T>(
     const abortPolling = () => { polling.abort(); clearTimeout(timer); };
     signal.addEventListener('abort', abortPolling, { once: true });
     const countedFetch: typeof fetch = (input, init) => {
-      // Preliminary folder reads are ordinary reads; only the operation POST
-      // starts a channel. One id belongs to exactly one POST.
+      // Preliminary folder reads are ordinary reads. A build-bearing GET must
+      // be designated explicitly; POST remains the default operation method.
       const requestSignal = init?.signal ? combineAbortSignals([init.signal, signal]) : signal;
-      if (init?.method?.toUpperCase() !== 'POST') return scoped(input, { ...init, signal: requestSignal });
-      const headers = new Headers(init.headers);
+      const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+      const url = input instanceof Request ? input.url : String(input);
+      const operation = operationGet ? method === 'GET' && url === operationGet.url : method === 'POST';
+      if (!operation) return scoped(input, { ...init, signal: requestSignal });
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
       headers.set('X-WG-Operation-Id', id);
       if (start.kind === 'send-to-cad' || start.kind === 'assembly-build') {
         activity.setCancel(() => { void cancelPublication(); });

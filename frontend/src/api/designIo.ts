@@ -811,15 +811,25 @@ export interface GeometryExportFile {
  * two replacement questions for one user action, and the dialog answers only
  * one at a time.
  */
+export function buildGeometryExport(
+  kind: 'profiles', design: DesignDocument, designRevision: number,
+  baseName: string, profileKind: 'pair', stepBody: StepBody,
+  fetcher: typeof fetch,
+): Promise<GeometryExportFile[]>;
+export function buildGeometryExport(
+  kind: 'step' | 'stl' | 'profiles', design: DesignDocument, designRevision: number,
+  baseName: string, profileKind?: 'profiles' | 'slices', stepBody?: StepBody,
+  fetcher?: typeof fetch,
+): Promise<GeometryExportFile>;
 export async function buildGeometryExport(
   kind: 'step' | 'stl' | 'profiles',
   design: DesignDocument,
   designRevision: number,
   baseName: string,
-  profileKind?: 'profiles' | 'slices',
+  profileKind?: 'profiles' | 'slices' | 'pair',
   stepBody: StepBody = 'solid',
   fetcher: typeof fetch = fetch,
-): Promise<GeometryExportFile> {
+): Promise<GeometryExportFile | GeometryExportFile[]> {
   const start = { kind: 'export' as const, label: `Exporting ${kind === 'profiles' ? 'profile CSV' : kind.toUpperCase()}` };
   const build = async (fetcher: typeof fetch, signal?: AbortSignal) => {
     const query = kind === 'profiles'
@@ -836,12 +846,21 @@ export async function buildGeometryExport(
     });
     if (!response.ok) throw new Error(await errorMessage(response));
     const warning = response.headers.get('X-Export-Warning')?.trim() || undefined;
+    if (kind === 'profiles' && profileKind === 'pair') {
+      const pair = await response.json() as { files?: Array<{ filename?: string; text?: string; warning?: string }> };
+      if (!Array.isArray(pair.files) || pair.files.length !== 2
+        || pair.files.some(file => !file.filename || typeof file.text !== 'string')) {
+        throw new Error('WG could not prepare both profile files. Export the profiles again.');
+      }
+      return pair.files.map(file => ({ filename: file.filename!, blob: new Blob([file.text!], { type: 'text/csv' }),
+        ...(file.warning ? { warning: file.warning } : {}) }));
+    }
     const suffix = kind === 'profiles' ? `_${profileKind ?? 'profiles'}.csv` : `.${kind}`;
     const filename = responseFilename(response, `${baseName}${suffix}`);
     const built: GeometryExportFile = { filename, blob: await response.blob() };
     return warning ? { ...built, warning } : built;
   };
-  return kind === 'profiles' ? activityOperation(start, fetcher, fetcher => build(fetcher))
+  return kind === 'profiles' && profileKind !== 'pair' ? activityOperation(start, fetcher, fetcher => build(fetcher))
     : stagedActivity(start, fetcher, undefined, build);
 }
 
