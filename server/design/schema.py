@@ -1618,15 +1618,22 @@ class NativeDesignCommon(DesignCommon):
 
 class NativeOSSEConfig(NativeDesignCommon):
     formula: Literal["OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC", "OSSE-NATIVE"]
-    L: NativeNumber = Field(default=120, gt=0, le=10000, description="Intrinsic OSSE body length in mm")
-    r0: NativeNumber = Field(default=12.7, gt=0, le=10000, description="Intrinsic body throat radius in mm")
-    a: NativeNumber = Field(default=40, ge=1, lt=80, description="Body coverage half-angle in degrees")
-    a0: NativeNumber = Field(default=15.5, ge=0, lt=80, description="Body throat half-angle in degrees")
-    k: NativeNumber = Field(default=1, gt=0, le=100)
+    L: Annotated[NativeNumber, Field(gt=0, le=10000)] | Expr = Field(default=120, description="Intrinsic OSSE body length in mm, evaluated per azimuth")
+    r0: Annotated[NativeNumber, Field(gt=0, le=10000)] | Expr = Field(default=12.7, description="Intrinsic body throat radius in mm, evaluated per azimuth")
+    a: Annotated[NativeNumber, Field(ge=1, lt=80)] | Expr = Field(default=40, description="Body coverage half-angle in degrees, evaluated per azimuth")
+    a0: Annotated[NativeNumber, Field(ge=0, lt=80)] | Expr = Field(default=15.5, description="Body throat half-angle in degrees, evaluated per azimuth")
+    k: Annotated[NativeNumber, Field(gt=0, le=100)] | Expr = 1
     s: NativeNumber = Field(default=0, ge=0, le=0, description="Native bodies require zero termination")
     throat_adapter: Annotated[AuthoredThroatAdapter | ControlThroatAdapter, Field(discriminator="mode")] | None = Field(default=None, exclude_if=lambda v: v is None)
     axial_scale: NativeNumber | None = Field(default=None, ge=0.01, le=10, exclude_if=lambda v: v is None, description="Absolute axial factor; scale controls X/Y")
     terminating_arc: TerminatingArc | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @field_validator("L", "r0", "a", "a0", "k", mode="before")
+    @classmethod
+    def _body_number_or_expression(cls, value: Any) -> Any:
+        if type(value) is bool:
+            raise ValueError("Native body dimensions require finite numbers or numeric expressions, not booleans")
+        return value
 
 
 class SourceDiskConfig(NativeDesignCommon):
@@ -1660,9 +1667,16 @@ class DesignConfig(RootModel[DesignVariant]):
                 {"key": "Family"},
             )
         if migrated.get("text_import_version") is None:
+            from .native import NATIVE_FORMULAS
+            native_body = migrated.get("formula") in NATIVE_FORMULAS
             # Old WG files documented base-10 log and natural ln. Retain the
             # exact source while sending unambiguous function names downstream.
             def native_logs(item: Any, path: tuple[str, ...] = ()) -> Any:
+                if native_body and path in {("L",), ("r0",), ("a",), ("a0",), ("k",)}:
+                    # These expressions were previously refused. Their new
+                    # native contract uses ATH syntax; an explicit wg-v1
+                    # dialect still delegates legacy log/ln translation to Expr.
+                    return item
                 if _is_known_numeric_path(path):
                     raw = item.get("raw") if isinstance(item, Mapping) else item
                     if isinstance(raw, str) and re.search(r"\b(?:log|ln)\s*\(", raw):

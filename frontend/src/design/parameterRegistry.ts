@@ -1,5 +1,6 @@
 import { designForFamily, type DesignDocument, type DesignFamily } from '../stores/design';
 import { NATIVE_FAMILIES, type NativeFamily } from './nativeFamilies';
+import { OSSE_MERIDIAN_FIELDS } from './osseFeatures';
 import type { WorkspaceMode } from '../stores/workspaceMode';
 import { backendSupports, hostLimitation, selectionLimitation, type BackendFeature, type BackendIdentity } from './backendSupport';
 import type { EngineCapability } from '../jobs/actions';
@@ -205,7 +206,12 @@ const compositeControls = (slot: 'adapter' | 'arc' | 'roundover' | 'axial') => (
   disabledWhen: (design: DesignDocument) => compositeHas(slot)(design) ? undefined : COMPOSITE_SLOT_DISABLED_REASON,
 });
 const nativeNumber = (id: string, path: string, label: string, options: Partial<ParameterDefinition>): ParameterDefinition =>
-  number(`native.${id}`, path, path, profile, label, options);
+  number(`native.${id}`, path, path, profile, label, {
+    ...options,
+    description: (OSSE_MERIDIAN_FIELDS as readonly string[]).includes(id)
+      ? `${options.description} Accepts an expression in azimuth p; the native construction is evaluated on each meridian.`
+      : options.description,
+  });
 
 export const LEGACY_PARAMETER_REGISTRY: ParameterDefinition[] = [
   select('mesh.ath_roundover', 'Mesh.Roundover', 'mesh.ath_roundover', morphTarget, 'ATH mouth lip', [{ value: 0, label: 'Off' }, { value: 1, label: 'On' }], { visibleWhen: isCurrentAthImport, description: 'Append an ATH mouth lip to the imported profile. Off removes Mesh.Roundover. Requires the supported ATH import combinations; preview reports incompatible shapes.' }),
@@ -658,8 +664,9 @@ export function parameterSectionIsVisible(
   return definition.visibleWhen?.(context) ?? true;
 }
 
-/** The 43 daggered v1 fields, the morph target exponent, and imported R-OSSE rotation. */
+/** The 43 daggered v1 fields, the morph target exponent, imported R-OSSE rotation, and the shared native OSSE body dimensions. */
 export const EXPRESSION_PARAMETER_IDS = new Set([
+  ...OSSE_MERIDIAN_FIELDS.map((field) => `native.${field}`),
   'rosse.R', 'rosse.a', 'rosse.a0', 'rosse.r0', 'rosse.k', 'rosse.m', 'rosse.b', 'rosse.r', 'rosse.q', 'rosse.tmax',
   'osse.L', 'osse.a', 'osse.a0', 'osse.r0', 'osse.k', 'osse.s', 'osse.n', 'osse.q', 'osse.h',
   'common.throat_ext_angle', 'common.throat_ext_length', 'common.slot_length',

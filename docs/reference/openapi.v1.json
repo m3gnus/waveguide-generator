@@ -10967,28 +10967,49 @@
         "additionalProperties": false,
         "properties": {
           "L": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "$ref": "#/components/schemas/Expr"
+              }
+            ],
             "default": 120,
-            "description": "Intrinsic OSSE body length in mm",
-            "exclusiveMinimum": 0.0,
-            "maximum": 10000.0,
-            "title": "L",
-            "type": "number"
+            "description": "Intrinsic OSSE body length in mm, evaluated per azimuth",
+            "title": "L"
           },
           "a": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 80.0,
+                "minimum": 1.0,
+                "type": "number"
+              },
+              {
+                "$ref": "#/components/schemas/Expr"
+              }
+            ],
             "default": 40,
-            "description": "Body coverage half-angle in degrees",
-            "exclusiveMaximum": 80.0,
-            "minimum": 1.0,
-            "title": "A",
-            "type": "number"
+            "description": "Body coverage half-angle in degrees, evaluated per azimuth",
+            "title": "A"
           },
           "a0": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 80.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "$ref": "#/components/schemas/Expr"
+              }
+            ],
             "default": 15.5,
-            "description": "Body throat half-angle in degrees",
-            "exclusiveMaximum": 80.0,
-            "minimum": 0.0,
-            "title": "A0",
-            "type": "number"
+            "description": "Body throat half-angle in degrees, evaluated per azimuth",
+            "title": "A0"
           },
           "assembly": {
             "anyOf": [
@@ -11115,11 +11136,18 @@
             "type": "string"
           },
           "k": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100.0,
+                "type": "number"
+              },
+              {
+                "$ref": "#/components/schemas/Expr"
+              }
+            ],
             "default": 1,
-            "exclusiveMinimum": 0.0,
-            "maximum": 100.0,
-            "title": "K",
-            "type": "number"
+            "title": "K"
           },
           "length_mode": {
             "anyOf": [
@@ -11146,12 +11174,19 @@
             "$ref": "#/components/schemas/OutputConfig"
           },
           "r0": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "$ref": "#/components/schemas/Expr"
+              }
+            ],
             "default": 12.7,
-            "description": "Intrinsic body throat radius in mm",
-            "exclusiveMinimum": 0.0,
-            "maximum": 10000.0,
-            "title": "R0",
-            "type": "number"
+            "description": "Intrinsic body throat radius in mm, evaluated per azimuth",
+            "title": "R0"
           },
           "s": {
             "default": 0,

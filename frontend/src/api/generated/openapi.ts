@@ -6279,22 +6279,22 @@ export interface components {
         NativeOSSEConfig: {
             /**
              * L
-             * @description Intrinsic OSSE body length in mm
+             * @description Intrinsic OSSE body length in mm, evaluated per azimuth
              * @default 120
              */
-            L?: number;
+            L?: number | components["schemas"]["Expr"];
             /**
              * A
-             * @description Body coverage half-angle in degrees
+             * @description Body coverage half-angle in degrees, evaluated per azimuth
              * @default 40
              */
-            a?: number;
+            a?: number | components["schemas"]["Expr"];
             /**
              * A0
-             * @description Body throat half-angle in degrees
+             * @description Body throat half-angle in degrees, evaluated per azimuth
              * @default 15.5
              */
-            a0?: number;
+            a0?: number | components["schemas"]["Expr"];
             assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
@@ -6330,7 +6330,7 @@ export interface components {
              * K
              * @default 1
              */
-            k?: number;
+            k?: number | components["schemas"]["Expr"];
             /** Length Mode */
             length_mode?: ("profile" | "total") | null;
             mesh?: components["schemas"]["MeshConfig"];
@@ -6338,10 +6338,10 @@ export interface components {
             output?: components["schemas"]["OutputConfig"];
             /**
              * R0
-             * @description Intrinsic body throat radius in mm
+             * @description Intrinsic body throat radius in mm, evaluated per azimuth
              * @default 12.7
              */
-            r0?: number;
+            r0?: number | components["schemas"]["Expr"];
             /**
              * S
              * @description Native bodies require zero termination

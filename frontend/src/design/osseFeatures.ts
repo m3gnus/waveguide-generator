@@ -1,5 +1,7 @@
 import type { DesignDocument, DesignFamily } from '../stores/design';
 
+export const OSSE_MERIDIAN_FIELDS = ['L', 'r0', 'a', 'a0', 'k'] as const;
+
 export type OsseFeatures = {
   throat: 'none' | 'authored' | 'controls';
   mouth: 'plain' | 'roundover' | 'arc';

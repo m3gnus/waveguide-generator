@@ -63,14 +63,14 @@ it.each([
   expect(useDesignStore.getState().design).toEqual(original);
 });
 
-it.each(['L', 'a0'])('confirms a constant %s expression before switching and restores it with Undo', async (path) => {
+it('confirms a constant scale expression before switching and restores it with Undo', async () => {
   const original = designForFamily('OSSE');
-  original._expressions = { [path]: { raw: '2 * 12.7', value: null } };
+  original._expressions = { scale: { raw: '2 * 0.75', value: null } };
   useDesignStore.getState().replaceDocument(original);
   const wire = JSON.stringify(serializeDesign(original));
-  const fetcher = resolveTo({ [path]: 25.4 });
+  const fetcher = resolveTo({ scale: 1.5 });
   const confirm = vi.spyOn(window, 'confirm').mockImplementation((message) => {
-    expect(message).toContain(`${path} = 2 * 12.7 will become 25.4`);
+    expect(message).toContain('scale = 2 * 0.75 will become 1.5');
     expect(useDesignStore.getState().design).toEqual(original);
     return true;
   });
@@ -78,12 +78,29 @@ it.each(['L', 'a0'])('confirms a constant %s expression before switching and res
   await choose();
   expect(fetcher).toHaveBeenCalledOnce();
   expect(confirm).toHaveBeenCalledOnce();
-  expect(useDesignStore.getState().design).toMatchObject({ formula: 'OSSE-ARC', [path]: 25.4 });
+  expect(useDesignStore.getState().design).toMatchObject({ formula: 'OSSE-ARC', scale: 1.5 });
   expect(changed).toHaveBeenCalledOnce();
   act(() => useDesignStore.getState().undo());
   expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(wire);
   act(() => useDesignStore.getState().redo());
-  expect(useDesignStore.getState().design[path as 'L' | 'a0']).toBe(25.4);
+  expect(useDesignStore.getState().design.scale).toBe(1.5);
+});
+
+it.each(['L', 'r0', 'a', 'a0', 'k'])('carries the %s expression to the native body without asking for a number', async (path) => {
+  const original = designForFamily('OSSE');
+  original._expressions = { [path]: { raw: '12 + sin(p)', value: 12 } };
+  useDesignStore.getState().replaceDocument(original);
+  const fetcher = resolveTo({});
+  const confirm = vi.spyOn(window, 'confirm');
+  render();
+  await choose();
+  expect(fetcher).not.toHaveBeenCalled();
+  expect(confirm).not.toHaveBeenCalled();
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+  expect(useDesignStore.getState().design.formula).toBe('OSSE-ARC');
+  expect(useDesignStore.getState().design._expressions?.[path]).toEqual(original._expressions[path]);
+  act(() => useDesignStore.getState().undo());
+  expect(useDesignStore.getState().design).toEqual(original);
 });
 
 it.each([
@@ -108,7 +125,7 @@ it.each([
   expect(useDesignStore.getState().design).toEqual(original);
 });
 
-it.each(['L', 'a0', 'a', 'mesh.throat_resolution'])('names the unresolved %s expression, even when it has a cached numeric sample', async (path) => {
+it.each(['scale', 'mesh.throat_resolution', 'mesh.angular_segments'])('names the unresolved %s expression, even when it has a cached numeric sample', async (path) => {
   const original = designForFamily('OSSE');
   original._expressions = { [path]: { raw: '12 + sin(p)', value: 12 } };
   useDesignStore.getState().replaceDocument(original);
@@ -125,9 +142,9 @@ it.each(['L', 'a0', 'a', 'mesh.throat_resolution'])('names the unresolved %s exp
 
 it('keeps the full design and history when conversion is cancelled', async () => {
   const original = designForFamily('OSSE');
-  original._expressions = { L: { raw: '60 * 2', value: 120 } };
+  original._expressions = { scale: { raw: '0.5 * 2', value: 1 } };
   useDesignStore.getState().replaceDocument(original);
-  resolveTo({ L: 120 });
+  resolveTo({ scale: 1 });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   render();
   await choose();
@@ -182,7 +199,7 @@ it('confirms actual missing-field defaults instead of copying the displayed temp
 
 it('discards expression resolution if the design changed while it was pending', async () => {
   const original = designForFamily('OSSE');
-  original._expressions = { L: { raw: '60 * 2', value: 120 } };
+  original._expressions = { scale: { raw: '0.5 * 2', value: 1 } };
   useDesignStore.getState().replaceDocument(original);
   let finish!: (response: Response) => void;
   vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise<Response>((resolve) => { finish = resolve; })));
@@ -190,7 +207,7 @@ it('discards expression resolution if the design changed while it was pending', 
   render();
   await choose();
   act(() => useDesignStore.getState().updateField('L', 190));
-  await act(async () => { finish(new Response(JSON.stringify({ L: 120 }), { status: 200 })); });
+  await act(async () => { finish(new Response(JSON.stringify({ scale: 1 }), { status: 200 })); });
   expect(confirm).not.toHaveBeenCalled();
   expect(designIo.serializeDesignDocument).not.toHaveBeenCalled();
   expect(useDesignStore.getState().design).toMatchObject({ formula: 'OSSE', L: 190 });

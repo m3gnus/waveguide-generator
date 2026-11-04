@@ -346,8 +346,11 @@ describe('complete parameter registry', () => {
 
   it('marks the daggered rows expression-capable and gives enclosure resolutions a numeric list editor', () => {
     const tupleIds = new Set(['enclosure.front_resolution', 'enclosure.back_resolution']);
-    expect([...EXPRESSION_PARAMETER_IDS].filter((id) => !tupleIds.has(id))).toHaveLength(45);
+    expect([...EXPRESSION_PARAMETER_IDS].filter((id) => !tupleIds.has(id) && !id.startsWith('native.'))).toHaveLength(45);
     expect(EXPRESSION_PARAMETER_IDS.has('rosse.rotation')).toBe(true);
+    expect([...EXPRESSION_PARAMETER_IDS].filter((id) => id.startsWith('native.'))).toEqual([
+      'native.L', 'native.r0', 'native.a', 'native.a0', 'native.k',
+    ]);
     expect(EXPRESSION_PARAMETER_IDS.has('morph.target_exponent')).toBe(true);
     expect([...tupleIds].every((id) => !EXPRESSION_PARAMETER_IDS.has(id))).toBe(true);
     expect(PARAMETER_REGISTRY.filter((field) => tupleIds.has(field.id)).every((field) => field.kind === 'text')).toBe(true);

@@ -363,7 +363,7 @@
         "OSSE-ARC",
         "OSSE-NATIVE"
       ],
-      "accepts_expression": false,
+      "accepts_expression": true,
       "writable": true,
       "default_by_family": {
         "OSSE-ADAPTER": 120,
@@ -381,7 +381,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Intrinsic length of the original circular OSSE body before scale, adapter trimming or arc attachment. Axial, arc and roundover formulas require finished length 1–2000 mm; use axial_scale for Z on axial bodies and scale otherwise. Adapter-axial instead bounds total finished adapter plus retained-body depth to 1–2000 mm."
+      "description": "Intrinsic length of the original circular OSSE body before scale, adapter trimming or arc attachment. Axial, arc and roundover formulas require finished length 1–2000 mm; use axial_scale for Z on axial bodies and scale otherwise. Adapter-axial instead bounds total finished adapter plus retained-body depth to 1–2000 mm. Accepts an expression in azimuth p; the native construction is evaluated on each meridian."
     },
     {
       "id": "native.r0",
@@ -402,7 +402,7 @@
         "OSSE-ARC",
         "OSSE-NATIVE"
       ],
-      "accepts_expression": false,
+      "accepts_expression": true,
       "writable": true,
       "default_by_family": {
         "OSSE-ADAPTER": 12.7,
@@ -420,7 +420,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Intrinsic radius of the original OSSE body. Axial, arc and roundover formulas require r0 × scale in 1–200 mm. Adapter-axial instead requires finished driver radius in 1–200 mm; driver diameter is controlled separately."
+      "description": "Intrinsic radius of the original OSSE body. Axial, arc and roundover formulas require r0 × scale in 1–200 mm. Adapter-axial instead requires finished driver radius in 1–200 mm; driver diameter is controlled separately. Accepts an expression in azimuth p; the native construction is evaluated on each meridian."
     },
     {
       "id": "native.a",
@@ -441,7 +441,7 @@
         "OSSE-ARC",
         "OSSE-NATIVE"
       ],
-      "accepts_expression": false,
+      "accepts_expression": true,
       "writable": true,
       "default_by_family": {
         "OSSE-ADAPTER": 40,
@@ -459,7 +459,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Circular body flare angle. Must exceed the throat half-angle. Axial, arc and roundover formulas require 5 through 75 degrees."
+      "description": "Circular body flare angle. Must exceed the throat half-angle. Axial, arc and roundover formulas require 5 through 75 degrees. Accepts an expression in azimuth p; the native construction is evaluated on each meridian."
     },
     {
       "id": "native.a0",
@@ -480,7 +480,7 @@
         "OSSE-ARC",
         "OSSE-NATIVE"
       ],
-      "accepts_expression": false,
+      "accepts_expression": true,
       "writable": true,
       "default_by_family": {
         "OSSE-ADAPTER": 15.5,
@@ -498,7 +498,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Circular body tangent angle at its original throat, strictly below its coverage angle."
+      "description": "Circular body tangent angle at its original throat, strictly below its coverage angle. Accepts an expression in azimuth p; the native construction is evaluated on each meridian."
     },
     {
       "id": "native.k",
@@ -519,7 +519,7 @@
         "OSSE-ARC",
         "OSSE-NATIVE"
       ],
-      "accepts_expression": false,
+      "accepts_expression": true,
       "writable": true,
       "default_by_family": {
         "OSSE-ADAPTER": 1,
@@ -537,7 +537,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Positive OSSE flare constant. Axial, arc and roundover formulas require 0.5 through 10."
+      "description": "Positive OSSE flare constant. Axial, arc and roundover formulas require 0.5 through 10. Accepts an expression in azimuth p; the native construction is evaluated on each meridian."
     },
     {
       "id": "native.scale",

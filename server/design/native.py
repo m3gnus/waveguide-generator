@@ -138,10 +138,21 @@ def native_mesher_config(root: Any) -> dict[str, Any]:
     if mesh.size_mm is not None:
         raise control_refusal('mesh.size_mm is only supported by SOURCE-DISK', 'Uniform source mesh size', 'Clear Uniform source mesh size, or choose the standalone source family.', message='Uniform source mesh size is only available for a standalone source.')
     roundover = has_native_roundover(root)
+    def body(value: Any, name: str) -> str | float:
+        if hasattr(value, "execution_text"):
+            # Raw text, including its expression dialect, is the authority;
+            # a hydrated editor sample is never the whole meridian profile.
+            result = value.execution_text()
+            if result is None:
+                raise _literal_error(name)
+            return result
+        return number(value, name)
+
     config.update({
         "mode": "freestanding" if roundover else "bare",
         "scale": number(root.scale, "scale", 1),
-        "profile": {"L_mm": root.L, "r0_mm": root.r0, "a_deg": root.a, "a0_deg": root.a0, "k": root.k, "s": root.s},
+        "profile": {key: body(getattr(root, field), field) for field, key in
+                    (("L", "L_mm"), ("r0", "r0_mm"), ("a", "a_deg"), ("a0", "a0_deg"), ("k", "k"), ("s", "s"))},
         "source": {"source_shape": 0},
     })
     config["mesh"]["wall_thickness_mm"] = number(mesh.wall_thickness, "mesh.wall_thickness", 5 if roundover else 0)

@@ -278,7 +278,7 @@ def test_native_fixture_fits_a_7_gib_runner_dense_solver_ceiling(formula: str, t
     ("OSSE-ROUNDOVER", {"mesh": {"wall_thickness": 5, "mouth_roundover_radius_mm": 5}}, "radius"),
     ("SOURCE-DISK", {"source_body": {"radius_mm": 18, "outer_radius_mm": 18, "depth_mm": 8}}, "radius"),
     ("SOURCE-DISK", {"mesh": {"size_mm": True}}, "size_mm"),
-    ("OSSE-AXIAL", {"a": "40 + p"}, "a"),
+    ("OSSE-AXIAL", {"a": "80 + p"}, "a"),
     ("OSSE-ADAPTER", {"source": {"shape": 1}}, "source.shape"),
     ("OSSE-ARC", {"morph": {"target_shape": 2}}, "morph.target_shape"),
     ("SOURCE-DISK", {"mesh": {"quadrants": 12}}, "mesh.quadrants"),

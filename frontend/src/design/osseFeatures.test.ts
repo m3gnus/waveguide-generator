@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
-import { designForFamily, mergeDesignForOsseFeatures, NATIVE_FAMILIES, resetDesignStore, serializeDesign, useDesignStore, type DesignFamily } from '../stores/design';
+import { designForFamily, mergeDesignForOsseFeatures, NATIVE_FAMILIES, osseInputsRequiringNumbers, resetDesignStore, serializeDesign, useDesignStore, type DesignFamily } from '../stores/design';
 import { osseFeatures, osseFormula } from './osseFeatures';
 
 afterEach(resetDesignStore);
@@ -71,22 +71,39 @@ describe('OSSE feature choices', () => {
     expect(useDesignStore.getState().design).toEqual(variant);
   });
 
-  it('refuses to copy a stored OSSE expression through the family conversion API', () => {
+  it('carries stored meridian expressions through native feature changes, file reload and undo', () => {
     const original = designForFamily('OSSE');
-    original._expressions = { L: { value: null, raw: '120 + sin(p)', dialect: 'ath' } };
+    original._expressions = { L: { value: null, raw: '120 + sin(p)' },
+      a: { value: 42, raw: '40 + 2*cos(2*p)' },
+      k: { value: null, raw: '1 + .01*log(10) + .01*sin(p)', dialect: 'wg-v1' } };
     useDesignStore.getState().replaceDocument(original);
-    expect(() => useDesignStore.getState().setFamily('OSSE-ROUNDOVER', { preserveOsseBody: true })).toThrow('Horn length (L) uses the expression “120 + sin(p)”');
+    useDesignStore.getState().setFamily('OSSE-ROUNDOVER', { preserveOsseBody: true });
+    const changed = useDesignStore.getState().design;
+    expect(changed._expressions).toEqual(original._expressions);
+    expect(serializeDesign(hydrateDesignDocument(serializeDesign(changed)))).toEqual(serializeDesign(changed));
+    useDesignStore.getState().setOsseFeatures({ throat: 'authored', mouth: 'roundover', axial: 'on' });
+    expect(useDesignStore.getState().design._expressions).toEqual(original._expressions);
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design).toEqual(changed);
+    useDesignStore.getState().undo();
     expect(useDesignStore.getState().design).toEqual(original);
   });
 
+  it.each(['L', 'r0', 'a', 'a0', 'k'])('does not ask for a number in %s, which is evaluated per meridian', (path) => {
+    const original = designForFamily('OSSE');
+    original._expressions = { [path]: { value: 1, raw: '1 + sin(p)' } };
+    expect(osseInputsRequiringNumbers(original)).toEqual({});
+  });
+
   it.each([
-    'L', 'r0', 'a', 'a0', 'k', 'scale', 'mesh.throat_resolution', 'mesh.mouth_resolution',
+    'scale', 'mesh.throat_resolution', 'mesh.mouth_resolution',
     'mesh.rear_resolution', 'mesh.angular_segments', 'mesh.length_segments',
     'mesh.max_triangles', 'mesh.allow_large_mesh', 'mesh.vertical_offset',
   ])('names %s when the native contract cannot carry its expression', (path) => {
     const original = designForFamily('OSSE');
     original._expressions = { [path]: { value: 1, raw: '1 + sin(p)' } };
     useDesignStore.getState().replaceDocument(original);
+    expect(Object.keys(osseInputsRequiringNumbers(original))).toEqual([path]);
     expect(() => useDesignStore.getState().setOsseFeatures({ throat: 'none', mouth: 'arc', axial: 'off' }))
       .toThrow(`(${path}) uses the expression “1 + sin(p)”`);
     expect(useDesignStore.getState().design).toEqual(original);

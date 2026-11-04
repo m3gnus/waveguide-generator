@@ -8,7 +8,7 @@ import { replaceAthPolarBlocks } from './athPolars';
 import { advanceEditorMutation } from './editorMutation';
 import { DEFAULT_SWEEP } from './solveDefaults';
 import { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
-import { osseFeatures, osseFormula, type OsseFeatures } from '../design/osseFeatures';
+import { OSSE_MERIDIAN_FIELDS, osseFeatures, osseFormula, type OsseFeatures } from '../design/osseFeatures';
 import type { DesignAssembly } from './assembly';
 
 export { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
@@ -622,10 +622,14 @@ const OSSE_LITERAL_BODY_FIELDS = OSSE_BODY_FIELDS.filter((field) => field !== 's
 const OSSE_MESH_FIELDS = ['throat_resolution', 'mouth_resolution', 'rear_resolution',
   'angular_segments', 'length_segments', 'max_triangles', 'allow_large_mesh', 'vertical_offset'] as const;
 
-/** Only dimensions and mesh controls actually carried to the native builder. */
+/**
+ * Carried inputs the native builder still needs as plain numbers. The shared
+ * body dimensions (L, r0, a, a0, k) are evaluated per meridian instead; scale
+ * and mesh settings stay scalar in the native construction.
+ */
 export function osseInputsRequiringNumbers(current: DesignDocument): Record<string, ExprNumber | null> {
   if (current.formula !== 'OSSE') return {};
-  const carriedPaths = new Set<string>([...OSSE_LITERAL_BODY_FIELDS, ...OSSE_MESH_FIELDS.map((field) => `mesh.${field}`)]);
+  const carriedPaths = new Set<string>(['scale', ...OSSE_MESH_FIELDS.map((field) => `mesh.${field}`)]);
   return {
     ...Object.fromEntries((current._absent ?? [])
       .filter((path) => (OSSE_LITERAL_BODY_FIELDS as readonly string[]).includes(path))
@@ -690,6 +694,10 @@ function mergeFamilyParameters(current: DesignDocument, family: DesignFamily, op
       // Native horns share the same intrinsic OSSE body and finished-mm sizing.
       for (const key of OSSE_BODY_FIELDS) {
         if (current[key] !== undefined) next[key] = current[key];
+      }
+      for (const key of OSSE_MERIDIAN_FIELDS) {
+        const expression = expressionAtPath(current, key);
+        if (expression) next._expressions = { ...next._expressions, [key]: structuredClone(expression) };
       }
       // Native bodies require s=0; plain-only termination/shape values remain
       // retrievable in the store's existing complete-document undo snapshot.

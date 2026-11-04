@@ -18,7 +18,7 @@ describe('native formula editing and persistence', () => {
     expect(fields.length).toBeGreaterThan(0);
     for (const field of fields) {
       expect(field.description).toBeTruthy();
-      expect(fieldAcceptsExpression(field)).toBe(false);
+      expect(fieldAcceptsExpression(field)).toBe(['L', 'r0', 'a', 'a0', 'k'].includes(field.path ?? ''));
     }
     expect(PARAMETER_REGISTRY.filter((field) => !field.id.startsWith('native.') && fieldIsVisible(field, design))
       .every((field) => field.id.startsWith('simulation.') || field.id === 'mesh.surface_deviation_mm' || field.kind === 'indicator')).toBe(true);

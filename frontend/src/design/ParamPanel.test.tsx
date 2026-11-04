@@ -1096,15 +1096,15 @@ describe('ParamPanel inventory UX', () => {
 
   it('keeps expressions and the complete design when native features cannot carry them', async () => {
     const validate = vi.spyOn(designIo, 'serializeDesignDocument');
-    vi.spyOn(designIo, 'resolveDesignExpressions').mockResolvedValue({ L: null });
+    vi.spyOn(designIo, 'resolveDesignExpressions').mockResolvedValue({ scale: null });
     const original = designForFamily('OSSE');
-    original._expressions = { L: { value: null, raw: '120 + 5*sin(p)', dialect: 'ath' } };
+    original._expressions = { scale: { value: null, raw: '1 + .1*sin(p)' } };
     act(() => useDesignStore.getState().replaceDocument(original));
     const select = host.querySelector<HTMLSelectElement>('#osse-feature-mouth')!;
     await act(async () => { select.value = 'roundover'; select.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(validate).not.toHaveBeenCalled();
     expect(useDesignStore.getState().design).toEqual(original);
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Horn length (L) uses the expression “120 + 5*sin(p)”');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('(scale) uses the expression “1 + .1*sin(p)”');
   });
 
   it('keeps an imported separate axial scale when native feature conversion is refused', async () => {
