@@ -1621,7 +1621,7 @@ def solve_imported_metal_from_msh_text(
         raise ValueError("imported Metal solve requires imported geometry")
     from server.contracts.source_contour import validate_contour_request
     validate_contour_request(geometry, record)
-    from . import beat_transducer_imported as exterior
+    from . import exterior_transducer_imported as exterior
 
     if exterior.enabled(geometry.drive_channels):
         _require_exterior_network(request, record)
@@ -2414,7 +2414,7 @@ class MetalEngine:
     ) -> str | None:
         """Why Metal cannot solve this imported drive, asked at submission."""
 
-        from . import beat_transducer_imported as exterior
+        from . import exterior_transducer_imported as exterior
 
         if request is not None:
             drive_channels = request.geometry.drive_channels

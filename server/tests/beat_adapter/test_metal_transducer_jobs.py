@@ -3,6 +3,10 @@
 from copy import deepcopy
 from dataclasses import replace
 import asyncio
+from pathlib import Path
+import subprocess
+import sys
+import json
 
 import numpy as np
 import pytest
@@ -149,6 +153,85 @@ def test_route_uses_same_request_and_unscaled_results(monkeypatch, solid, record
         assert result["channels"]["ideal"]["metadata"]["source_normalization"] == "native_rms_velocity"
         assert "impedance" not in result["channels"]["ideal"]
         assert result["_channel_bases_npz"]
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+def test_metal_admission_and_solve_do_not_import_beat_engine(solid, record, mixed):
+    requested = metal_request(mixed=mixed)
+    if mixed:
+        record["producer"] = "design-assembly"
+        record["required_features"] = ["wg-design-assembly-v1"]
+        record["excitations"] = [
+            {"id": c.id, "source_ids": c.source_ids, "motion": c.motion,
+             **({"motion_axis": [1, 0, 0]} if c.exterior_transducer else {})}
+            for c in requested.geometry.drive_channels
+        ]
+    compiled, _ = jobs.compile_request(solid, requested, record, backend="metal")
+    payload = {
+        "mesh": solid, "request": requested.model_dump(mode="json"), "record": record,
+        "compiled": compiled.wire,
+        "rows": [native_record(compiled, f) for f in compiled.wire["frequencies_hz"]],
+    }
+    # A fresh interpreter also catches imports hidden by test collection. Block
+    # the actual architecture contract's engine modules while both entry points
+    # compile, validate and package a complete stubbed native sweep.
+    completed = subprocess.run(
+        [sys.executable, "-c", """
+import configparser
+import importlib.abc
+import json
+import os
+import sys
+
+config = configparser.ConfigParser()
+config.read('.importlinter')
+forbidden = config['importlinter:contract:solver-engine-beat']['forbidden_modules'].split()
+
+class NoBeatEngine(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if any(fullname == name or fullname.startswith(name + '.') for name in forbidden):
+            raise AssertionError('Metal reached BEAT engine module: ' + fullname)
+
+sys.meta_path.insert(0, NoBeatEngine())
+from server.jobs.models import SolveRequest
+from server.solver import metal, metal_worker
+from server.solver.beat_adapter.transducers import TransducerSweep, parse_transducer_frequency
+
+payload = json.load(sys.stdin)
+request = SolveRequest.model_validate(payload['request'])
+os.environ['WG2_METAL_EXTERIOR_TRANSDUCERS'] = '1'
+metal.metal_status = lambda: {'available': True}
+metal_worker.transducer_worker_available = lambda: True
+validated = []
+def validate(compiled):
+    assert compiled.wire == payload['compiled']
+    validated.append(compiled)
+metal_worker.validate_worker_request = validate
+
+def solve(compiled, **callbacks):
+    assert compiled.wire == payload['compiled']
+    rows = tuple(parse_transducer_frequency(raw, compiled, frequency)
+                 for raw, frequency in zip(payload['rows'], compiled.wire['frequencies_hz']))
+    for count in range(1, len(rows) + 1):
+        callbacks['on_frequency_result'](TransducerSweep(rows[:count], False, len(rows)))
+    return TransducerSweep(rows, False, len(rows))
+metal_worker.solve_transducer_worker = solve
+
+assert metal.MetalEngine().imported_preflight(
+    payload['record'], payload['mesh'], request=request) is None
+assert len(validated) == 1
+partial = []
+result = metal.solve_imported_metal_from_msh_text(
+    payload['mesh'], request, payload['record'],
+    result_callback=lambda revision, frame: partial.append(frame))
+assert len(partial) == len(payload['rows'])
+assert result['metadata']['solver_engine']['package'] == 'hornlab-metal-bem'
+assert result['channel_order'] == [channel.id for channel in request.geometry.drive_channels]
+"""],
+        cwd=Path(__file__).resolve().parents[3], input=json.dumps(payload),
+        capture_output=True, text=True, timeout=20,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_admission_validates_complete_request_before_job(monkeypatch, solid, record):
