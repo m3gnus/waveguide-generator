@@ -24,3 +24,11 @@ it('leaves disjoint or excessive loci unprojected and handles coincident and deg
   expect(geometry.projectToLoci(cursor, [circle(0, 0, 5), circle(0, 0, 5)])).toEqual(geometry.projectToLoci(cursor, [circle(0, 0, 5)]));
   expect(geometry.projectToLoci(cursor, [line(0, 0, 1, 0), line(2, 0, -1, 0)])).toEqual({ x: 1, y: 0 });
 });
+
+it('projects to segment interiors and clamped endpoints, including a zero-length segment', () => {
+  const a = { x: 2, y: 3 }, b = { x: 6, y: 3 };
+  expect(geometry.projectToSegment({ x: 4, y: 8 }, a, b)).toEqual({ x: 4, y: 3 });
+  expect(geometry.projectToSegment({ x: 0, y: 8 }, a, b)).toEqual(a);
+  expect(geometry.projectToSegment({ x: 8, y: 8 }, a, b)).toEqual(b);
+  expect(geometry.projectToSegment({ x: 8, y: 8 }, a, a)).toEqual(a);
+});

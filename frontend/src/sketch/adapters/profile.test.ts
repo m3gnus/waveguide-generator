@@ -9,6 +9,7 @@ import { ProfileController } from '../profileController';
 import { ProjectHistoryAuthority } from '../workspace/projectHistoryAuthority';
 import { displayView } from '../workspace/view';
 import { worldToScreen } from '../view';
+import * as geometry from '../geometry';
 import { profileServer, sampledCurve } from '../profileCanvasTestSupport';
 import { anchorId, createProfileAdapter, equalProfiles, profileBinding, profileCommandBuilder, type ProfilePresentation } from './profile';
 
@@ -105,6 +106,31 @@ describe('profile adapter', () => {
     expect(commands).toEqual([{ kind: 'move', plane: 'H', index: 1, at: { x: 50, y: 40 } }]);
   });
 
+  it('writes only changed coordinates, preserving an untouched radius expression and z metadata', () => {
+    design._expressions = { 'profile_h.points.1.r': { raw: '15*2', value: 30 } };
+    const set = vi.spyOn(owner, 'setAnchorValue');
+    const moved = adapter().apply(design, { kind: 'move', plane: 'H', index: 1, at: { x: 45, y: 30 } }) as DesignDocument;
+    expect(moved.profile_h!.points[1]).toMatchObject({ t: .375, r: 30 });
+    expect(moved._expressions).toEqual(design._expressions);
+    expect(set.mock.calls.map(call => call[3])).toEqual(['z']);
+    set.mockClear();
+    design._expressions['profile_h.points.1.t'] = { raw: '1/3', value: 1 / 3 };
+    const radial = adapter().apply(design, { kind: 'move', plane: 'H', index: 1, at: { x: 40, y: 35 } }) as DesignDocument;
+    expect(radial._expressions).toEqual({ 'profile_h.points.1.t': { raw: '1/3', value: 1 / 3 } });
+    expect(set.mock.calls.map(call => call[3])).toEqual(['r']);
+  });
+
+  it('picks sampled curve segments through the shared bounded projection primitive', () => {
+    const project = vi.spyOn(geometry, 'projectToSegment');
+    presentation.curves = structuredClone(curves);
+    presentation.curves.H.samples = [[40, 30], [50, 30], [50, 30]];
+    const domain = adapter(), ui = { selection: [], scale: 1 };
+    expect(domain.hits(design, { x: 45, y: 32 }, 2, ui)).toContainEqual(expect.objectContaining({ id: 'H:curve', gap: 2 }));
+    expect(project).toHaveBeenCalled();
+    expect(domain.hits(design, { x: 55, y: 30 }, 4, ui).some(hit => hit.id === 'H:curve')).toBe(false);
+    expect(domain.hits(design, { x: 50, y: 30 }, 0, ui)).toContainEqual(expect.objectContaining({ id: 'H:curve', gap: 0 }));
+  });
+
   it('delegates delete, join and angle edits to the existing owner and exposes server span labels and refusals', () => {
     const del = vi.spyOn(owner, 'deleteAnchor'), join = vi.spyOn(owner, 'setAnchorJoin'), angle = vi.spyOn(owner, 'setAnchorAngle');
     const domain = adapter();
@@ -158,6 +184,44 @@ describe('legacy LOOKUP adapter', () => {
 });
 
 describe('native profile project bridge', () => {
+  it('rebases a FREEFORM drag after an unrelated edit, then commits the preview', async () => {
+    const authority = new ProjectHistoryAuthority(profileBinding(vi.fn()));
+    let proposal: owner.EditBuilder | undefined;
+    const controller = new ProfileController({ adapter: adapter(), authority, initial: authority.current,
+      presentation: () => presentation, propose: (_label, builder) => { proposal = builder; }, drafting: vi.fn(), blocked: () => false });
+    useDesignStore.getState().updateValue('throat_ext_length', 12);
+    await controller.enqueue(async () => {});
+    await controller.beginDrag([anchorId('H', 1)]);
+    await controller.dragTo([{ id: anchorId('H', 1), at: { x: 45, y: 40 } }]);
+    await controller.endDrag();
+    expect(proposal).toBeTypeOf('function');
+    const before = useDesignStore.getState().design, origin = owner.currentEditOrigin();
+    const result = await proposal!(before, { origin, signal: new AbortController().signal });
+    owner.commitProfileEdit(origin, before, result.after);
+    await controller.enqueue(async () => {});
+    expect(useDesignStore.getState().design).toMatchObject({ throat_ext_length: 12, profile_h: { points: expect.arrayContaining([expect.objectContaining({ t: .375, r: 40 })]) } });
+    expect(useDesignStore.temporal.getState().pastStates.at(-1)?.design?.throat_ext_length).toBe(12);
+    controller.destroy();
+  });
+
+  it('rebases LOOKUP commands and drags after unrelated parameter edits', async () => {
+    const lookup = designForFamily('LOOKUP'); lookup.lookup_profile = [[0, 12.7], [40, 30], [120, 140]];
+    useDesignStore.getState().replaceDocument(lookup); useDesignStore.temporal.getState().clear();
+    const authority = new ProjectHistoryAuthority(profileBinding(vi.fn(), 'lookup'));
+    const controller = new ProfileController({ adapter: createProfileAdapter(() => ({}), 'lookup'), authority, initial: authority.current,
+      presentation: () => ({}), propose: vi.fn(), drafting: vi.fn(), blocked: () => false });
+    useDesignStore.getState().updateValue('throat_ext_length', 12);
+    await controller.command({ kind: 'move', plane: 'H', index: 1, at: { x: 45, y: 35 } });
+    await controller.enqueue(async () => {});
+    expect(useDesignStore.getState().design).toMatchObject({ throat_ext_length: 12, lookup_profile: [[0, 12.7], [45, 35], [120, 140]] });
+    useDesignStore.getState().updateValue('throat_ext_length', 18);
+    await controller.beginDrag([anchorId('H', 1)]);
+    await controller.dragTo([{ id: anchorId('H', 1), at: { x: 50, y: 40 } }]);
+    await controller.endDrag();
+    expect(useDesignStore.getState().design).toMatchObject({ throat_ext_length: 18, lookup_profile: [[0, 12.7], [50, 40], [120, 140]] });
+    controller.destroy();
+  });
+
   it('records one drag step, preserves untouched expressions, and interleaves table edits in the same Undo/Redo history', async () => {
     const store = useDesignStore.getState();
     design._expressions = { 'profile_h.points.2.r': { raw: '70*2', value: 140 } };

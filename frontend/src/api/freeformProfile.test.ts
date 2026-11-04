@@ -29,11 +29,13 @@ describe('Custom profile curve client', () => {
       .mockResolvedValueOnce(json({ content_key: null, detail: 'malformed' }, 422));
     const insert = insertFreeformAnchor(design, { plane: 'V', z_mm: 0, mode: 'exact' }, 'k1', undefined, fetcher);
     await expect(insert).rejects.toThrow('profileV insert z must be strictly inside a span');
+    await expect(insert).rejects.toMatchObject({ refused: true });
     await expect(queryFreeformCurves(design, 'k1', undefined, fetcher)).rejects.toThrow('the first FREEFORM profile point must have t = 0');
     await expect(queryFreeformCurves(design, 'k1', undefined, fetcher)).rejects.toBeInstanceOf(StaleFreeformResponse);
     const malformed = queryFreeformCurves(design, 'k1', undefined, fetcher);
     await expect(malformed).rejects.toBeInstanceOf(FreeformRequestError);
     await expect(malformed).rejects.toThrow('malformed');
+    await expect(malformed).rejects.toMatchObject({ refused: false });
   });
 
   it.each([
@@ -45,6 +47,7 @@ describe('Custom profile curve client', () => {
     const request = queryFreeformCurves(designForFamily('FREEFORM'), 'current', undefined, fetcher);
     await expect(request).rejects.toBeInstanceOf(FreeformRequestError);
     await expect(request).rejects.toThrow(message);
+    await expect(request).rejects.toMatchObject({ refused: false });
   });
 
   it('hydrates the inserted design and sends the edit fields', async () => {

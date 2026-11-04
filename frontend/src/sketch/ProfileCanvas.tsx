@@ -76,7 +76,12 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
   const draftOwner = useRef(Symbol('profile-canvas'));
   const setDraft = useCallback((value: Parameters<typeof setProfileDraft>[0]) => setProfileDraft(value, draftOwner.current), []);
   const anyDraft = useProfileDraftBlocker();
-  const curveError = legacy ? undefined : currentCurves.error;
+  const curveError = legacy || !currentCurves.refused ? undefined : currentCurves.error;
+  const curveQuery = useRef(currentCurves); curveQuery.current = currentCurves;
+  useEffect(() => {
+    const query = curveQuery.current;
+    if (visible && query.error && !query.refused) query.retry();
+  }, [visible]);
   const host = useRef<HTMLDivElement>(null), latest = useRef({ edit, dragging, invalidInputs, curveError }); latest.current = { edit, dragging, invalidInputs, curveError };
   const revertingFields = useRef(false);
   const lastValid = useRef<{ identity: number; design: DesignDocument } | undefined>(undefined);
@@ -142,7 +147,7 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
 
   presentation.current = {
     curves: legacy ? undefined : previewCurves ?? currentCurves.curves, stale: legacy ? false : preview?.after ? !previewCurves : currentCurves.stale,
-    error: legacy ? undefined : preview?.validation.status === 'error' ? preview.validation.message : currentCurves.error,
+    error: legacy ? undefined : preview?.validation.status === 'error' ? preview.validation.message : curveError,
     before: preview?.after ? currentCurves.curves : undefined,
     generated: generated.samples, generatedScale: generated.scale, generatedStale: generated.stale || Boolean(anyDraft), showGenerated, plane, scaled,
   };
@@ -195,6 +200,7 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
         <div role="status" className="profile-canvas-freshness" data-stale={!legacy && currentCurves.stale || generated.stale || unfinished || undefined}>
           {(!legacy ? currentCurves.error : undefined) ?? generated.error ?? (invalidInputs ? 'Fix the marked values. Showing the last valid profile.' : !legacy && currentCurves.stale || generated.stale ? 'Updating… — last valid profile' : '')}
         </div>
+        {!legacy && currentCurves.error && !currentCurves.refused && <button type="button" className="btn" onClick={currentCurves.retry}>Retry</button>}
         {actionError && <p className="field-error" role="alert">{actionError}</p>}
         {anyDraft && !preview && !dragging && <div role="status">
           <p className="profile-canvas-caption">{invalidInputs || curveError ? 'Fix the marked values or revert to the last valid profile.' : 'Finish the profile or revert to the last valid profile.'} Solve is blocked.</p>

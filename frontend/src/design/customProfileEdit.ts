@@ -869,13 +869,18 @@ export function previewAcceptable(preview: ProfileEditPreview): boolean {
     && preview.curve.status === 'ready' && preview.generated.status === 'ready' && isCurrentOrigin(preview.origin);
 }
 
-interface CurvesState { origin: EditOrigin; curves?: CurvesResponse; error?: string }
+interface CurvesState { origin: EditOrigin; attempt: number; curves?: CurvesResponse; error?: string; refused?: boolean }
 let sharedCurves: { origin: EditOrigin; promise: Promise<CurvesResponse> } | null = null;
 
 /** One keyed curve query per document revision, shared by every table that shows it. */
 function curvesFor(design: DesignDocument, origin: EditOrigin, fetcher: typeof fetch): Promise<CurvesResponse> {
   const same = sharedCurves && sharedCurves.origin.load === origin.load && sharedCurves.origin.generation === origin.generation && sharedCurves.origin.revision === origin.revision;
-  if (!same || fetcher !== fetch) sharedCurves = { origin, promise: queryFreeformCurves(design, profileRequestKey(origin, design), undefined, fetcher) };
+  if (!same || fetcher !== fetch) {
+    const request = { origin, promise: queryFreeformCurves(design, profileRequestKey(origin, design), undefined, fetcher) };
+    sharedCurves = request;
+    // A failed request must not poison this revision for a reopened editor.
+    void request.promise.catch(() => { if (sharedCurves === request) sharedCurves = null; });
+  }
   return sharedCurves!.promise;
 }
 
@@ -884,27 +889,29 @@ function curvesFor(design: DesignDocument, origin: EditOrigin, fetcher: typeof f
  * stays visible, marked stale, until the current revision's answer arrives;
  * answers and refusals for an older revision or another document are dropped.
  */
-export function useCurrentProfileCurves(fetcher: typeof fetch = fetch): { curves?: CurvesResponse; error?: string; stale: boolean } {
+export function useCurrentProfileCurves(fetcher: typeof fetch = fetch) {
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
   const generation = useDesignStore((state) => state.loadGeneration);
   const [state, setState] = useState<CurvesState | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt(value => value + 1), []);
   useEffect(() => {
     if (design.formula !== 'FREEFORM') return undefined;
     const origin = currentEditOrigin();
     let cancelled = false;
     const timer = setTimeout(() => {
       curvesFor(design, origin, fetcher).then((curves) => {
-        if (!cancelled && isCurrentOrigin(origin)) setState({ origin, curves });
+        if (!cancelled && isCurrentOrigin(origin)) setState({ origin, attempt, curves });
       }, (reason: unknown) => {
-        if (!cancelled && isCurrentOrigin(origin) && !(reason instanceof StaleFreeformResponse)) setState((previous) => ({ origin, curves: previous?.origin.generation === generation ? previous.curves : undefined, error: messageOf(reason) }));
+        if (!cancelled && isCurrentOrigin(origin) && !(reason instanceof StaleFreeformResponse)) setState((previous) => ({ origin, attempt, curves: previous?.origin.generation === generation ? previous.curves : undefined, error: messageOf(reason), refused: reason instanceof FreeformRequestError && reason.refused }));
       });
     }, 250);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [design, revision, generation, fetcher]);
+  }, [design, revision, generation, fetcher, attempt]);
   const sameDocument = state?.origin.generation === generation;
-  const current = sameDocument && state?.origin.revision === revision;
-  return { curves: sameDocument ? state?.curves : undefined, error: current ? state?.error : undefined, stale: !current };
+  const current = sameDocument && state?.origin.revision === revision && state?.attempt === attempt;
+  return { curves: sameDocument ? state?.curves : undefined, error: current ? state?.error : undefined, refused: Boolean(current && state?.refused), stale: !current || Boolean(state?.error), retry };
 }
 
 /** Exact (default) or refit insertion through the server's insertion route. */

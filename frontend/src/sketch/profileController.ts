@@ -1,7 +1,7 @@
-import type { DesignDocument } from '../stores/design';
+import { useDesignStore, type DesignDocument } from '../stores/design';
 import { commitProfileEdit, currentEditOrigin, ProfileEditRefusal, type EditBuilder } from '../design/customProfileEdit';
 import { PlainController, type PlainControllerOptions } from './workspace/plainController';
-import { profileCommandBuilder, type ProfileCommand, type ProfilePresentation } from './adapters/profile';
+import { profileCommandBuilder, rebaseProfileDocument, type ProfileCommand, type ProfilePresentation } from './adapters/profile';
 
 interface Options extends PlainControllerOptions<DesignDocument, DesignDocument, ProfileCommand> {
   presentation(): ProfilePresentation;
@@ -14,6 +14,9 @@ interface Options extends PlainControllerOptions<DesignDocument, DesignDocument,
  * exactly one project Undo entry on Accept, including metadata. */
 export class ProfileController extends PlainController<DesignDocument, DesignDocument, ProfileCommand> {
   constructor(private profile: Options) { super(profile); }
+  override get current() {
+    return rebaseProfileDocument(super.current, useDesignStore.getState().design);
+  }
   override command(commands: ProfileCommand | ProfileCommand[] | ((state: DesignDocument) => ProfileCommand | ProfileCommand[])) {
     return this.enqueue(async () => {
       if (this.profile.blocked()) throw new ProfileEditRefusal('Accept or cancel the current profile preview first.');
@@ -51,7 +54,7 @@ export class ProfileController extends PlainController<DesignDocument, DesignDoc
       ? { before: this.dragStart, after: this.current } : undefined);
     await super.endDrag(true);
     this.profile.drafting(false);
-    if (cancel || !candidate || JSON.stringify(this.current) !== JSON.stringify(candidate.before)) return;
-    this.profile.propose('Move point', () => ({ after: candidate.after, notes: ['Point moved in design mm. Pinned handles keep their vectors; automatic spans refit.'] }));
+    if (cancel || !candidate || JSON.stringify(this.current) !== JSON.stringify(rebaseProfileDocument(candidate.before, this.current))) return;
+    this.profile.propose('Move point', before => ({ after: rebaseProfileDocument(candidate.after, before), notes: ['Point moved in design mm. Pinned handles keep their vectors; automatic spans refit.'] }));
   }
 }

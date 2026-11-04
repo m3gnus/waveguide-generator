@@ -25,10 +25,10 @@ export interface InsertResult {
   deviation: CurveDeviation;
 }
 
-/** The server refused the design or edit; `message` is ready to show. */
+/** A request failed; only a keyed validation response proves the draft was refused. */
 export class FreeformRequestError extends Error {
   override name = 'FreeformRequestError';
-  constructor(message: string, readonly status: number) { super(message); }
+  constructor(message: string, readonly status: number, readonly refused = false) { super(message); }
 }
 
 /** An answer for a different request: never shown, never applied. */
@@ -53,7 +53,8 @@ async function post<T extends { content_key: string }>(
     if (error?.content_key != null && error.content_key !== contentKey) {
       throw new StaleFreeformResponse(`Discarded a response for another profile request (${response.status}).`);
     }
-    throw new FreeformRequestError(error?.detail !== undefined ? refusalText(error.detail, 'profile edit') : 'WG could not check this profile. Try again.', response.status);
+    throw new FreeformRequestError(error?.detail !== undefined ? refusalText(error.detail, 'profile edit') : 'WG could not check this profile. Try again.', response.status,
+      response.status === 422 && error?.content_key === contentKey && error?.detail !== undefined);
   }
   const result = payload as T | undefined;
   if (!result || result.content_key !== contentKey) throw new StaleFreeformResponse('Discarded a response for another profile request.');

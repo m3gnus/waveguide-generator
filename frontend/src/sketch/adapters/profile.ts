@@ -8,6 +8,7 @@ import { useDesignStore, type DesignDocument, type FreeformPoint } from '../../s
 import type { DomainAdapter, DisplayItem, DisplayUI, PropertiesSection } from '../workspace/types';
 import type { ProjectBinding } from '../workspace/projectHistoryAuthority';
 import { gridStep, worldToScreen } from '../view';
+import { distance as pointDistance, projectToSegment } from '../geometry';
 import type { XY } from '../solver/types';
 
 export type ProfileCommand =
@@ -62,7 +63,8 @@ export function profileEdit(state: DesignDocument, command: Exclude<ProfileComma
       const points = profilePoints(state, plane);
       const moved = index > 0 && index < points.length - 1 && command.at.x !== points[index].t * (state.length ?? 120)
         ? setAnchorValue(state, plane, index, 'z', command.at.x) : { after: state, notes: [] };
-      const radius = setAnchorValue(moved.after, plane, index, 'r', command.at.y);
+      const radius = command.at.y !== points[index].r
+        ? setAnchorValue(moved.after, plane, index, 'r', command.at.y) : { after: moved.after, notes: [] };
       return { after: radius.after, notes: [...moved.notes, ...radius.notes] };
     }
   }
@@ -81,6 +83,14 @@ export function profileCommandBuilder(commands: ProfileCommand[], curves?: Curve
   };
 }
 
+const profileFields = ['formula', 'length', 'scale', 'profile_h', 'profile_v', 'shared_profile', '_expressions', '_absent'] as const;
+const lookupFields = ['formula', 'length', 'scale', 'lookup_profile', '_expressions', '_absent'] as const;
+/** Keep the editor's bound fields, rebasing everything else onto the live document. */
+export function rebaseProfileDocument(state: DesignDocument, document: DesignDocument): DesignDocument {
+  const fields = state.formula === 'LOOKUP' ? lookupFields : profileFields;
+  return { ...document, ...Object.fromEntries(fields.map(field => [field, state[field]])) };
+}
+
 /** Native, sidecar-free profile binding. Drag writes only changed coordinate leaves,
  * preserving all untouched expressions and omissions exactly as setAnchorValue does. */
 export function profileBinding(onMissing: () => void, mode: 'freeform' | 'lookup' = 'freeform'): ProjectBinding<DesignDocument> {
@@ -88,8 +98,8 @@ export function profileBinding(onMissing: () => void, mode: 'freeform' | 'lookup
     ['t', 'r'].map(field => `profile_${plane}.points.${i}.${field}`)).flat());
   return {
     get paths() { return mode === 'lookup'
-      ? ['formula', 'scale', 'lookup_profile', '_expressions', '_absent', ...(useDesignStore.getState().design.lookup_profile ?? []).flatMap((_point, index) => [0, 1].map(axis => `lookup_profile.${index}.${axis}`))]
-      : ['formula', 'length', 'scale', 'profile_h', 'profile_v', 'shared_profile', '_expressions', '_absent', ...coordinates]; },
+      ? [...lookupFields, ...(useDesignStore.getState().design.lookup_profile ?? []).flatMap((_point, index) => [0, 1].map(axis => `lookup_profile.${index}.${axis}`))]
+      : [...profileFields, ...coordinates]; },
     read: () => {
       const design = useDesignStore.getState().design;
       return mode === 'lookup' ? design.formula === 'LOOKUP' && design.lookup_profile ? design : undefined
@@ -118,9 +128,7 @@ export function profileBinding(onMissing: () => void, mode: 'freeform' | 'lookup
 function distance(at: XY, points: XY[]) {
   let gap = Infinity;
   for (let i = 1; i < points.length; i++) {
-    const a = points[i - 1], b = points[i], dx = b.x - a.x, dy = b.y - a.y;
-    const t = Math.max(0, Math.min(1, ((at.x - a.x) * dx + (at.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
-    gap = Math.min(gap, Math.hypot(at.x - a.x - t * dx, at.y - a.y - t * dy));
+    gap = Math.min(gap, pointDistance(at, projectToSegment(at, points[i - 1], points[i])));
   }
   return gap;
 }

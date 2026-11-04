@@ -416,6 +416,51 @@ describe('profile canvas freshness (FV regression net)', () => {
   });
 });
 
+describe('profile curve request recovery', () => {
+  it.each(['transport', '503', 'unkeyed 422'] as const)('keeps Solve unblocked after a %s failure and retries explicitly', async failure => {
+    const service = profileServer(), respond = service.getMockImplementation()!;
+    let failing = true;
+    service.mockImplementation(async (url, init) => {
+      if (String(url).endsWith('/curves') && failing) {
+        if (failure === 'transport') throw new TypeError('Network unavailable');
+        return new Response('Service unavailable', { status: failure === '503' ? 503 : 422 });
+      }
+      return respond(url, init);
+    });
+    await mount(); await tick();
+    expect(profileDraftBlocker()).toBeNull();
+    expect(button('Revert to last valid')).toBeUndefined();
+    expect(button('Retry')).toBeTruthy();
+    failing = false;
+    await act(async () => button('Retry').click()); await tick();
+    expect(document.querySelector('.profile-authored')).not.toBeNull();
+    expect(document.querySelector('.profile-authored.stale')).toBeNull();
+    expect(button('Retry')).toBeUndefined();
+    expect(profileDraftBlocker()).toBeNull();
+  });
+
+  it.each(['reopen', 'revision'] as const)('retries a failed revision on %s without poisoning the shared query cache', async recovery => {
+    const service = profileServer(), respond = service.getMockImplementation()!;
+    let failing = true;
+    service.mockImplementation(async (url, init) => {
+      if (String(url).endsWith('/curves') && failing) throw new TypeError('Network unavailable');
+      return respond(url, init);
+    });
+    await mount(); await tick();
+    expect(button('Retry')).toBeTruthy(); expect(profileDraftBlocker()).toBeNull();
+    failing = false;
+    if (recovery === 'reopen') {
+      await act(async () => button('Close').click());
+      await act(async () => button('Edit profile on canvas…').click());
+    } else await act(async () => useDesignStore.getState().updateValue('throat_ext_length', 12));
+    await tick();
+    expect(document.querySelector('.profile-authored')).not.toBeNull();
+    expect(document.querySelector('.profile-authored.stale')).toBeNull();
+    expect(button('Retry')).toBeUndefined(); expect(profileDraftBlocker()).toBeNull();
+    expect(service.mock.calls.filter(([url]) => String(url).endsWith('/curves'))).toHaveLength(2);
+  });
+});
+
 describe('profile gesture acceptance authority', () => {
   it('reuses the owner commit after one drag, interleaves a table edit, and rejects an older candidate', async () => {
     const authority = new ProjectHistoryAuthority(profileBinding(vi.fn()));

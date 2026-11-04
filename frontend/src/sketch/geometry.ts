@@ -94,14 +94,18 @@ export function projectToLine(p: XY, a: XY, b: XY): XY {
   const dx = b.x - a.x, dy = b.y - a.y, t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1);
   return { x: a.x + t * dx, y: a.y + t * dy };
 }
+/** Bounded line projection, shared by sketch geometry and sampled polylines. */
+export function projectToSegment(p: XY, a: XY, b: XY): XY {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy) || 0));
+  return { x: a.x + t * dx, y: a.y + t * dy };
+}
 export function projectToEntity(sketch: Sketch, entityId: string, x: number, y: number): { x: number; y: number } {
   const e = sketch.entities.find(e => e.id === entityId), cursor = { x, y };
   const point = (id: string) => sketch.points.find(p => p.id === id)!;
   if (!Number.isFinite(x + y)) throw new Error('Projection needs finite coordinates.');
   if (e?.kind === 'line') {
-    const a = point(e.p1), b = point(e.p2), dx = b.x - a.x, dy = b.y - a.y;
-    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy) || 0));
-    return { x: a.x + t * dx, y: a.y + t * dy };
+    return projectToSegment(cursor, point(e.p1), point(e.p2));
   }
   if (e?.kind === 'arc') {
     const g = arcGeometry(sketch, e), angle = Math.atan2(y - g.center.y, x - g.center.x);
