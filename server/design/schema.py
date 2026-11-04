@@ -1652,6 +1652,13 @@ class DesignConfig(RootModel[DesignVariant]):
         from .migrate import _is_known_numeric_path, apply_migrations
 
         migrated, _applications = apply_migrations(value)
+        if migrated.get("formula") == "LOOKUP":
+            from pydantic_core import PydanticCustomError
+            raise PydanticCustomError(
+                "lookup_import_required",
+                "Family: this saved table profile needs import. Open it through Open design to convert it to a Custom profile, then try again.",
+                {"key": "Family"},
+            )
         if migrated.get("text_import_version") is None:
             # Old WG files documented base-10 log and natural ln. Retain the
             # exact source while sending unambiguous function names downstream.

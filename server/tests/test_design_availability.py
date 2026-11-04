@@ -41,7 +41,7 @@ def test_unrecognised_snapshot_is_refused_with_a_reason() -> None:
 
 @pytest.mark.parametrize('versioned', [False, True])
 def test_lookup_snapshot_is_preserved_without_conversion(monkeypatch, versioned):
-    import server.preview.freeform_conversion as conversion
+    import server.jobs.freeform_conversion as conversion
     def unexpected(*args, **kwargs):
         pytest.fail('History classification must not fit geometry')
     monkeypatch.setattr(conversion, 'convert_design', unexpected)
@@ -55,7 +55,7 @@ def test_lookup_snapshot_is_preserved_without_conversion(monkeypatch, versioned)
 
 
 def test_listing_200_lookup_runs_and_websocket_snapshot_do_no_conversion(tmp_path, monkeypatch):
-    import server.preview.freeform_conversion as conversion
+    import server.jobs.freeform_conversion as conversion
     import server.design.migrate as migration
     from server.jobs.runtime import JobRuntime
     from server.jobs.store import JobStore

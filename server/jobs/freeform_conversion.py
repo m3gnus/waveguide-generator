@@ -17,7 +17,7 @@ from scipy.interpolate import PchipInterpolator
 from server.design.schema import DesignCommon, DesignConfig, Expr, LookupConfig, StrictModel
 from server.design.native import NATIVE_FORMULAS, has_native_roundover
 from server.design.text_import import uses_current_ath_import
-from server.exports.core import _bare_grid_config, _inner_grid
+from server.mesh.inner_grid import _bare_grid_config, _inner_grid
 from server.preview.translate import _expr, design_to_mesher_config
 
 ANGULAR = 144
@@ -636,7 +636,7 @@ def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Ca
                *, anchor_z: Sequence[float] = (), explicit: bool = False) -> dict:
     from hornlab_mesher import freeform_evaluate_profile
     from hornlab_mesher.freeform import MIN_INTERIOR_CORNER_SPACING_MM
-    from server.preview.freeform import _params
+    from server.preview.freeform_profile import _params
     _, unique = np.unique(samples[:, 0], return_index=True)
     samples = samples[np.sort(unique)]
     raw_z, raw_r = samples.T
@@ -769,7 +769,7 @@ def _refine_generated(candidate: DesignConfig, wall: Sequence[np.ndarray], scale
         def objective(delta):
             nonlocal best
             from hornlab_mesher import freeform_evaluate_profile
-            from server.preview.freeform import _params
+            from server.preview.freeform_profile import _params
             check()
             trial_payload = candidate.model_dump(mode='json')
             trial_payload[field]['points'][-1]['r'] = mouth+float(delta)/scale

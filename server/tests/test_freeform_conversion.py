@@ -12,8 +12,8 @@ import pytest
 from server.design.schema import DesignConfig
 from server.design.textcfg import parse
 from server.jobs.operation_progress import mount_operation_progress
-from server.preview.freeform import mount_freeform
-from server.preview.freeform_conversion import compare_generated_designs, convert_design, conversion_notice, legacy_lookup_source
+from server.jobs.freeform import mount_freeform
+from server.jobs.freeform_conversion import compare_generated_designs, convert_design, conversion_notice, legacy_lookup_source
 
 
 @pytest.fixture
@@ -58,7 +58,7 @@ def test_circular_osse_matches_scaled_generated_wall_and_preserves_settings(clie
                            headers={'X-WG-Operation-Id': '00000000-0000-0000-0000-000000000004'})
     assert response.status_code == 200, response.text
     assert response.json()['content_key'] == 'success-key'
-    from server.preview.freeform_conversion import ConvertResponse
+    from server.jobs.freeform_conversion import ConvertResponse
     result = ConvertResponse.model_validate(response.json())
     assert result.verdict == 'match'
     assert assert_honest(result) <= .01
@@ -139,7 +139,7 @@ def test_freeform_and_schema_refusals_echo_key(client):
 
 @pytest.mark.parametrize('error_name',['RuntimeError', 'ValueError', 'InternalInvariantError', 'chained invariant'])
 def test_program_faults_are_not_presented_as_user_refusals(client,monkeypatch,error_name):
-    import server.preview.freeform_conversion as conversion
+    import server.jobs.freeform_conversion as conversion
     from hornlab_mesher.errors import ConfigError, InternalInvariantError
     from server.preview.errors import public_error_message
     error_type = {'RuntimeError': RuntimeError, 'ValueError': ValueError,
@@ -200,7 +200,7 @@ def default_rosse_conversion():
 
 
 def test_default_rosse_converts_through_fold_and_reports_removed_lip(default_rosse_conversion):
-    from server.preview.freeform_conversion import _sample, _meridians, _end_angle, _kept_wall
+    from server.jobs.freeform_conversion import _sample, _meridians, _end_angle, _kept_wall
     result = default_rosse_conversion
     original = _meridians(_sample(DesignConfig.model_validate({'formula': 'R-OSSE'})))
     kept, _ = _kept_wall(original)
@@ -233,7 +233,7 @@ def test_default_rosse_converts_through_fold_and_reports_removed_lip(default_ros
 
 
 def test_fold_cut_retains_each_meridians_own_maximum_and_measures_physical_lip():
-    from server.preview.freeform_conversion import _kept_wall, _lip_change
+    from server.jobs.freeform_conversion import _kept_wall, _lip_change
     original = np.array([[[0, 1], [10, 2], [9, 4], [8, 6]],
                          [[0, 1], [8, 2], [12, 4], [11, 7]]], dtype=float)
     kept, lips = _kept_wall(original)
@@ -247,14 +247,14 @@ def test_fold_cut_retains_each_meridians_own_maximum_and_measures_physical_lip()
 
 def test_fold_before_later_maximum_still_refuses():
     from hornlab_mesher.errors import UserRefusal
-    from server.preview.freeform_conversion import _kept_wall
+    from server.jobs.freeform_conversion import _kept_wall
     with pytest.raises(UserRefusal, match='wall doubles back'):
         _kept_wall(np.array([[[0, 1], [2, 3], [1, 4], [3, 5]]]))
 
 
 @pytest.mark.parametrize('mounting', ['infinite-baffle', 'enclosure'])
 def test_lip_dependent_baffle_and_enclosure_changes_are_reported(default_rosse_conversion, mounting):
-    from server.preview.freeform_conversion import _construction_changes
+    from server.jobs.freeform_conversion import _construction_changes
     before = DesignConfig.model_validate({'formula': 'R-OSSE', 'simulation': {'sim_type': 'infinite-baffle' if mounting == 'infinite-baffle' else 'freestanding'},
                                           'enclosure': {'depth': 300 if mounting == 'enclosure' else 0}})
     payload = default_rosse_conversion.design.model_dump(mode='json')
@@ -280,7 +280,7 @@ def test_icw_refines_generated_wall_before_accepting_conversion(client, record_p
     response = client.post('/api/design/freeform/convert',json={'design':{'formula':'ICW'},'content_key':'icw'})
     assert response.json()['content_key'] == 'icw'
     assert response.status_code == 200, response.text
-    from server.preview.freeform_conversion import ConvertResponse
+    from server.jobs.freeform_conversion import ConvertResponse
     result = ConvertResponse.model_validate(response.json())
     maximum = assert_honest(result)
     assert maximum < .47
@@ -411,3 +411,48 @@ def test_lookup_endpoint_angles_follow_end_chords_even_next_to_a_nearby_kink():
     assert_honest(result)
     assert result.design.root.profile_h.throat_angle_deg.constant_value() == pytest.approx(45)
     assert result.design.root.profile_h.mouth_angle_deg.constant_value() == pytest.approx(math.degrees(math.atan2(30-12.71,120-.01)))
+
+
+def test_conversion_router_exposes_live_progress_and_cancel(monkeypatch):
+    import asyncio
+    import json
+    import threading
+    from uuid import uuid4
+    import server.jobs.freeform as api
+    from server.tests.test_operation_stages import _http
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fitting(_design, _key, *, check, progress):
+        progress('sample')
+        progress('fit')
+        entered.set()
+        while not release.wait(.01):
+            check()
+        check()
+        pytest.fail('Conversion should have stopped at its cancellation check')
+
+    monkeypatch.setattr(api, 'convert_design', fitting)
+
+    async def scenario():
+        app = FastAPI()
+        mount_freeform(app)
+        mount_operation_progress(app)
+        key = str(uuid4())
+        pending = asyncio.create_task(_http(app, 'POST', '/api/design/freeform/convert',
+            {'design': {'formula': 'OSSE'}, 'content_key': 'cancel-revision'}, operation_id=key))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            status, _, body = await _http(app, 'GET', f'/api/operation-progress/{key}')
+            assert status == 200
+            assert json.loads(body) == {'stages': ['sample', 'fit'], 'total': 4}
+            assert (await _http(app, 'DELETE', f'/api/operation-progress/{key}'))[0] == 204
+            status, _, body = await asyncio.wait_for(pending, 5)
+            assert status == 499
+            assert json.loads(body)['content_key'] == 'cancel-revision'
+        finally:
+            release.set()
+            await asyncio.gather(pending, return_exceptions=True)
+
+    asyncio.run(scenario())

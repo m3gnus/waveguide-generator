@@ -12,8 +12,9 @@ from pydantic import ValidationError
 from scipy.optimize import brentq
 
 from server.design.schema import DesignConfig, Expr
-from server.design.textcfg import TextConfigError, parse, serialize
-from server.preview.freeform import mount_freeform
+from server.design.textcfg import TextConfigError, serialize
+from server.design_io.reader import parse
+from server.jobs.freeform import mount_freeform
 from server.preview.translate import design_to_mesher_config
 
 

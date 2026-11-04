@@ -815,7 +815,7 @@ def create_app(
     mount_operation_progress(application)
     mount_preview(application, extra_ws_origins=extra_ws_origins)
     mount_design_io(application)
-    from server.preview.freeform import mount_freeform
+    from server.jobs.freeform import mount_freeform
 
     mount_freeform(application)
     mount_exports(application)

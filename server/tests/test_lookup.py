@@ -7,8 +7,9 @@ import pytest
 from hornlab_mesher.profile_formulas import lookup_profile_array
 from pydantic import ValidationError
 
-from server.design.schema import DesignConfig, LookupConfig
-from server.design.textcfg import TextConfigError, parse
+from server.design.schema import LookupConfig
+from server.design_io.reader import parse, read_design
+from server.design.textcfg import TextConfigError
 
 TABLE = [[0, 12.7], [20, 25], [80, 60]]
 
@@ -18,7 +19,7 @@ def input_design(**changes):
 
 
 def design(**changes):
-    return DesignConfig.model_validate({"formula": "LOOKUP", "lookup_profile": TABLE, **changes})
+    return read_design({"formula": "LOOKUP", "lookup_profile": TABLE, **changes})
 
 
 @pytest.mark.parametrize("table,reason", [
@@ -39,7 +40,7 @@ def test_table_validation_matches_pin(table, reason):
 def test_only_z_is_monotonic_and_alias_is_supported():
     table = [[-10, 0], [0, -2], [10, 1]]
     assert input_design(lookup_profile=table).lookup_profile == [tuple(row) for row in table]
-    assert DesignConfig.model_validate({"formula": "LOOKUP", "lookupProfile": TABLE}).formula == "FREEFORM"
+    assert read_design({"formula": "LOOKUP", "lookupProfile": TABLE}).formula == "FREEFORM"
 
 
 @pytest.mark.parametrize("key", ["L", "R", "n", "s", "s1", "s2", "rotation", "tmax", "m", "r", "b", "a", "k", "q", "h", "throat_adapter"])
@@ -98,3 +99,27 @@ def test_only_lookup_json_takes_the_json_design_path(text: str) -> None:
     with pytest.raises(TextConfigError) as raised:
         parse(text)
     assert "LOOKUP" not in str(raised.value)
+
+
+def test_schema_validation_requires_explicit_import_without_fitting(monkeypatch):
+    from server.design.schema import DesignConfig
+    import server.jobs.freeform_conversion as conversion
+
+    def unexpected(*args, **kwargs):
+        pytest.fail('Schema validation must not sample or fit geometry')
+
+    monkeypatch.setattr(conversion, 'convert_design', unexpected)
+    with pytest.raises(ValidationError) as raised:
+        DesignConfig.model_validate({'formula': 'LOOKUP', 'lookup_profile': TABLE})
+    error = raised.value.errors()[0]
+    assert error['type'] == 'lookup_import_required'
+    assert error['ctx']['key'] == 'Family'
+    assert 'Open design' in error['msg']
+
+
+def test_low_level_text_reader_requires_explicit_import():
+    import json
+    from server.design.textcfg import parse as parse_schema_text
+
+    with pytest.raises(TextConfigError, match='Open design'):
+        parse_schema_text(json.dumps({'formula': 'LOOKUP', 'lookup_profile': TABLE}))

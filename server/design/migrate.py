@@ -10,8 +10,6 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import math
-import json
-from functools import lru_cache
 from types import UnionType
 from typing import Annotated, Any, Callable, Mapping, Union, get_args, get_origin
 
@@ -595,13 +593,6 @@ MIGRATIONS: tuple[Migration, ...] = (
 )
 
 
-@lru_cache(maxsize=32)
-def _custom_profile_import(encoded: str) -> tuple[Payload, str]:
-    from server.preview.freeform_conversion import convert_design, conversion_notice, legacy_lookup_source
-    converted = convert_design(legacy_lookup_source(json.loads(encoded)), '', importing=True)
-    return converted.design.model_dump(mode="json"), conversion_notice(converted)
-
-
 def apply_migrations(payload: Mapping[str, Any]) -> tuple[Payload, list[MigrationApplication]]:
     """Apply every matching migration in numeric order to a defensive copy."""
 
@@ -611,12 +602,6 @@ def apply_migrations(payload: Mapping[str, Any]) -> tuple[Payload, list[Migratio
         if migration.applies_if(migrated):
             migration.transform(migrated)
             applied.append(MigrationApplication(migration.name, migration.note))
-    if migrated.get("formula") == "LOOKUP":
-        # S4 owns the only conversion. This boundary runs before discriminator
-        # validation for files, API loads, autosaves and stored run designs.
-        converted, note = _custom_profile_import(json.dumps(migrated, sort_keys=True, allow_nan=False))
-        migrated = deepcopy(converted)
-        applied.append(MigrationApplication("007_custom_profile_import", note))
     return migrated, applied
 
 

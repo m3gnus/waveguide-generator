@@ -34,7 +34,7 @@ def test_real_design_and_import_routes(case, tmp_path):
     from server.cadlink.store import CadLinkStore
     from server.jobs.api import create_jobs_router
     from server.jobs.mesh_preview import mount_solver_mesh
-    from server.preview.freeform import mount_freeform
+    from server.jobs.freeform import mount_freeform
 
     async def run():
         store = CadLinkStore.for_data_dir(tmp_path)

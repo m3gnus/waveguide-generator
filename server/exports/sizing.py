@@ -42,6 +42,8 @@ from typing import Any, Callable, Mapping
 
 import numpy as np
 
+from server.mesh.inner_grid import EXPORT_CORNER_SEGMENTS as EXPORT_CORNER_SEGMENTS
+
 from server.preview.construction import retain_mesher_construction
 
 # --- the tolerances, and the one ceiling ---------------------------------
@@ -67,11 +69,6 @@ STL_CHORD_TOLERANCE_MM = 0.10
 #: so this sits well clear of it rather than cutting through the middle the way
 #: the 50,000-triangle solve threshold did.
 STL_TRIANGLE_CEILING = 150_000
-
-#: Corner arcs are sampled at the finest count the export ever used, rather
-#: than at a multiple of the user's solve setting. Only rounded-rectangle morph
-#: and guiding-curve designs have corner arcs at all.
-EXPORT_CORNER_SEGMENTS = 12
 
 _MIN_ANGULAR, _MAX_ANGULAR = 32, 720
 _MIN_LENGTH, _MAX_LENGTH = 16, 480

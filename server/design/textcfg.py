@@ -14,7 +14,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping
 
 from pydantic import ValidationError
 
@@ -1708,10 +1708,18 @@ def _mesher_validation_text(
     return "\n".join(rows)
 
 
-def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
-    """Keep authored ATH refusal metadata through the existing text wrapper."""
+PayloadImporter = Callable[[Mapping[str, Any]], tuple[dict[str, Any], list[MigrationApplication]]]
+
+
+def parse(text: str, *, migrate: bool = True, import_payload: PayloadImporter = apply_migrations) -> ParsedDesign:
+    """Keep authored ATH refusal metadata through the existing text wrapper.
+
+    Load boundaries may supply an explicit saved-payload reader. The default
+    performs only structural migrations and refuses retired table designs at
+    schema validation; it never imports or fits geometry.
+    """
     try:
-        return _parse(text, migrate=migrate)
+        return _parse(text, migrate=migrate, import_payload=import_payload)
     except TextConfigError as exc:
         if (isinstance(text, str) and not _PRIVATE_BLOCK_START.search(text)
                 and getattr(exc, "user_refusal", None) is None
@@ -1720,7 +1728,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         raise
 
 
-def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
+def _parse(text: str, *, migrate: bool = True, import_payload: PayloadImporter = apply_migrations) -> ParsedDesign:
     """Parse and validate a v1 text design, preserving raw expressions/extras.
 
     Dialect sniffing exactly mirrors ``src/geometry/params.js:65-67`` as called
@@ -1738,7 +1746,7 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             payload = None
         if isinstance(payload, dict) and payload.get("formula") == "LOOKUP":
             try:
-                payload, applications = apply_migrations(payload)
+                payload, applications = import_payload(payload)
                 design = DesignConfig.model_validate(payload)
             except (ValueError, TypeError) as exc:
                 raise TextConfigError(f"invalid Custom profile input: {exc}") from exc
@@ -1833,7 +1841,7 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
                     payload.setdefault("extra_blocks", {})[name] = ConfigBlock(
                         items=block.items, lines=block.lines, comments=block.comments, entries=block.entries
                     ).model_dump()
-            payload, applications = apply_migrations(payload)
+            payload, applications = import_payload(payload)
             design = DesignConfig.model_validate(payload)
         except (ValueError, TypeError) as exc:
             raise TextConfigError(f"invalid native design: {exc}") from exc
@@ -1941,7 +1949,7 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     applications: list[MigrationApplication] = []
     if migrate:
         try:
-            payload, applications = apply_migrations(payload)
+            payload, applications = import_payload(payload)
         except (OverflowError, ValueError) as exc:
             raise TextConfigError(str(exc)) from exc
     mesh_payload = payload.get("mesh", {})

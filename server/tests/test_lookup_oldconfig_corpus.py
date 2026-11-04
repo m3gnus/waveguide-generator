@@ -7,12 +7,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from server.design.migrate import apply_migrations
+from server.design_io.reader import import_payload, read_design
 from server.design.schema import DesignConfig
-from server.design.textcfg import parse, serialize
+from server.design_io.reader import parse
+from server.design.textcfg import serialize
 from server.design_io.api import open_design, serialize_design
 from server.jobs.design_availability import resolve_job_design
-from server.preview.freeform_conversion import convert_design, legacy_lookup_source, _legacy_grid
+from server.jobs.freeform_conversion import convert_design, legacy_lookup_source, _legacy_grid
 from server.preview.translate import design_to_mesher_config
 from server.exports.core import _inner_grid
 
@@ -104,7 +105,7 @@ def test_generated_morph_and_source_cap_preserved(name):
 def test_native_payload_api_and_run_open_use_same_import_without_changing_original():
     payload = frozen('morph-snapping')['design']
     original = deepcopy(payload)
-    expected, applications = apply_migrations(payload)
+    expected, applications = import_payload(payload)
     assert payload == original
     encoded = json.dumps(payload, separators=(',', ':'))
     native = '; Parameter config\n; Waveguide Generator geometry-interpretation: native-v1\nWG.NativeDesign = {\nPayload = '+encoded+'\n}\n'
@@ -125,7 +126,7 @@ def test_native_payload_api_and_run_open_use_same_import_without_changing_origin
 
 def test_import_keeps_best_fit_when_explicit_conversion_would_refuse():
     payload = {'formula': 'LOOKUP', 'lookup_profile': [[float(i), 20+i*.2+2*(i%2)] for i in range(90)]}
-    migrated, applications = apply_migrations(payload)
+    migrated, applications = import_payload(payload)
     assert migrated['formula'] == 'FREEFORM'
     assert len(migrated['profile_h']['points']) <= 64
     assert 'closest fit' in applications[-1].note
@@ -141,7 +142,7 @@ def test_disjoint_axial_origin_still_opens_and_reports_actual_placement(origin):
     assert result.report.axial_extent_deviation_mm == pytest.approx(abs(origin))
     assert result.report.mouth.max_deviation_mm == pytest.approx(abs(origin))
     assert any(feature.name == 'Axial origin' for feature in result.report.features)
-    assert DesignConfig.model_validate(payload).formula == 'FREEFORM'
+    assert read_design(payload).formula == 'FREEFORM'
 
 
 def test_history_does_not_attempt_a_run_design_import(monkeypatch):
@@ -162,7 +163,7 @@ def test_full_explicit_axial_sample_map_keeps_its_authored_count_on_import():
                'mesh': {'length_segments': 2, 'z_map_points': '0,0.2,1'}}
     original, _ = _legacy_grid(legacy_lookup_source(payload))
     np.testing.assert_allclose(original[0, :, 2], [0, 20, 100])
-    migrated, applications = apply_migrations(payload)
+    migrated, applications = import_payload(payload)
     assert migrated['formula'] == 'FREEFORM'
     assert migrated['mesh']['length_segments']['value'] == 2
     assert migrated['mesh']['z_map_points'] == '0,0.2,1'
@@ -172,7 +173,7 @@ def test_full_explicit_axial_sample_map_keeps_its_authored_count_on_import():
 
 def test_exactly_one_mm_interior_corner_gap_survives_t_roundoff():
     payload = {'formula': 'LOOKUP', 'lookup_profile': [[0, 12.7], [1.1, 13.5], [2.1, 13.8], [120, 140]]}
-    design = DesignConfig.model_validate(payload)
+    design = read_design(payload)
     assert len(design.root.profile_h.points) == 4
     assert all(point.join == 'corner' for point in design.root.profile_h.points)
     z = np.linspace(0, 120, 10001)

@@ -16,7 +16,8 @@ from server.cadlink.store import CadLinkStore
 from server.workspace.api import select_workspace_path
 from server.design.uid import validate_design_uid
 from server.design.schema import DesignConfig, Expr, OSSEConfig
-from server.design.textcfg import ParsedDesign, TextConfigError, parse, serialize
+from server.design_io.reader import parse, read_design
+from server.design.textcfg import ParsedDesign, TextConfigError, serialize
 
 
 _SAFE_STEM = re.compile(r"[^A-Za-z0-9._-]+")
@@ -105,7 +106,7 @@ def _save_design(
     design_payload: object = payload.get("design", payload)
     filename = payload.get("filename") if "design" in payload else None
     try:
-        design = DesignConfig.model_validate(design_payload)
+        design = read_design(design_payload)
         design_uid = validate_design_uid(payload.get("designUid") if "design" in payload else None)
         requested = (
             SaveIdentity.model_validate(payload["identity"])
@@ -146,7 +147,7 @@ def _serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
     design_payload: object = payload.get("design", payload)
     filename = payload.get("filename") if "design" in payload else None
     try:
-        design = DesignConfig.model_validate(design_payload)
+        design = read_design(design_payload)
         design_uid = validate_design_uid(payload.get("designUid") if "design" in payload else None)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False, include_context=False)) from exc

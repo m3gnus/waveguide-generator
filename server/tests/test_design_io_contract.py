@@ -15,8 +15,8 @@ import pytest
 
 from server.cadlink.identity import CadLink, design_hash
 from server.cadlink.store import CadLinkStore
-from server.design.schema import DesignConfig
 from server.design.textcfg import parse, serialize
+from server.design_io.reader import read_design
 from server.design_io import api
 from server.design_io.api import import_report, open_design, save_design, serialize_design
 from server.tests._asgi import _post
@@ -239,7 +239,7 @@ def test_worker_saves_share_the_in_memory_registry():
 def test_worker_round_trips_preserve_document_bytes_and_semantic_values(tmp_path, kind):
     source = "; MWG config\nLength = 120\nCoverage.Angle = 45\nTerm.n = 4\n"
     if kind == "lookup":
-        source = serialize(DesignConfig.model_validate({
+        source = serialize(read_design({
             "formula": "LOOKUP", "lookup_profile": [[0, 12.7], [20, 25], [80, 60]],
         }))
     elif kind == "cadlink":
