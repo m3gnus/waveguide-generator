@@ -3,7 +3,7 @@ import { NATIVE_FAMILIES, type NativeFamily } from './nativeFamilies';
 import type { WorkspaceMode } from '../stores/workspaceMode';
 import { backendSupports, hostLimitation, selectionLimitation, type BackendFeature, type BackendIdentity } from './backendSupport';
 import type { EngineCapability } from '../jobs/actions';
-import { isCurrentAthImport } from './athImportControls';
+import { isAthV3Import, isCurrentAthImport } from './athImportControls';
 import { SOLVE_CONTROLS, nameFieldsWith } from '../api/httpError';
 
 export type ParameterSection =
@@ -96,6 +96,8 @@ export interface ParameterDefinition {
   max?: number;
   step?: number;
   precision?: number;
+  /** Preserve typed finite numbers exactly; precision only controls display and stepping. */
+  preservePrecision?: boolean;
   options?: ParameterOption[];
   description?: string;
   disabledReason?: string;
@@ -591,7 +593,7 @@ const MESH_GROUPS: readonly ParameterGroupDefinition[] = [
 ];
 const meshGroups = Object.fromEntries(MESH_GROUPS.flatMap((group) => (group.fieldOrder ?? []).map((id) => [id, group.title])));
 
-const parametricFields: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((field) => {
+const parametricFields: ParameterDefinition[] = [...LEGACY_PARAMETER_REGISTRY.map((field) => {
   let section = sectionMoves[field.section] ?? field.section;
   if (['common.s1', 'common.s2', 'source.shape', 'source.radius', 'source.curvature'].includes(field.id)) section = 'Throat';
   if (field.id.startsWith('cross_section.')) section = 'Cross-section';
@@ -608,7 +610,11 @@ const parametricFields: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((f
     ...(field.id === 'osse.throat_profile' ? { description: field.description?.replace('For a terminating arc on a new design, select OSSE features → Mouth end → Terminating arc.', 'Circular arc profiles are retained for editing existing designs. For a terminating arc on a new design, select OSSE features → Mouth end → Terminating arc.') } : {}),
     ...(importedOnlyIds.has(field.id) ? { visibleWhen: (design: DesignDocument) => importedValueIsVisible(field, design) } : {}),
   };
-});
+}),
+  number('common.ath_axial_scale', 'Scale.Z', 'ath_axial_scale', 'Imported ATH values', 'ATH axial scale', { families: osseFamilies, optional: true, min: 0, exclusiveMin: true, step: .001, precision: 3, preservePrecision: true, visibleWhen: isAthV3Import, description: 'Positive finite absolute Z factor, replacing global Scale on Z. Blank uses global Scale. This is the imported ATH control, separate from native OSSE features.' }),
+  number('mesh.ath_throat_ext_segments', 'Mesh.ThroatExtSegments', 'mesh.ath_throat_ext_segments', 'Imported ATH values', 'ATH throat extension intervals', { families: osseFamilies, optional: true, min: 1, max: 4096, step: 1, precision: 0, visibleWhen: isAthV3Import, disabledWhen: (design) => design.formula === 'OSSE' && design.ath_axial_sampling_rule === 'ath-v2025-06' ? 'Extension intervals require current ATH OSSE sampling. Re-import a copy saved by ATH V2025-12 or later to use them.' : undefined, placeholderWhen: () => 'Default (10)', description: 'Whole number from 1 to 4096 controlling the authored throat extension intervals. Blank uses 10. Requires the current ATH OSSE sampling rule on OSSE imports.' }),
+  number('rosse.rotation', 'Rot', 'rotation', 'Imported ATH values', 'Profile rotation', { families: ['R-OSSE'], optional: true, unit: '°', precision: 3, preservePrecision: true, visibleWhen: isAthV3Import, description: 'Top-level ATH Rot: finite degrees or an expression of p. Rotates each meridian around the main throat join, keeping the straight extension unrotated. Blank leaves rotation unset.' }),
+];
 
 export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[] = [
   { title: 'Profile', groups: PROFILE_GROUPS, descriptionWhen: (design) => freeformOnly(design) ? 'Custom profile: an anchor table (one for both planes, or separate horizontal and vertical tables) with a shared circular throat, length and cross-section stations.' : undefined, fieldOrder: [...parametricFields.filter((field) => field.section === 'Profile' && field.group !== 'Advanced ICW').map((field) => field.id), ...ICW_ADVANCED_FIELD_IDS, 'control.freeformImport'], tab: 'geometry', description: 'Primary dimensions for the selected horn family. OSSE and R-OSSE labels carry their ATH formula symbol in parentheses.', visibleWhen: waveguideDefinitionOnly },
@@ -655,13 +661,13 @@ export function parameterSectionIsVisible(
   return definition.visibleWhen?.(context) ?? true;
 }
 
-/** The 43 daggered v1 fields, the morph target exponent, and the two legacy four-value baffle tuples. */
+/** The 43 daggered v1 fields, the morph target exponent, and imported R-OSSE rotation. */
 export const EXPRESSION_PARAMETER_IDS = new Set([
   'rosse.R', 'rosse.a', 'rosse.a0', 'rosse.r0', 'rosse.k', 'rosse.m', 'rosse.b', 'rosse.r', 'rosse.q', 'rosse.tmax',
   'osse.L', 'osse.a', 'osse.a0', 'osse.r0', 'osse.k', 'osse.s', 'osse.n', 'osse.q', 'osse.h',
   'common.throat_ext_angle', 'common.throat_ext_length', 'common.slot_length',
   'morph.target_width', 'morph.target_height', 'morph.target_exponent', 'morph.corner_radius', 'morph.rate', 'morph.fixed_part',
-  'osse.rotation', 'guide.distance', 'guide.width', 'guide.aspect_ratio', 'guide.superellipse_n', 'guide.superformula',
+  'osse.rotation', 'rosse.rotation', 'guide.distance', 'guide.width', 'guide.aspect_ratio', 'guide.superellipse_n', 'guide.superformula',
   'guide.sf_a', 'guide.sf_b', 'guide.sf_m1', 'guide.sf_m2', 'guide.sf_n1', 'guide.sf_n2', 'guide.sf_n3',
   'guide.rotation', 'osse.circ_arc_term_angle', 'osse.circ_arc_radius',
 ]);

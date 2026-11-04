@@ -589,6 +589,122 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-parameter-id^="mesh.ath_"]')).toBeNull();
   });
 
+  describe('imported v3 scale, extension sampling and rotation editors', () => {
+    const ids = ['common.ath_axial_scale', 'mesh.ath_throat_ext_segments', 'rosse.rotation'];
+    const load = (formula: 'OSSE' | 'R-OSSE', extra: Record<string, unknown> = {}) => act(() => {
+      useDesignStore.getState().replaceDocument(hydrateDesignDocument({
+        formula, text_import_version: 'ath-2026-09a-v3', enclosure: null, ...extra,
+      }));
+    });
+    const editor = (id: string) => host.querySelector<HTMLInputElement>(`[data-parameter-id="${id}"] input`)!;
+    const type = (input: HTMLInputElement, draft: string) => {
+      act(() => input.focus());
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, draft);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+
+    it.each(['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES] as const)('leaves the unedited %s payload byte-identical', (formula) => {
+      const original = designForFamily(formula);
+      const before = JSON.stringify(serializeDesign(original));
+      act(() => useDesignStore.getState().replaceDocument(original));
+      expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before);
+      for (const id of ids) expect(editor(id)).toBeNull();
+    });
+
+    it.each(['OSSE', 'R-OSSE'] as const)('edits %s controls through the existing rows and save/load', (formula) => {
+      load(formula);
+      const before = serializeDesign(useDesignStore.getState().design);
+      const active = formula === 'OSSE' ? ids.slice(0, 2) : ids;
+      for (const id of active) {
+        expect(editor(id)).not.toBeNull();
+        expect(editor(id).closest('[data-section]')?.getAttribute('data-section')).toBe('Imported ATH values');
+        expect(editor(id).value).toBe('');
+      }
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
+      const values = ['1.2345678901234567', '4096', '-720.1234567890123'];
+      active.forEach((id, index) => { type(editor(id), values[index]); act(() => editor(id).blur()); });
+      const edited = serializeDesign(useDesignStore.getState().design);
+      expect(edited).toMatchObject({ ath_axial_scale: Number(values[0]), mesh: { ath_throat_ext_segments: 4096 } });
+      if (formula === 'R-OSSE') expect(edited.rotation).toBe(Number(values[2]));
+      act(() => useDesignStore.getState().replaceDocument(hydrateDesignDocument(JSON.parse(JSON.stringify(edited)))));
+      for (const id of active) { act(() => editor(id).focus()); act(() => editor(id).blur()); }
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(edited);
+      for (const id of active) { type(editor(id), ''); act(() => editor(id).blur()); }
+      expect(serializeDesign(useDesignStore.getState().design)).toMatchObject({ ath_axial_scale: null, mesh: { ath_throat_ext_segments: null } });
+      if (formula === 'R-OSSE') expect(serializeDesign(useDesignStore.getState().design).rotation).toBeNull();
+    });
+
+    it('accepts a positive scale below the display precision', () => {
+      load('OSSE');
+      type(editor(ids[0]), '1e-20');
+      act(() => editor(ids[0]).blur());
+      expect(serializeDesign(useDesignStore.getState().design).ath_axial_scale).toBe(1e-20);
+    });
+
+    it.each(ids)('finds %s by its ATH key in the imported section', (id) => {
+      load('R-OSSE');
+      const field = PARAMETER_REGISTRY.find((field) => field.id === id)!;
+      type(host.querySelector<HTMLInputElement>('input[type="search"]')!, field.legacyKey);
+      expect(editor(id)).not.toBeNull();
+      expect(editor(id).closest('[data-section]')?.getAttribute('data-section')).toBe('Imported ATH values');
+    });
+
+    it.each([
+      ['common.ath_axial_scale', '0', 'greater than 0'],
+      ['common.ath_axial_scale', '-1', 'greater than 0'],
+      ['common.ath_axial_scale', '1e309', 'finite number'],
+      ['mesh.ath_throat_ext_segments', '0', 'whole number from 1 to 4096'],
+      ['mesh.ath_throat_ext_segments', '4097', 'whole number from 1 to 4096'],
+      ['mesh.ath_throat_ext_segments', '1.5', 'whole number from 1 to 4096'],
+      ['rosse.rotation', '1e309', 'finite number'],
+    ])('refuses invalid %s = %s without mutating the design', (id, draft, message) => {
+      load('R-OSSE');
+      const before = serializeDesign(useDesignStore.getState().design);
+      type(editor(id), draft);
+      expect(editor(id).getAttribute('aria-invalid')).toBe('true');
+      expect(host.textContent).toContain(message);
+      act(() => editor(id).blur());
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
+    });
+
+    it('preserves a p-dependent R-OSSE rotation expression through save/load', () => {
+      load('R-OSSE', { rotation: { value: null, raw: '10+5*cos(p)', dialect: 'ath' } });
+      const row = () => host.querySelector<HTMLElement>('[data-parameter-id="rosse.rotation"]')!;
+      const input = row().querySelector('textarea')!;
+      expect(input.value).toBe('10+5*cos(p)');
+      act(() => input.focus());
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '20+2*sin(p)');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      act(() => input.blur());
+      const edited = serializeDesign(useDesignStore.getState().design);
+      expect(edited.rotation).toMatchObject({ raw: '20+2*sin(p)' });
+      act(() => useDesignStore.getState().replaceDocument(hydrateDesignDocument(edited)));
+      expect(row().querySelector('textarea')!.value).toBe('20+2*sin(p)');
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(edited);
+    });
+
+    it.each([undefined, 'ath-2026-08c-v1', 'ath-2026-09a-v2'])('keeps v3 controls out of older imports and search (%s)', (version) => {
+      load('R-OSSE', { text_import_version: version });
+      const before = serializeDesign(useDesignStore.getState().design);
+      const search = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+      type(search, 'Rot');
+      for (const id of ids) expect(editor(id)).toBeNull();
+      expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
+    });
+
+    it('disables extension intervals on OSSE imports with legacy axial sampling', () => {
+      load('OSSE', { ath_axial_sampling_rule: 'ath-v2025-06' });
+      expect(editor(ids[1]).disabled).toBe(true);
+      expect(editor(ids[1]).closest('.field-row')?.getAttribute('title')).toContain('V2025-12');
+      load('R-OSSE', { ath_axial_sampling_rule: 'ath-v2025-06' });
+      expect(editor(ids[1]).disabled).toBe(false);
+    });
+  });
+
   it.each(['bare', 'enclosure', 'infinite-baffle'])('disables Opus for %s with the required Mounting change', (mode) => {
     act(() => useDesignStore.getState().replaceDocument(hydrateDesignDocument({
       formula: 'OSSE', text_import_version: 'ath-2026-09a-v2',

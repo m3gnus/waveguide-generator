@@ -21,6 +21,8 @@ interface NumberFieldProps {
   max?: number;
   step?: number;
   precision?: number;
+  /** Keep typed finite values exactly; precision still controls display and stepping. */
+  preservePrecision?: boolean;
   /** Decimals shown; commits keep `precision`, so untouched and typed values are never coarsened. */
   displayPrecision?: number;
   modified?: boolean;
@@ -55,6 +57,7 @@ export function NumberField({
   max = Infinity,
   step = 1,
   precision = 1,
+  preservePrecision = false,
   displayPrecision,
   modified = false,
   disabled = false,
@@ -82,7 +85,7 @@ export function NumberField({
   const displayed = expression?.raw ?? (value === undefined ? '' : value.toFixed(shown));
   // A field shown coarser than it stores edits its stored value, so typing the
   // rounded number on screen is a real change, not a no-op.
-  const exact = expression?.raw ?? (value === undefined ? '' : String(Number(value.toFixed(precision))));
+  const exact = expression?.raw ?? (value === undefined ? '' : preservePrecision ? String(value) : String(Number(value.toFixed(precision))));
   const editBaseline = useRef<string | null>(null);
   const [draft, setDraft] = useState(displayed);
   const [editing, setEditing] = useState(false);
@@ -244,7 +247,7 @@ export function NumberField({
       onCommitExpression?.({ value: null, raw });
       return;
     }
-    const rounded = Number(parsed.toFixed(precision));
+    const rounded = preservePrecision ? parsed : Number(parsed.toFixed(precision));
     const roundedMessage = validate?.(rounded);
     if (roundedMessage) {
       setDraft(displayed);
@@ -417,7 +420,7 @@ export function NumberField({
           onChange={changeDraft}
           onFocus={() => {
             setEditing(true);
-            if (shown < precision && !holdsExpression && exact !== displayed) {
+            if ((preservePrecision || shown < precision) && !holdsExpression && exact !== displayed) {
               editBaseline.current = exact;
               setDraft(exact);
             }

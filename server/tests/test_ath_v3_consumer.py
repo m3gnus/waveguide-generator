@@ -17,6 +17,37 @@ ROOT = Path(__file__).parent / 'fixtures/ath_v3_controls'
 V3 = 'ath-2026-09a-v3'
 
 
+@pytest.mark.parametrize('name,path,value,line', [
+    ('o-z2-s3', 'ath_axial_scale', 1.2345678901234567, 'Scale.Z = 1.2345678901234567'),
+    ('r-ext-seg4', 'mesh.ath_throat_ext_segments', 7, 'Mesh.ThroatExtSegments = 7'),
+    ('r-rot10', 'rotation', -7.1234567890123, 'Rot = -7.1234567890123'),
+    ('r-rot10', 'rotation', {'value': None, 'raw': '20+2*sin(p)', 'dialect': 'ath'}, 'Rot = 20+2*sin(p)'),
+])
+def test_edited_panel_values_stay_exact_through_save_cfg_preview_and_solve(name, path, value, line, tmp_path):
+    from server.mesh.builder import _solver_mesher_config
+
+    payload = parse((ROOT / f'{name}.cfg').read_text()).design.model_dump(mode='json')
+    target = payload
+    keys = path.split('.')
+    for key in keys[:-1]:
+        target = target[key]
+    target[keys[-1]] = value
+    edited = DesignConfig.model_validate(payload)
+    expected = build_point_grid_arrays(build_geometry_params(design_to_mesher_config(edited))[0])['inner_grid']
+    store = CadLinkStore(tmp_path / 'cadlink.db')
+    saved = asyncio.run(save_design(payload, store=store))
+    assert line in saved['text'].splitlines()
+    reopened = asyncio.run(open_design(saved['text'], store=store))
+    for copy in (edited, DesignConfig.model_validate_json(edited.model_dump_json()),
+                 parse(serialize(edited)).design, DesignConfig.model_validate(reopened['design'])):
+        assert line in serialize(copy).splitlines()
+        configs = (design_to_mesher_config(copy), _solver_mesher_config(copy))
+        for config in configs:
+            actual = build_point_grid_arrays(build_geometry_params(config)[0])['inner_grid']
+            assert actual.shape == expected.shape
+            assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize('name', ['o-z2-s3', 'r-rot10', 'r-ext-seg4'])
 def test_fresh_control_matches_ath_after_save_reopen_and_cfg(name, tmp_path):
     text = (ROOT / f'{name}.cfg').read_text()

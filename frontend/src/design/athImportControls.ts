@@ -2,8 +2,11 @@ import { usesCurrentAthImport } from './athImportVersion';
 import type { DesignDocument } from '../stores/design';
 
 export const isCurrentAthImport = (design: DesignDocument): boolean => usesCurrentAthImport(design.text_import_version);
+export const isAthV3Import = (design: DesignDocument): boolean => design.text_import_version === 'ath-2026-09a-v3';
 
 export function athControlError(path: string | undefined, value: number): string | undefined {
+  if (path === 'ath_axial_scale' && (!Number.isFinite(value) || value <= 0)) return 'Enter a finite scale greater than 0.';
+  if (path === 'mesh.ath_throat_ext_segments' && (!Number.isInteger(value) || value < 1 || value > 4096)) return 'Enter a whole number from 1 to 4096.';
   if (path === 'mesh.ath_roundover.radius' && (!Number.isFinite(value) || value <= 0)) return 'Enter a radius greater than 0.';
   if (path === 'mesh.ath_roundover.segments' && (!Number.isFinite(value) || value < 1 || !Number.isInteger(value))) return 'Enter a whole number of at least 1.';
   if (path === 'mesh.ath_rear_front_offset') {

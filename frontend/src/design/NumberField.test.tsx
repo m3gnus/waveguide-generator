@@ -71,6 +71,25 @@ describe('NumberField', () => {
     });
   });
 
+  it.each([1.2345678901234567, 1e-20, Number.MIN_VALUE, Number.MAX_VALUE])('preserves exact typed input %s when requested', (value) => {
+    const commit = vi.fn();
+    act(() => root.render(<NumberField label="Axial scale" value={1} precision={3} preservePrecision min={0} exclusiveMin
+      validate={next => next <= 0 ? 'Enter a scale greater than 0.' : undefined} onCommit={commit}/>));
+    const input = host.querySelector('input')!;
+    act(() => input.focus());
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, String(value));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => input.blur());
+    expect(commit).toHaveBeenCalledExactlyOnceWith(value);
+    act(() => root.render(<NumberField label="Axial scale" value={value} precision={3} preservePrecision onCommit={commit}/>));
+    act(() => input.focus());
+    expect(input.value).toBe(String(value));
+    act(() => input.blur());
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
   it('renders a stored null as an empty field instead of crashing', () => {
     // Saved designs keep unset optionals (e.g. morph.target_exponent) as null.
     act(() => root.render(<NumberField label="Target exponent" value={null} min={2} max={16} onCommit={() => {}} />));

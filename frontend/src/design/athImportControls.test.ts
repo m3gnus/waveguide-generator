@@ -3,6 +3,18 @@ import { hydrateDesignDocument } from '../api/designIo';
 import { resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { athControlError, lipRadiusWallError, lipUnavailableReason, rosseMorphNote } from './athImportControls';
 
+describe('v3 ATH numeric control domains', () => {
+  it('accepts every positive finite axial scale without invented bounds', () => {
+    for (const value of [Number.MIN_VALUE, 1e-20, 1, 1e8, Number.MAX_VALUE]) expect(athControlError('ath_axial_scale', value)).toBeUndefined();
+    for (const value of [0, -1, NaN, Infinity, -Infinity]) expect(athControlError('ath_axial_scale', value)).toContain('greater than 0');
+  });
+
+  it('accepts only whole extension interval counts from 1 through 4096', () => {
+    for (const value of [1, 10, 4096]) expect(athControlError('mesh.ath_throat_ext_segments', value)).toBeUndefined();
+    for (const value of [0, -1, 4097, 1.5, NaN, Infinity, -Infinity]) expect(athControlError('mesh.ath_throat_ext_segments', value)).toContain('whole number from 1 to 4096');
+  });
+});
+
 describe.each(['ath-2026-09a-v2', 'ath-2026-09a-v3'] as const)('ATH import wall default and controls (%s)', (version) => {
   it('keeps ATH\'s 5 mm wall for an unset wall through lip/rear edits without saving it', () => {
     resetDesignStore();

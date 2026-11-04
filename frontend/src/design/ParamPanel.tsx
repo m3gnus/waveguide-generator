@@ -587,11 +587,12 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       max={field.max}
       step={field.step}
       precision={field.precision}
+      preservePrecision={field.preservePrecision}
       disabled={disabled}
       disabledReason={disabledReason}
       invalidMessage={error ?? serverError}
       validate={(next) => prospectiveValidation(field, design, next)}
-      formatRangeError={field.id.startsWith('mesh.ath_') ? (next) => athControlError(field.path, next) : field.path === 's1' || field.path === 's2'
+      formatRangeError={field.id.startsWith('mesh.ath_') || field.path === 'ath_axial_scale' ? (next) => athControlError(field.path, next) : field.path === 's1' || field.path === 's2'
         ? (next) => throatStretchError(field.path as 's1' | 's2', next) : undefined}
       onCommit={(next) => commit(next)}
       optional={optional}

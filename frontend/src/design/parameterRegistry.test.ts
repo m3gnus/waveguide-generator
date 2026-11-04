@@ -16,6 +16,8 @@ import {
   traceEntryIsRegistered,
 } from './parameterRegistry';
 
+const IMPORTED_ATH_EDITOR_IDS = ['common.ath_axial_scale', 'mesh.ath_throat_ext_segments', 'rosse.rotation'];
+
 // Authoritative parameterInventory.js list, intentionally duplicated here so
 // additions/removals in the production registry cannot silently weaken this test.
 const TRACEABILITY_KEYS = {
@@ -114,8 +116,8 @@ describe('complete parameter registry', () => {
       expect(editor.description).not.toContain('Solve options');
       expect(legacy.description).toContain('Solve options');
     }
-    expect(PARAMETER_REGISTRY).toHaveLength(LEGACY_PARAMETER_REGISTRY.length);
-    expect(new Set(PARAMETER_REGISTRY.map((field) => field.id))).toEqual(new Set(LEGACY_PARAMETER_REGISTRY.map((field) => field.id)));
+    expect(PARAMETER_REGISTRY).toHaveLength(LEGACY_PARAMETER_REGISTRY.length + IMPORTED_ATH_EDITOR_IDS.length);
+    expect(new Set(PARAMETER_REGISTRY.map((field) => field.id))).toEqual(new Set([...LEGACY_PARAMETER_REGISTRY.map((field) => field.id), ...IMPORTED_ATH_EDITOR_IDS]));
   });
 
   it('covers every current family-qualified traceability entry with no deferrals', () => {
@@ -168,7 +170,7 @@ describe('complete parameter registry', () => {
   });
 
   it('preserves all document fields, paths, bounds, defaults and family gates across the presentation moves', () => {
-    expect(PARAMETER_REGISTRY.map((field) => field.id).sort()).toEqual(LEGACY_PARAMETER_REGISTRY.map((field) => field.id).sort());
+    expect(PARAMETER_REGISTRY.map((field) => field.id).sort()).toEqual([...LEGACY_PARAMETER_REGISTRY.map((field) => field.id), ...IMPORTED_ATH_EDITOR_IDS].sort());
     for (const original of LEGACY_PARAMETER_REGISTRY) {
       const moved = PARAMETER_REGISTRY.find((field) => field.id === original.id)!;
       const { section: _oldSection, label: _oldLabel, description: oldDescription, group: _oldGroup, visibleWhen: oldVisibility, ...oldSemantics } = original;
@@ -186,6 +188,18 @@ describe('complete parameter registry', () => {
         expect(description, original.id).toBe(original.section === 'Frequency Sweep' ? oldDescription?.replaceAll('Solve options', 'Frequency sweep') : oldDescription);
       }
       if (moved.section !== 'Imported ATH values') expect(visibility, original.id).toBe(oldVisibility);
+    }
+  });
+
+  it('keeps v3 import editors out of the frozen CAD and catalog registry', () => {
+    for (const id of IMPORTED_ATH_EDITOR_IDS) {
+      expect(LEGACY_PARAMETER_REGISTRY.some((field) => field.id === id)).toBe(false);
+      const field = PARAMETER_REGISTRY.find((field) => field.id === id)!;
+      expect(field.section).toBe('Imported ATH values');
+      for (const family of ['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES] as const) {
+        const design = { ...designForFamily(family), text_import_version: 'ath-2026-09a-v3' as const };
+        expect(fieldIsVisible(field, design)).toBe(family === 'R-OSSE' || (family === 'OSSE' && id !== 'rosse.rotation'));
+      }
     }
   });
 
@@ -333,7 +347,8 @@ describe('complete parameter registry', () => {
 
   it('marks the daggered rows expression-capable and gives enclosure resolutions a numeric list editor', () => {
     const tupleIds = new Set(['enclosure.front_resolution', 'enclosure.back_resolution']);
-    expect([...EXPRESSION_PARAMETER_IDS].filter((id) => !tupleIds.has(id))).toHaveLength(44);
+    expect([...EXPRESSION_PARAMETER_IDS].filter((id) => !tupleIds.has(id))).toHaveLength(45);
+    expect(EXPRESSION_PARAMETER_IDS.has('rosse.rotation')).toBe(true);
     expect(EXPRESSION_PARAMETER_IDS.has('morph.target_exponent')).toBe(true);
     expect([...tupleIds].every((id) => !EXPRESSION_PARAMETER_IDS.has(id))).toBe(true);
     expect(PARAMETER_REGISTRY.filter((field) => tupleIds.has(field.id)).every((field) => field.kind === 'text')).toBe(true);
