@@ -1757,21 +1757,32 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             raise TextConfigError(f"invalid CadLink block: {exc}") from exc
     dialect: Literal["mwg", "ath"] = "mwg" if _MWG_SNIFF.search(text) else "ath"
     if dialect == "ath" and repeated and not any(_GEOMETRY_STAMP.match(c) for c in comments):
-        from hornlab_mesher.config_parser import _ath_item_ignored
+        from hornlab_mesher.config_parser import _PROFILE_BLOCKS, _ath_item_ignored, ath_profile_members
+
+        # Merge only fresh ATH profiles. Saved/native files keep their earlier
+        # last-block reading; the mesher owns ATH's member precedence.
+        profile_repeats = {name for name, _block in repeated if name in _PROFILE_BLOCKS}
+        for name in profile_repeats:
+            declarations = [block for key, block in repeated if key == name] + [blocks[name]]
+            blocks[name] = _RawBlock(
+                items=ath_profile_members(block.items for block in declarations),
+                lines=[line for block in declarations for line in block.lines],
+                comments=[comment for block in declarations for comment in block.comments],
+                entries=[entry for block in declarations for entry in block.entries],
+            )
 
         # Retain earlier copies so an empty final Mesh cannot hide populated
         # members that ATH would merge. Only entirely empty Mesh copies are safe.
         populated_mesh = any(block.items or block.lines for name, block in repeated if name == "Mesh")
         repeated = [
             (name, block) for name, block in repeated
-            if not _ath_item_ignored(name, block=True)
+            if name not in profile_repeats and not _ath_item_ignored(name, block=True)
             and not (name == "Mesh" and not populated_mesh
                      and not blocks[name].items and not blocks[name].lines)
         ]
     if dialect == "ath" and repeated and not any(_GEOMETRY_STAMP.match(c) for c in comments):
-        # ATH merges a repeated block member by member; this parser never did,
-        # so the second copy silently replaced the first. WG's own files keep
-        # passthrough blocks verbatim, repeats included.
+        # Only profile merging is qualified here. Keep refusing other active
+        # repeated blocks; WG's own files retain their passthrough semantics.
         raise TextConfigError(
             f"block {repeated[0][0]!r} appears more than once; ATH merges repeated "
             "blocks member by member and this importer does not. Combine "

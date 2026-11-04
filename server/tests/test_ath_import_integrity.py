@@ -13,7 +13,6 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
 
 from server.design.textcfg import (
     TextConfigError, _GEOMETRY_STAMP, _MWG_SNIFF, _formula, _lex, parse, serialize,
@@ -47,6 +46,16 @@ def mouth_radius(text: str) -> float:
 
     profile = design_to_mesher_config(parse(text).design)["profile"]
     return calculate_osse(float(profile["L"]), 0.0, profile)[1]
+
+
+def geometry_bytes(design: DesignConfig) -> tuple[bytes, bytes | None]:
+    from hornlab_mesher.config_builder import build_geometry_params
+    from hornlab_mesher.profile_sampling import build_point_grid_arrays
+
+    params = build_geometry_params(design_to_mesher_config(design))[0]
+    grid = build_point_grid_arrays(params)
+    outer = grid["outer_grid"]
+    return grid["inner_grid"].tobytes(), None if outer is None else outer.tobytes()
 
 
 UNSUPPORTED = {
@@ -108,12 +117,16 @@ def test_typo_fixture_is_refused_by_name_with_the_near_miss() -> None:
         parse(fixture("typo"))
 
 
-def test_a_repeated_block_is_refused_not_replaced() -> None:
-    with pytest.raises(TextConfigError, match=r"block 'OSSE' appears more than once"):
-        parse(fixture("repeated"))
-    with pytest.raises(HTTPException):
-        asyncio.run(open_design(fixture("repeated")))
-    # The merged spelling ATH writes to config.txt imports, with ATH's radius.
+def test_a_repeated_profile_imports_like_aths_merged_config() -> None:
+    expected = parse(fixture("merged")).design
+    parsed = parse(fixture("repeated"))
+    assert parsed.design == expected
+    opened = asyncio.run(open_design(fixture("repeated")))
+    assert DesignConfig.model_validate(opened["design"]) == expected
+    assert parse(serialize(parsed)).design == expected
+    assert geometry_bytes(parse(serialize(parsed.design)).design) == geometry_bytes(expected)
+    # The merged spelling ATH writes to config.txt has ATH's mouth radius.
+    assert mouth_radius(fixture("repeated")) == pytest.approx(83.743, abs=1e-3)
     assert mouth_radius(fixture("merged")) == pytest.approx(83.743, abs=1e-3)
 
 
@@ -276,6 +289,55 @@ ROSSE_BASE = (BASE.replace("OSSE = {\n L = 120\n", "R-OSSE = {\n R = 150\n b = 0
               .replace(" s = 0.7\n n = 4\n", ""))
 
 
+@pytest.mark.parametrize("family, base", [("OSSE", BASE), ("R-OSSE", ROSSE_BASE),
+                                        ("ROSSE", ROSSE_BASE.replace("R-OSSE", "ROSSE"))])
+def test_profile_merge_reaches_geometry_and_canonical_save(family: str, base: str) -> None:
+    dimension = "L" if family == "OSSE" else "R"
+    initial_dimension = "120" if family == "OSSE" else "150"
+    text = (base + f"{family} = {{\n {dimension} = 80\n a = 30+5*sin(p)^2\n Rot = 30\n}}\n"
+            + f"{family} = {{\n r0 = 11\n Rot = 0\n}}\n{family} = {{\n}}\nRot = 10\n")
+    merged = base.replace(f"{dimension} = {initial_dimension}", f"{dimension} = 80").replace(
+        "a = 45", "a = 30+5*sin(p)^2"
+    ).replace("r0 = 12.7", "r0 = 11") + "Rot = 10\n"
+    sampling = "Mesh.AngularSegments = 8\nMesh.LengthSegments = 20\nMesh.WallThickness = 2\n"
+    parsed, expected = [parse(source + sampling) for source in (text, merged)]
+    assert parsed.design == expected.design
+    assert {item.key for item in parsed.ignored_settings} >= {f"{family}.Rot"}
+    assert design_to_mesher_config(parsed.design) == design_to_mesher_config(expected.design)
+    assert geometry_bytes(parsed.design) == geometry_bytes(expected.design) == geometry_bytes(
+        parse(serialize(parsed.design)).design
+    )
+
+
+@pytest.mark.parametrize("header", [
+    "; Parameter config\n",
+    "; Waveguide Generator geometry-interpretation: native-v1\n",
+    "; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\n",
+    "; Waveguide Generator geometry-interpretation: ath-2026-09a-v2\n",
+    "; Waveguide Generator geometry-interpretation: ath-2026-09a-v3\n",
+])
+def test_saved_repeated_profiles_retain_the_last_block_reading(header: str) -> None:
+    last = "OSSE = {\n L = 80\n r0 = 10\n a = 30\n}\n"
+    parsed = parse(header + BASE + last)
+    expected = parse(header + last + "ABEC.SimType = 2\n")
+    assert parsed.design == expected.design
+    assert serialize(parsed) == header + BASE + last
+    assert geometry_bytes(parse(serialize(parsed.design)).design) == geometry_bytes(expected.design)
+
+
+@pytest.mark.parametrize("member", ["Bogus = 2", "Throat.Ext.Length = 4", "frexp = frexp(1)"])
+def test_profile_merge_does_not_hide_unsupported_earlier_members(member: str) -> None:
+    text = BASE.replace(" L = 120", f" {member}\n L = 120") + "OSSE = {\n a = 30\n}\n"
+    with pytest.raises(TextConfigError, match=member.split(" =")[0]):
+        parse(text)
+
+
+def test_profile_merge_does_not_hide_malformed_earlier_rows() -> None:
+    text = BASE.replace(" L = 120", " broken row\n L = 120") + "OSSE = {\n a = 30\n}\n"
+    with pytest.raises(TextConfigError, match="broken row"):
+        parse(text)
+
+
 @pytest.mark.parametrize(
     "text, key",
     [
@@ -352,7 +414,6 @@ def test_repeated_empty_mesh_blocks_import_like_the_mesher() -> None:
     "Mesh = {\n AngularSegments = 32\n}\nMesh = {\n}\n",
     "Mesh = {\n}\nMesh = {\n AngularSegments = 32\n}\n",
     "Mesh = {\n}\nMesh = {\n AngularSegments = 32\n}\nMesh = {\n}\n",
-    "OSSE = {\n L = 200\n}\n",
 ])
 def test_repeated_blocks_that_would_lose_members_are_still_refused(sections: str) -> None:
     with pytest.raises(TextConfigError, match="more than once"):
