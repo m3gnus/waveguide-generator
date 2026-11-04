@@ -171,8 +171,8 @@ describe('profile canvas UI', () => {
     const join = document.querySelector<HTMLSelectElement>('[aria-label="Selected point join"]')!;
     await act(async () => { join.value = 'corner'; join.dispatchEvent(new Event('change', { bubbles: true })); await flush(); });
     expect(document.querySelector('.ghost')).not.toBeNull();
-    expect(document.body.textContent).toContain('curve deviation 0.125 mm'); expect(document.body.textContent).toContain('Generated profile change');
-    expect(profileDraftBlocker()).toContain('unfinished'); expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
+    expect(document.body.textContent).toContain('largest curve change 0.125 mm'); expect(document.body.textContent).toContain('Generated profile change');
+    expect(profileDraftBlocker()).toContain('edits waiting for review'); expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
     await act(async () => { button('Cancel').click(); await flush(); });
     expect(profileDraftBlocker()).toBeNull(); expect(useDesignStore.getState().design.profile_h!.points[1].join).toBeUndefined();
     await act(async () => { join.value = 'corner'; join.dispatchEvent(new Event('change', { bubbles: true })); await flush(); });
@@ -189,7 +189,7 @@ describe('profile canvas UI', () => {
     expect(button('Open sketch')).toBeUndefined();
     expect(document.querySelector('.sketch-conflict-banner')).toBeNull();
     expect(button('Accept').closest('aside')).not.toBeNull();
-    expect(profileDraftBlocker()).toContain('unfinished');
+    expect(profileDraftBlocker()).toContain('edits waiting for review');
     expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith('/insert') && JSON.parse(String(init?.body)).mode === 'exact')).toBe(true);
     await act(async () => { button('Accept').click(); await flush(); }); await tick();
     expect(useDesignStore.getState().design.profile_h!.points).toHaveLength(4);
@@ -236,7 +236,7 @@ describe('profile canvas UI', () => {
       input.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '-1');
       input.dispatchEvent(new Event('input', { bubbles: true })); await flush();
     });
-    expect(profileDraftBlocker()).toContain('invalid'); expect(button('Revert to last valid').closest('aside')).not.toBeNull();
+    expect(profileDraftBlocker()).toContain('edits that need fixing'); expect(button('Revert to last valid').closest('aside')).not.toBeNull();
     expect(document.querySelector('.profile-canvas-freshness')?.closest('aside')).not.toBeNull();
     expect(document.querySelector('.sketch-conflict-banner')).toBeNull();
     await act(async () => { button('Revert to last valid').click(); await flush(); });
@@ -269,7 +269,7 @@ describe('profile canvas UI', () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     const join = document.querySelector<HTMLSelectElement>('select[aria-label="H point 1 join"]')!;
     await act(async () => { join.value = 'corner'; join.dispatchEvent(new Event('change', { bubbles: true })); await flush(); });
-    expect(profileDraftBlocker()).toContain('unfinished');
+    expect(profileDraftBlocker()).toContain('edits waiting for review');
     await act(async () => getProfileDraft()!.open());
     expect(document.querySelector('[role="dialog"][aria-label="Custom profile canvas"]')).not.toBeNull();
     expect(button('Open sketch')).toBeUndefined();
@@ -288,7 +288,7 @@ describe('profile canvas UI', () => {
       input.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '-1');
       input.dispatchEvent(new Event('input', { bubbles: true })); await flush();
     });
-    expect(profileDraftBlocker()).toContain('invalid');
+    expect(profileDraftBlocker()).toContain('edits that need fixing');
     await act(async () => getProfileDraft()!.open());
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     await act(async () => { getProfileDraft()!.revert(); await flush(); });
@@ -398,7 +398,7 @@ describe('profile canvas freshness (FV regression net)', () => {
       await flush();
     });
     expect(document.body.textContent).toContain('Bad profile'); expect(document.querySelector('.profile-authored')).toBeNull();
-    expect(document.querySelector('.profile-generated')).toBeNull(); expect(profileDraftBlocker()).toContain('invalid');
+    expect(document.querySelector('.profile-generated')).toBeNull(); expect(profileDraftBlocker()).toContain('edits that need fixing');
     expect(button('Revert to last valid').disabled).toBe(true);
   });
 });

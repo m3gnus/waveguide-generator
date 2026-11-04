@@ -114,7 +114,7 @@ describe('generated-profile change', () => {
     expect(change.V).toMatchObject({ domain: 'no_overlap', maxChangeMm: null });
     const folded = compareProfileSamples(before, { H: line([[0, 10], [50, 20], [40, 30]]), V: before.V });
     expect(folded.H.domain).toBe('unavailable');
-    expect(folded.H.reason).toMatch(/single-valued/);
+    expect(folded.H.reason).toContain('points do not run in order along z');
     // A mouth-to-throat listing is compared along increasing z.
     expect(compareProfileSamples(before, { H: [...before.H].reverse(), V: before.V }).H).toMatchObject({ domain: 'full', maxChangeMm: 0 });
   });

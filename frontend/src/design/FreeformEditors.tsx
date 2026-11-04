@@ -89,7 +89,7 @@ export function parsePointPaste(text: string): ParsedPointPaste {
 export { normalizedImportedPoints } from './customProfileEdit';
 
 export const FREEFORM_POSITION_NOTE = 'Anchor and station positions are measured from the throat along Length, in mm before Scale. Changing Length asks whether to stretch the profile or move only the mouth.';
-export const CUSTOM_PROFILE_TABLE_HELP = 'Every anchor, throat and mouth included, at z mm from the throat before Scale. A smooth anchor has one tangent (automatic unless an angle or handle pins it); a corner may take different incoming and outgoing angles, and two neighbouring corners without facing angles join with a straight span. Each edit is previewed with its curve deviation and generated-profile change before it applies.';
+export const CUSTOM_PROFILE_TABLE_HELP = 'The table includes every anchor, including the throat and mouth. z is distance from the throat in mm before Scale. At a smooth anchor, both sides share one direction. This adjusts automatically unless an angle or handle fixes it. A corner can have different incoming and outgoing angles. Two neighbouring corners without facing angles join with a straight line. Review the curve and exported-profile changes before accepting each edit.';
 export const FREEFORM_IMPORT_HINT = 'One anchor per line in mm: z r [angle °], with commas, tabs or spaces; plain z,r tables paste as they are. Lines starting with # and a header row are ignored. A row at z = 0 sets the throat radius; the last row sets the mouth radius and the length. Both planes at once: z;H;V in centimetres.';
 
 /** Why a profile-level endpoint angle is ignored in one plane (precedence: handle, point angle, corner chord). */
@@ -135,23 +135,23 @@ function formatDeviation(value: number | null | undefined): string {
 
 function curveLine(plane: string, deviation: CurveDeviation): string {
   const { extents } = deviation;
-  if (extents.comparison_domain === 'no_overlap') return `${plane}: no common z range (before ${extents.before.map(formatMm).join('–')} mm, after ${extents.after.map(formatMm).join('–')} mm); nothing to compare.`;
+  if (extents.comparison_domain === 'no_overlap') return `${plane}: no positions along the length can be compared (before ${extents.before.map(formatMm).join('–')} mm, after ${extents.after.map(formatMm).join('–')} mm); nothing to compare.`;
   const where = extents.comparison_domain === 'overlap_only'
-    ? ` over the overlap z = ${extents.overlap!.map(formatMm).join('–')} mm only (extents differ; not a full-domain bound)`
+    ? ` only where both profiles exist, z = ${extents.overlap!.map(formatMm).join('–')} mm. The lengths differ, so this does not measure the whole profile`
     : ' over the full profile';
-  return `${plane}: curve deviation ${formatDeviation(deviation.curve_deviation_mm)} mm at z = ${formatDeviation(deviation.curve_at_z_mm)} mm${where}; production evaluator ${formatDeviation(deviation.evaluator_deviation_mm)} mm at z = ${formatDeviation(deviation.evaluator_at_z_mm)} mm. Sampled estimate over ${deviation.sample_count} z values, not a certified maximum.`;
+  return `${plane}: largest curve change ${formatDeviation(deviation.curve_deviation_mm)} mm at z = ${formatDeviation(deviation.curve_at_z_mm)} mm${where}. The radius calculation used to build the profile changes by ${formatDeviation(deviation.evaluator_deviation_mm)} mm at z = ${formatDeviation(deviation.evaluator_at_z_mm)} mm. Checked at ${deviation.sample_count} positions along the length. Larger changes between checked positions are possible.`;
 }
 
 function generatedLine(plane: string, change: GeneratedPlaneChange): string {
   if (change.domain === 'unavailable') return `${plane}: unavailable — ${change.reason}`;
-  if (change.domain === 'no_overlap') return `${plane}: no common z range in the generated profiles; nothing to compare.`;
+  if (change.domain === 'no_overlap') return `${plane}: the exported profiles do not cover any of the same positions along the length. Nothing can be compared.`;
   const where = change.domain === 'overlap_only'
-    ? ` Over the overlap only (before ${change.extents.before.map(formatMm).join('–')} mm, after ${change.extents.after.map(formatMm).join('–')} mm).`
+    ? ` Only the length covered by both profiles is compared (before ${change.extents.before.map(formatMm).join('–')} mm, after ${change.extents.after.map(formatMm).join('–')} mm).`
     : '';
   const shared = change.maxChangeMm === null
-    ? 'no exported z row is shared by both profiles'
-    : `largest radius change ${formatDeviation(change.maxChangeMm)} mm at z = ${formatDeviation(change.atZMm)} mm over the ${change.sampleCount} z rows both exports share`;
-  return `${plane}: ${shared}; between rows ${formatDeviation(change.interpolatedMaxChangeMm)} mm at z = ${formatDeviation(change.interpolatedAtZMm)} mm (linear between ${change.interpolatedSampleCount} exported rows, so it includes rows added or removed by the edit).${where}`;
+    ? 'the exports have no measured positions in common'
+    : `largest radius change ${formatDeviation(change.maxChangeMm)} mm at z = ${formatDeviation(change.atZMm)} mm at the ${change.sampleCount} measured positions both exports share`;
+  return `${plane}: ${shared}. Joining exported points with straight lines gives a largest change of ${formatDeviation(change.interpolatedMaxChangeMm)} mm at z = ${formatDeviation(change.interpolatedAtZMm)} mm. This checks ${change.interpolatedSampleCount} positions, including points added or removed by the edit.${where}`;
 }
 
 /** The before/after feedback of one proposed edit, with Accept and Cancel. */
@@ -160,7 +160,7 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
   const id = useId(), draftOwner = useRef(Symbol('profile-preview'));
   useLayoutEffect(() => {
     setProfileDraft(preview ? {
-      message: `Custom profile ${preview.status === 'refused' || preview.validation.status === 'error' ? 'has an invalid draft' : 'is unfinished'}. Open sketch or Revert to last valid before Solve.`,
+      message: `Custom profile ${preview.status === 'refused' || preview.validation.status === 'error' ? 'has edits that need fixing' : 'has edits waiting for review'}. Choose Open sketch to review them, or Revert to last valid before Solve.`,
       open: openProfileCanvas, revert: edit.cancel,
     } : null, draftOwner.current);
     return () => setProfileDraft(null, draftOwner.current);
@@ -182,7 +182,7 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
     </>}>
       <ul className="profile-edit-notes">{preview.notes.map(note => <li key={note}>{note}</li>)}</ul>
       {preview.validation.status === 'pending' && <p>Checking the fitted profile…</p>}
-      {preview.validation.status === 'error' && <p className="field-error" role="alert">Not valid: {preview.validation.message}</p>}
+      {preview.validation.status === 'error' && <p className="field-error" role="alert">Cannot apply this edit: {preview.validation.message}</p>}
     </Notice>;
   }
   const planes = activePlanes(after);
@@ -190,26 +190,26 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
   const shared = isSharedProfile(after);
   const scale = after.scale;
   const blocked = preview.validation.status === 'error' ? 'The edited profile is not valid, so the current design is kept.'
-    : preview.validation.status === 'pending' || preview.curve.status === 'pending' || preview.generated.status === 'pending' ? 'Waiting for the curve and generated-profile measurements.'
-      : preview.curve.status === 'error' || preview.generated.status === 'error' ? 'WG is still measuring this change. Wait a moment, then accept it.' : undefined;
+    : preview.validation.status === 'pending' || preview.curve.status === 'pending' || preview.generated.status === 'pending' ? 'Measuring the curve and exported profile before you can accept this edit.'
+      : preview.curve.status === 'error' || preview.generated.status === 'error' ? 'WG could not measure this change. Cancel and try the edit again.' : undefined;
   return <Notice id={id} tabIndex={-1} tone={preview.validation.status === 'error' ? 'error' : 'info'} title={`Preview: ${preview.label}`} className="profile-edit-preview"
     actions={<>
       <button type="button" className="btn" disabled={!previewAcceptable(preview)} title={blocked} onClick={edit.accept}>Accept</button>
       <button type="button" className="btn" onClick={edit.cancel}>Cancel</button>
     </>}>
     <ul className="profile-edit-notes">{preview.notes.map((note) => <li key={note}>{note}</li>)}</ul>
-    {preview.validation.status === 'error' && <p className="field-error" role="alert">Not valid: {preview.validation.message}</p>}
+    {preview.validation.status === 'error' && <p className="field-error" role="alert">Cannot apply this edit: {preview.validation.message}</p>}
     {preview.validation.status === 'ready' && preview.validation.value.warnings.map((warning) => <p key={warning} className="field-warning">{warning}</p>)}
-    <div className="profile-edit-measure" role="group" aria-label="Curve deviation">
-      <b>Curve deviation</b> <span>(mesher comparison of the authored curves, design mm before Scale)</span>
+    <div className="profile-edit-measure" role="group" aria-label="Curve change">
+      <b>Curve change</b> <span>(compares the curves you edit; mm before Scale. z is distance along the length from the throat.)</span>
       {curve.status === 'pending' && <p>Measuring…</p>}
       {curve.status === 'error' && <p className="field-error">Unavailable: {curve.message}</p>}
       {curve.status === 'ready' && planes.map((plane) => <p key={plane}>{curveLine(shared ? 'H (both planes)' : plane, curve.value[plane])}</p>)}
     </div>
     <div className="profile-edit-measure" role="group" aria-label="Generated profile change">
-      <b>Generated profile change</b> <span>(profile export, physical mm with Scale = {scale}; z = design z × Scale; H and V meridians only, not the whole wall, mouth or source cap)</span>
+      <b>Generated profile change</b> <span>(compares exported horizontal and vertical slices; mm after Scale = {scale}. Exported z = design z × Scale. This does not check the whole wall, mouth outline or source surface.)</span>
       {generated.status === 'pending' && <p>Measuring…</p>}
-      {generated.status === 'error' && <p className="field-error">Unavailable: {generated.message}. No generated-geometry identity is claimed.</p>}
+      {generated.status === 'error' && <p className="field-error">Unavailable: {generated.message}. The built shapes could not be confirmed to be the same. Cancel and try the edit again.</p>}
       {generated.status === 'ready' && (['H', 'V'] as const).map((plane) => <p key={plane}>{generatedLine(plane, generated.value[plane])}</p>)}
     </div>
     {blocked && <p className="disabled-reason">{blocked}</p>}

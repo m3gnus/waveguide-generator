@@ -91,7 +91,7 @@ describe('profile adapter', () => {
   it.each([{ x: 0, y: 35 }, { x: 120, y: 35 }, { x: 40, y: 0 }, { x: 40, y: -2 }])('refuses an invalid drag with the owner reason at $x, $y', at => {
     const result = adapter().apply(design, { kind: 'move', plane: 'H', index: 1, at });
     expect(result).toHaveProperty('error');
-    expect((result as { error: string }).error).toMatch(/strictly between|greater than 0/);
+    expect((result as { error: string }).error).toMatch(/between its neighbouring anchors|greater than 0/);
     expect(design.profile_h!.points[1]).toMatchObject({ t: 1 / 3, r: 30 });
   });
 

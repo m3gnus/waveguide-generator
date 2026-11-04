@@ -93,7 +93,7 @@ function comparePlane(rawBefore: ProfileSample[], rawAfter: ProfileSample[]): Ge
   const increasing = (points: ProfileSample[]) => points.length >= 2 && points.every((point, index) => index === 0 || point.z > points[index - 1].z);
   if (!increasing(before) || !increasing(after)) {
     return { extents, domain: 'unavailable', ...empty,
-      reason: 'The generated meridian is not a single-valued r(z) polyline, so a radius change cannot be measured along z.' };
+      reason: 'The exported points do not run in order along z, or there are fewer than two. A radius change cannot be measured along the length. Cancel and try the edit again.' };
   }
   const start = Math.max(extents.before[0], extents.after[0]);
   const stop = Math.min(extents.before[1], extents.after[1]);

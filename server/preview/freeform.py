@@ -148,7 +148,7 @@ class InsertResponse(StrictModel):
 def _root(design: DesignConfig) -> FreeformConfig:
     if not isinstance(design.root, FreeformConfig):
         from hornlab_mesher.errors import UserRefusal
-        raise UserRefusal("Family", "Profile editing needs a FREEFORM design.", "Choose FREEFORM under Family.")
+        raise UserRefusal("Family", "Profile editing needs a Custom profile design.", "Choose Custom profile under Family.")
     return design.root
 
 
@@ -214,7 +214,7 @@ def insert(request: InsertRequest) -> InsertResponse:
         z = request.z_mm
         if not 0 < z < length or any(z == a["z"] for a in before[plane]["anchors"]):
             from hornlab_mesher.errors import UserRefusal
-            raise UserRefusal("Insert anchor", f"{'Horizontal' if plane == 'H' else 'Vertical'} profile: the insertion point lies outside a span or on an existing anchor.", "Choose a point between two existing anchors.")
+            raise UserRefusal("Insert anchor", f"{'Horizontal' if plane == 'H' else 'Vertical'} profile: the new point is outside the curve or at an existing anchor.", "Choose a point between two existing anchors.")
         if len(profile.points) >= 64:
             from hornlab_mesher.errors import UserRefusal
             raise UserRefusal("Profile anchors", f"{'Horizontal' if plane == 'H' else 'Vertical'} profile already has 64 anchors.", "Remove an anchor before inserting another.")

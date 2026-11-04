@@ -1384,7 +1384,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
     </SelectRow>
     {conversionNotice && <Notice tone="warning" className="conversion-notice" actions={<button className="btn" onClick={() => setConversionNotice(null)}>Dismiss</button>}>{conversionNotice}</Notice>}
     {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Start a Custom profile">
-      <b>Start a Custom profile</b><span>Start blank, or preview a conversion of the current design with its generated-wall, mouth and source-cap report.</span>
+      <b>Start a Custom profile</b><span>Start blank, or preview the current design as a Custom profile. Review changes to the wall, mouth outline and source surface before accepting.</span>
       <div><button className="btn" onClick={() => { setFamily('FREEFORM'); rememberUnseparatedVertical(useDesignStore.getState().design); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button className="btn" onClick={() => { setFreeformChoice(false); conversionEdit.propose('Convert to Custom profile', convertToCustomProfileBuilder()); }}>Convert current design</button><button className="btn" onClick={() => setFreeformChoice(false)}>Cancel</button></div>
     </div>}
     <ProfileEditPreviewPanel edit={conversionEdit} />

@@ -49,7 +49,7 @@ const lengthOf = (design: DesignDocument) => design.length ?? 120;
 export const positionMm = (t: number, length: number) => t * length;
 const profileOf = (design: DesignDocument, plane: Plane): FreeformProfile => {
   const profile = design[PROFILE_KEY[plane]];
-  if (!profile) throw new ProfileEditRefusal('Custom profile edits require a Custom profile design.');
+  if (!profile) throw new ProfileEditRefusal('Choose Custom profile under Family before editing its anchors.');
   return profile;
 };
 const pointLabel = (plane: Plane, index: number, count: number) =>
@@ -64,7 +64,7 @@ function expressionAt(design: DesignDocument, path: string): ExprNumber | undefi
 /** Refuse to silently overwrite an authored expression with a computed number. */
 function requireLiteral(design: DesignDocument, path: string, what: string): void {
   const expression = expressionAt(design, path);
-  if (expression) throw new ProfileEditRefusal(`${what} is the expression "${expression.raw}". Replace it with a number before this edit, so the rewritten value is not silently lost.`);
+  if (expression) throw new ProfileEditRefusal(`${what} is the expression "${expression.raw}". Replace it with a number before this edit. This protects your expression from being replaced.`);
 }
 
 function pointPath(plane: Plane, index: number, field?: string): string {
@@ -146,7 +146,7 @@ function describePins(plane: Plane, points: FreeformPoint[]): string | undefined
     present(point.handle_in) ? `${pointLabel(plane, index, points.length)} (in)` : null,
     present(point.handle_out) ? `${pointLabel(plane, index, points.length)} (out)` : null,
   ]).filter(Boolean);
-  return pinned.length ? `Handles that remain pinned in ${plane}: ${pinned.join(', ')}.` : undefined;
+  return pinned.length ? `Handles that stay fixed in ${plane} (they will not adjust automatically): ${pinned.join(', ')}.` : undefined;
 }
 
 const degrees = (radians: number) => radians * 180 / Math.PI;
@@ -160,7 +160,7 @@ function rotatedHandle(handle: [number, number], angleDeg: number, side: 'in' | 
 
 function checkInteriorAngle(value: number, endpoint: boolean): void {
   if (!Number.isFinite(value) || (endpoint ? value < -90 || value > 90 : value <= -90 || value >= 90)) {
-    throw new ProfileEditRefusal(endpoint ? 'An endpoint angle must be between −90 and 90°.' : 'An interior angle must be greater than −90 and less than 90°.');
+    throw new ProfileEditRefusal(endpoint ? 'Enter an angle between −90 and 90° for the throat or mouth.' : 'Enter an angle greater than −90 and less than 90° for an anchor between the throat and mouth.');
   }
 }
 
@@ -173,7 +173,7 @@ function withPlane(design: DesignDocument, plane: Plane, points: FreeformPoint[]
 /** Delete an interior anchor; the surviving neighbours' facing handles are released. */
 export function deleteAnchor(design: DesignDocument, plane: Plane, index: number): ProfileEditResult {
   const points = profileOf(design, plane).points;
-  if (index <= 0 || index >= points.length - 1) throw new ProfileEditRefusal('The throat and mouth anchors cannot be deleted.');
+  if (index <= 0 || index >= points.length - 1) throw new ProfileEditRefusal('The throat and mouth anchors cannot be deleted. Choose an anchor between them.');
   const next = structuredClone(points);
   const released: string[] = [];
   const previous = next[index - 1]; const following = next[index + 1];
@@ -185,7 +185,7 @@ export function deleteAnchor(design: DesignDocument, plane: Plane, index: number
   clearMetadata(after, [pointPath(plane, index - 1, 'handle_out'), pointPath(plane, index, 'handle_in')]);
   return { after: reconcileAbsent(after), notes: [
     `Deleted ${pointLabel(plane, index, points.length)} at z = ${formatMm(positionMm(points[index].t, lengthOf(design)))} mm.`,
-    released.length ? `Released the facing handles of the neighbours: ${released.join(', ')}. Those spans use automatic tangents.` : 'No neighbouring handle was pinned.',
+    released.length ? `Released the facing handles of the neighbours: ${released.join(', ')}. Those parts of the curve now adjust their direction automatically.` : 'No neighbouring handle was fixed.',
     describePins(plane, next),
   ].filter((note): note is string => Boolean(note)) };
 }
@@ -197,12 +197,12 @@ export function setAnchorValue(design: DesignDocument, plane: Plane, index: numb
   const next = structuredClone(points);
   const label = pointLabel(plane, index, points.length);
   const touched = [pointPath(plane, index, key === 'z' ? 't' : 'r')];
-  if (!Number.isFinite(value)) throw new ProfileEditRefusal('Enter a finite number.');
+  if (!Number.isFinite(value)) throw new ProfileEditRefusal('Enter a number.');
   let after: DesignDocument;
   if (key === 'z') {
     if (index === 0 || index === points.length - 1) throw new ProfileEditRefusal('The throat is at z = 0 and the mouth at Length. Change Length to move the mouth.');
     const t = value / length;
-    if (!(t > points[index - 1].t && t < points[index + 1].t)) throw new ProfileEditRefusal(`${label} must stay strictly between its neighbours (no crossing or duplicate z).`);
+    if (!(t > points[index - 1].t && t < points[index + 1].t)) throw new ProfileEditRefusal(`${label} must stay between its neighbouring anchors. Choose a different z from either neighbour so the anchors do not cross or overlap.`);
     next[index].t = t;
     after = withPlane(design, plane, next);
   } else {
@@ -220,7 +220,7 @@ export function setAnchorValue(design: DesignDocument, plane: Plane, index: numb
     }
   }
   clearMetadata(after, touched);
-  return { after: reconcileAbsent(after), notes: [describePins(plane, next) ?? 'No handle is pinned in this plane; spans next to the anchor refit automatically.'] };
+  return { after: reconcileAbsent(after), notes: [describePins(plane, next) ?? 'No handle is fixed in this plane. The curves next to the anchor adjust automatically.'] };
 }
 
 /**
@@ -248,7 +248,7 @@ export function setAnchorAngle(design: DesignDocument, plane: Plane, index: numb
   if (value === undefined) {
     delete target[field];
     const kept = [present(target.handle_in) ? 'in' : null, present(target.handle_out) ? 'out' : null].filter(Boolean);
-    if (kept.length) notes.push(`Cleared the angle; the explicit ${kept.join(' and ')} handle${kept.length > 1 ? 's stay' : ' stays'} pinned and still set${kept.length > 1 ? '' : 's'} the direction.`);
+    if (kept.length) notes.push(`Cleared the angle. The ${kept.join(' and ')} handle${kept.length > 1 ? 's stay' : ' stays'} fixed and still set${kept.length > 1 ? '' : 's'} the direction.`);
   } else {
     checkInteriorAngle(value, endpoint);
     target[field] = value;
@@ -261,14 +261,14 @@ export function setAnchorAngle(design: DesignDocument, plane: Plane, index: numb
       const key = handleSide === 'in' ? 'handle_in' : 'handle_out';
       const handle = target[key];
       if (!present(handle)) continue;
-      if (norm(handle) === 0) throw new ProfileEditRefusal(`The ${handleSide} handle of ${pointLabel(plane, index, points.length)} has zero length, so it has no direction to rotate.`);
+      if (norm(handle) === 0) throw new ProfileEditRefusal(`The ${handleSide} handle of ${pointLabel(plane, index, points.length)} has zero length, so it has no direction to rotate. Give the handle a length before changing its angle.`);
       target[key] = rotatedHandle(handle, value, handleSide);
-      notes.push(`Rotated the pinned ${handleSide} handle of ${pointLabel(plane, index, points.length)} to ${formatAngle(value)}, keeping its length ${formatMm(norm(handle))} mm.`);
+      notes.push(`Rotated the fixed ${handleSide} handle of ${pointLabel(plane, index, points.length)} to ${formatAngle(value)}. Its length stays ${formatMm(norm(handle))} mm.`);
     }
   }
   const after = withPlane(design, plane, next);
   clearMetadata(after, [pointPath(plane, index, field), pointPath(plane, index, 'handle_in'), pointPath(plane, index, 'handle_out')]);
-  notes.push(describePins(plane, next) ?? 'No handle is pinned in this plane.');
+  notes.push(describePins(plane, next) ?? 'No handle is fixed in this plane. All handles can adjust automatically.');
   return { after: reconcileAbsent(after), notes };
 }
 
@@ -297,15 +297,15 @@ export function setAnchorJoin(design: DesignDocument, plane: Plane, index: numbe
   const label = pointLabel(plane, index, points.length);
   const endpoint = index === 0 || index === points.length - 1;
   const notes: string[] = [];
-  if ((target.join ?? 'smooth') === join) throw new ProfileEditRefusal(`${label} is already ${join}.`);
+  if ((target.join ?? 'smooth') === join) throw new ProfileEditRefusal(`${label} is already ${join}. Choose a different join type to change it.`);
   if (join === 'corner') {
     target.join = 'corner';
     notes.push(endpoint
-      ? `${label} becomes a corner: unless a handle or point angle pins it, its angle now follows the chord to the neighbouring anchor.`
-      : `${label} becomes a corner. Its current angle and handles are kept; set an outgoing angle to break the tangent.`);
+      ? `${label} becomes a corner. Its angle follows the straight line to the neighbouring anchor unless a handle or point angle fixes it.`
+      : `${label} becomes a corner. Its current angle and handles are kept. Set an outgoing angle to give the two sides different directions.`);
   } else if (endpoint) {
     target.join = 'smooth';
-    notes.push(`${label} becomes smooth: the endpoint angle follows the explicit handle, point angle or profile endpoint angle.`);
+    notes.push(`${label} becomes smooth. Its end angle follows the fixed handle, point angle or profile end angle, in that order.`);
   } else {
     const resolved = curves?.[plane].anchors[index];
     const pinned = present(target.handle_in) || present(target.handle_out) || present(target.angle_deg) || present(target.angle_out_deg);
@@ -313,9 +313,9 @@ export function setAnchorJoin(design: DesignDocument, plane: Plane, index: numbe
     if (pinned) {
       const incoming = sideDirection(target, 'in', resolved);
       const outgoing = sideDirection(target, 'out', resolved);
-      if (!incoming || !outgoing) throw new ProfileEditRefusal(`The resolved direction of ${label} is not available yet. Wait for the curve check, or fix the marked profile values first.`);
+      if (!incoming || !outgoing) throw new ProfileEditRefusal(`The curve direction at ${label} is not available yet. Wait for the curve check, or fix the marked profile values first.`);
       const sum: [number, number] = [Math.cos(incoming.angle) + Math.cos(outgoing.angle), Math.sin(incoming.angle) + Math.sin(outgoing.angle)];
-      if (norm(sum) < 1e-9) throw new ProfileEditRefusal(`${label}'s incoming and outgoing directions are opposed, so there is no averaged smooth direction. Set an angle first.`);
+      if (norm(sum) < 1e-9) throw new ProfileEditRefusal(`${label}'s incoming and outgoing directions are opposed. They cannot be averaged into one smooth direction. Set an angle first.`);
       const average = degrees(Math.atan2(sum[1], sum[0]));
       if (!(average > -90 && average < 90)) throw new ProfileEditRefusal(`The averaged direction of ${label} (${formatAngle(average)}) points backwards; set an angle between −90 and 90° first.`);
       if (present(target.angle_deg) || present(target.angle_out_deg)) target.angle_deg = average;
@@ -325,14 +325,14 @@ export function setAnchorJoin(design: DesignDocument, plane: Plane, index: numbe
         const handle = target[key];
         if (present(handle)) target[key] = rotatedHandle(handle, average, side);
       }
-      notes.push(`${label} becomes smooth on the averaged direction ${formatAngle(average)}; pinned handles keep their lengths.`);
+      notes.push(`${label} becomes smooth at ${formatAngle(average)}, halfway between its two directions. Fixed handles keep their lengths.`);
     } else {
-      notes.push(`${label} becomes smooth with an automatic tangent.`);
+      notes.push(`${label} becomes smooth. Its curve direction adjusts automatically.`);
     }
   }
   const after = withPlane(design, plane, next);
   clearMetadata(after, ['join', 'angle_deg', 'angle_out_deg', 'handle_in', 'handle_out'].map((field) => pointPath(plane, index, field)));
-  notes.push(describePins(plane, next) ?? 'No handle is pinned in this plane.');
+  notes.push(describePins(plane, next) ?? 'No handle is fixed in this plane. All handles can adjust automatically.');
   return { after: reconcileAbsent(after), notes };
 }
 
@@ -381,7 +381,7 @@ export function stretchLength(design: DesignDocument, newLength: number, curves:
   for (const plane of ['H', 'V'] as const) {
     const profile = after[PROFILE_KEY[plane]]!;
     const anchors = active.includes(plane) ? curves[plane].anchors : undefined;
-    if (anchors && anchors.length !== profile.points.length) throw new ProfileEditRefusal('The resolved curve is out of date. Wait for the curve check and try again.');
+    if (anchors && anchors.length !== profile.points.length) throw new ProfileEditRefusal('The curve check is out of date. Wait for the curve check and try again.');
     for (const field of ['throat_angle_deg', 'mouth_angle_deg'] as const) {
       const angle = profile[field];
       if (!present(angle)) continue;
@@ -407,10 +407,10 @@ export function stretchLength(design: DesignDocument, newLength: number, curves:
   }
   clearMetadata(after, ['length', ...rewritten]);
   return { after: reconcileAbsent(after), notes: [
-    `Stretch profile: every anchor, handle and station keeps its fraction of Length (${formatMm(oldLength)} → ${formatMm(newLength)} mm); radii are unchanged.`,
-    rewritten.length ? `${rewritten.length} explicit angle${rewritten.length === 1 ? ' is' : 's are'} rewritten to the stretched direction.` : 'No explicit angle needed rewriting.',
-    pinned.length ? `To keep the stretch exact, these automatic handles are pinned to the stretched resolved curve and no longer refit automatically: ${pinned.join(', ')}.` : 'Every handle was already pinned.',
-    ...(isSharedProfile(design) ? ['The inactive vertical profile is stretched by its authored values; its automatic spans refit if it is separated again.'] : []),
+    `Stretch profile: Length changes from ${formatMm(oldLength)} to ${formatMm(newLength)} mm. Every anchor, handle and cross-section station keeps its relative position along Length. Radii stay unchanged.`,
+    rewritten.length ? `${rewritten.length} fixed angle${rewritten.length === 1 ? ' is' : 's are'} changed to follow the stretch.` : 'No fixed angle needed changing.',
+    pinned.length ? `To keep the stretch exact, these automatic handles become fixed to the stretched curve. They will no longer adjust automatically: ${pinned.join(', ')}.` : 'Every handle was already fixed.',
+    ...(isSharedProfile(design) ? ['The inactive vertical profile is stretched using its saved values. Its automatic curves adjust if Separate vertical profile is turned on again.'] : []),
   ] };
 }
 
@@ -451,7 +451,7 @@ export function moveMouth(design: DesignDocument, newLength: number, curves: Cur
   for (const plane of ['H', 'V'] as const) {
     const profile = after[PROFILE_KEY[plane]]!;
     const anchors = active.includes(plane) ? curves[plane].anchors : undefined;
-    if (anchors && anchors.length !== profile.points.length) throw new ProfileEditRefusal('The resolved curve is out of date. Wait for the curve check and try again.');
+    if (anchors && anchors.length !== profile.points.length) throw new ProfileEditRefusal('The curve check is out of date. Wait for the curve check and try again.');
     const last = profile.points.length - 1;
     profile.points.forEach((point, index) => {
       if (anchors) {
@@ -484,9 +484,9 @@ export function moveMouth(design: DesignDocument, newLength: number, curves: Cur
   });
   clearMetadata(after, ['length', ...rewritten]);
   return { after: reconcileAbsent(after), notes: [
-    `Move mouth: interior anchors, handles and stations keep their positions in mm; only the mouth moves (${formatMm(oldLength)} → ${formatMm(newLength)} mm).`,
-    pinned.length ? `So that only the last span changes, these automatic handles are pinned to the current curve and no longer refit automatically: ${pinned.join(', ')}.` : 'The spans before the mouth were already pinned or are straight.',
-    ...(isSharedProfile(design) ? ['The inactive vertical profile keeps its positions too; its automatic spans refit if it is separated again.'] : []),
+    `Move mouth: the mouth moves from ${formatMm(oldLength)} to ${formatMm(newLength)} mm. Interior anchors, handles and cross-section stations keep their positions in mm.`,
+    pinned.length ? `Only the last part of the curve changes. To keep the rest unchanged, these automatic handles become fixed to the current curve and no longer adjust automatically: ${pinned.join(', ')}.` : 'The curves before the mouth already had fixed handles or are straight.',
+    ...(isSharedProfile(design) ? ['The inactive vertical profile keeps its positions too; its automatic curves adjust if Separate vertical profile is turned on again.'] : []),
   ] };
 }
 
@@ -512,7 +512,7 @@ export function separateVerticalBlocker(design: DesignDocument): string | undefi
   if (!isSharedProfile(design)) return undefined;
   const h = profileOf(design, 'H').points[0].r; const v = profileOf(design, 'V').points[0].r;
   return h === v ? undefined
-    : `The stored vertical profile has throat radius ${formatMm(v)} mm but the horizontal throat is ${formatMm(h)} mm. Use H throat for V first; the throat is one circle.`;
+    : `The stored vertical throat radius is ${formatMm(v)} mm. The horizontal throat radius is ${formatMm(h)} mm. They must match because the throat is one circle. Choose Use H throat for V first.`;
 }
 
 /**
@@ -524,7 +524,7 @@ export function setSeparateVertical(design: DesignDocument, separate: boolean, s
   const after = structuredClone(design);
   if (!separate) {
     after.shared_profile = true;
-    return { after: reconcileAbsent(after), notes: ['The vertical profile is kept but inactive; the horizontal profile now shapes both planes.'] };
+    return { after: reconcileAbsent(after), notes: ['The horizontal profile now shapes both planes. The vertical profile is saved but inactive.'] };
   }
   // Seeding replaces V with H, so only a restore needs the throats to agree.
   const blocker = seed ? undefined : separateVerticalBlocker(design);
@@ -533,10 +533,10 @@ export function setSeparateVertical(design: DesignDocument, separate: boolean, s
   if (seed) {
     after.profile_v = structuredClone(profileOf(design, 'H'));
     remapVerticalFromHorizontal(after);
-    return { after: reconcileAbsent(after), notes: ['The vertical profile starts as a copy of the horizontal profile, so the geometry does not change.'] };
+    return { after: reconcileAbsent(after), notes: ['The vertical profile starts as a copy of the horizontal profile. The shape does not change.'] };
   }
   return { after: reconcileAbsent(after), notes: [sameProfile(design.profile_h, design.profile_v)
-    ? 'The stored vertical profile equals the horizontal profile, so the geometry does not change.'
+    ? 'The stored vertical profile equals the horizontal profile. The shape does not change.'
     : 'Restores the stored vertical profile. The preview shows how the vertical plane changes.'] };
 }
 
@@ -577,7 +577,7 @@ export function horizontalThroatForVertical(design: DesignDocument): ProfileEdit
   const after = structuredClone(design);
   after.profile_v!.points[0].r = profileOf(design, 'H').points[0].r;
   clearMetadata(after, ['profile_v.points.0.r']);
-  return { after: reconcileAbsent(after), notes: [`The stored vertical throat radius becomes ${formatMm(after.profile_v!.points[0].r)} mm; the rest of the vertical profile is unchanged.`] };
+  return { after: reconcileAbsent(after), notes: [`The stored vertical throat radius becomes ${formatMm(after.profile_v!.points[0].r)} mm. The rest of the vertical profile is unchanged.`] };
 }
 
 /**
@@ -589,7 +589,7 @@ export function normalizedImportedPoints(imported: FreeformPoint[], current: Fre
   const throat = sorted[0]?.t === 0 ? sorted.shift()! : structuredClone(current[0]);
   const mouth = sorted.at(-1)?.t === 1 ? sorted.pop()! : structuredClone(current.at(-1)!);
   const rows = [{ ...throat, t: 0 }, ...sorted.filter((point) => point.t > 0 && point.t < 1), { ...mouth, t: 1 }];
-  if (rows.length > MAX_FREEFORM_ANCHORS) throw new ProfileEditRefusal(`The ${plane} profile would have ${rows.length} anchors; a Custom profile supports at most ${MAX_FREEFORM_ANCHORS} including the throat and mouth.`);
+  if (rows.length > MAX_FREEFORM_ANCHORS) throw new ProfileEditRefusal(`The ${plane} profile would have ${rows.length} anchors. A Custom profile supports at most ${MAX_FREEFORM_ANCHORS}, including the throat and mouth. Paste fewer anchors.`);
   return rows;
 }
 
@@ -614,7 +614,7 @@ export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile
   // Adopting the pasted length is a Length change for everything the paste
   // does not replace (the other plane, stations): it is the explicit Stretch.
   const adopting = choice.adoptLength && length !== lengthOf(design);
-  if (adopting && !curves) throw new ProfileEditRefusal('Adopting the pasted length stretches the rest of the profile, which needs the resolved curve. Wait for the curve check and try again.');
+  if (adopting && !curves) throw new ProfileEditRefusal('Adopting the pasted length stretches the rest of the profile, which needs a completed curve check. Wait for the curve check and try again.');
   const stretched = adopting ? stretchLength(design, length, curves!) : undefined;
   const base = stretched?.after ?? design;
   const after = structuredClone(base);
@@ -630,7 +630,7 @@ export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile
     });
     after[PROFILE_KEY[plane]] = { ...profileOf(base, plane), points };
     remapListMetadata(after, `${PROFILE_KEY[plane]}.points`, current.length, () => null);
-    notes.push(`${plane}: ${points.length} anchors as ${choice.join === 'corner' ? 'corners (adjacent corners without angles join with straight spans)' : 'smooth anchors with automatic tangents'}.`);
+    notes.push(`${plane}: ${points.length} anchors as ${choice.join === 'corner' ? 'corners. Neighbouring corners without facing angles join with straight lines' : 'smooth anchors whose curve directions adjust automatically'}.`);
   };
   if (target === 'H' || target === 'both') replace('H', pasted.pointsByPlane?.H ?? pasted.points);
   if (target === 'V' || target === 'both') replace('V', pasted.pointsByPlane?.V ?? pasted.points);
@@ -854,12 +854,15 @@ export function convertToCustomProfileBuilder(fetcher: typeof fetch = fetch): Ed
     if (!isCurrentOrigin(origin)) throw new StaleFreeformResponse('Discarded a conversion for an older design.');
     const report = result.report;
     const kept = report.features.some(feature => feature.name === 'Rolled-back lip removed');
-    const measured = (label: string, d: ConversionReport['wall']) => `${label}: ${d.max_deviation_mm.toFixed(5)} mm at ${d.azimuth_deg}°, z = ${d.z_mm.toFixed(5)} mm (physical mm, Scale applied).`;
+    const maximum = Math.max(report.wall.max_deviation_mm, report.mouth.max_deviation_mm, report.axial_extent_deviation_mm);
+    const measured = (label: string, d: ConversionReport['wall']) => `${label}: largest measured change ${d.max_deviation_mm.toFixed(5)} mm. At ${d.azimuth_deg}° around the horn, z = ${d.z_mm.toFixed(5)} mm along its length. Measurements include Scale.`;
     return { after: result.design, notes: [
-      `Conversion verdict: ${result.verdict}.`, measured('H', report.H), measured('V', report.V),
-      measured(kept ? 'Kept wall maximum' : 'Whole wall maximum', report.wall), measured(kept ? 'Kept mouth outline' : 'Mouth outline', report.mouth),
-      `${kept ? 'Kept axial' : 'Axial'} extent change: ${report.axial_extent_deviation_mm.toFixed(5)} mm.`,
-      `Source-cap angle: ${report.source_cap_angle_before_deg.toFixed(5)}° → ${report.source_cap_angle_after_deg.toFixed(5)}°.`,
+      result.verdict === 'match' ? 'Matches the original within 0.01 mm at the checked points.'
+        : `Converted with differences. Largest measured change${kept ? ' in the kept part' : ''}: ${maximum.toFixed(5)} mm. Review the feature changes and measurement limits below before accepting.`,
+      measured('Horizontal profile (H)', report.H), measured('Vertical profile (V)', report.V),
+      measured(kept ? 'Kept wall' : 'Whole wall', report.wall), measured(kept ? 'Kept mouth outline' : 'Mouth outline', report.mouth),
+      `${kept ? 'Kept wall' : 'Wall'} start/end position change along the length: ${report.axial_extent_deviation_mm.toFixed(5)} mm after Scale.`,
+      `Source surface opening angle: ${report.source_cap_angle_before_deg.toFixed(5)}° → ${report.source_cap_angle_after_deg.toFixed(5)}°.`,
       ...report.features.map(feature => feature.message), report.method.grid, ...report.method.limits,
     ],
       conversion: { report: result.report, verdict: result.verdict } };
@@ -916,14 +919,14 @@ export function insertAnchorBuilder(plane: Plane, zMm: number, mode: InsertMode,
   return async (design, { origin, signal }) => {
     const edited = isSharedProfile(design) ? 'H' : plane;
     const length = lengthOf(design);
-    if (!(zMm > 0 && zMm < length)) throw new ProfileEditRefusal(`Insert z must be strictly between the throat (0) and the mouth (${formatMm(length)} mm).`);
-    if (profileOf(design, edited).points.length >= MAX_FREEFORM_ANCHORS) throw new ProfileEditRefusal(`The ${edited} profile already has ${MAX_FREEFORM_ANCHORS} anchors, the most a Custom profile supports.`);
+    if (!(zMm > 0 && zMm < length)) throw new ProfileEditRefusal(`Choose an insertion position between the throat (0 mm) and the mouth (${formatMm(length)} mm).`);
+    if (profileOf(design, edited).points.length >= MAX_FREEFORM_ANCHORS) throw new ProfileEditRefusal(`The ${edited} profile already has ${MAX_FREEFORM_ANCHORS} anchors, the most a Custom profile supports. Delete an anchor before adding another.`);
     const result = await insertFreeformAnchor(design, { plane: edited, z_mm: zMm, mode }, profileRequestKey(origin, design), signal, fetcher);
     if (!isCurrentOrigin(origin)) throw new StaleFreeformResponse('Discarded an insertion for an older design.');
     const after = withInsertedProfile(design, result.design, edited);
     const notes = mode === 'exact'
-      ? [`Exact insertion at z = ${formatMm(zMm)} mm in ${edited}: the curve is split where it is, and the new anchor and any neighbouring automatic spans that would move get explicit handles.`]
-      : [`Refit insertion at z = ${formatMm(zMm)} mm in ${edited}: every explicit handle in ${edited} is released and the plane is fitted automatically through its anchors.`];
+      ? [`Exact insertion at z = ${formatMm(zMm)} mm in ${edited}. The curve keeps its shape. The new anchor gets fixed handles. Neighbouring automatic curves also get fixed handles if they would otherwise move.`]
+      : [`Refit insertion at z = ${formatMm(zMm)} mm in ${edited}. Every fixed handle in ${edited} is released. The curve adjusts automatically through all its anchors.`];
     const pins = describePins(edited, profileOf(after, edited).points);
     return { after: reconcileAbsent(after), notes: pins ? [...notes, pins] : notes };
   };

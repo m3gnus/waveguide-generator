@@ -38,7 +38,7 @@ describe('Custom profile edit transformations', () => {
     expect(after._expressions).toEqual({ 'profile_h.points.2.r': { value: 90, raw: '45 * 2' }, 'profile_h.points.3.r': { value: 140, raw: '70*2' }, 'profile_v.points.1.r': { value: 1, raw: 'x' } });
     expect(after._absent).toBeUndefined();
     expect(notes.join(' ')).toMatch(/Released the facing handles .*H point 1 \(out\)/);
-    expect(notes.join(' ')).toMatch(/remain pinned in H: H point 1 \(in\)/);
+    expect(notes.join(' ')).toMatch(/stay fixed in H \(they will not adjust automatically\): H point 1 \(in\)/);
     expect(after.profile_v).toEqual(design.profile_v);
     expect(() => deleteAnchor(design, 'H', 0)).toThrow(ProfileEditRefusal);
   });
@@ -59,7 +59,7 @@ describe('Custom profile edit transformations', () => {
     const cleared = setAnchorAngle(design, 'H', 1, 'in', undefined);
     expect(cleared.after.profile_h!.points[1]).not.toHaveProperty('angle_deg');
     expect(cleared.after.profile_h!.points[1].handle_out).toEqual([6, 3]);
-    expect(cleared.notes[0]).toMatch(/stay pinned/);
+    expect(cleared.notes[0]).toMatch(/stay fixed/);
     expect(() => setAnchorAngle(design, 'H', 2, 'in', 90)).toThrow('less than 90');
     expect(() => setAnchorAngle(design, 'H', 0, 'in', 10)).toThrow('no incoming side');
   });
@@ -100,7 +100,7 @@ describe('Custom profile edit transformations', () => {
     const reconciled = horizontalThroatForVertical(result).after;
     expect(reconciled.profile_v!.points[0].r).toBe(15);
     expect(setSeparateVertical(reconciled, true).after.shared_profile).toBe(false);
-    expect(() => setAnchorValue(separate, 'H', 2, 'z', 30)).toThrow('between its neighbours');
+    expect(() => setAnchorValue(separate, 'H', 2, 'z', 30)).toThrow('between its neighbouring anchors');
     expect(() => setAnchorValue(separate, 'H', 0, 'z', 1)).toThrow('Change Length');
   });
 
@@ -118,7 +118,7 @@ describe('Custom profile edit transformations', () => {
     expect(after.profile_h!.points[3]).toMatchObject({ handle_in: [-6, -1], handle_out: [6, 1] });
     expect(after.profile_h!.points[0].handle_out).toEqual([6, 1]);
     expect(after.profile_h!.points[4].handle_in).toEqual([-6, -1]);
-    expect(notes.join(' ')).toContain('no longer refit automatically: H throat (out), H point 3 (in), H point 3 (out), H mouth (in)');
+    expect(notes.join(' ')).toContain('will no longer adjust automatically: H throat (out), H point 3 (in), H point 3 (out), H mouth (in)');
     // The inactive V has no resolved curve of its own: authored values only.
     expect(after.profile_v!.points[1]).not.toHaveProperty('handle_in');
     expect(after.profile_h!.points[1].angle_deg).toBeCloseTo(Math.atan(Math.tan(20 * Math.PI / 180) / 2) * 180 / Math.PI, 12);
@@ -171,7 +171,7 @@ describe('Custom profile edit transformations', () => {
     expect(kept.length).toBe(120);
     expect(kept.profile_h!.points.every((point) => point.join === 'corner')).toBe(true);
     expect(kept.profile_v!.points[0].r).toBe(10);
-    expect(() => applyPastedProfile(design, pasted, { target: 'H', adoptLength: true, join: 'smooth' })).toThrow('resolved curve');
+    expect(() => applyPastedProfile(design, pasted, { target: 'H', adoptLength: true, join: 'smooth' })).toThrow('completed curve check');
     const unresolved = { anchors: design.profile_h!.points.map(() => ({ handleIn: null, handleOut: null })) };
     const adopted = applyPastedProfile(design, pasted, { target: 'H', adoptLength: true, join: 'smooth' }, { H: unresolved, V: { anchors: design.profile_v!.points.map(() => ({ handleIn: null, handleOut: null })) } } as unknown as CurvesResponse).after;
     expect(adopted.length).toBe(200);
@@ -311,8 +311,8 @@ describe('Custom profile commit and preview', () => {
       await act(async () => edit.propose('Convert', convertToCustomProfileBuilder(fetcher)));
       await vi.waitFor(() => expect(edit.preview?.validation.status).toBe('ready'));
       const notes = edit.preview!.notes.join(' ');
-      expect(notes).toContain('Conversion verdict: approximate');
-      expect(notes).toContain('Kept wall maximum: 0.02000 mm');
+      expect(notes).toContain('Converted with differences');
+      expect(notes).toContain('Kept wall: largest measured change 0.02000 mm');
       expect(notes).toContain('Kept mouth outline:');
       expect(notes).toContain(message);
     });

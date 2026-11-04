@@ -183,7 +183,7 @@ def _kept_wall(wall: np.ndarray) -> tuple[list[np.ndarray], list[np.ndarray]]:
         span = rows[:end+1].copy() if len(lip) else rows.copy()
         dz, dr = np.diff(span, axis=0).T
         if len(span) < 2 or np.any((dz < -1e-10) | ((dz <= 0) & (abs(dr) > 1e-9))):
-            _refuse('The kept generated wall does not advance in z before its maximum; a Custom profile cannot represent it.',
+            _refuse('Cannot convert this design: the wall doubles back before reaching its furthest point. A Custom profile cannot keep that shape.',
                     'Keep this horn in its original family, or simplify the folds before converting again.')
         kept.append(span)
         lips.append(lip)
@@ -198,10 +198,10 @@ def _lip_change(lips: Sequence[np.ndarray], mouth: np.ndarray) -> FeatureChange 
     radial = max(float(np.ptp(lip[:, 1])) for lip, _ in removed)
     distance = max(float(np.linalg.norm(lip-end, axis=1).max()) for lip, end in removed)
     return FeatureChange(name='Rolled-back lip removed', change='removed',
-        message=f'Rolled-back lip removed: axial length {axial:.6g} mm; radial extent {radial:.6g} mm; '
-                f'maximum sampled distance to the converted mouth at the same azimuth {distance:.6g} mm. '
-                'Conversion ends at each meridian’s maximum z. Wall and mouth deviations measure only the kept part; '
-                'the removed lip is excluded from the 0.5 mm wall limit. The verdict is approximate.')
+        message=f'Rolled-back lip removed. Its length along the horn was {axial:.6g} mm. Its radial extent (distance outwards) was {radial:.6g} mm. '
+                f'Largest measured distance from the removed lip to the new mouth at the same angle around the horn: {distance:.6g} mm. '
+                'In each slice along the horn, conversion ends at the furthest point along its length. Wall and mouth measurements cover only the kept part. '
+                'The removed lip is outside the 0.5 mm wall limit. The converted shape is approximate.')
 
 
 def _cap_angle(design: DesignConfig, points: np.ndarray) -> float:
@@ -238,8 +238,8 @@ def _radial_difference(left: np.ndarray, right: np.ndarray, *, align_disjoint: b
         lo = max(left[:, 0].min(), right[:, 0].min())
         hi = min(left[:, 0].max(), right[:, 0].max())
     if hi < lo:
-        _refuse('The generated profiles have no common axial range.',
-                'Keep the original design or move the throat and mouth into the same axial range before converting.')
+        _refuse('Cannot compare these profiles: they do not cover any of the same positions along the length.',
+                'Keep the original design or move the throat and mouth into the same range along the length before converting.')
     grid = np.unique(np.r_[left[:, 0], right[:, 0], np.linspace(lo, hi, 2049)])
     grid = grid[(grid >= lo) & (grid <= hi)]
     def branches(rows):
@@ -303,13 +303,13 @@ def compare_generated_designs(
                   *(_construction_changes(before, after) if include_construction else [])], method=GeneratedComparisonMethod(
             angular_samples=ANGULAR, angular_samples_before=first.shape[0], angular_samples_after=second.shape[0],
             axial_segments_before=first.shape[1] - 1, axial_segments_after=second.shape[1] - 1,
-            azimuths_deg=AZIMUTHS.tolist(), grid='Full 360° domain at 2.5°; union of both generated z grids and 2049 uniform overlap samples per meridian; polar-linear interpolation of exported rings.',
-            limits=['Sampled estimate, not a bound between angular or axial samples and not a mesh/STEP surface-distance certificate.',
-                    'Rear boundaries and outer walls are checked separately on the resolved construction grids and reported as feature changes; enclosure, baffle and source surface distances are not certified. Source-cap opening angle is checked separately.',
-                    'Active morphs, explicit axial maps and ATH lips retain the authored axial count to preserve snapping and construction; other profiles use 4096 axial segments plus semantic anchors.',
-                    'Native constructions use their resolved inner-wall grid at the native owner’s density; the actual axial count is reported above.',
-                    'Radial errors use the common z range and all fold branches; axial extent error and 3D mouth-ring displacement at a common azimuth are reported separately.',
-                    *(['Disjoint imported axial ranges are aligned at the throat for radial comparison; the actual translation remains in the extent and mouth measurements.'] if align_disjoint else [])]),
+            azimuths_deg=AZIMUTHS.tolist(), grid='Checked all the way around the horn (360°), every 2.5°. Each lengthwise slice checks every position from both exports, plus 2049 evenly spaced positions where their lengths overlap. Between exported rings, radius is estimated with straight lines in angle and length.',
+            limits=['These measurements are estimates at checked points. Larger differences between points are possible. Distances over the complete mesh or STEP surfaces are not verified.',
+                    'Rear edges and outer walls are checked separately at points on the built shapes. Their changes are listed separately. Distances over the enclosure, baffle and source surfaces are not verified. The source surface opening angle is checked separately.',
+                    'Designs with mouth shaping, fixed positions along the length or ATH lips keep their original number of lengthwise segments. This preserves features that line up with those positions. Other profiles use 4096 lengthwise segments plus points at shape features.',
+                    'Other built-in shapes use the inner-wall points produced by their own shape builder. The actual number of lengthwise segments is included in the report.',
+                    'Radius changes are checked where both profiles exist along the length, including every part of a fold. Start/end position changes along the length and mouth movement in 3D at the same angle around the horn are reported separately.',
+                    *(['If imported profiles cover separate lengths, their throats are lined up to compare radii. The actual movement is still included in the start/end position and mouth measurements.'] if align_disjoint else [])]),
     )
 
 
@@ -347,7 +347,7 @@ def _construction_changes(before: DesignConfig, after: DesignConfig, *, removed_
             if words is None:
                 raise
             problems.append(FeatureChange(name='Outer construction', change='changed',
-                message=f'{label} enclosure/baffle/outer/rear construction could not be generated: {words} Its surface change is unmeasured.'))
+                message=f'{label} enclosure, baffle, outer wall or rear body could not be built: {words} Changes to those surfaces could not be measured.'))
     if problems:
         return problems
     changes = []
@@ -356,20 +356,20 @@ def _construction_changes(before: DesignConfig, after: DesignConfig, *, removed_
         displacement = float(np.linalg.norm(rings[0]-rings[1], axis=1).max())
         if displacement > MATCH_MM:
             changes.append(FeatureChange(name='Baffle opening', change='changed',
-                message=f'The baffle opening follows the kept mouth after lip removal; maximum sampled opening displacement {displacement:.6g} mm.'))
+                message=f'The baffle opening follows the kept mouth after lip removal. Its largest measured movement is {displacement:.6g} mm.'))
         bounds = [resolve_enclosure_bounds(config, resolved=resolved) for config, resolved in zip(configs, resolutions)]
         if all(bound is not None for bound in bounds):
-            moved = [f'{key} {bounds[0][key]:.6g} → {bounds[1][key]:.6g} mm'
+            moved = [f'{dict(bx0="left edge", bx1="right edge", by0="bottom edge", by1="top edge", z_front="front position", z_back="back position")[key]} {bounds[0][key]:.6g} → {bounds[1][key]:.6g} mm'
                      for key in ('bx0', 'bx1', 'by0', 'by1', 'z_front', 'z_back')
                      if abs(bounds[0][key]-bounds[1][key]) > MATCH_MM]
             if moved:
                 changes.append(FeatureChange(name='Enclosure / baffle bounds', change='changed',
-                    message='Enclosure / baffle placement changes after lip removal (authored settings retained): '+ '; '.join(moved)+'.'))
+                    message='Enclosure / baffle placement changes after lip removal. Your settings are kept. Positions change as follows: '+ '; '.join(moved)+'.'))
     outer = [getattr(g, 'outer_points', None) for g in geometries]
     if any(points is None for points in outer):
         if not all(points is None for points in outer):
             changes.append(FeatureChange(name='Outer wall / rear body', change='changed',
-                message='The resolved outer shell and rear body are present in only one design.'))
+                message='Only one of the two designs has an outer wall and rear body.'))
         return changes
     outer = [_restored_outer_throat_points(g.inner_points, points, wall_thickness_mm=g.wall_thickness_mm)
              for g, points in zip(geometries, outer)]
@@ -381,7 +381,7 @@ def _construction_changes(before: DesignConfig, after: DesignConfig, *, removed_
                       abs(left[:, 0].min()-right[:, 0].min()), abs(left[:, 0].max()-right[:, 0].max()))
     if maximum > MATCH_MM:
         changes.append(FeatureChange(name='Outer wall', change='changed',
-            message=f'Maximum sampled outer-wall radial/axial-extent change {maximum:.6g} mm on the resolved construction grids.'))
+            message=f'Outer wall changes by up to {maximum:.6g} mm at the checked points. This checks both its radius and its extent along the length on the built shapes.'))
     rear = [getattr(g, 'ath_rear_points', None) for g in geometries]
     rear = [geometry_rear_ring(g, g.inner_points, points) if ring is None else ring
             for g, points, ring in zip(geometries, outer, rear)]
@@ -398,7 +398,7 @@ def _construction_changes(before: DesignConfig, after: DesignConfig, *, removed_
             lo, hi = np.min(ring[:, 2]), np.max(ring[:, 2])
             return f'{lo:.6g}' if hi-lo < 1e-8 else f'[{lo:.6g}, {hi:.6g}]'
         changes.append(FeatureChange(name='Rear construction', change='changed',
-            message=f'Rear boundary z {location(rear[0])} → {location(rear[1])} mm; maximum sampled boundary/apex displacement {displacement:.6g} mm.'))
+            message=f'Rear edge position along the length: {location(rear[0])} → {location(rear[1])} mm. Largest measured movement of the rear edge or rear tip: {displacement:.6g} mm.'))
     return changes
 
 
@@ -406,9 +406,12 @@ def _feature_changes(before: DesignConfig, after: DesignConfig) -> list[FeatureC
     if before.formula != 'FREEFORM' and after.formula == 'FREEFORM':
         return _preserve_shared(before)[1]
     changes = []
-    for path, name in [('throat_ext_length','Throat extension'), ('slot_length','Slot'),
-                       ('mesh.ath_roundover','ATH Mesh.Roundover'), ('mesh.ath_rear_shape','ATH Mesh.RearShape'),
-                       ('guiding_curve','Guiding curves'), ('morph','Mouth morph')]:
+    for path, name, control in [('throat_ext_length', 'Throat extension', 'Throat extension'),
+                                ('slot_length', 'Slot', 'Slot'),
+                                ('mesh.ath_roundover', 'ATH Mesh.Roundover', 'ATH mouth lip'),
+                                ('mesh.ath_rear_shape', 'ATH Mesh.RearShape', 'ATH rear shape'),
+                                ('guiding_curve', 'Guiding curves', 'Guiding curves'),
+                                ('morph', 'Mouth morph', 'Mouth shaping')]:
         def value(design):
             item = design.root
             for field in path.split('.'):
@@ -417,7 +420,7 @@ def _feature_changes(before: DesignConfig, after: DesignConfig) -> list[FeatureC
         old, new = value(before), value(after)
         if old is not None and old != new:
             changes.append(FeatureChange(name=name, change='removed' if new is None else 'changed',
-                message=f'{name} changes as a construction control; the inner-wall comparison does not certify its other surfaces or future edits.'))
+                message=f'{control} changes how the shape is built. The inner-wall comparison does not verify its other surfaces or how future edits will affect them.'))
     return changes
 
 
@@ -436,32 +439,33 @@ def _preserve_shared(source: DesignConfig) -> tuple[dict, list[FeatureChange]]:
     for key, label in [('throat_ext_length', 'Throat extension'), ('slot_length', 'Slot')]:
         value = getattr(source.root, key)
         if value is not None and value.constant_value() != 0:
-            feature(label, f'{label} is baked into the fitted wall; its separate construction control is removed.')
+            feature(label, f'{label} is included in the new wall shape. Its separate control is removed. Edit the Custom profile anchors to change it.')
     for key in ('throat_ext_angle', 'throat_ext_length', 'slot_length'):
         common[key] = None  # already present in the generated meridians
     common['cross_section'] = {'exponent': 2, 'aspect_ratio': 1}
     if _active_morph(source):
-        feature('Mouth morph', 'The generated morph is baked into the profiles and cross-section stations; the original morph controls no longer drive it.', 'removed')
+        feature('Mouth morph', 'The mouth shaping is included in the new profiles and cross-section stations. The original mouth shaping controls no longer change it. Edit the Custom profile to change the shape.', 'removed')
         m = source.root.morph
         if m.target_width is None or m.target_height is None:
-            feature('Implicit mouth rounding', 'The generated implicit mouth dimensions are baked into the fit instead of being rounded again by the original family.')
+            feature('Implicit mouth rounding', 'The automatically chosen mouth dimensions are included in the new shape. They will not be rounded again by the original profile family.')
     common['morph'] = {**common['morph'], 'target_shape': 0}
     guide = getattr(source.root, 'guiding_curve', None)
     if guide is not None and guide.curve_type is not None and guide.curve_type.constant_value() != 0:
-        feature('Guiding curves', 'The generated guiding shape is baked into the fit; its guiding-curve controls are removed.', 'removed')
+        feature('Guiding curves', 'The guiding shape is included in the new profile. Its guiding-curve controls are removed. Edit the Custom profile to change it.', 'removed')
     mesh = common['mesh']
     for key, label in [('throat_adapter', 'Throat adapter'), ('axial_scale', 'Axial scale'),
                        ('terminating_arc', 'Terminating arc')]:
         if payload.get(key) is not None:
-            feature(label, f'{label} is baked into the fitted wall; its separate construction control is removed.')
+            feature(label, f'{label} is included in the new wall shape. Its separate control is removed. Edit the Custom profile anchors to change it.')
     if mesh.get('mouth_roundover_radius_mm') is not None:
-        feature('Mouth roundover', 'The native mouth roundover is baked into the fit; its outer lip is outside the inner-wall comparison.', 'removed')
+        feature('Mouth roundover', 'The mouth roundover is included in the new profile. Its separate control is removed. Its outer lip is not covered by the inner-wall comparison.', 'removed')
     for key in ('size_mm', 'mouth_roundover_radius_mm'):
         mesh.pop(key, None)
-    for key, label in [('ath_roundover', 'ATH Mesh.Roundover'), ('ath_rear_shape', 'ATH Mesh.RearShape'),
-                       ('ath_throat_ext_segments', 'ATH throat-extension sampling')]:
+    for key, label, control in [('ath_roundover', 'ATH Mesh.Roundover', 'ATH mouth lip'),
+                                ('ath_rear_shape', 'ATH Mesh.RearShape', 'ATH rear shape'),
+                                ('ath_throat_ext_segments', 'ATH throat-extension sampling', 'Throat extension segments')]:
         if mesh.get(key) is not None:
-            feature(label, f'{label} is removed as a construction control; the bare-wall comparison does not certify its outer lip or rear surfaces.', 'removed')
+            feature(label, f'{control} is removed as a separate control. The inner-wall comparison does not verify its outer lip or rear surfaces.', 'removed')
     for key in list(mesh):
         if key.startswith('ath_'):
             mesh.pop(key)
@@ -851,8 +855,8 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
     progress('sample')
     origins = np.array([rows[0, 0] for rows in wall])
     if np.max(abs(origins)) > REFUSE_MM and not importing:
-        _refuse('The generated throat is more than 0.5 mm from z = 0; a Custom profile starts at zero.',
-                'Shift the imported table so its first z is zero, then convert again.')
+        _refuse('Cannot convert this design: the throat is more than 0.5 mm from z = 0. A Custom profile must start at zero.',
+                'Shift the imported positions so the first z is zero, then convert again.')
     for rows, origin in zip(wall, origins):
         rows[:, 0] -= origin
     length = float(wall[0][-1, 0])
@@ -860,7 +864,7 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
     common, features = _preserve_shared(source)
     if np.max(abs(origins)) > 1e-8:
         features.append(FeatureChange(name='Axial origin', change='changed',
-            message='The throat moves to z = 0; its translation is included in the axial extent and mouth-outline deviations.'))
+            message='The throat moves to z = 0. This movement is included in the start/end position and mouth-outline changes.'))
     lookup = isinstance(source.root, LookupConfig)
     curve_error = None
     if lookup:
@@ -897,13 +901,13 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
         else:
             common['source']['radius'] = radius/scale
         features.append(FeatureChange(name='Source-cap angle', change='baked',
-            message='Source shape preserved explicitly, including the resolved source-cap angle and curvature.'))
+            message='The source surface keeps its shape. Its current opening angle and curvature are saved as fixed values.'))
         if _active_morph(source):
             _, construction = _legacy_grid(source, authored=True)
             start = float(construction['morph_start'])
             common['morph']['fixed_part'] = start
             features.append(FeatureChange(name='Morph-start snapping', change='baked',
-                message=f'Morph-start snapping is frozen at {start:.12g} of the authored axial table; Custom profile uses that continuous start.'))
+                message=f'Mouth shaping starts at a fixed fraction of the original length: {start:.12g} (0 is the throat; 1 is the mouth). Custom profile uses this exact start instead of moving it to the nearest lengthwise point.'))
             from hornlab_mesher.profile_morph import _resolve_morph_half_dimensions, _morph_target_shape
             shape_only = _morph_target_shape(params, 0) == 3
             half_width, half_height = _resolve_morph_half_dimensions(params, 0, h_rows[-1, 1], v_rows[-1, 1], round_implicit_up=not shape_only)
@@ -913,7 +917,7 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
                     common['morph'][field] = 2*half/scale
                     label = 'Implicit mouth dimensions' if shape_only else 'Implicit mouth rounding'
                     features.append(FeatureChange(name=label, change='baked',
-                        message=f'{label} frozen as {field.replace("_", " ")} {2*half:.12g} mm.'))
+                        message=f'Automatically chosen mouth size is saved as a fixed {field.replace("_", " ").capitalize()}: {2*half:.12g} mm.'))
         stations = [{'t': 0, 'shape': 'ellipse'}, {'t': 1, 'shape': 'ellipse'}]
         if not shared:
             # The generic section scales only growth past a circular throat.
@@ -925,9 +929,9 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
             base_wall[:, :, 0] -= base_wall[:, :1, 0]
             stations = _fit_stations(base_wall, length, scale, check)
             features.append(FeatureChange(name='Cross-section exponent' if exponent != 2 else 'Cross-section outline', change='baked',
-                message='The cross-section outline and circular-throat growth rule are fitted into the cross-section stations; the outline fit is included in the generated-grid comparison.'))
+                message='The cross-section stations now describe the outline and how it grows from the circular throat. Changes to that outline are included in the measured shape comparison.'))
         features.append(FeatureChange(name='Axial map / interpolate fit', change='changed',
-            message='The ATH solve z-map / interpolate surface fit is replaced by the Custom profile corner-wall fit; the generated-grid comparison is sampled, not an OCC wall-distance certificate.'))
+            message='Custom profile now builds the wall through its corner anchors. This replaces the ATH method of spacing points along the length and fitting a surface through them. The comparison checks points on the shapes. It does not verify distances over the complete CAD wall surfaces.'))
         candidate = DesignConfig.model_validate({**common, 'formula': 'FREEFORM', 'length': length/scale,
             'profile_h': h, 'profile_v': v, 'shared_profile': shared, 'cross_sections': stations, 'inflection_policy': 'warn'})
     else:
@@ -943,7 +947,7 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
         v['points'][0]['r'] = h['points'][0]['r']
         if np.ptp([rows[0, 1] for rows in wall]) > 1e-8:
             features.append(FeatureChange(name='Throat outline', change='changed',
-                message='The generated throat is fitted as one circle; its outline change is included in the wall and source-cap measurements.'))
+                message='The throat becomes one circle. Changes to its outline are included in the wall and source surface measurements.'))
         stations = ([{'t': 0, 'shape': 'ellipse'}, {'t': 1, 'shape': 'ellipse'}] if shared
                     else _fit_stations(wall, length, scale, check))
         candidate = DesignConfig.model_validate({**common, 'formula': 'FREEFORM', 'length': length/scale,
@@ -957,18 +961,18 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
                                       before_wall=kept, after_points=generated, align_disjoint=importing, include_construction=False)
     if lip := _lip_change(lips, _meridians(_sample(candidate) if generated is None else generated)[:, -1, :]):
         report.features.append(lip)
-        report.method.grid = 'Kept wall through each meridian’s maximum z. '+report.method.grid
-        report.method.limits.append('This conversion compares only the wall kept through each meridian’s maximum z. '
-                                    'The removed lip is measured separately as a named feature, outside the wall refusal limit.')
+        report.method.grid = 'Only the wall up to the furthest point along each lengthwise slice is kept. '+report.method.grid
+        report.method.limits.append('This conversion compares only the wall kept up to the furthest point along each lengthwise slice. '
+                                    'The removed lip is measured separately, outside the wall conversion limit.')
         counts = [len(rows)-1 for rows in kept]
-        report.method.limits.append(f'Kept axial segments per meridian: {min(counts)}–{max(counts)}; '
-                                    'axial_segments_before counts the complete original sampling, including the removed lip.')
+        report.method.limits.append(f'Lengthwise segments kept in each slice: {min(counts)}–{max(counts)}. '
+                                    'The original segment count includes the removed lip.')
     maximum = max(report.wall.max_deviation_mm, report.mouth.max_deviation_mm, report.axial_extent_deviation_mm)
     if curve_error is not None:
         report.curve_deviation_mm = curve_error
     if maximum > REFUSE_MM and not importing:
-        _refuse(f'The best Custom profile differs by {maximum:.4f} mm, above the 0.5 mm conversion limit (up to 64 anchors and 32 stations).',
-                'Keep the original family, or simplify the kept profile/morph and try again.')
+        _refuse(f'Cannot convert this design: the closest Custom profile differs by {maximum:.4f} mm. The limit is 0.5 mm. Conversion uses up to 64 anchors and 32 cross-section stations.',
+                'Keep the original family, or simplify the kept profile or mouth shaping and try again.')
     report.features.extend(_construction_changes(source, candidate, removed_lip=lip is not None))
     progress('compare')
     same = maximum <= MATCH_MM and abs(report.source_cap_angle_before_deg-report.source_cap_angle_after_deg) <= .01 and not report.features
@@ -984,7 +988,7 @@ def convert_design(source: DesignConfig, content_key: str, *, check: Callable = 
         # This mesher spacing refusal predates UserRefusal. Match only this
         # documented constraint; unexpected ValueErrors remain program faults.
         if str(exc).startswith('FREEFORM semantic axial features are closer than normalized-t tolerance'):
-            _refuse('The generated profile needs anchors closer together than a Custom profile can build.',
+            _refuse('Cannot convert this design: it needs anchors closer together than a Custom profile can build.',
                     'Keep the original family, or soften the nearly vertical end or tightly spaced features before converting again.')
         raise
 
@@ -994,10 +998,10 @@ def conversion_notice(result: ConvertResponse) -> str:
     maximum = max(report.wall.max_deviation_mm, report.mouth.max_deviation_mm, report.axial_extent_deviation_mm)
     curve = report.curve_deviation_mm or 0
     removed_lip = any(feature.name == 'Rolled-back lip removed' for feature in report.features)
-    fit = ('Kept wall fitted through the fold.' if removed_lip else
-           'Profile curve unchanged.' if curve < 1e-9 else f'Maximum profile curve change {curve:.6g} mm.')
-    limit = ' The fit exceeds the 0.01 mm profile tolerance.' if curve > MATCH_MM else ''
-    refusal = ' This exceeds the 0.5 mm explicit-conversion limit; opened with the best fit.' if maximum > REFUSE_MM else ''
+    fit = ('Only the wall up to the fold is kept.' if removed_lip else
+           'Profile curve unchanged.' if curve < 1e-9 else f'Largest profile curve change: {curve:.6g} mm.')
+    limit = ' The profile curve change exceeds the 0.01 mm limit for a match.' if curve > MATCH_MM else ''
+    refusal = ' This exceeds the 0.5 mm limit used by Convert current design. The file was opened with the closest fit. Review the shape before using it.' if maximum > REFUSE_MM else ''
     scope = 'kept ' if removed_lip else ''
-    return (f'Opened as Custom profile. {fit} Maximum {scope}generated-grid change {maximum:.6g} mm.'
+    return (f'Opened as Custom profile. {fit} Largest measured change to the {scope}shape: {maximum:.6g} mm. Larger differences between checked points are possible.'
             f'{limit}{refusal} ' + ' '.join(f.message for f in report.features))

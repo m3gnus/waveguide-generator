@@ -211,9 +211,9 @@ def test_default_rosse_converts_through_fold_and_reports_removed_lip(default_ros
     assert result.design.root.profile_h.mouth_angle_deg.constant_value() > 89
     lip = next(f for f in result.report.features if f.name == 'Rolled-back lip removed')
     assert lip.change == 'removed'
-    assert float(re.search(r'axial length ([\d.]+)', lip.message)[1]) == pytest.approx(5.21551, abs=1e-5)
-    assert float(re.search(r'radial extent ([\d.]+)', lip.message)[1]) == pytest.approx(11.2769, abs=1e-4)
-    assert float(re.search(r'azimuth ([\d.]+)', lip.message)[1]) == pytest.approx(12.4332, abs=1e-4)
+    assert float(re.search(r'length along the horn was ([\d.]+)', lip.message)[1]) == pytest.approx(5.21551, abs=1e-5)
+    assert float(re.search(r'radial extent \(distance outwards\) was ([\d.]+)', lip.message)[1]) == pytest.approx(11.2769, abs=1e-4)
+    assert float(re.search(r'around the horn: ([\d.]+)', lip.message)[1]) == pytest.approx(12.4332, abs=1e-4)
     assert result.report.wall.max_deviation_mm == pytest.approx(.009511758, abs=1e-5)
     assert result.report.mouth.max_deviation_mm < .01
     assert result.report.axial_extent_deviation_mm == 0
@@ -232,7 +232,7 @@ def test_fold_cut_retains_each_meridians_own_maximum_and_measures_physical_lip()
     kept, lips = _kept_wall(original)
     assert [len(rows) for rows in kept] == [2, 3]
     np.testing.assert_array_equal([rows[-1] for rows in kept], [[10, 2], [12, 4]])
-    assert 'axial length 2 mm; radial extent 4 mm' in _lip_change(lips, np.array([rows[-1] for rows in kept])).message
+    assert 'length along the horn was 2 mm. Its radial extent (distance outwards) was 4 mm' in _lip_change(lips, np.array([rows[-1] for rows in kept])).message
     unchanged, empty = _kept_wall(original[:, :2])
     np.testing.assert_array_equal(unchanged, original[:, :2])
     assert _lip_change(empty, original[:, 1]) is None
@@ -241,7 +241,7 @@ def test_fold_cut_retains_each_meridians_own_maximum_and_measures_physical_lip()
 def test_fold_before_later_maximum_still_refuses():
     from hornlab_mesher.errors import UserRefusal
     from server.preview.freeform_conversion import _kept_wall
-    with pytest.raises(UserRefusal, match='kept generated wall'):
+    with pytest.raises(UserRefusal, match='wall doubles back'):
         _kept_wall(np.array([[[0, 1], [2, 3], [1, 4], [3, 5]]]))
 
 
@@ -290,9 +290,9 @@ def test_ath_rear_plane_change_is_measured_and_prevents_match():
     assert result.report.wall.max_deviation_mm <= .01
     assert result.verdict == 'approximate'
     rear = next(feature for feature in result.report.features if feature.name == 'Rear construction')
-    assert float(re.search(r'z (-?[\d.]+)', rear.message)[1]) == pytest.approx(-6.33652, abs=1e-4)
+    assert float(re.search(r'length: (-?[\d.]+)', rear.message)[1]) == pytest.approx(-6.33652, abs=1e-4)
     assert '→ -5 mm' in rear.message
-    assert float(re.search(r'displacement ([\d.]+)', rear.message)[1]) == pytest.approx(1.33652, abs=1e-4)
+    assert float(re.search(r'rear tip: ([\d.]+)', rear.message)[1]) == pytest.approx(1.33652, abs=1e-4)
 
 
 def test_comparison_measures_outer_wall_and_rear_changes_with_unchanged_bore():

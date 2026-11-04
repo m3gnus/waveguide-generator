@@ -49,9 +49,9 @@ def test_table_file_opens_as_custom_profile_and_roundtrips(name):
         np.testing.assert_allclose(values, expected, atol=.01, rtol=0)
     note = parsed.migrations[-1].note
     assert 'Opened as Custom profile.' in note
-    assert 'Maximum generated-grid change' in note
-    assert 'Source shape preserved' in note
-    assert 'interpolate' in note
+    assert 'Largest measured change to the shape:' in note
+    assert 'The source surface keeps its shape' in note
+    assert 'fitting a surface' in note
     assert 'LOOKUP' not in note
     saved = serialize(parsed)
     assert saved != text
@@ -65,9 +65,9 @@ def test_table_file_opens_as_custom_profile_and_roundtrips(name):
         assert len(design.root.profile_h.points) == 2
         assert 'Profile curve unchanged.' in note
     if name in ('implicit-dimensions', 'morph-snapping'):
-        assert 'Morph-start snapping' in note
+        assert 'Mouth shaping starts at a fixed fraction' in note
     if name == 'implicit-dimensions':
-        assert 'Implicit mouth rounding' in note
+        assert 'Automatically chosen mouth size' in note
 
 
 @pytest.mark.parametrize('name', CASES[:4])
@@ -128,7 +128,7 @@ def test_import_keeps_best_fit_when_explicit_conversion_would_refuse():
     migrated, applications = apply_migrations(payload)
     assert migrated['formula'] == 'FREEFORM'
     assert len(migrated['profile_h']['points']) <= 64
-    assert 'best fit' in applications[-1].note
+    assert 'closest fit' in applications[-1].note
     assert 'exceeds the 0.01 mm' in applications[-1].note
 
 
@@ -167,7 +167,7 @@ def test_full_explicit_axial_sample_map_keeps_its_authored_count_on_import():
     assert migrated['mesh']['length_segments']['value'] == 2
     assert migrated['mesh']['z_map_points'] == '0,0.2,1'
     np.testing.assert_allclose(_inner_grid(DesignConfig.model_validate(migrated), profile_sampling=True)[0, :, 2], [0, 20, 100])
-    assert 'Maximum generated-grid change' in applications[-1].note
+    assert 'Largest measured change to the shape:' in applications[-1].note
 
 
 def test_exactly_one_mm_interior_corner_gap_survives_t_roundoff():

@@ -129,7 +129,7 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
 
   const unfinished = Boolean(preview || dragging || invalidInputs || curveError || adapter.status(design).kind === 'unfinished');
   useLayoutEffect(() => {
-    setDraft(unfinished ? { message: `Custom profile ${preview?.status === 'refused' || invalidInputs || curveError ? 'has an invalid draft' : 'is unfinished'}. Open sketch or Revert to last valid before Solve.`, open, revert } : null);
+    setDraft(unfinished ? { message: `Custom profile ${preview?.status === 'refused' || invalidInputs || curveError ? 'has edits that need fixing' : 'has edits waiting for review'}. Choose Open sketch to review them, or Revert to last valid before Solve.`, open, revert } : null);
   }, [unfinished, preview?.status, curveError, open, revert, setDraft]);
   useEffect(() => {
     if (!preview || !visible) return;

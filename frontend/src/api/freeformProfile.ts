@@ -74,7 +74,8 @@ async function post<T extends { content_key: string }>(
     if (error?.content_key != null && error.content_key !== contentKey) {
       throw new StaleFreeformResponse(`Discarded a response for another profile request (${response.status}).`);
     }
-    throw new FreeformRequestError(error?.detail !== undefined ? refusalText(error.detail, 'profile edit') : 'WG could not check this profile. Try again.', response.status,
+    const fallback = path === 'convert' ? 'WG could not convert this design to Custom profile. Try again.' : 'WG could not check this profile. Try again.';
+    throw new FreeformRequestError(error?.detail !== undefined ? refusalText(error.detail, path === 'convert' ? 'conversion to Custom profile' : 'profile edit', fallback) : fallback, response.status,
       response.status === 422 && error?.content_key === contentKey && error?.detail !== undefined);
   }
   const result = payload as T | undefined;

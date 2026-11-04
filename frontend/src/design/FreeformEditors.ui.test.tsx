@@ -330,8 +330,8 @@ describe('Custom profile table, insertion, paste and Length', () => {
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="H insertion mode"]')!.value).toBe('exact');
     act(() => button('Add point').click());
     await vi.waitFor(async () => { await settle(); expect(host.textContent).toContain('Generated profile change'); expect(host.textContent).toContain('largest radius change 0 mm'); });
-    expect(host.textContent).toContain('H: curve deviation 0.125 mm at z = 40 mm over the full profile');
-    expect(host.textContent).toContain('Sampled estimate over 16390 z values, not a certified maximum.');
+    expect(host.textContent).toContain('H: largest curve change 0.125 mm at z = 40 mm over the full profile');
+    expect(host.textContent).toContain('Checked at 16390 positions along the length. Larger changes between checked positions are possible.');
     expect(host.textContent).toContain('Exact insertion at z = 40 mm in H');
     const insert = server.mock.calls.find(([url]) => String(url).endsWith('/insert'))!;
     expect(JSON.parse(String(insert[1]?.body))).toMatchObject({ plane: 'H', z_mm: 40, mode: 'exact' });
@@ -361,7 +361,7 @@ describe('Custom profile table, insertion, paste and Length', () => {
     act(() => radius.blur());
     const z = inputWithLabel(host, 'H point 1 z');
     act(() => enterDraft(z, '130'));
-    expect(host.textContent).toContain('strictly between its neighbours');
+    expect(host.textContent).toContain('between its neighbouring anchors');
     act(() => z.blur());
     commitDraft('H point 1 radius', '70');
     await vi.waitFor(async () => { await settle(); expect(button('Accept')).toBeTruthy(); });
@@ -375,7 +375,7 @@ describe('Custom profile table, insertion, paste and Length', () => {
     load();
     act(() => root.render(<CustomProfileTable field={hField} plane="H" />));
     act(() => { const select = host.querySelector<HTMLSelectElement>('select[aria-label="H mouth join"]')!; Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'corner'); select.dispatchEvent(new Event('change', { bubbles: true })); });
-    await vi.waitFor(async () => { await settle(); expect(host.textContent).toContain('Not valid: FREEFORM profileH span 1 has a handle that reverses z'); });
+    await vi.waitFor(async () => { await settle(); expect(host.textContent).toContain('Cannot apply this edit: FREEFORM profileH span 1 has a handle that reverses z'); });
     expect(button('Accept').disabled).toBe(true);
     expect(useDesignStore.getState().design.profile_h!.points[1]).not.toHaveProperty('join');
   });
