@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response, Streami
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
-from starlette.websockets import WebSocketDisconnect
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from server.jobs.fem_field import FemFieldCorrupt, FemFieldInvalidSelection
 from server.platform.feature_flags import fem_regions_enabled
@@ -84,7 +84,6 @@ from server.cadlink.operations import TERMINAL_STATES
 from server.mesh.prepared_gc import PreparedMeshCollector
 from server.engines.registry import EngineRegistry
 from server.platform.origin import websocket_request_allowed
-from server.protocol.transport import FastAPIWebSocketTransport
 from server.updates.restart import UPDATE_RESTART_PENDING, RestartApproval
 
 logger = logging.getLogger(__name__)
@@ -240,6 +239,29 @@ FieldPlane422Response = (
     | FieldPlaneValidationErrorResponse
 )
 
+
+
+class _FastAPIJobsTransport:
+    def __init__(self, websocket: WebSocket) -> None:
+        self.websocket = websocket
+
+    async def receive(self) -> str | bytes | None:
+        try:
+            message = await self.websocket.receive()
+        except WebSocketDisconnect:
+            return None
+        if message["type"] == "websocket.disconnect":
+            return None
+        if message.get("text") is not None:
+            return message["text"]
+        return message.get("bytes")
+
+    async def send_json(self, message: dict[str, Any]) -> None:
+        await self.websocket.send_json(message)
+
+    async def close(self, code: int) -> None:
+        if self.websocket.application_state != WebSocketState.DISCONNECTED:
+            await self.websocket.close(code=code)
 
 
 def _error_response(
@@ -1121,7 +1143,7 @@ def create_jobs_router(
         await websocket.accept()
         protocol = JobsProtocol(runtime)
         try:
-            await protocol.run(FastAPIWebSocketTransport(websocket))
+            await protocol.run(_FastAPIJobsTransport(websocket))
         except asyncio.CancelledError:
             await protocol.close_restarting()
             raise

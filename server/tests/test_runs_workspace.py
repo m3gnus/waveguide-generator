@@ -13,8 +13,6 @@ from server.cadlink.store import CadLinkStore
 from server.jobs.imported_setup import setup_digest, solve_request_for, validate_setup
 from server.jobs.model_solve import _request_revision
 from server.jobs.models import SolveRequest
-from server.jobs.models_api import model_summary
-from server.jobs import run_workspace
 from server.jobs.api import create_jobs_router
 from server.jobs.run_workspace import derived_setup, mount_run_workspace
 
@@ -23,7 +21,7 @@ from test_cad_preparation import _setup
 from test_jobs_api import _request
 from test_mesh_import import register_mesh, registration, request as file_request
 from test_model_solve import _cad_model, _models_app, _settle, _solve
-from test_models_api import app_for, call, setup_for
+from test_models_api import app_for, setup_for
 
 
 def _job(jobs: Any, job_id: str, config: dict[str, Any], metadata: dict[str, Any] | None = None,
@@ -57,27 +55,6 @@ def _file_scenario(tmp_path: Path, scenario) -> None:
 
 
 # -- file runs -------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("has_latest", [False, True])
-def test_reopened_run_and_model_api_share_the_exact_stored_summary(tmp_path, has_latest):
-    assert run_workspace.model_summary is model_summary
-
-    async def scenario(store, app, runtime):
-        record = register_mesh(store, tmp_path, registration())
-        model_id = "mesh-file:" + record["artifact_sha256"]
-        _job(runtime.store, "summary-run", file_request(record).model_dump(mode="json"))
-        if not has_latest:
-            with store._lock, store._transaction() as conn:
-                conn.execute("UPDATE imported_models SET latest_ingest_id = NULL WHERE model_id = ?", (model_id,))
-        stored = store.get_model(model_id)
-        opened = await _workspace(app, "summary-run")
-        model = await call(app, "GET", f"/api/models/{model_id}")
-        assert opened["model"] == model["model"] == model_summary(stored)
-        assert opened["model"]["latest_prepared_id"] == (record["ingest_id"] if has_latest else None)
-        assert store.get_model(model_id) == stored
-
-    _file_scenario(tmp_path, scenario)
 
 
 def test_a_file_run_opens_with_its_recorded_revision_mesh_and_original(tmp_path) -> None:

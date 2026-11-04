@@ -481,7 +481,7 @@ def prepare_model(store: Any, data_dir: Path, model_id: str, body: FilePreparati
     return register_mesh(store, data_dir, retained_registration(store, model_id, body))
 
 
-def model_summary(model: Mapping[str, Any]) -> dict[str, Any]:
+def _model_summary(model: dict[str, Any]) -> dict[str, Any]:
     return {
         "model_id": model["model_id"],
         "producer": model["producer"],
@@ -556,7 +556,7 @@ def read_model(store: Any, model_id: str, prepared_id: str | None) -> dict[str, 
         bundle = json.loads(latest["record_json"]).get("bundle_store_path") if latest else None
         original_available = bool(bundle) and Path(str(bundle)).exists()
     response: dict[str, Any] = {
-        "model": model_summary(model),
+        "model": _model_summary(model),
         "latest_prepared": (
             public_record(json.loads(latest["record_json"]), model_id) if latest else None
         ),
@@ -860,7 +860,7 @@ def mount_models_api(application: FastAPI) -> None:
                 cancellation.close()
             model_id = file_model_id(record["artifact_sha256"])
             return {
-                "model": model_summary(store.get_model(model_id)),
+                "model": _model_summary(store.get_model(model_id)),
                 "prepared": await asyncio.to_thread(_prepared_with_mesh, record, model_id),
             }
 
@@ -933,7 +933,7 @@ def mount_models_api(application: FastAPI) -> None:
             return {
                 "status": "published",
                 "reused": outcome["reused"],
-                "model": model_summary(store.get_model(model_id)),
+                "model": _model_summary(store.get_model(model_id)),
                 "prepared": (public_record(record, model_id)
                              if body.known_prepared_id == record["ingest_id"]
                              else _prepared_with_mesh(record, model_id)),
@@ -1121,7 +1121,6 @@ __all__ = [
     "MeshRegistration",
     "ModelSetupWrite",
     "model_of_prepared",
-    "model_summary",
     "mount_models_api",
     "prepare_model",
     "public_record",

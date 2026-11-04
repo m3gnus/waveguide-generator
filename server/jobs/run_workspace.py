@@ -47,7 +47,7 @@ from server.jobs.cad_intent import CAD_INTENT, cad_of
 from server.jobs.imported_setup import setup_content, setup_digest, setup_of_request, validate_setup
 from server.jobs.model_solve import recorded_setup_revision
 from server.jobs.models import SolveRequest
-from server.jobs.models_api import ModelRefusal, model_summary, public_record, read_original
+from server.jobs.models_api import ModelRefusal, public_record, read_original
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.prepared_record import is_ready_mesh
 
@@ -169,6 +169,18 @@ def _setup(
                           derived=True, exact=exact, note=note)
 
 
+def _model_summary(model: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "model_id": model["model_id"],
+        "producer": model["producer"],
+        "display_name": model["display_name"],
+        "archive_stem": model["archive_stem"],
+        "latest_prepared_id": model["latest_ingest_id"],
+        "created_at": model["created_at"],
+        "updated_at": model["updated_at"],
+    }
+
+
 def _original_available(store: Any, model_id: str, record: Mapping[str, Any] | None) -> bool:
     if model_id.startswith(FILE_MODEL_PREFIX):
         try:
@@ -203,7 +215,7 @@ def read_run_workspace(row: Mapping[str, Any], store: Any) -> RunWorkspace:
     )
     model = store.get_model(model_id) if model_id and model_id != UNFILED_MODEL_ID else None
     if model is not None:
-        answer.model = model_summary(model)
+        answer.model = _model_summary(model)
         answer.original_available = _original_available(store, str(model_id), record)
     try:
         answer.setup = _setup(store, row, request, record)

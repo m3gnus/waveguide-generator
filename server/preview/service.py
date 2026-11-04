@@ -4,16 +4,44 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Collection
+from typing import Any, Mapping
 
 from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 from server.platform.origin import websocket_request_allowed
-from server.protocol.transport import FastAPIWebSocketTransport
 from server.preview.core import (
     CLOSE_ORIGIN_REJECTED,
     PreviewComputeService,
     PreviewProtocol,
 )
+
+
+
+class _FastAPITransport:
+    def __init__(self, websocket: WebSocket) -> None:
+        self.websocket = websocket
+
+    async def receive(self) -> str | bytes | None:
+        try:
+            message = await self.websocket.receive()
+        except WebSocketDisconnect:
+            return None
+        if message["type"] == "websocket.disconnect":
+            return None
+        if message.get("text") is not None:
+            return message["text"]
+        return message.get("bytes")
+
+    async def send_json(self, message: Mapping[str, Any]) -> None:
+        await self.websocket.send_json(dict(message))
+
+    async def send_bytes(self, data: bytes) -> None:
+        await self.websocket.send_bytes(data)
+
+    async def close(self, code: int) -> None:
+        if self.websocket.application_state != WebSocketState.DISCONNECTED:
+            await self.websocket.close(code=code)
 
 
 def create_preview_router(
@@ -40,7 +68,7 @@ def create_preview_router(
         await websocket.accept()
         protocol = PreviewProtocol(preview_service=service)
         try:
-            await protocol.run(FastAPIWebSocketTransport(websocket))
+            await protocol.run(_FastAPITransport(websocket))
         except asyncio.CancelledError:
             await protocol.close_restarting()
             raise

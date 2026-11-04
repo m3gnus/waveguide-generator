@@ -957,7 +957,7 @@ def _judge_cached_reduced_winding(
     return accepted
 
 
-def _read_mesh_cache(mesh_path: Path, metadata_path: Path) -> dict[str, Any] | None:
+def _load_cached_mesh(mesh_path: Path, metadata_path: Path) -> dict[str, Any] | None:
     if not mesh_path.is_file() or not metadata_path.is_file():
         return None
     try:
@@ -1002,6 +1002,22 @@ def _write_cache(
             publish_metadata()
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
+
+
+def _load_cached_viewport_mesh(
+    mesh_path: Path, metadata_path: Path
+) -> dict[str, Any] | None:
+    if not mesh_path.is_file() or not metadata_path.is_file():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        msh_text = mesh_path.read_text(encoding="utf-8")
+        expected = str(metadata["content_sha256"])
+        if mesh_text_sha256(msh_text) != expected:
+            return None
+        return {**metadata, "msh_text": msh_text}
+    except (KeyError, OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
 
 
 def _write_viewport_cache(
@@ -1563,7 +1579,7 @@ def _ingest_bundle(
         index = _viewport_index_path(imports_root, lookup)
         key = _read_cas_index(index)
         mesh_file, metadata_file = _viewport_paths(imports_root, key or ".pending")
-        artifact = _read_mesh_cache(mesh_file, metadata_file) if key else None
+        artifact = _load_cached_viewport_mesh(mesh_file, metadata_file) if key else None
         return lookup, index, key, mesh_file, metadata_file, artifact
 
     def mesh_for(opts: Mapping[str, Any], *, include_viewport: bool) -> tuple[dict[str, Any], str, bool, Path]:
@@ -1576,7 +1592,7 @@ def _ingest_bundle(
         cache_key = _read_cas_index(index_path)
         mesh_path = imports_root / "meshes" / f"{cache_key}.msh" if cache_key else imports_root / "meshes" / ".pending.msh"
         metadata_path = imports_root / "meshes" / f"{cache_key}.json" if cache_key else imports_root / "meshes" / ".pending.json"
-        built = _read_mesh_cache(mesh_path, metadata_path) if cache_key else None
+        built = _load_cached_mesh(mesh_path, metadata_path) if cache_key else None
         if built is not None:
             try:
                 expected_cache_key = _cache_key(
@@ -2691,7 +2707,7 @@ def resolve_deferred_viewport(
     cache_key = _read_cas_index(_viewport_index_path(imports_root, lookup_key))
     if cache_key is None:
         return None
-    artifact = _read_mesh_cache(*_viewport_paths(imports_root, cache_key))
+    artifact = _load_cached_viewport_mesh(*_viewport_paths(imports_root, cache_key))
     if artifact is None:
         return None
     if artifact.get("content_sha256") != f"sha256:{cache_key}":
