@@ -65,3 +65,11 @@ def test_voltage_driven_lem_channel_is_never_tagged_as_a_prescribed_basis():
     channels = json.loads(served)["channels"]
     assert channels["lem"]["metadata"]["source_normalization"] == "voltage_driven_driver_lem"
     assert channels["coupled"]["metadata"]["source_normalization"] == "native_rms_voltage"
+
+
+def test_deferred_passive_cardioid_driver_stays_prescribed():
+    payload = {"channels": {"mf": {"metadata": {"source_normalization": "native_rms_velocity",
+                                                "impedance_drive": "rms_velocity", "driver": {"re_ohm": 6},
+                                                "driver_coupling_deferred_to": "passive_cardioid"}}}}
+    served, _ = with_result_basis(json.dumps(payload), "stored", {})
+    assert json.loads(served)["channels"]["mf"]["metadata"]["source_normalization"] == "native_rms_velocity"

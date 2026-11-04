@@ -44,7 +44,13 @@ def with_result_basis(text: str, digest: str, row: Mapping[str, Any]) -> tuple[s
             continue
         # Driver evidence wins over a prescribed tag: LEM paths keep the solver's
         # basis tag after scaling the response to the drive voltage.
-        if channel_id in drivers or metadata.get("driver") or metadata.get("impedance_drive") in ("rms_voltage", "voltage"):
+        drive = metadata.get("impedance_drive")
+        # Explicit drive evidence first; a saved driver whose coupling was deferred
+        # (passive cardioid) leaves the channel prescribed.
+        voltage = drive in ("rms_voltage", "voltage") or (
+            drive is None and not metadata.get("driver_coupling_deferred_to")
+            and (channel_id in drivers or bool(metadata.get("driver"))))
+        if voltage:
             if "voltage" in str(metadata.get("source_normalization", "")):
                 continue
             metadata["source_normalization"] = "voltage_driven_driver_lem"
