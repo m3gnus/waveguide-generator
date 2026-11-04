@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 
 from .beat_adapter.results import acceleration_scale, map_sweep, real_source_copy_count
+from .beat_adapter.mesh import SurfaceMesh
+from .base import StageCallback
 from .result_mapping import build_provisional_frequency_response
 
 
@@ -143,11 +145,14 @@ def solve_transducer_worker(
 
 
 def select_worker_request(
-    builder: Callable[[], Any], *, msh_text: str, merge_tol: float,
+    builder: Callable[[SurfaceMesh], Any], *, msh_text: str, merge_tol: float,
+    stage_callback: StageCallback | None = None,
 ) -> tuple[Any | None, str | None]:
     """Select only requests the installed worker can validate before solving."""
     if not worker_available():
         return None, "The installed Metal-BEM package does not expose the compatible interface"
+    if stage_callback:
+        stage_callback("setup", 0.0, "Preparing Metal mesh and solver request")
     try:
         from hornlab_metal_bem.mesh import _compact_surface_vertices, _merge_duplicate_vertices
 
@@ -160,7 +165,9 @@ def select_worker_request(
         _, _, merged = _merge_duplicate_vertices(points, faces, merge_tol)
         if unused or merged:
             return None, "The native interface is required to preserve mesh loading"
-        candidate = builder()
+        # Admission owns the original Float64 coordinates. The builder applies
+        # its own transforms and precision conversion to this same source mesh.
+        candidate = builder(mesh)
         validate_worker_request(candidate)
     except (ImportError, ValueError, RuntimeError):
         return None, "The compatible interface does not accept this mesh or request"

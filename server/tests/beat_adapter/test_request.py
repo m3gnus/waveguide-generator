@@ -57,7 +57,7 @@ def test_packed_mesh_preserves_original_identity_scale_order_and_winding(build):
     assert built.channel_loading["stored-channel"].area_m2 == pytest.approx(.5e-6)
 
 
-def test_original_surface_is_retained_only_for_immediate_builder_reuse(build, msh):
+def test_original_surface_is_retained_only_for_immediate_builder_reuse(build, msh, monkeypatch):
     ordinary = build(mesh_scale_to_m=.001, precision="float32")
     retained = build(mesh_scale_to_m=.001, precision="float32", _retain_source_mesh=True)
     assert ordinary.source_mesh is None
@@ -65,6 +65,12 @@ def test_original_surface_is_retained_only_for_immediate_builder_reuse(build, ms
     np.testing.assert_array_equal(retained.source_mesh.points_m, read_surface(msh, scale_to_m=.001).points_m)
     assert retained.source_mesh.points_m.dtype == np.float64
     assert retained.mesh.points_m.dtype == np.float32
+    original = read_surface(msh, scale_to_m=.001)
+    monkeypatch.setattr(adapter, "read_surface", lambda *_a, **_k: pytest.fail("parsed twice"))
+    reused = build(mesh_scale_to_m=.001, precision="float32", _retain_source_mesh=True,
+                   _source_mesh=original)
+    assert reused.source_mesh is original
+    assert reused.wire == retained.wire
 
 
 @pytest.mark.parametrize("engine,backend,precision", [

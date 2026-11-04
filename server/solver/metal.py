@@ -763,11 +763,13 @@ def solve_metal_from_msh_text(
         from .beat_adapter.request import build_parametric_request
         from .metal_worker import select_worker_request
 
-        worker_request, worker_reason = select_worker_request(lambda: build_parametric_request(
+        worker_request, worker_reason = select_worker_request(lambda mesh: build_parametric_request(
             msh_text, context, frequencies_hz=(live_execution_frequencies(context)
                                                if result_callback is not None else canonical_frequencies(context)),
             engine_id="beat-metal", backend="metal", surface_traces=retain_traces,
-        ), msh_text=msh_text, merge_tol=float(getattr(config, "mesh_merge_tol", 1e-9)))
+            _source_mesh=mesh,
+        ), msh_text=msh_text, merge_tol=float(getattr(config, "mesh_merge_tol", 1e-9)),
+            stage_callback=stage_callback)
 
     ladder_dropped_fields: tuple[str, ...] = ()
     ladder_solve_refusals: dict[int, str] = {}
@@ -1848,18 +1850,20 @@ def solve_imported_metal_from_msh_text(
             from .beat_adapter.request import build_imported_request, validate_imported_request
             from .metal_worker import select_worker_request
 
-            def build_candidate():
+            def build_candidate(mesh):
                 candidate = build_imported_request(
                     msh_text, context, record, geometry.drive_channels,
                     frequencies_hz=(execution_frequencies if execution_frequencies is not None
                                     else canonical_frequencies(context)),
                     engine_id="beat-metal", backend="metal", surface_traces=retain_traces,
+                    _source_mesh=mesh,
                 )
                 validate_imported_request(candidate, imported_symmetry.native_plane)
                 return candidate
 
             worker_request, worker_reason = select_worker_request(
                 build_candidate, msh_text=msh_text, merge_tol=float(getattr(config, "mesh_merge_tol", 1e-9)),
+                stage_callback=stage_callback,
             )
         if worker_request is not None:
             from .metal_worker import solve_worker

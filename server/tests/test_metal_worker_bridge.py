@@ -2,11 +2,14 @@
 
 from pathlib import Path
 from types import SimpleNamespace
+import json
 
 import numpy as np
 import pytest
 
-from server.solver.beat_adapter.request import build_parametric_request
+from server.jobs.models import DriveChannel
+from server.solver.beat_adapter import mesh as mesh_adapter, request as request_adapter
+from server.solver.beat_adapter.request import build_imported_request, build_parametric_request
 from server.solver.context import SolverContext
 from server.solver import metal, metal_worker
 from server.solver.metal_worker import solve_worker
@@ -19,7 +22,7 @@ def test_unsupported_mesh_keeps_native_path_before_any_worker_solve(monkeypatch)
     monkeypatch.setattr(metal_worker, "worker_available", lambda: True)
     monkeypatch.setattr(metal_worker, "validate_worker_request", lambda _: (_ for _ in ()).throw(ValueError("mesh")))
     mesh = (Path(__file__).resolve().parents[1] / "solver" / "warmup_mesh.msh").read_text()
-    selected, reason = metal_worker.select_worker_request(lambda: object(), msh_text=mesh, merge_tol=1e-9)
+    selected, reason = metal_worker.select_worker_request(lambda _: object(), msh_text=mesh, merge_tol=1e-9)
     assert selected is None
     assert reason == "The compatible interface does not accept this mesh or request"
 
@@ -33,9 +36,130 @@ def test_mesh_cleanup_stays_on_native_path(monkeypatch, change):
         mesh = mesh.replace("$Nodes\n9\n", "$Nodes\n10\n").replace("$EndNodes", "10 5 5 5\n$EndNodes")
     else:
         mesh = mesh.replace("4 0 0 0.05", "4 0.0000000001 0 0")
-    selected, reason = metal_worker.select_worker_request(lambda: object(), msh_text=mesh, merge_tol=1e-9)
+    selected, reason = metal_worker.select_worker_request(lambda _: pytest.fail("builder called"),
+                                                        msh_text=mesh, merge_tol=1e-9)
     assert selected is None
     assert reason == "The native interface is required to preserve mesh loading"
+
+
+@pytest.mark.parametrize("kind", ["parametric", "imported"])
+@pytest.mark.parametrize("quadrants", [1234, 14, 1])
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_admission_reuses_original_parse_with_identical_request_and_loading(monkeypatch, kind, quadrants, precision):
+    msh = _cabinet_msh()
+    context = SolverContext(None, (100, 1000), 2, quadrants=quadrants)
+    context.polar_config.update(spherical_theta_count=3, spherical_phi_count=4)
+    record = {"source_tags": {"source": 2},
+              "anchor": {"throat_frame": {"origin_m": [0, 0, .05], "axis": [0, 0, 1],
+                                            "u": [1, 0, 0], "v": [0, 1, 0]}},
+              "symmetry": {"cut_planes": {1234: [], 14: ["x0"], 1: ["x0", "y0"]}[quadrants]}}
+
+    def build(source_mesh=None):
+        options = {"engine_id": "beat-metal" if precision == "float32" else "beat-cpu",
+                   "precision": precision, "surface_traces": True}
+        if source_mesh is not None:
+            options["_source_mesh"] = source_mesh
+        if kind == "parametric":
+            return build_parametric_request(msh, context, **options)
+        return build_imported_request(msh, context, record,
+                                      [DriveChannel(id="source", source_ids=["source"])], **options)
+
+    expected = build()
+    parsed = []
+    read_surface = mesh_adapter.read_surface
+
+    def read(*args, **kwargs):
+        mesh = read_surface(*args, **kwargs)
+        parsed.append(mesh)
+        return mesh
+
+    monkeypatch.setattr(mesh_adapter, "read_surface", read)
+    monkeypatch.setattr(request_adapter, "read_surface", read)
+    monkeypatch.setattr(metal_worker, "worker_available", lambda: True)
+    # These open test surfaces isolate WG admission from provider manifold checks.
+    validated = []
+    monkeypatch.setattr(metal_worker, "validate_worker_request", validated.append)
+    selected, reason = metal_worker.select_worker_request(build, msh_text=msh, merge_tol=1e-9)
+    assert reason is None and validated == [selected]
+    assert len(parsed) == 1
+    assert parsed[0].points_m.dtype == np.float64
+    assert json.dumps(selected.wire, allow_nan=False).encode() == json.dumps(expected.wire, allow_nan=False).encode()
+    for name in ("points_m", "faces", "tags"):
+        actual, original = getattr(selected.mesh, name), getattr(expected.mesh, name)
+        assert (actual.dtype, actual.shape, actual.tobytes()) == (original.dtype, original.shape, original.tobytes())
+    assert selected.mesh.node_ids == expected.mesh.node_ids
+    assert selected.mesh.element_ids == expected.mesh.element_ids
+    actual, original = selected.channel_loading["source"], expected.channel_loading["source"]
+    np.testing.assert_array_equal(actual.source_faces, original.source_faces)
+    assert actual.areas_m2.tobytes() == original.areas_m2.tobytes()
+    pressure = np.arange(actual.node_count) + 2j
+    assert actual.area_m2 == original.area_m2
+    assert actual.mean_pressure(pressure) == original.mean_pressure(pressure)
+
+
+@pytest.mark.parametrize("change", ["precision", "symmetry"])
+def test_admission_merge_gate_uses_original_coordinates(monkeypatch, change):
+    from hornlab_metal_bem.mesh import _merge_duplicate_vertices
+
+    msh = _cabinet_msh()
+    if change == "precision":
+        msh = msh.replace("1 0 0 0\n", "1 10 0 0\n").replace("4 0 0 0.05", "4 10.00000001 0 0")
+    else:
+        msh = msh.replace("4 0 0 0.05", "4 0.000000005 0 0")
+    context = SolverContext(None, (100, 1000), 2, quadrants=1234 if change == "precision" else 14)
+    monkeypatch.setattr(metal_worker, "worker_available", lambda: True)
+    monkeypatch.setattr(metal_worker, "validate_worker_request", lambda _: None)
+
+    def build(source_mesh=None):
+        options = {} if source_mesh is None else {"_source_mesh": source_mesh}
+        return build_parametric_request(msh, context, engine_id="beat-metal", **options)
+
+    expected = build()
+    original = mesh_adapter.read_surface(msh)
+    assert _merge_duplicate_vertices(original.points_m, original.faces, 1e-9)[2] == 0
+    assert _merge_duplicate_vertices(expected.mesh.points_m, expected.mesh.faces, 1e-9)[2] == 1
+    selected, reason = metal_worker.select_worker_request(build, msh_text=msh, merge_tol=1e-9)
+    assert reason is None
+    assert selected.wire == expected.wire
+
+
+def test_closed_surface_keeps_provider_validation_and_route(monkeypatch):
+    msh = (Path(__file__).resolve().parents[1] / "solver" / "warmup_mesh.msh").read_text()
+    context = SolverContext(None, (100, 1000), 2)
+    expected = build_parametric_request(msh, context, engine_id="beat-metal")
+    metal_worker.validate_worker_request(expected)
+    monkeypatch.setattr(metal_worker, "worker_available", lambda: True)
+
+    def build(source_mesh=None):
+        options = {} if source_mesh is None else {"_source_mesh": source_mesh}
+        return build_parametric_request(msh, context, engine_id="beat-metal", **options)
+
+    stages = []
+
+    def status(*values):
+        # Publish through the existing setup owner before parsing starts.
+        stages.append(values)
+
+    original_read = mesh_adapter.read_surface
+
+    def read(*args, **kwargs):
+        assert stages == [("setup", 0., "Preparing Metal mesh and solver request")]
+        return original_read(*args, **kwargs)
+
+    monkeypatch.setattr(mesh_adapter, "read_surface", read)
+    selected, reason = metal_worker.select_worker_request(build, msh_text=msh, merge_tol=1e-9,
+                                                         stage_callback=status)
+    assert reason is None
+    assert selected.wire == expected.wire
+
+
+@pytest.mark.parametrize("text,tolerance", [("invalid", 1e-9), (_cabinet_msh(), np.nan)])
+def test_invalid_admission_never_builds_a_worker_request(monkeypatch, text, tolerance):
+    monkeypatch.setattr(metal_worker, "worker_available", lambda: True)
+    selected, reason = metal_worker.select_worker_request(lambda _: pytest.fail("builder called"),
+                                                        msh_text=text, merge_tol=tolerance)
+    assert selected is None
+    assert reason is not None
 
 
 def test_parametric_metal_routes_qualified_request_through_worker(monkeypatch):
@@ -45,15 +169,28 @@ def test_parametric_metal_routes_qualified_request_through_worker(monkeypatch):
     monkeypatch.setattr(metal, "native_solve", lambda *_: pytest.fail("native path used"))
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "version": "test"})
     monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(metal_worker, "select_worker_request", lambda *_, **__: (candidate, None))
+    stages = []
+
+    def select(builder, **options):
+        original = mesh_adapter.read_surface(options["msh_text"])
+        # A reused surface reaches the existing request builder through each entry point.
+        monkeypatch.setattr(request_adapter, "read_surface", lambda *_a, **_k: pytest.fail("parsed twice"))
+        built = builder(original)
+        assert built.mesh.points_m.dtype == np.float32
+        options["stage_callback"]("setup", 0., "Preparing Metal mesh and solver request")
+        return candidate, None
+
+    monkeypatch.setattr(metal_worker, "select_worker_request", select)
 
     def solve(selected, **kwargs):
         calls.append((selected, kwargs["channel_id"]))
         return native_result()
 
     monkeypatch.setattr(metal_worker, "solve_worker", solve)
-    response = metal.solve_metal_from_msh_text(_cabinet_msh(), _context(field_plane=False))
+    response = metal.solve_metal_from_msh_text(_cabinet_msh(), _context(field_plane=False),
+                                             stage_callback=lambda *values: stages.append(values))
     assert calls == [(candidate, "source")]
+    assert ("setup", 0., "Preparing Metal mesh and solver request") in stages
     assert response["metadata"]["metal"]["interface"] == "beat-compatible"
     assert response["frequencies"] == [500., 1000.]
 
@@ -74,7 +211,16 @@ def test_imported_single_source_preserves_channel_live_results(monkeypatch, tmp_
     monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(metal, "native_solve_multi_source", lambda *_args, **_kwargs: pytest.fail("native path used"))
-    monkeypatch.setattr(metal_worker, "select_worker_request", lambda *_, **__: (candidate, None))
+    stages = []
+
+    def select(builder, **options):
+        original = mesh_adapter.read_surface(options["msh_text"])
+        monkeypatch.setattr(request_adapter, "read_surface", lambda *_a, **_k: pytest.fail("parsed twice"))
+        assert builder(original).mesh.points_m.dtype == np.float32
+        options["stage_callback"]("setup", 0., "Preparing Metal mesh and solver request")
+        return candidate, None
+
+    monkeypatch.setattr(metal_worker, "select_worker_request", select)
 
     def solve(selected, **kwargs):
         assert selected is candidate and kwargs["channel_id"] == "left"
@@ -86,14 +232,19 @@ def test_imported_single_source_preserves_channel_live_results(monkeypatch, tmp_
                        mesh={"rigid_size_mm": 8., "transition_mm": 20., "source_size_mm": {"source-a": 3.}})
     request.options.frequencies_hz = [100., 200.]
     mesh_path = tmp_path / "imported.msh"
-    mesh_path.write_text("msh")
+    msh = _cabinet_msh()
+    mesh_path.write_text(msh)
+    record = _roled_record(mesh_path)
+    record["source_tags"]["source-a"] = 2
     streamed = []
     response = metal.solve_imported_metal_from_msh_text(
-        "msh", request, _roled_record(mesh_path), result_callback=lambda i, value: streamed.append((i, value)),
+        msh, request, record, result_callback=lambda i, value: streamed.append((i, value)),
+        stage_callback=lambda *values: stages.append(values),
     )
     assert response["metadata"]["solver_engine"]["interface"] == "beat-compatible"
     assert response["channel_order"] == ["left"]
     assert streamed[0][1]["channels"]["left"]["metadata"]["role"] == "HF"
+    assert ("setup", 0., "Preparing Metal mesh and solver request") in stages
 
 
 @pytest.mark.parametrize("callback_terminal", ["cancelled", "failed"])
