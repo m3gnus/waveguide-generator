@@ -83,12 +83,13 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
             ? mirrored ? ' · mirrored from the negative side' : ' · kept on the negative side' : ''}</span> <button className="btn-link link-button" disabled={!editable}
               aria-label="Change symmetry" aria-expanded={symmetryOpen} onClick={() => setSymmetryOpen(!symmetryOpen)}>Change</button></p>
           {symmetryOpen && <fieldset disabled={!editable}>
-            <label className="field-row">Symmetry<select aria-label="Mesh symmetry" value={draft.autoCut ? 'auto' : planes.join(',')}
-              onChange={e => void editMeshImport({ domainPlanes: e.target.value && e.target.value !== 'auto' ? e.target.value.split(',') : [], autoCut: e.target.value === 'auto', reflectPlanes: null,
+            <label className="field-row">Symmetry<select aria-label="Mesh symmetry" value={planes.join(',')}
+              onChange={e => void editMeshImport({ domainPlanes: e.target.value ? e.target.value.split(',') : [], reflectPlanes: null,
                 removeLidPlanes: (draft.removeLidPlanes ?? []).filter(plane => e.target.value.split(',').includes(plane)) })}>
-              <option value="auto">Auto · cut for speed</option><option value="">Full model</option><option value="x0">Half x = 0</option><option value="y0">Half y = 0</option><option value="x0,y0">Quarter</option>
+              <option value="">Full model</option><option value="x0">Already half · x = 0</option><option value="y0">Already half · y = 0</option><option value="x0,y0">Already quarter</option>
             </select></label>
             <p className="section-note">Symmetry planes must be x = 0 or y = 0 after axes are applied.</p>
+            {!!registered?.symmetry?.cut_planes.length && <p className="section-note">This saved mesh was cut by an older WG. To prepare it again, choose Full or import a file exported as a half or quarter.</p>}
             {planes.filter(plane => summary?.lids?.[plane]?.candidate || draft.removeLidPlanes?.includes(plane)).map(plane => <label className="field-row" key={plane}>
               <input type="checkbox" checked={draft.removeLidPlanes?.includes(plane) ?? false}
                 onChange={e => void editMeshImport({ removeLidPlanes: e.target.checked

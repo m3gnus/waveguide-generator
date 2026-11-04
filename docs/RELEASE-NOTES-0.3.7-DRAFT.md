@@ -147,11 +147,11 @@ This is not a release announcement or a statement of platform qualification.
 
 ## Known limitations
 
-- Full file meshes can use **Auto · cut for speed** or an explicit half/quarter
-  choice when geometry and source groups mirror. Cutting supports up to 5,000
-  input triangles. Larger meshes and cuts that cannot be verified keep the valid
-  full mesh ready to solve, with a status note. Export the half or quarter to
-  solve faster; choose **Full model** to keep the whole mesh.
+- WG no longer cuts imported meshes. Choose **Full model**, or export a half
+  or quarter from the meshing tool and select **Already half** or **Already
+  quarter**. Mirroring and closed-face removal remain available. Existing
+  models, saved runs and replay packages keep their original prepared meshes.
+  STEP/CAD Link cutting is unchanged.
 - Coupled Passive cardioid requires an MF driver and port topology, and cannot
   be combined with Crossover.
 - Flush enclosure construction has geometry guards; zero margin does not make

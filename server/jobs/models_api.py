@@ -412,17 +412,19 @@ def _register_mesh(
     return json.loads(row["record_json"])
 
 
-async def prepare_registration(body: MeshRegistration, cancel_cb: Any = None) -> tuple[FileMesh, dict[str, Any]]:
+async def prepare_registration(
+    body: MeshRegistration, cancel_cb: Any = None, *, historical_reconstruction: bool = False,
+) -> tuple[FileMesh, dict[str, Any]]:
     """Compute in the owned killable mesh child, without stores or publication."""
     if cancel_cb is not None:
         cancel_cb()
     original = await asyncio.to_thread(_file_original, body)
     options = {"units": body.units, "forward": body.forward, "up": body.up,
                "domain_planes": body.domain_planes, "reflect_planes": body.reflect_planes,
-               "remove_lid_planes": body.remove_lid_planes, "roles": body.driven_roles(), "auto_cut": body.auto_cut}
-    # Pure preparation owns the transformed straddling decision and retains
-    # the original count through lid removal. Only an admitted actual cut
-    # starts native work; existing reduced inputs retain their old pure path.
+               "remove_lid_planes": body.remove_lid_planes, "roles": body.driven_roles(), "auto_cut": body.auto_cut,
+               "historical_reconstruction": historical_reconstruction}
+    # New imports refuse cutting in pure preparation, before any native work.
+    # Replay alone opts into reconstructing the historical preparation.
     preparation = await asyncio.to_thread(prepare_file_mesh_input, original, **options)
     if preparation.needs_native_cut:
         try:

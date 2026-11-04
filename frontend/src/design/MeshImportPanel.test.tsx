@@ -296,7 +296,7 @@ it('offers symmetry, mirror, size and axes changes in their owning controls', ()
   expect(host.textContent).toContain('mirrored from the negative side');
   act(() => button('Change symmetry').click());
   expect([...host.querySelectorAll<HTMLOptionElement>('[aria-label="Mesh symmetry"] option')].map(option => option.textContent))
-    .toEqual(['Auto · cut for speed', 'Full model', 'Half x = 0', 'Half y = 0', 'Quarter']);
+    .toEqual(['Full model', 'Already half · x = 0', 'Already half · y = 0', 'Already quarter']);
   expect(host.querySelector<HTMLInputElement>('[aria-label="Mirror from the negative side"]')?.checked).toBe(true);
   expectNoJargon(host);
   act(() => button('Change size').click());
@@ -597,13 +597,13 @@ it('keeps a file restore note visible when Results hides quiet readiness', () =>
   expect(host.querySelector('.cad-status-line')?.textContent).toContain('Ready to solve');
 });
 
-it.each([true, false])('shows effective cut dimensions and keeps automatic intent selectable (accepted: %s)', accepted => {
+it.each([true, false])('shows historical cut dimensions and effective domain choices (accepted: %s)', accepted => {
   geometry({ prepared: true });
   const effective = accepted ? ['x0', 'y0'] : [];
   const note = accepted ? null : 'The mesh could not be cut safely. Export the half or quarter to solve faster.';
   act(() => {
     const model = useImportedModelStore.getState();
-    opened({ ...model, fileDraft: { ...model.fileDraft, domainPlanes: [], autoCut: true },
+    opened({ ...model, fileDraft: { ...model.fileDraft, domainPlanes: effective },
       prepared: { ...(model.prepared as RegisteredMesh), symmetry: { domain_planes: effective, cut_planes: effective },
         summary: { ...fileSummary, triangle_count: accepted ? 100 : 400,
           dimensions_mm: accepted ? [100, 100, 300] : [200, 200, 300] } } as RegisteredMesh });
@@ -613,5 +613,6 @@ it.each([true, false])('shows effective cut dimensions and keeps automatic inten
   expect(host.querySelector('.cad-status-line')?.textContent).toContain(accepted ? '100 triangles' : '400 triangles');
   if (note) expect(host.querySelector('.cad-status-line')?.textContent).toContain(note);
   act(() => button('Change symmetry').click());
-  expect(host.querySelector<HTMLSelectElement>('[aria-label="Mesh symmetry"]')?.value).toBe('auto');
+  expect(host.querySelector<HTMLSelectElement>('[aria-label="Mesh symmetry"]')?.value).toBe(effective.join(','));
+  expect(host.textContent?.includes('This saved mesh was cut by an older WG.')).toBe(accepted);
 });

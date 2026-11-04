@@ -354,17 +354,19 @@ def prepare_file_mesh(
     remove_lid_planes: tuple[str, ...] | list[str] = (),
     roles: Mapping[int, str] | None = None,
     auto_cut: bool = False,
+    historical_reconstruction: bool = False,
 ) -> tuple[FileMesh, dict[str, Any]]:
     preparation = prepare_file_mesh_input(
         mesh, units, forward, up, domain_planes=domain_planes, reflect_planes=reflect_planes,
         remove_lid_planes=remove_lid_planes, roles=roles, auto_cut=auto_cut,
+        historical_reconstruction=historical_reconstruction,
     )
     return finish_file_mesh_preparation(preparation)
 
 
 @dataclass(frozen=True)
 class FileMeshPreparation:
-    """Validated pure input and original-count admission for the owned cutter."""
+    """Validated pure input; cut candidates exist only for historical reconstruction."""
 
     mesh: FileMesh
     transform: dict[str, Any]
@@ -389,16 +391,26 @@ def prepare_file_mesh_input(
     remove_lid_planes: tuple[str, ...] | list[str] = (),
     roles: Mapping[int, str] | None = None,
     auto_cut: bool = False,
+    historical_reconstruction: bool = False,
 ) -> FileMeshPreparation:
-    """Transform, remove lids and verify without importing or starting Gmsh."""
+    """Transform and verify; only old replay inputs may request triangle cutting.
+
+    ``historical_reconstruction`` is internal, never accepted by import routes.
+    Keep its preparation semantics intact for byte-identical retained replays.
+    """
+    cut_remedy = "WG no longer cuts imported meshes. Choose Full, or export the half or quarter from your meshing tool and import that."
+    if auto_cut and not historical_reconstruction:
+        raise FileMeshRefusal(cut_remedy)
     input_triangle_count = len(mesh.triangles)
     planes, reflect_planes = validate_file_symmetry(domain_planes, reflect_planes)
     remove_lid_planes = validate_remove_lid_planes(remove_lid_planes, planes)
     mesh, transform = transform_file_mesh(mesh, units, forward, up)
-    # A requested plane can describe an existing open cut, or ask WG to cut
-    # a full mesh. Validate the immutable input before attempting optimisation.
+    # New declarations describe a file already cut in its authoring tool.
+    # Only historical reconstruction may clip a crossing original.
     sides = _symmetry_evidence(mesh, ())[1]["detection"]["plane_vertex_side_counts"]
     crossing = tuple(plane for plane in planes if sides[plane]["positive"] and sides[plane]["negative"])
+    if crossing and not historical_reconstruction:
+        raise FileMeshRefusal(f"The mesh crosses {_plane_labels(list(crossing))}. {cut_remedy}")
     _check_lid_crossing(remove_lid_planes, crossing)
     declared = tuple(plane for plane in planes if plane not in crossing)
     if crossing and file_mesh_integrity(mesh, declared)["off_plane_open_edge_count"]:

@@ -283,7 +283,8 @@ def build_mesh_replay(runtime: Any, store: Any, job_id: str, *, prepared: tuple[
     mesh, _ = prepared if prepared is not None else prepare_file_mesh(parse_file_mesh(original_text), source["transform"]["units"],
                                 source["transform"]["forward"], source["transform"]["up"],
                                 domain_planes=source.get("domain_planes", []), reflect_planes=source.get("reflect_planes"),
-                                remove_lid_planes=source.get("remove_lid_planes", []), roles=registration.driven_roles(), auto_cut=registration.auto_cut)
+                                remove_lid_planes=source.get("remove_lid_planes", []), roles=registration.driven_roles(), auto_cut=registration.auto_cut,
+                                historical_reconstruction=True)
     if mesh_text(mesh) != solver_text:
         raise ValueError("The original mesh no longer reconstructs the run's solver mesh.")
     # Remove local job ancestry and a spent submission key, keeping the entire
@@ -339,9 +340,10 @@ def restore_mesh_replay(
     if isinstance(package, CadMeshReplayPackage):
         return _restore_cad_mesh(runtime, store, data_dir, package, lock, commit_guard=commit_guard)
     assert body is not None
-    mesh, _ = prepared if prepared is not None else prepare_file_mesh(parse_file_mesh(body.msh_text), body.units, body.forward, body.up,
+    mesh, transform = prepared if prepared is not None else prepare_file_mesh(parse_file_mesh(body.msh_text), body.units, body.forward, body.up,
                                 domain_planes=body.domain_planes, reflect_planes=body.reflect_planes,
-                                remove_lid_planes=body.remove_lid_planes, roles=body.driven_roles(), auto_cut=body.auto_cut)
+                                remove_lid_planes=body.remove_lid_planes, roles=body.driven_roles(), auto_cut=body.auto_cut,
+                                historical_reconstruction=True)
     # Reconstruct, do not trust a packaged solver mesh or a transform matrix.
     reconstructed = mesh_text(mesh)
     if (_digest(package.solver_msh_text) != package.solver_sha256
@@ -361,7 +363,7 @@ def restore_mesh_replay(
     # backend owns this data directory; the lock keeps the two opens in order.
     # A replay in progress holds off prepared-mesh collection until it answers.
     with lock, prepared_mesh_use():
-        record = register_mesh(store, data_dir, body, validate_record=validate_record, prepared=(mesh, prepared[1]) if prepared is not None else None, commit_guard=commit_guard)
+        record = register_mesh(store, data_dir, body, validate_record=validate_record, prepared=(mesh, transform), commit_guard=commit_guard)
         request = package.request.model_copy(deep=True)
         request.geometry.ingest_id = record["ingest_id"]
         request.geometry.manifest_sha256 = record["manifest_sha256"]
@@ -443,7 +445,7 @@ def mount_mesh_replay(application: FastAPI) -> None:
             registration = await asyncio.to_thread(build_mesh_replay, runtime, store, job_id, registration_only=True)
             if isinstance(registration, dict):
                 return registration
-            prepared = await prepare_registration(registration)
+            prepared = await prepare_registration(registration, historical_reconstruction=True)
             return await asyncio.to_thread(build_mesh_replay, runtime, store, job_id, prepared=prepared)
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
@@ -459,7 +461,7 @@ def mount_mesh_replay(application: FastAPI) -> None:
             registration = await asyncio.to_thread(_checked_registration, body)
             guard = begin_file_preparation(application, file_model_id(body.original_sha256 if isinstance(body, MeshReplayPackage) else body.solver_sha256), http_request, body.content_sha256)
             cancellation.commit_guard = guard
-            prepared = await prepare_registration(registration, cancellation.check) if registration is not None else None
+            prepared = await prepare_registration(registration, cancellation.check, historical_reconstruction=True) if registration is not None else None
             cancellation.check()
             restored = await asyncio.to_thread(
                 restore_mesh_replay, runtime, store, Path(application.state.data_dir), body, lock,

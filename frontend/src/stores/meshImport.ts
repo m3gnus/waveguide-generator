@@ -152,7 +152,6 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
       editFileDraft({ roles, units: preparation?.units ?? summary.suggested_units ?? '',
         forward: preparation?.forward ?? '+z', up: preparation?.up ?? '+y',
         domainPlanes: preparation?.domain_planes ?? summary.detected_planes ?? [],
-        autoCut: preparation ? preparation.auto_cut ?? false : !(summary.detected_planes?.length),
         reflectPlanes: preparation?.reflect_planes ?? null, removeLidPlanes: preparation?.remove_lid_planes ?? [] });
       if (previous?.setup) {
         seedFileOptions(previous.setup);
@@ -233,13 +232,12 @@ async function prepareMeshFileIntent(fetcher: typeof fetch, inspectFrame: boolea
         if (!importedMeshStore.isCurrentGeneration(generation)
           || JSON.stringify(useImportedModelStore.getState().fileDraft) !== JSON.stringify(draft)) return;
         useMeshImportStore.setState({ summary, frameDirty: false });
-        if (inspectFrame || state.frameDirty) editFileDraft({ domainPlanes: summary.detected_planes ?? [], autoCut: draft.autoCut ?? !(summary.detected_planes?.length), reflectPlanes: null, removeLidPlanes: [] });
+        if (inspectFrame || state.frameDirty) editFileDraft({ domainPlanes: summary.detected_planes ?? [], reflectPlanes: null, removeLidPlanes: [] });
         draft = useImportedModelStore.getState().fileDraft;
       }
       const preparation = { units: draft.units, forward: draft.forward, up: draft.up,
         roles: Object.fromEntries(Object.entries(draft.roles ?? Object.fromEntries(draft.selected.map(tag => [tag, 'HF'])))
           .map(([tag, role]) => [tag, role ?? 'RIGID'])),
-        ...(draft.autoCut ? { auto_cut: true } : {}),
         domain_planes: draft.domainPlanes ?? [], reflect_planes: draft.reflectPlanes ?? null,
         remove_lid_planes: draft.removeLidPlanes ?? [] };
 
@@ -486,7 +484,6 @@ function fillFileRail(record: RegisteredMesh, setup: ImportedSetup | null, gener
       ...Object.fromEntries((record.symmetry?.reflected_planes ?? []).map(plane => [plane, 'negative' as const])),
     } },
     request: useMeshImportStore.getState().request,
-    notice: record.source_file.transform.symmetry_report?.note ?? null,
   });
   return true;
 }

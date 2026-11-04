@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "kind": "wg-file-mesh-replay",
+  "numerical_contract": "imported-free-space-v1",
+  "axial_contract": "per-source-axis-v2",
+  "registration": {
+    "units": "m",
+    "forward": "+z",
+    "up": "+y",
+    "source_tags": [],
+    "roles": {
+      "101": "HF",
+      "102": "MF"
+    },
+    "auto_cut": true,
+    "filename": "symmetric.msh",
+    "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$PhysicalNames\n4\n2 2 \"Untagged surface\"\n2 1 \"Walls\"\n2 101 \"HF\"\n2 102 \"MF\"\n$EndPhysicalNames\n$Nodes\n26\n1 -0.10000000000000001 -0.10000000000000001 0\n2 0.10000000000000001 -0.10000000000000001 0\n3 0.10000000000000001 0.10000000000000001 0\n4 -0.10000000000000001 0.10000000000000001 0\n5 -0.10000000000000001 -0.10000000000000001 0.29999999999999999\n6 0.10000000000000001 -0.10000000000000001 0.29999999999999999\n7 0.10000000000000001 0.10000000000000001 0.29999999999999999\n8 -0.10000000000000001 0.10000000000000001 0.29999999999999999\n9 0 0 0\n10 0.10000000000000001 0 0\n11 0 -0.10000000000000001 0\n12 -0.10000000000000001 0 0\n13 0 0.10000000000000001 0\n14 0 -0.10000000000000001 0.29999999999999999\n15 0.10000000000000001 0 0.29999999999999999\n16 0 0 0.29999999999999999\n17 0 0.10000000000000001 0.29999999999999999\n18 -0.10000000000000001 0 0.29999999999999999\n19 0.10000000000000001 -0.10000000000000001 0.14999999999999999\n20 0 -0.10000000000000001 0.14999999999999999\n21 -0.10000000000000001 -0.10000000000000001 0.14999999999999999\n22 0.10000000000000001 0.10000000000000001 0.14999999999999999\n23 0.10000000000000001 0 0.14999999999999999\n24 -0.10000000000000001 0.10000000000000001 0.14999999999999999\n25 0 0.10000000000000001 0.14999999999999999\n26 -0.10000000000000001 0 0.14999999999999999\n$EndNodes\n$Elements\n48\n1 2 2 102 102 1 9 11\n2 2 2 102 102 9 3 10\n3 2 2 102 102 11 10 2\n4 2 2 102 102 9 10 11\n5 2 2 102 102 1 12 9\n6 2 2 102 102 12 4 13\n7 2 2 102 102 9 13 3\n8 2 2 102 102 12 13 9\n9 2 2 101 101 5 14 16\n10 2 2 101 101 14 6 15\n11 2 2 101 101 16 15 7\n12 2 2 101 101 14 15 16\n13 2 2 101 101 5 16 18\n14 2 2 101 101 16 7 17\n15 2 2 101 101 18 17 8\n16 2 2 101 101 16 17 18\n17 2 2 1 1 1 11 20\n18 2 2 1 1 11 2 19\n19 2 2 1 1 20 19 6\n20 2 2 1 1 11 19 20\n21 2 2 1 1 1 20 21\n22 2 2 1 1 20 6 14\n23 2 2 1 1 21 14 5\n24 2 2 1 1 20 14 21\n25 2 2 1 1 2 10 23\n26 2 2 1 1 10 3 22\n27 2 2 1 1 23 22 7\n28 2 2 1 1 10 22 23\n29 2 2 1 1 2 23 19\n30 2 2 1 1 23 7 15\n31 2 2 1 1 19 15 6\n32 2 2 1 1 23 15 19\n33 2 2 1 1 3 13 25\n34 2 2 1 1 13 4 24\n35 2 2 1 1 25 24 8\n36 2 2 1 1 13 24 25\n37 2 2 1 1 3 25 22\n38 2 2 1 1 25 8 17\n39 2 2 1 1 22 17 7\n40 2 2 1 1 25 17 22\n41 2 2 2 2 4 12 26\n42 2 2 2 2 12 1 21\n43 2 2 2 2 26 21 5\n44 2 2 2 2 12 21 26\n45 2 2 2 2 4 26 24\n46 2 2 2 2 26 5 18\n47 2 2 2 2 24 18 8\n48 2 2 2 2 26 18 24\n$EndElements\n"
+  },
+  "original_sha256": "sha256:e656b5a429965d2f5983d6db08f02447a14efbd24534b7c293914f4c69cdc746",
+  "solver_msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$PhysicalNames\n3\n2 1 \"Walls\"\n2 101 \"HF\"\n2 102 \"MF\"\n$EndPhysicalNames\n$Nodes\n11\n1 0.10000000000000001 0.10000000000000001 0\n2 0.10000000000000001 0.10000000000000001 0.29999999999999999\n3 0 0 0\n4 0.10000000000000001 0 0\n5 0 0.10000000000000001 0\n6 0.10000000000000001 0 0.29999999999999999\n7 0 0 0.29999999999999999\n8 0 0.10000000000000001 0.29999999999999999\n9 0.10000000000000001 0.10000000000000001 0.14999999999999999\n10 0.10000000000000001 0 0.14999999999999999\n11 0 0.10000000000000001 0.14999999999999999\n$EndNodes\n$Elements\n12\n1 2 2 102 102 3 1 4\n2 2 2 102 102 3 5 1\n3 2 2 101 101 7 6 2\n4 2 2 101 101 7 2 8\n5 2 2 1 1 4 1 9\n6 2 2 1 1 10 9 2\n7 2 2 1 1 4 9 10\n8 2 2 1 1 10 2 6\n9 2 2 1 1 1 5 11\n10 2 2 1 1 1 11 9\n11 2 2 1 1 9 8 2\n12 2 2 1 1 11 8 9\n$EndElements\n",
+  "solver_sha256": "sha256:3bc81618284febb0edaef84412d764a7d409f3cc3405c9ec1b1eef0b8a205abf",
+  "request": {
+    "geometry": {
+      "type": "imported",
+      "ingest_id": "wgi_01M6K9EZQ6KRTBBAWDQM800781",
+      "manifest_sha256": "sha256:81952f12e2909721215c987225e08f77318bc9fac449809b8dd317c5f33de496",
+      "artifact_sha256": "sha256:e656b5a429965d2f5983d6db08f02447a14efbd24534b7c293914f4c69cdc746",
+      "drive_channels": [
+        {
+          "id": "HF",
+          "source_ids": [
+            "group_101"
+          ],
+          "motion": "normal",
+          "driver": null
+        },
+        {
+          "id": "MF",
+          "source_ids": [
+            "group_102"
+          ],
+          "motion": "normal",
+          "driver": null
+        }
+      ],
+      "combine": null,
+      "drive_voltage_v": 2.83,
+      "rg_ohm": 0.0,
+      "max_drive_voltage_v": null,
+      "mesh": null,
+      "acknowledged_findings": [],
+      "skipped_source_ids": [],
+      "exterior_only": false,
+      "passive_cardioid_rear_volume_l": null,
+      "passive_cardioid_port_length_mm": null,
+      "model_port_area_m2": null,
+      "bem_port_area_m2": null,
+      "port_area_source": null,
+      "passive_cardioid_foam_resistance_pa_s_m3": null,
+      "passive_cardioid_invert_port": true,
+      "passive_cardioid_coupled": false
+    },
+    "options": {
+      "engine": "metal",
+      "accuracy": "fast",
+      "solver_mode": "full_3d",
+      "symmetry": "auto",
+      "frequency_range": null,
+      "num_frequencies": null,
+      "frequency_spacing": "log",
+      "frequencies_hz": [
+        100.0,
+        200.0
+      ],
+      "verbose": false,
+      "mesh_ladder": "off",
+      "mesh_validation_mode": "warn",
+      "polar_config": {
+        "angle_range": [
+          -180.0,
+          180.0,
+          73
+        ],
+        "angle_step": null,
+        "distance": 2.0,
+        "norm_angle": 5.0,
+        "inclination": 45.0,
+        "enabled_axes": [
+          "horizontal",
+          "vertical",
+          "diagonal"
+        ],
+        "observation_origin": "mouth",
+        "spherical_sampling": false,
+        "field_plane": true,
+        "spherical_theta_count": 37,
+        "spherical_phi_count": 72
+      },
+      "ground_plane": {
+        "enabled": false,
+        "axis": "y",
+        "height_m": 1.0
+      },
+      "stage_delay_ms": 30
+    },
+    "label": "mesh test",
+    "parent_job_id": null,
+    "client_request_id": null,
+    "client_metadata": {}
+  },
+  "result_provenance": {
+    "schema_version": 1,
+    "wg_version": "0.3.7",
+    "dependency_shas": {
+      "beat-engine": "a008a034033028e65d79aaf595e191e1a9515bd0",
+      "hornlab-bempp-bem": "5d82a932bbebd65c441746098dad20a517ec0430",
+      "hornlab-metal-bem": "722ed50607b66b06c493e570238f5e29eaa73725",
+      "hornlab-plots": "9462f4b8ee92ad87eb839173eac2aaacef5e8b55",
+      "hornlab-sim": "bf50b3b5fa20775fe9c248646a46efbe014d4a99",
+      "hornlab-waveguide-mesher": "63b62c2246844a81092c1d293cbf43c71b58aa19"
+    },
+    "installed_dependency_shas": {
+      "beat-engine": "a008a034033028e65d79aaf595e191e1a9515bd0",
+      "hornlab-bempp-bem": "5d82a932bbebd65c441746098dad20a517ec0430",
+      "hornlab-metal-bem": "722ed50607b66b06c493e570238f5e29eaa73725",
+      "hornlab-plots": "9462f4b8ee92ad87eb839173eac2aaacef5e8b55",
+      "hornlab-sim": "bf50b3b5fa20775fe9c248646a46efbe014d4a99",
+      "hornlab-waveguide-mesher": "63b62c2246844a81092c1d293cbf43c71b58aa19"
+    },
+    "dependency_drift": [],
+    "request_identity": "execution",
+    "execution_request_sha256": "9117efbcb52538cf2eb6a435c6fcc5e38f7cdb513fe43b7661d821ff97564af7",
+    "execution_geometry_sha256": "736c73559368e0eee00643a06ab62fb65796da8834b252945e6e7d9eded5af22",
+    "execution_solve_options_sha256": "66bc1022d307d1c0484ab1afe55337d4e9f9bf78ef2329872575acae3daa137c",
+    "effective_request_sha256": "9117efbcb52538cf2eb6a435c6fcc5e38f7cdb513fe43b7661d821ff97564af7",
+    "effective_geometry_sha256": "736c73559368e0eee00643a06ab62fb65796da8834b252945e6e7d9eded5af22",
+    "effective_solve_options_sha256": "66bc1022d307d1c0484ab1afe55337d4e9f9bf78ef2329872575acae3daa137c",
+    "request_sha256": "9117efbcb52538cf2eb6a435c6fcc5e38f7cdb513fe43b7661d821ff97564af7",
+    "geometry_sha256": "736c73559368e0eee00643a06ab62fb65796da8834b252945e6e7d9eded5af22",
+    "solve_options_sha256": "66bc1022d307d1c0484ab1afe55337d4e9f9bf78ef2329872575acae3daa137c",
+    "resolved_engine": "metal",
+    "solver_fingerprints": [
+      {
+        "package": null,
+        "version": null,
+        "commit": null,
+        "source_sha256": null,
+        "build_sha256": null,
+        "backend": "metal"
+      }
+    ]
+  },
+  "content_sha256": "sha256:2cf1034afe874474fde5c533a6f5632879da013b05e206300114998b97f2bbde"
+}

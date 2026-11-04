@@ -1,4 +1,4 @@
-"""Full file meshes enter the pinned CAD cutter and the shared publication owner."""
+"""New imports refuse cutting; historical reconstruction retains the old bytes."""
 
 import asyncio
 import json
@@ -32,8 +32,12 @@ def cutting_registration(mesh=None, **changes):
                             units="m", forward="+z", up="+y", roles={101: "HF", 102: "MF"}, **changes)
 
 
+def prepare_historical_file_mesh(*args, **options):
+    return prepare_file_mesh(*args, historical_reconstruction=True, **options)
+
+
 def prepare(mesh, **options):
-    return _run_in_gmsh_session(lambda: prepare_file_mesh(mesh, "m", "+z", "+y",
+    return _run_in_gmsh_session(lambda: prepare_historical_file_mesh(mesh, "m", "+z", "+y",
                                                        roles={101: "HF", 102: "MF"}, **options))
 
 
@@ -44,7 +48,7 @@ def triangle_keys(mesh):
 
 
 @pytest.mark.parametrize("planes", [("x0",), ("y0",), ("x0", "y0")])
-def test_real_cut_preserves_facets_groups_winding_and_effective_domain(planes):
+def test_historical_cut_preserves_facets_groups_winding_and_effective_domain(planes):
     original = full_mesh()
     snapshots = [array.copy() for array in (original.points, original.triangles, original.tags)]
     reduced, transform = prepare(original, domain_planes=planes)
@@ -103,7 +107,7 @@ def test_asymmetric_geometry_and_independent_same_role_sources_stay_full():
     mesh = full_mesh()
     mesh.tags[(mesh.tags == 101) & (mesh.points[mesh.triangles].mean(axis=1)[:, 0] < 0)] = 103
     mesh.names[103] = "Second HF"
-    result, transform = _run_in_gmsh_session(lambda: prepare_file_mesh(
+    result, transform = _run_in_gmsh_session(lambda: prepare_historical_file_mesh(
         mesh, "m", "+z", "+y", domain_planes=["x0"], roles={101: "HF", 103: "HF", 102: "MF"}))
     assert transform["cut_planes"] == transform["domain_planes"] == []
     np.testing.assert_array_equal(result.tags, mesh.tags)
@@ -162,10 +166,10 @@ def test_existing_reduced_mesh_and_opt_out_do_not_enter_cutter(monkeypatch):
 
     monkeypatch.setattr(file_cut, "cut_file_mesh", lambda *_args: pytest.fail("unexpected reduction"))
     mesh = box_mesh(planes=("x0", "y0"))
-    first, transform = prepare_file_mesh(mesh, "m", "+z", "+y", domain_planes=["x0", "y0"], auto_cut=True)
+    first, transform = prepare_historical_file_mesh(mesh, "m", "+z", "+y", domain_planes=["x0", "y0"], auto_cut=True)
     np.testing.assert_array_equal(first.triangles, mesh.triangles)
     assert "cut_planes" not in transform
-    full, transform = prepare_file_mesh(full_mesh(), "m", "+z", "+y")
+    full, transform = prepare_historical_file_mesh(full_mesh(), "m", "+z", "+y")
     assert "cut_planes" not in transform
     assert len(full.triangles) == len(full_mesh().triangles)
 
@@ -176,7 +180,7 @@ def test_unit_and_axis_frames_cut_the_same_si_geometry(units, scale, forward, up
     mesh = full_mesh()
     rotation = np.asarray([np.cross(AXES[up], AXES[forward]), AXES[up], AXES[forward]])
     mesh.points = mesh.points @ rotation * scale
-    reduced, transform = _run_in_gmsh_session(lambda: prepare_file_mesh(mesh, units, forward, up,
+    reduced, transform = _run_in_gmsh_session(lambda: prepare_historical_file_mesh(mesh, units, forward, up,
         auto_cut=True, roles={101: "HF", 102: "MF"}))
     assert transform["cut_planes"] == ["x0", "y0"]
     np.testing.assert_allclose(np.ptp(reduced.points, axis=0), [.1, .1, .3])
@@ -192,7 +196,7 @@ def test_a_driver_keeps_its_whole_area_however_the_file_was_reduced(tmp_path, ex
     body = cutting_registration(mesh, domain_planes=list(requested))
     store = CadLinkStore.for_data_dir(tmp_path)
     try:
-        prepared = _run_in_gmsh_session(lambda: prepare_file_mesh(
+        prepared = _run_in_gmsh_session(lambda: prepare_historical_file_mesh(
             mesh, "m", "+z", "+y", domain_planes=requested, roles=body.driven_roles()))
         record = register_mesh(store, tmp_path, body, prepared=prepared)
     finally:
@@ -247,7 +251,7 @@ def test_record_reimport_setup_and_replay_share_effective_cut(tmp_path):
     body = cutting_registration(auto_cut=True)
     store = CadLinkStore.for_data_dir(tmp_path)
     try:
-        prepared = _run_in_gmsh_session(lambda: prepare_file_mesh(full_mesh(), "m", "+z", "+y", auto_cut=True, roles=body.driven_roles()))
+        prepared = _run_in_gmsh_session(lambda: prepare_historical_file_mesh(full_mesh(), "m", "+z", "+y", auto_cut=True, roles=body.driven_roles()))
         first = register_mesh(store, tmp_path, body, prepared=prepared)
         assert first["symmetry"] == {"domain_planes": ["x0", "y0"], "cut_planes": ["x0", "y0"], "reflected_planes": []}
         assert first["source_file"]["auto_cut"] is True
@@ -282,9 +286,9 @@ def test_record_reimport_setup_and_replay_share_effective_cut(tmp_path):
 def test_cancelled_child_and_superseded_result_never_publish(tmp_path, monkeypatch):
     import server.jobs.models_api as api
     store = CadLinkStore.for_data_dir(tmp_path)
-    body = cutting_registration(auto_cut=True)
+    body = cutting_registration()
     mesh = full_mesh()
-    prepared = prepare_file_mesh(mesh, "m", "+z", "+y")
+    prepared = prepare_historical_file_mesh(mesh, "m", "+z", "+y")
     async def scenario():
         started = asyncio.Event()
         release = asyncio.Event()
@@ -343,10 +347,10 @@ def test_api_orders_prepare_and_load_before_older_child_publication(tmp_path, mo
         started, release = asyncio.Event(), asyncio.Event()
         owner = api.prepare_registration
         async def compute(body, cancel_cb=None):
-            if body.auto_cut:
+            if body.units == "cm":
                 started.set()
                 await release.wait()
-            return await owner(body.model_copy(update={"auto_cut": False}), cancel_cb)
+            return await owner(body, cancel_cb)
         monkeypatch.setattr(api, "prepare_registration", compute)
         async def call(method, path, body=None, sequence=1):
             async def ordered(scope, receive, send):
@@ -363,10 +367,10 @@ def test_api_orders_prepare_and_load_before_older_child_publication(tmp_path, mo
             initial = first["prepared"]
             settings = {key: value for key, value in body.items() if key not in {"filename", "msh_text"}}
             path = f'/api/models/{initial["model_id"]}'
-            old = asyncio.create_task(call("POST", path + "/prepare", {**settings, "auto_cut": True}, sequence=2))
+            old = asyncio.create_task(call("POST", path + "/prepare", {**settings, "units": "cm"}, sequence=2))
             await started.wait()
             if newer == "prepare":
-                status, current = await call("POST", path + "/prepare", {**settings, "units": "cm"}, sequence=3)
+                status, current = await call("POST", path + "/prepare", {**settings, "units": "mm"}, sequence=3)
                 assert status == 200, current
                 expected = current["prepared"]["ingest_id"]
             else:
@@ -401,46 +405,60 @@ def test_postmesh_verification_failure_returns_immutable_input(monkeypatch):
     assert "could not be verified" in transform["symmetry_report"]["note"]
 
 
-def test_native_cut_exports_and_restores_through_shared_replay_and_solve(tmp_path):
-    from server.jobs.models_api import register_mesh_async
-    from server.jobs.mesh_replay import _inputs, MeshReplayPackage
-    from server.mesh.child import close_mesher_child
-    from test_mesh_replay import app_for, call
+@pytest.mark.parametrize("mode", ["auto", "declared"])
+def test_base_cut_replay_reopens_retained_setup_and_reexports_identical_solver_bytes(tmp_path, mode):
+    # Captured from unmodified df52fbd27, rather than generated by the code under test.
+    from pathlib import Path
+    from server.jobs.models_api import mount_models_api
+    from server.mesh.artifact import read_verified_import_mesh
+    from server.jobs.imported_setup import setup_content, validate_setup
+    from server.jobs.mesh_replay import MeshReplayPackage, restore_mesh_replay
+    from test_mesh_replay import app_for
+    from test_models_api import call
     from test_mesh_import import request
 
+    package = json.loads((Path(__file__).parent / "fixtures/mesh_replay" / f"file-cut-{mode}-df52fbd27.wgreplay").read_text())
     async def scenario():
-        app, store, runtime, engine = app_for(tmp_path / "origin")
+        app, store, runtime, engine = app_for(tmp_path)
+        mount_models_api(app)
         try:
-            record = await register_mesh_async(store, app.state.data_dir, cutting_registration(auto_cut=True))
-            submission = request(record)
+            opened = await call(app, "POST", "/api/mesh-replay", package)
+            record = opened["record"]
+            assert record["msh_text"].encode() == package["solver_msh_text"].encode()
+            assert record["manifest_sha256"] == package["request"]["geometry"]["manifest_sha256"]
+            assert record["symmetry"]["cut_planes"] == ["x0", "y0"]
+            assert record["source_file"].get("auto_cut", False) == (mode == "auto")
+            retained = json.loads(store.get_ingest(record["ingest_id"])["record_json"])
+            assert read_verified_import_mesh(retained).encode() == package["solver_msh_text"].encode()
+            path = f'/api/models/{record["model_id"]}'
+            setup = {"geometry": {"drive_channels": [{"id": "HF", "source_ids": ["group_101"]},
+                                                       {"id": "MF", "source_ids": ["group_102"]}]},
+                     "options": package["request"]["options"]}
+            await call(app, "PUT", path + "/setup", {"prepared_id": record["ingest_id"], "setup": setup})
+            saved = await call(app, "GET", path + "/setup")
+            assert saved["setup"] == json.loads(setup_content(validate_setup(setup)))
+            reopened = await call(app, "GET", path + f'?prepared_id={record["ingest_id"]}')
+            assert reopened["prepared"]["msh_text"].encode() == package["solver_msh_text"].encode()
+            submission = request(retained)
             submission.geometry.drive_channels[0].id = "HF"
             submission.geometry.drive_channels[0].source_ids = ["group_101"]
-            submission.geometry.drive_channels.append(submission.geometry.drive_channels[0].model_copy(
-                update={"id": "MF", "source_ids": ["group_102"]}))
+            submission.geometry.drive_channels.append(submission.geometry.drive_channels[0].model_copy(update={"id": "MF", "source_ids": ["group_102"]}))
             submission.options.symmetry = "auto"
             job_id = await runtime.submit(submission)
             await runtime.wait_idle()
             assert runtime.store.get_job_row(job_id)["status"] == "complete"
-            package = await call(app, "GET", f"/api/jobs/{job_id}/mesh-replay")
-            assert package["registration"]["auto_cut"] is True
-            assert "domain_planes" not in package["registration"]
-            assert _inputs(MeshReplayPackage.model_validate(package))["registration"]["auto_cut"] is True
-            solver = engine.calls[0][1]
+            assert engine.calls[0][1].encode() == package["solver_msh_text"].encode()
+            exported = await call(app, "GET", f"/api/jobs/{job_id}/mesh-replay")
+            assert exported["registration"] == package["registration"]
+            assert exported["solver_msh_text"] == package["solver_msh_text"]
+            direct = _run_in_gmsh_session(lambda: restore_mesh_replay(runtime, store, tmp_path, MeshReplayPackage.model_validate(package), threading.Lock()))
+            assert direct["record"]["msh_text"] == package["solver_msh_text"]
+            assert direct["record"]["ingest_id"] == record["ingest_id"]
+            again = await call(app, "POST", "/api/mesh-replay", package)
+            assert again["record"]["ingest_id"] == record["ingest_id"]
         finally:
             await runtime.shutdown()
             store.close()
-        app, store, runtime, _ = app_for(tmp_path / "fresh")
-        try:
-            restored = await call(app, "POST", "/api/mesh-replay", package)
-            assert restored["record"]["msh_text"] == solver
-            assert restored["record"]["source_file"]["auto_cut"] is True
-            assert restored["record"]["symmetry"]["domain_planes"] == ["x0", "y0"]
-            assert restored["request"]["geometry"]["drive_channels"] == package["request"]["geometry"]["drive_channels"]
-            assert restored["request"]["options"] == package["request"]["options"]
-        finally:
-            await runtime.shutdown()
-            store.close()
-            close_mesher_child()
     asyncio.run(scenario())
 
 
@@ -449,7 +467,7 @@ def test_refused_requested_cut_uses_full_memory_and_polar_domain(tmp_path, monke
     seen = []
     monkeypatch.setattr(api, "_enforce_dense_solver_memory_ceiling", lambda _triangles, quadrants, **_kwargs: seen.append(quadrants))
     original = full_mesh()
-    full, transform = prepare_file_mesh(original, "m", "+z", "+y")
+    full, transform = prepare_historical_file_mesh(original, "m", "+z", "+y")
     transform.update(domain_planes=[], cut_planes=[], symmetry_report={"note": "The cut could not be verified. Export the half or quarter to solve faster."})
     store = CadLinkStore.for_data_dir(tmp_path)
     try:
@@ -464,27 +482,41 @@ def test_refused_requested_cut_uses_full_memory_and_polar_domain(tmp_path, monke
         store.close()
 
 
-@pytest.mark.parametrize("intent", [{"auto_cut": True}, {"domain_planes": ["x0", "y0"]}])
-def test_native_cut_crash_has_a_working_full_model_remedy(tmp_path, monkeypatch, intent):
+@pytest.mark.parametrize("intent", [{"auto_cut": True}, {"domain_planes": ["x0"]}, {"domain_planes": ["y0"]}, {"domain_planes": ["x0", "y0"]}])
+def test_new_cut_requests_are_refused_before_native_work_or_publication(tmp_path, monkeypatch, intent):
     import server.jobs.models_api as api
-    from server.mesh.child import MesherCrashError
+    from server.mesh import file_cut
     from test_models_api import app_for, call
 
-    async def fail(*_args, **_kwargs):
-        raise MesherCrashError("parametric morph advice must not escape here")
-    monkeypatch.setattr(api, "run_mesh_build", fail)
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("new cut request reached the historical cutter")
+    async def unexpected_child(*_args, **_kwargs):
+        unexpected()
+    monkeypatch.setattr(file_cut, "cut_file_mesh", unexpected)
+    monkeypatch.setattr(api, "run_mesh_build", unexpected_child)
+    body = cutting_registration(**intent)
+    with pytest.raises(ValueError, match="WG no longer cuts imported meshes"):
+        prepare_file_mesh(full_mesh(), "m", "+z", "+y", **intent)
     async def scenario():
         store = CadLinkStore.for_data_dir(tmp_path)
         app, runtime = app_for(tmp_path, store)
         try:
-            refused = await call(app, "POST", "/api/models/files", cutting_registration(**intent).model_dump(mode="json"), expected=422)
-            assert "Choose Full model" in refused["detail"]
-            assert "morph" not in refused["detail"]
+            refused = await call(app, "POST", "/api/models/files", body.model_dump(mode="json"), expected=422)
+            remedy = "WG no longer cuts imported meshes. Choose Full, or export the half or quarter from your meshing tool and import that."
+            assert remedy in refused["detail"]
             assert store.ingest_records() == []
-            # That remedy uses the supported no-native path for valid full input.
-            full = await call(app, "POST", "/api/models/files", cutting_registration().model_dump(mode="json"))
-            assert full["prepared"]["symmetry"]["domain_planes"] == []
-            assert full["prepared"]["summary"]["triangle_count"] == len(full_mesh().triangles)
+            await call(app, "POST", "/api/models/files", {**body.model_dump(mode="json"), "historical_reconstruction": True}, expected=422)
+            # The remedy succeeds without the native child, and a subsequent
+            # prepare request cannot use the retained original to bypass refusal.
+            full = (await call(app, "POST", "/api/models/files", cutting_registration().model_dump(mode="json")))["prepared"]
+            assert full["symmetry"]["domain_planes"] == []
+            assert full["summary"]["triangle_count"] == len(full_mesh().triangles)
+            settings = body.model_dump(mode="json", exclude={"filename", "msh_text"})
+            refused = await call(app, "POST", f'/api/models/{full["model_id"]}/prepare', settings, expected=422)
+            assert remedy in refused["detail"]
+            await call(app, "POST", f'/api/models/{full["model_id"]}/prepare', {**settings, "historical_reconstruction": True}, expected=422)
+            assert len(store.ingest_records()) == 1
+            assert store.get_model(full["model_id"])["latest_ingest_id"] == full["ingest_id"]
         finally:
             await runtime.shutdown()
             store.close()
@@ -517,69 +549,24 @@ def capped_half_mesh(input_count=48):
 
 
 @pytest.mark.parametrize("count,limit", [(48, 40), (5002, 5000)])
-def test_original_cut_admission_survives_lid_removal_without_native_entry(tmp_path, monkeypatch, count, limit):
-    import gmsh
-    import server.jobs.models_api as api
+def test_historical_cut_admission_survives_lid_removal_without_native_entry(monkeypatch, count, limit):
     from server.mesh import file_cut
     from server.mesh.file_import import prepare_file_mesh_input
-    from test_models_api import app_for, call
-
     original = capped_half_mesh(count)
-    snapshots = [array.copy() for array in (original.points, original.triangles, original.tags)]
     monkeypatch.setattr(file_cut, "MAX_FILE_CUT_TRIANGLES", limit)
-    def native_entry(*_args, **_kwargs):
-        pytest.fail("above-bound original must never enter Gmsh/OCC after lid removal")
-    async def native_child(*_args, **_kwargs):
-        pytest.fail("above-bound original must not dispatch a native child")
-    monkeypatch.setattr(gmsh.model, "getCurrent", native_entry)
-    monkeypatch.setattr(file_cut, "_load_model", native_entry)
-    monkeypatch.setattr(api, "run_mesh_build", native_child)
-    body = MeshRegistration(filename="capped-half.msh", msh_text=mesh_text(original), units="m",
-                            forward="+z", up="+y", roles={101: "HF"},
-                            domain_planes=["x0", "y0"], remove_lid_planes=["x0"])
-    preparation = prepare_file_mesh_input(original, "m", "+z", "+y", roles=body.driven_roles(),
-                                          domain_planes=body.domain_planes, remove_lid_planes=body.remove_lid_planes)
+    monkeypatch.setattr(file_cut, "_load_model", lambda *_args: pytest.fail("above-bound original entered OCC"))
+    preparation = prepare_file_mesh_input(original, "m", "+z", "+y", roles={101: "HF"},
+        domain_planes=["x0", "y0"], remove_lid_planes=["x0"], historical_reconstruction=True)
     assert preparation.input_triangle_count == count
     assert len(preparation.mesh.triangles) == 40
     assert preparation.declared_planes == ("x0",)
     assert preparation.candidate_planes == ("y0",)
     assert not preparation.needs_native_cut
-    async def scenario():
-        result, transform = await api.prepare_registration(body)
-        np.testing.assert_array_equal(result.points, preparation.mesh.points)
-        np.testing.assert_array_equal(result.triangles, preparation.mesh.triangles)
-        np.testing.assert_array_equal(result.tags, preparation.mesh.tags)
-        assert transform["domain_planes"] == ["x0"] and transform["cut_planes"] == []
-        note = transform["symmetry_report"]["note"]
-        assert f"{count:,} triangles" in note and f"up to {limit:,}" in note
-        assert "Export the half or quarter" in note
-        store = CadLinkStore.for_data_dir(tmp_path)
-        app, runtime = app_for(tmp_path, store)
-        try:
-            record = (await call(app, "POST", "/api/models/files", body.model_dump(mode="json")))["prepared"]
-            assert record["symmetry"]["domain_planes"] == ["x0"]
-            assert record["symmetry"]["cut_planes"] == []
-            assert record["source_file"]["domain_planes"] == ["x0", "y0"]
-            assert record["source_file"]["remove_lid_planes"] == ["x0"]
-            assert record["source_file"]["transform"]["symmetry_report"]["note"] == note
-            assert record["summary"]["triangle_count"] == 40
-            assert record["source_tags"] == {"group_101": 101}
-            assert record["sources"][0]["role"] == "HF"
-            assert record["sources"][0]["observed"]["total_area_mm2"] == pytest.approx(80000)
-            assert record["polar_grid_derivation"]["axes"]["horizontal"]["minimum_deg"] == 0
-            assert record["polar_grid_derivation"]["axes"]["vertical"]["minimum_deg"] == -180
-        finally:
-            await runtime.shutdown()
-            store.close()
-    asyncio.run(scenario())
-    for array, saved in zip((original.points, original.triangles, original.tags), snapshots):
-        np.testing.assert_array_equal(array, saved)
 
 
 @pytest.mark.parametrize("planes", [("x0",), ("x0", "y0")])
-@pytest.mark.parametrize("auto_cut", [False, True])
 @pytest.mark.parametrize("failure", ["startup", "shutdown"])
-def test_reduced_registration_and_api_need_no_native_child(tmp_path, monkeypatch, planes, auto_cut, failure):
+def test_reduced_registration_and_api_need_no_native_child(tmp_path, monkeypatch, planes, failure):
     import gmsh
     import server.jobs.models_api as api
     from server.mesh.child import MesherChildError, MesherShuttingDownError
@@ -593,9 +580,9 @@ def test_reduced_registration_and_api_need_no_native_child(tmp_path, monkeypatch
     mesh.points = mesh.points @ rotation * 1000
     body = MeshRegistration(filename="reduced.msh", msh_text=mesh_text(mesh), units="mm",
                             forward="+x", up="+z", roles={101: "HF", 102: "MF"},
-                            domain_planes=list(planes), auto_cut=auto_cut)
+                            domain_planes=list(planes))
     expected, transform = prepare_file_mesh(mesh, "mm", "+x", "+z", domain_planes=planes,
-                                            auto_cut=auto_cut, roles=body.driven_roles())
+                                            roles=body.driven_roles())
     calls = []
     async def unavailable(*_args, **_kwargs):
         calls.append(failure)

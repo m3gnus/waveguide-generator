@@ -1,4 +1,6 @@
-"""Triangle/OCC adaptation to the same symmetry cutter used for CAD returns.
+"""Historical file replay adapter to the shared CAD symmetry cutter.
+
+New imported files cannot reach this adapter; preserve old solver bytes here.
 
 Called only in an owned Gmsh session. Original arrays are read-only inputs;
 native geometry and generated children are disposable until verification.

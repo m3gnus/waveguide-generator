@@ -217,13 +217,12 @@ will not remove a driver or port surface as part of that face.
 
 A full model must be closed and face outward. A half or quarter may be open on
 its declared symmetry planes; close other openings in the meshing tool. WG
-checks the mesh for other problems before solving. For a full mesh, **Auto · cut
-for speed** checks the geometry and source groups and cuts to a half or quarter
-when they mirror. **Change** lets you choose a particular half or quarter, or
-**Full model** to keep the whole mesh. Cutting supports up to **5,000 input
-triangles**. If a cut is too large or cannot be verified, the valid full mesh
-remains ready to solve and the status line explains why. Export the half or
-quarter to solve faster.
+checks the mesh for other problems before solving. WG no longer cuts imported
+meshes. Choose **Full model**, or export a half or quarter from your meshing
+tool and choose **Already half · x = 0**, **Already half · y = 0** or
+**Already quarter**. These choices declare the file's existing cuts. Existing
+imported models, saved runs and replay packages keep their prepared meshes.
+STEP/CAD Link cutting is unchanged.
 
 Use the **Simulation** tab shared with CAD models to set the sweep, drivers,
 directivity and solver. For surfaces with the same role, choose **Share one

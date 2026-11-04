@@ -107,13 +107,12 @@ Every solved run also keeps a copy of its design.
    coupled Passive cardioid.
 
 WG saves setup changes automatically. Importing the same file again restores
-its last settings. For a full symmetric mesh, **Auto · cut for speed** checks the
-geometry and source groups and cuts to a half or quarter when they mirror.
-You can also choose an explicit half or quarter, or **Full model** to keep the
-whole mesh. Cutting supports up to **5,000 input triangles**. If the cut is too
-large, unsafe or unverifiable, the valid full mesh remains ready to solve and
-the status explains why. You can export a reduced mesh from your meshing tool
-for larger inputs. See the
+its last settings. WG no longer cuts imported meshes. Choose **Full model**, or
+export a half or quarter from your meshing tool and choose **Already half** or
+**Already quarter** for that file. Mirroring from the negative side and removing
+a closed face on a declared plane remain available. Existing imported models,
+saved runs and replay packages reopen with their original prepared meshes.
+STEP/CAD Link cutting is unchanged. See the
 [import and solve a mesh](USER-GUIDE.md#import-and-solve-a-mesh) section for
 file formats, role guesses and retained runs.
 

@@ -39,13 +39,15 @@ The earlier restriction to selecting existing labels as sources has been lifted:
 group can be assigned a different role. WG does not paint faces or rename the file's
 group names.
 
-For full file meshes, **Auto · cut for speed** checks geometry and source-group
-symmetry and cuts to a half or quarter when verified. **Change** offers explicit
-half/quarter choices and **Full model** to keep the whole mesh. Cutting supports
-up to **5,000 input triangles**; a larger mesh or an unverified cut keeps the valid
-full mesh ready to solve, with a status note. Export the half or quarter to solve
-faster. This cut bound is separate from the 22,000-triangle solve choice. File meshes
-now use the shared **Crossover** and **Passive cardioid**
+WG no longer cuts new imported meshes. **Change** offers **Full model**,
+**Already half · x = 0**, **Already half · y = 0** and **Already quarter**.
+Export the half or quarter from the meshing tool before importing it. Declared
+planes may not cross the mesh. Negative-side mirroring and removal of a rigid
+closed face remain available. New requests with `auto_cut=True` are refused;
+only historical replay reconstruction retains triangle cutting so existing
+registrations, saved setups and replay packages preserve their solver bytes
+and preparation identities. STEP/CAD Link cutting is unchanged. File meshes
+use the shared **Crossover** and **Passive cardioid**
 controls in the Simulation tab. Coupled Passive cardioid requires an MF driver
 and a port topology, and it cannot be combined with Crossover.
 

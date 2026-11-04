@@ -39,7 +39,6 @@ export interface FilePreparation {
   source_tags?: number[];
   roles?: Record<string, string>;
   domain_planes?: string[];
-  auto_cut?: boolean;
   remove_lid_planes?: string[];
   reflect_planes?: string[] | null;
 }

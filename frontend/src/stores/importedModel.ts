@@ -44,7 +44,6 @@ export interface FileDraft {
   selected: number[];
   roles?: Record<string, string | null>;
   domainPlanes?: string[];
-  autoCut?: boolean;
   removeLidPlanes?: string[];
   /** null lets preparation mirror a negative-side model automatically. */
   reflectPlanes?: string[] | null;
@@ -225,8 +224,7 @@ function fileDraftOf(prepared: Extract<ImportedSource, { kind: 'file' }>['prepar
   return {
     units: file?.transform?.units ?? '', forward: file?.transform?.forward ?? '+z', up: file?.transform?.up ?? '+y',
     selected: Object.entries(roles).filter(([, role]) => role !== 'RIGID').map(([tag]) => Number(tag)),
-    roles, domainPlanes: file?.domain_planes ?? (file?.auto_cut ? [] : record?.symmetry?.domain_planes) ?? [],
-    autoCut: file?.auto_cut ?? false,
+    roles, domainPlanes: record?.symmetry?.domain_planes ?? file?.domain_planes ?? [],
     reflectPlanes: file?.reflect_planes ?? null,
     removeLidPlanes: file?.remove_lid_planes ?? Object.keys(file?.transform?.removed_lids ?? {}),
   };
