@@ -22,7 +22,7 @@ import {
 } from './exportDestinationPrompt';
 import { ExportCancelledError } from '../api/exportDestination';
 export { resultExportSnapshot } from '../results/exportContext';
-import { copyChartPng, saveChartPng } from '../results/chartImage';
+import { composeChartCanvases, copyChartPng, saveChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { latestCombine } from '../results/latestCombine';
 import { limitingSummary, maxOutputChartSeries, maxOutputMissingReason, maxOutputOf, memberLabelOf } from '../results/maxOutput';
@@ -1481,19 +1481,23 @@ function Summary({ result, wrapper, job, channelId, density }: { result: ResultP
   const developer = useDeveloperDetails();
   const groups = useMemo(() => summaryGroups({ result, wrapper, job, channelId, developer }), [channelId, developer, job, result, wrapper]);
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const copiedTimer = useRef<number | null>(null);
   useEffect(() => () => {
     if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
   }, []);
   const copy = useCallback(async () => {
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    setCopied(false);
+    setCopyError(null);
     try {
-      if (!navigator.clipboard?.writeText) return;
+      if (!navigator.clipboard?.writeText) throw new Error('WG could not copy the summary.');
       await navigator.clipboard.writeText(summaryText(groups));
       setCopied(true);
       if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
       copiedTimer.current = window.setTimeout(() => setCopied(false), 1_600);
-    } catch {
-      // Clipboard permission is optional; the summary remains readable when it is blocked.
+    } catch (reason) {
+      setCopyError(`${failureWords(reason instanceof DOMException ? reason.message : reason, 'WG could not copy the summary.', 'copy simulation summary')} Select the summary text and copy it yourself.`);
     }
   }, [groups]);
   return <div className="result-summary" data-density={density}>
@@ -1503,6 +1507,7 @@ function Summary({ result, wrapper, job, channelId, density }: { result: ResultP
         : <p className="result-summary-empty" role="status">No summary details available.</p>}
     </div>
     {groups.length > 0 && <button className="result-summary-copy" type="button" aria-label={copied ? 'Simulation summary copied' : 'Copy simulation summary'} title="Copy summary as text" onClick={() => void copy()}><span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span></button>}
+    {copyError && <span className="result-image-status" role="status">{copyError}</span>}
   </div>;
 }
 
@@ -2205,29 +2210,36 @@ function useChartImage({ capture, chartType, job, channelId, background }: {
   const imageAction = async (operation: 'copy' | 'download') => {
     const target = capture();
     if (!target || imageOperation) return;
+    if (imageStatusTimer.current !== null) window.clearTimeout(imageStatusTimer.current);
     setImageOperation(operation);
     setImageStatus(null);
+    let failed = false;
     try {
       if (operation === 'copy') {
         await copyChartPng(target, background);
         setImageStatus('Copied PNG');
       } else {
         const filename = chartImageFilename(chartType, job, channelId);
+        const image = composeChartCanvases(target, background);
         const destination = await askForExportDestination({ title: 'Export chart PNG', detail: filename });
         if (!destination) { setImageStatus('Export cancelled'); return; }
         await saveChartPng(
-          target, filename, destination.token, background, askToReplaceExports,
+          image, filename, destination.token, askToReplaceExports,
         );
         setImageStatus('Saved PNG');
       }
     } catch (reason) {
+      failed = !(reason instanceof ExportCancelledError);
       setImageStatus(reason instanceof ExportCancelledError
         ? 'Export cancelled'
-        : operation === 'copy' ? 'WG could not copy this chart. Try again.' : 'WG could not export this chart. Try again.');
+        : failureWords(reason, operation === 'copy'
+          ? 'WG could not copy this chart. Use Export PNG instead.'
+          : 'WG could not export this chart. Choose a writable folder, then export again.',
+        `${operation} chart PNG`));
     } finally {
       setImageOperation(null);
       if (imageStatusTimer.current !== null) window.clearTimeout(imageStatusTimer.current);
-      imageStatusTimer.current = window.setTimeout(() => setImageStatus(null), 1_600);
+      if (!failed) imageStatusTimer.current = window.setTimeout(() => setImageStatus(null), 1_600);
     }
   };
   return { imageOperation, imageStatus, imageAction };

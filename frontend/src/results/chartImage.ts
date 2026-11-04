@@ -1,5 +1,7 @@
 import { writeToOutputFolder } from '../api/workspace';
 import type { ConfirmReplacements } from '../api/exportDestination';
+import { activityOperation } from '../shell/activityOperation';
+import { writePendingClipboardItem } from '../api/clipboard';
 
 const DEFAULT_PIXEL_RATIO = 2;
 const MAX_PIXEL_RATIO = 3;
@@ -74,8 +76,9 @@ export async function copyChartPng(container: HTMLElement, background?: string):
   if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
     throw new Error('Copying images is not available here. Use Export PNG instead.');
   }
-  const blob = await chartPngBlob(container, background);
-  await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+  await activityOperation({ kind: 'export', label: 'Copying chart PNG' }, fetch, async () => {
+    await writePendingClipboardItem('image/png', chartPngBlob(container, background));
+  });
 }
 
 /**
@@ -85,17 +88,21 @@ export async function copyChartPng(container: HTMLElement, background?: string):
  * the desktop window -- a WebView2 host with no download handler -- so the
  * image was encoded and then silently went nowhere. It takes the same route
  * every other export takes: the user names a folder, and the server writes it.
+ * The caller captures this detached canvas together with its filename before
+ * asking for a destination, so a following run cannot replace its pixels.
  */
 export async function saveChartPng(
-  container: HTMLElement,
+  canvas: HTMLCanvasElement,
   filename: string,
   destination: string,
-  background?: string,
   confirmReplacements?: ConfirmReplacements,
 ): Promise<string> {
-  const written = await writeToOutputFolder(
-    '', [{ filename, blob: await chartPngBlob(container, background) }],
-    fetch, 'confirm', destination, confirmReplacements,
-  );
-  return written.directory;
+  return activityOperation({ kind: 'export', label: 'Encoding chart PNG' }, fetch, async (scoped, activity) => {
+    const blob = await pngBlob(canvas);
+    activity.label('Writing chart PNG');
+    const written = await writeToOutputFolder(
+      '', [{ filename, blob }], scoped, 'confirm', destination, confirmReplacements,
+    );
+    return written.directory;
+  });
 }

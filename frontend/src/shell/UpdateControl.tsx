@@ -6,6 +6,7 @@ import { getUpdateChannel, getUpdateDiagnostics, getUpdateStatus, installApplica
 import { Icon } from './icons';
 import { focusableSelector, useModalDialogFocus } from './dialogFocus';
 import { failureWords } from '../api/httpError';
+import { writePendingClipboardItem } from '../api/clipboard';
 
 export const UPDATE_QUERY_KEY = ['application-update'] as const;
 const active = (state: string | undefined) => state === 'downloading' || state === 'verifying';
@@ -78,10 +79,8 @@ async function writePendingText(text: Promise<string>, isCurrent: () => boolean)
   // WebKit needs the write inside the click gesture, before the fetch resolves.
   if (typeof ClipboardItem !== 'undefined' && typeof clipboard.write === 'function') {
     const blob = text.then((value) => new Blob([value], { type: 'text/plain' }));
-    // A refused write may never consume its pending data.
-    void blob.catch(() => undefined);
     try {
-      await clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+      await writePendingClipboardItem('text/plain', blob);
       return;
     } catch { /* Try writeText where pending clipboard items are unsupported. */ }
   }

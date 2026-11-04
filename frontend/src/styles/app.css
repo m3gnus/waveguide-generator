@@ -519,7 +519,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .result-card-image-action:focus-visible, .result-card-expand:focus-visible, .result-card-close:focus-visible { opacity: 1; background: color-mix(in srgb, var(--chart-bg) 72%, transparent); }
 .result-card-image-action:hover:not(:disabled), .result-card-expand:hover, .result-card-close:hover { background: var(--ov4); color: var(--chart-fg); }
 .result-card-image-action:disabled { cursor: wait; opacity: .3; }
-.result-image-status { position: absolute; top: 24px; right: 4px; padding: 2px 5px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: color-mix(in srgb, var(--chart-bg) 90%, transparent); color: var(--fg2); font: var(--text-micro) var(--mono); white-space: nowrap; pointer-events: none; backdrop-filter: blur(6px); }
+.result-image-status { position: absolute; top: 24px; right: 4px; max-width: calc(100% - 8px); padding: 2px 5px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: color-mix(in srgb, var(--chart-bg) 90%, transparent); color: var(--fg2); font: var(--text-micro) var(--mono); white-space: normal; overflow-wrap: anywhere; pointer-events: none; backdrop-filter: blur(6px); }
 /* The groups scroll under a fixed copy action. Keeping the shell itself still
    prevents that action from disappearing in a long provenance report. */
 .result-summary { position: relative; width: 100%; height: 100%; min-height: 0; margin: 0; overflow: hidden; padding: 20px 6px 6px; }

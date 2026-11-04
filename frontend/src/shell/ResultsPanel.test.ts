@@ -17,11 +17,13 @@ import { beamShapeMissingReason, ChartDetailDialog, chartImageFilename, chartUni
 const chartImageMocks = vi.hoisted(() => ({
   copy: vi.fn<() => Promise<void>>(),
   save: vi.fn<() => Promise<string>>(),
+  compose: vi.fn<(target: HTMLElement, background?: string) => HTMLCanvasElement>(),
 }));
 vi.mock('../results/chartImage', async (importOriginal) => ({
   ...await importOriginal<typeof import('../results/chartImage')>(),
   copyChartPng: chartImageMocks.copy,
   saveChartPng: chartImageMocks.save,
+  composeChartCanvases: chartImageMocks.compose,
 }));
 
 const summaryMocks = vi.hoisted(() => ({
@@ -631,11 +633,16 @@ describe('results chart layouts', () => {
     summaryMocks.text.mockReset().mockReturnValue('');
     chartImageMocks.copy.mockReset().mockResolvedValue(undefined);
     chartImageMocks.save.mockReset().mockResolvedValue('/exports');
+    chartImageMocks.compose.mockReset().mockImplementation(() => document.createElement('canvas'));
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
   });
-  afterEach(() => { act(() => root.unmount()); host.remove(); });
+  afterEach(() => {
+    act(() => root.unmount()); host.remove();
+    provideExportDestinationPrompt(null);
+    vi.restoreAllMocks(); vi.useRealTimers();
+  });
 
   it.each([1, 2, 3, 4, 6])('renders the %i-panel layout with the matching number of cards', (count) => {
     const chartTypes = Array.from({ length: count }, () => 'summary' as ChartType);
@@ -779,7 +786,7 @@ describe('results chart layouts', () => {
     provideExportDestinationPrompt(async () => ({ token: 'handle-png', directory: '/exports' }));
     await act(async () => { save.click(); });
     expect(chartImageMocks.save).toHaveBeenCalledWith(
-      target, 'result_frequency_response.png', 'handle-png', tokens.background,
+      chartImageMocks.compose.mock.results[0].value, 'result_frequency_response.png', 'handle-png',
       expect.any(Function),
     );
     expect(host.querySelector('.result-image-status')?.textContent).toBe('Saved PNG');
@@ -792,11 +799,97 @@ describe('results chart layouts', () => {
     provideExportDestinationPrompt(null);
   });
 
+  it.each([true, false])('captures run A before the destination answer (%s) while the same card redraws run B', async (accept) => {
+    const chartResult: ResultPayload = { frequencies: [500], spl_on_axis: { frequencies: [500], spl: [80] } };
+    const renderRun = (label: string) => act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['frequency_response'], result: chartResult, named: [], tokens,
+      job: { label, run_number: 1, config_summary: {} } as JobItem,
+    })));
+    renderRun('A');
+    const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
+    const layer = document.createElement('canvas');
+    layer.dataset.pixels = 'A';
+    await act(async () => { target.append(layer); });
+    const snapshot = document.createElement('canvas');
+    const bounds = { left: 0, top: 0, width: 100, height: 50 } as DOMRect;
+    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue(bounds);
+    vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(bounds);
+    vi.spyOn(snapshot, 'getContext').mockReturnValue({
+      setTransform: vi.fn(), fillRect: vi.fn(),
+      drawImage: (source: HTMLCanvasElement) => { snapshot.dataset.pixels = source.dataset.pixels; },
+    } as unknown as CanvasRenderingContext2D);
+    const actual = await vi.importActual<typeof import('../results/chartImage')>('../results/chartImage');
+    chartImageMocks.compose.mockImplementation((element, background) => actual.composeChartCanvases(element, background, () => snapshot));
+    let answer!: (choice: { token: string; directory: string } | null) => void;
+    const prompt = vi.fn(() => new Promise<{ token: string; directory: string } | null>((resolve) => { answer = resolve; }));
+    provideExportDestinationPrompt(prompt);
+    act(() => { host.querySelector<HTMLButtonElement>('[aria-label="Export panel 1 as PNG"]')!.click(); });
+    expect(prompt).toHaveBeenCalledWith({ title: 'Export chart PNG', detail: '1_A_frequency_response.png' });
+    renderRun('B');
+    expect(host.querySelector('.chart-placeholder')).toBe(target);
+    layer.dataset.pixels = 'B';
+    await act(async () => { answer(accept ? { token: 'chosen', directory: '/exports' } : null); });
+    expect(chartImageMocks.compose).toHaveBeenCalledOnce();
+    expect(snapshot.dataset.pixels).toBe('A');
+    if (accept) {
+      expect(chartImageMocks.save).toHaveBeenCalledWith(snapshot, '1_A_frequency_response.png', 'chosen', expect.any(Function));
+    } else {
+      expect(chartImageMocks.save).not.toHaveBeenCalled();
+      expect(host.querySelector('.result-image-status')?.textContent).toBe('Export cancelled');
+    }
+  });
+
+  it.each(['copy', 'export'])('keeps the %s remedy until another attempt, including past a previous success timer', async (operation) => {
+    vi.useFakeTimers();
+    const chartResult: ResultPayload = { frequencies: [500], spl_on_axis: { frequencies: [500], spl: [80] } };
+    act(() => root.render(createElement(ResultsChartGrid, { chartTypes: ['frequency_response'], result: chartResult, named: [], tokens })));
+    const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
+    await act(async () => { target.append(document.createElement('canvas')); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Copy panel 1 as PNG"]')!.click(); });
+    const remedy = operation === 'copy'
+      ? 'Copying images is not available here. Use Export PNG instead.'
+      : 'WG could not write this image. Choose a writable folder, then export again.';
+    if (operation === 'copy') chartImageMocks.copy.mockRejectedValueOnce(new Error(remedy));
+    else provideExportDestinationPrompt(async () => { throw new Error(remedy); });
+    const label = operation === 'copy' ? 'Copy panel 1 as PNG' : 'Export panel 1 as PNG';
+    await act(async () => { host.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click(); });
+    expect(host.querySelector('.result-image-status')?.textContent).toBe(remedy);
+    act(() => { vi.advanceTimersByTime(5_000); });
+    expect(host.querySelector('.result-image-status')?.textContent).toBe(remedy);
+    await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Copy panel 1 as PNG"]')!.click(); });
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('Copied PNG');
+    act(() => { vi.advanceTimersByTime(1_600); });
+    expect(host.querySelector('.result-image-status')).toBeNull();
+  });
+
+  it.each(['unavailable', 'refused'])('reports %s Summary Copy access with a lasting remedy and allows retry', async (failure) => {
+    vi.useFakeTimers();
+    summaryMocks.groups.mockReturnValue([{ title: 'Run', rows: [{ label: 'Name', value: 'A' }] }]);
+    const originalClipboard = navigator.clipboard;
+    const writeText = vi.fn().mockRejectedValue(new DOMException('Write permission denied.', 'NotAllowedError'));
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: failure === 'unavailable' ? undefined : { writeText } });
+    try {
+      act(() => root.render(createElement(ResultsChartGrid, { chartTypes: ['summary'], result, named: [], tokens })));
+      const copy = host.querySelector<HTMLButtonElement>('[aria-label="Copy simulation summary"]')!;
+      await act(async () => { copy.click(); });
+      const remedy = `${failure === 'unavailable' ? 'WG could not copy the summary.' : 'Write permission denied.'} Select the summary text and copy it yourself.`;
+      expect(host.querySelector('[role="status"]')?.textContent).toBe(remedy);
+      act(() => { vi.advanceTimersByTime(5_000); });
+      expect(host.querySelector('[role="status"]')?.textContent).toBe(remedy);
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } });
+      await act(async () => { copy.click(); });
+      expect(copy.textContent).toBe('Copied');
+      expect(host.querySelector('[role="status"]')).toBeNull();
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: originalClipboard });
+    }
+  });
+
   it('reports a blocked image clipboard without breaking the chart', async () => {
     const chartResult: ResultPayload = {
       frequencies: [500], spl_on_axis: { frequencies: [500], spl: [80] },
     };
-    chartImageMocks.copy.mockRejectedValue(new Error('clipboard blocked'));
+    chartImageMocks.copy.mockRejectedValue(new TypeError("Cannot read properties of undefined (reading 'write')"));
     act(() => root.render(createElement(ResultsChartGrid, {
       chartTypes: ['frequency_response'], result: chartResult, named: [], tokens,
     })));
@@ -811,7 +904,7 @@ describe('results chart layouts', () => {
     for (let i = 0; i < 100 && !host.querySelector('.result-image-status'); i += 1) {
       await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 5); }); });
     }
-    expect(host.querySelector('.result-image-status')?.textContent).toBe('WG could not copy this chart. Try again.');
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('WG could not copy this chart. Use Export PNG instead.');
     expect(host.querySelector('.result-card')).not.toBeNull();
   });
 
