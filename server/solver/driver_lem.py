@@ -8,7 +8,7 @@ pinned ``hornlab-sim`` for the lumped physics:
   ``_solver_surface_avg_to_self_impedance``). ``S`` is the source's full
   physical area — symmetry images move with the source, and ⟨p⟩ from a
   symmetry-reduced solve equals the full-domain average.
-- Basis scaling by cone **acceleration**, not velocity:
+- Basis scaling in the result's declared excitation basis (legacy acceleration):
   ``p_V = (jω·U/S)·p_basis`` (using velocity here was the historical
   −6 dB/oct + −90° bug recorded in the add-in's July 2026 implementation
   history).
@@ -32,8 +32,8 @@ from hornlab_sim.methods.driver_coupling import MMD_CORRECTION_WARN
 
 from server.contracts.conventions import engineering_to_solver, solver_to_engineering
 from server.contracts import DriverSpec
+from .excitation_basis import pressure_per_velocity_scale
 
-_TWO_PI = 2.0 * np.pi
 logger = logging.getLogger(__name__)
 
 
@@ -66,12 +66,13 @@ def self_impedance_from_surface_average(
     frequencies_hz: np.ndarray,
     surface_pressure_avg_raw: np.ndarray,
     area_m2: float,
+    *, excitation_normalization: str = "acceleration_legacy",
 ) -> np.ndarray:
     """Engineering acoustic self-impedance from the raw solver ⟨p⟩ array."""
 
-    omega = _TWO_PI * np.asarray(frequencies_hz, dtype=np.float64)
     raw = np.asarray(surface_pressure_avg_raw, dtype=np.complex128).reshape(-1)
-    return solver_to_engineering(-1j * omega * raw) / float(area_m2)
+    scale = pressure_per_velocity_scale(frequencies_hz, excitation_normalization)
+    return solver_to_engineering(scale * raw) / float(area_m2)
 
 
 def validate_driver_mass(spec: DriverSpec) -> None:
@@ -179,11 +180,12 @@ def channel_drive_scaling(
     *,
     drive_voltage_v: float,
     rg_ohm: float,
+    excitation_normalization: str = "acceleration_legacy",
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Solve the coupled driver and return the raw-field scale + metadata.
 
-    The returned array multiplies the channel's raw unit-acceleration
-    fields; the payload records the electrical picture for the metadata
+    The returned array multiplies the channel's raw fields in their stated basis;
+    the payload records the electrical picture for the metadata
     contract (impedance in ohms, peak excursion, applied voltage).
     """
 
@@ -192,7 +194,8 @@ def channel_drive_scaling(
     if float(area_m2) <= 0.0 or not np.isfinite(float(area_m2)):
         raise ValueError("driver coupling requires a positive finite source area")
     z_self = self_impedance_from_surface_average(
-        frequencies, surface_pressure_avg_raw, area_m2
+        frequencies, surface_pressure_avg_raw, area_m2,
+        excitation_normalization=excitation_normalization,
     )
     driver = hornlab_driver(spec)
     coupled = driver_coupling.coupled_direct_radiator_response(
@@ -205,9 +208,9 @@ def channel_drive_scaling(
         drive_voltage_v=drive_voltage_v,
         rg_ohm=rg_ohm,
     )
-    omega = _TWO_PI * frequencies
-    # Cone acceleration per the applied voltage; conjugated onto raw fields.
-    scale_eng = 1j * omega * coupled.cone_volume_velocity / float(area_m2)
+    # Convert cone velocity to the same basis as the retained pressure fields.
+    basis_scale = pressure_per_velocity_scale(frequencies, excitation_normalization)
+    scale_eng = np.conjugate(basis_scale) * coupled.cone_volume_velocity / float(area_m2)
     scale_raw = engineering_to_solver(scale_eng)
 
     excursion_mm = one_way_peak_excursion_mm(coupled.cone_excursion_m)
@@ -246,6 +249,9 @@ def channel_drive_scaling(
         "mmd_correction_g": float(mmd_correction_g),
         "warnings": warnings,
         "scale_convention": (
+            "engineering U/S velocity scale applied to exp(+ikr) "
+            "solver fields as complex conjugates"
+            if excitation_normalization == "rms_velocity" else
             "engineering jw*U/S acceleration scale applied to exp(+ikr) "
             "solver fields as complex conjugates"
         ),

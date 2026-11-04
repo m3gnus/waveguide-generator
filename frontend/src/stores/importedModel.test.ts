@@ -82,12 +82,14 @@ describe('openImported', () => {
     expect(activityStore.typicalMs('mesh-import') === null).toBe(fail);
   });
 
-  it('reopens an assembly run through the third shared adapter, with its exact setup and no CAD sizing', async () => {
+  it.each([false, true])('restores assembly physics through a real control edit (explicit basis=%s)', async explicit => {
     const id = '00000000-0000-4000-8000-0000000000aa';
     const modelId = 'design-assembly:wgu_saved';
     const channels = [{ id: 'horn-throat', source_ids: ['horn-throat'], motion: 'normal' },
       { id, source_ids: [`${id}/cone`, `${id}/cap`], motion: 'axial' }];
     const saved = { ...setup, geometry: { required_features: ['wg-design-assembly-v1'], drive_channels: channels,
+      ...(explicit ? { excitation_normalization: 'rms_velocity' as const,
+        excitation_normalization_by_engine: { bempp: 'acceleration_legacy' as const } } : {}),
       skipped_source_ids: [], driver_groups: [{ id: 'lf', channel_ids: [id], label: 'LF',
         member_processing: { [id]: { weight: 0.8, delay_ms: 0.25, invert: true } } }] } };
     const prepared = { ingest_id: 'wgi_assembly', model_id: modelId, producer: 'design-assembly',
@@ -118,6 +120,9 @@ describe('openImported', () => {
     const edited = fileMeshSetup();
     expect(edited.geometry.required_features).toEqual(['wg-design-assembly-v1']);
     expect(edited.geometry.drive_channels).toEqual(channels);
+    expect(JSON.stringify(edited.geometry)).toBe(JSON.stringify(saved.geometry));
+    expect(edited.options.frequency_spacing).toBe('log');
+    expect(edited.options.frequency_spacing).not.toBe(saved.options.frequency_spacing);
     expect(edited.geometry.driver_groups?.find(group => group.id === 'lf')?.member_processing?.[id]).toEqual({ weight: 0.8, delay_ms: 0.25, invert: true });
     expect(edited.geometry.mesh).toBeUndefined();
     workspaceModeStore.setImportedInput('file');

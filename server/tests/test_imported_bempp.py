@@ -228,6 +228,15 @@ def test_explicit_bempp_normalization_and_engine_override(monkeypatch, normaliza
             metadata = json.loads(archive[f"metadata::{name}"].item())
         assert metadata["source_normalization"] == ("native_rms_velocity" if rms else "unit_normal_acceleration")
     assert result["channels"]["right"]["metadata"]["impedance_drive"] == ("rms_velocity" if rms else "unit_acceleration")
+    # The native source pressure is j*rho*c per unit acceleration. Impedance
+    # is pressure/velocity regardless of the requested pressure basis.
+    np.testing.assert_allclose(result["channels"]["right"]["impedance"]["real"],
+                               2 * np.pi * np.array([100., 500., 1000.]), rtol=1e-14)
+    np.testing.assert_allclose(result["channels"]["right"]["impedance"]["imaginary"], 0., atol=1e-14)
+    for _, frame in streamed:
+        if "right" in frame["channels"]:
+            assert frame["channels"]["right"]["impedance"]["real"][0] == pytest.approx(
+                2 * np.pi * frame["channels"]["right"]["impedance"]["frequencies"][0])
     assert streamed[0][1]["channels"]["left"]["spl_on_axis"]["spl"][0] == result["channels"]["left"]["spl_on_axis"]["spl"][0]
 
 

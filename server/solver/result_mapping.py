@@ -25,6 +25,7 @@ from .beam_shape import beam_shape_summary
 from .context import SolverContext
 from .contract import build_directivity_metadata, frequency_failure
 from .directivity_index import calculate_di_from_spherical_grid
+from .excitation_basis import pressure_per_velocity_scale
 from .quadrants import native_symmetry_plane_for_quadrants
 
 
@@ -720,7 +721,7 @@ def phase_on_axis(result: Any) -> list[float | None]:
 def specific_impedance_z_over_rho_c(
     result: Any, *, rho_c: float = REFERENCE_RHO_C
 ) -> list[complex | None]:
-    """Convert unit-acceleration pressure using v=a/(-iω), then conjugate.
+    """Convert the result's pressure basis to pressure/velocity, then conjugate.
 
     This is the sign/drive convention from v1
     ``server/solver/result_mapping.py:185-200``.  ``rho_c`` names the medium
@@ -731,12 +732,15 @@ def specific_impedance_z_over_rho_c(
 
     frequencies = np.asarray(result.frequencies_hz, dtype=float)
     raw_pressure = np.asarray(result.impedance, dtype=np.complex128).reshape(-1)
+    scale = pressure_per_velocity_scale(
+        frequencies, getattr(result, "excitation_normalization", "acceleration_legacy"),
+    ).reshape(-1)
     output: list[complex | None] = []
     for index, frequency in enumerate(frequencies.reshape(-1)):
         if index >= raw_pressure.size:
             output.append(None)
             continue
-        mapped = solver_to_engineering(-1j * 2.0 * np.pi * frequency * raw_pressure[index]) / rho_c
+        mapped = solver_to_engineering(scale[index] * raw_pressure[index]) / rho_c
         output.append(
             complex(mapped)
             if math.isfinite(float(mapped.real)) and math.isfinite(float(mapped.imag))
@@ -1176,7 +1180,7 @@ def build_solver_response(
             "phase_units": "degrees",
             "impedance_units": "Z/(rho*c)",
             "impedance_quantity": "specific_acoustic_impedance",
-            "impedance_drive": "unit_acceleration",
+            "impedance_drive": ("rms_velocity" if getattr(result, "excitation_normalization", None) == "rms_velocity" else "unit_acceleration"),
             "source_motion": context.source_motion,
             "quadrants": context.quadrants,
             # "explicit" rather than log/linear: reporting a spacing the solve
@@ -1331,6 +1335,7 @@ def build_provisional_frequency_response(
         pressure_complex=pressure_row[None, ...],
         directivity_db=directivity_row[None, ...],
         impedance=np.asarray([impedance], dtype=np.complex128),
+        excitation_normalization=entry.get("excitation_normalization", "acceleration_legacy"),
     )
     response = build_solver_response(
         result=native_result,

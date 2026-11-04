@@ -1,0 +1,4452 @@
+{
+  "assembly/beat-cpu/prescribed": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"required_features\":[\"wg-design-assembly-v1\"],\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "required_features": [
+          "wg-design-assembly-v1"
+        ],
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "764d0755f31f1b2c4921e3341704d330fb811cbbf59fee4f2a1d5be3b5cc6ff7",
+      "observation_planes": "742ae228710610314a85964459841df3225c0bec2ef3e7bd5e74a9199eca96c1",
+      "pressure::left": "cbb6f259dbda8cf17add02d893b5baca3fe1036db9637bb3f1b3706733e8f921",
+      "metadata::left": "b53d49cdba39c87923da90a9eda884c8e3211e258581cd00407c2d3ab7983c13",
+      "pressure::right": "16d20d321dc2088b21d729d5e2e3d184f81825151cac97adaa384b69148be42c",
+      "metadata::right": "71e3917849fe5036e1bf2b29e5cc9dfdcd81b701f043572d1314cc2422f1c17d"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            62.953297410522495,
+            76.93269749724286,
+            82.9532974105225
+          ],
+          "phase_degrees": [
+            -26.56505117707799,
+            -26.56505117707799,
+            -26.56505117707799
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            -9.558793075155858,
+            -238.96982687889644,
+            -955.8793075155858
+          ],
+          "imaginary": [
+            19.117586150311716,
+            477.9396537577929,
+            1911.7586150311715
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            68.9738973238021,
+            82.9532974105225,
+            88.97389732380212
+          ],
+          "phase_degrees": [
+            -26.56505117707799,
+            -26.56505117707799,
+            -26.56505117707799
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            -9.558793075155858,
+            -238.96982687889644,
+            -955.8793075155858
+          ],
+          "imaginary": [
+            19.117586150311716,
+            477.9396537577929,
+            1911.7586150311715
+          ]
+        },
+        "driver": null
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        72.49572250491573,
+        86.47512259163612,
+        92.49572250491573
+      ],
+      "phase_degrees": [
+        -26.56505117707799,
+        -26.56505117707799,
+        -26.56505117707799
+      ]
+    }
+  },
+  "assembly/bempp/prescribed": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"required_features\":[\"wg-design-assembly-v1\"],\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"bempp\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "required_features": [
+          "wg-design-assembly-v1"
+        ],
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "bempp",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "82c12b92cada4a8b9ecb1397d2ba1ae1e997f63c2cb97fe9d15d9aa55a4f5a68",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "pressure::left": "95ce84e348f0e4005dfa461054149a460c837b5dc383375c373349ec903de1c9",
+      "metadata::left": "b53d49cdba39c87923da90a9eda884c8e3211e258581cd00407c2d3ab7983c13",
+      "pressure::right": "6455e6238dd57d5b71ce79de6fd34becf878355e30dc257535ec35562568670e",
+      "metadata::right": "71e3917849fe5036e1bf2b29e5cc9dfdcd81b701f043572d1314cc2422f1c17d"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            13.010299956639813,
+            13.010299956639813,
+            13.010299956639813
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        16.53212513775344,
+        16.53212513775344,
+        16.53212513775344
+      ],
+      "phase_degrees": [
+        63.43494882292201,
+        63.43494882292201,
+        63.43494882292201
+      ]
+    }
+  },
+  "assembly/metal/prescribed": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"required_features\":[\"wg-design-assembly-v1\"],\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"metal\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "required_features": [
+          "wg-design-assembly-v1"
+        ],
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "metal",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "82c12b92cada4a8b9ecb1397d2ba1ae1e997f63c2cb97fe9d15d9aa55a4f5a68",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "pressure::left": "d9808311cc317810459c34bdcd59bd4a26dad7c7779bf4d72e691a255e4e2061",
+      "metadata::left": "b53d49cdba39c87923da90a9eda884c8e3211e258581cd00407c2d3ab7983c13",
+      "pressure::right": "a7bf49fd41c1eaddd60f52f20d15663db0fd43e3d10ff10e7689aab39d2ab3d7",
+      "metadata::right": "71e3917849fe5036e1bf2b29e5cc9dfdcd81b701f043572d1314cc2422f1c17d"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            62.953297410522495,
+            76.93269749724286,
+            82.9532974105225
+          ],
+          "phase_degrees": [
+            -26.56505117707799,
+            -26.56505117707799,
+            -26.56505117707799
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            -9.558793075155858,
+            -238.96982687889644,
+            -955.8793075155858
+          ],
+          "imaginary": [
+            19.117586150311716,
+            477.9396537577929,
+            1911.7586150311715
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            68.9738973238021,
+            82.9532974105225,
+            88.97389732380212
+          ],
+          "phase_degrees": [
+            -26.56505117707799,
+            -26.56505117707799,
+            -26.56505117707799
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            -9.558793075155858,
+            -238.96982687889644,
+            -955.8793075155858
+          ],
+          "imaginary": [
+            19.117586150311716,
+            477.9396537577929,
+            1911.7586150311715
+          ]
+        },
+        "driver": null
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        72.49572250491573,
+        86.47512259163612,
+        92.49572250491573
+      ],
+      "phase_degrees": [
+        -26.56505117707799,
+        -26.56505117707799,
+        -26.56505117707799
+      ]
+    }
+  },
+  "cad/beat-cpu/prescribed": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "764d0755f31f1b2c4921e3341704d330fb811cbbf59fee4f2a1d5be3b5cc6ff7",
+      "observation_planes": "742ae228710610314a85964459841df3225c0bec2ef3e7bd5e74a9199eca96c1",
+      "pressure::left": "7dd8f320bb51749b0b62e07eeb7ee4b0213554651a5dbb8fdc254f96ca5ac0cc",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "3f32812bccf982590df5bb8d0cc0d49f409dc5535127468594b62bbd9792c70b",
+      "metadata::right": "9563eb112547ff2f6a46a932da1f321eca2d8552976230ace95b1005a8ad4ea3"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            13.010299956639813,
+            13.010299956639813,
+            13.010299956639813
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        16.53212513775344,
+        16.53212513775344,
+        16.53212513775344
+      ],
+      "phase_degrees": [
+        63.43494882292201,
+        63.43494882292201,
+        63.43494882292201
+      ]
+    }
+  },
+  "cad/beat-cpu/lem": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":{\"sd_cm2\":210.0,\"bl_t_m\":10.5,\"re_ohm\":5.3,\"le_mh\":0.5,\"le2_mh\":null,\"re2_ohm\":null,\"mmd_g\":12.0,\"mms_g\":null,\"cms_m_per_n\":0.0004,\"vas_l\":null,\"fs_hz\":null,\"rms_kg_per_s\":1.2,\"qms\":null,\"xmax_mm\":null,\"power_w\":null,\"z_nom_ohm\":null,\"count\":1,\"rear_volume_l\":null,\"label\":null}}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": {
+              "sd_cm2": 210.0,
+              "bl_t_m": 10.5,
+              "re_ohm": 5.3,
+              "le_mh": 0.5,
+              "le2_mh": null,
+              "re2_ohm": null,
+              "mmd_g": 12.0,
+              "mms_g": null,
+              "cms_m_per_n": 0.0004,
+              "vas_l": null,
+              "fs_hz": null,
+              "rms_kg_per_s": 1.2,
+              "qms": null,
+              "xmax_mm": null,
+              "power_w": null,
+              "z_nom_ohm": null,
+              "count": 1,
+              "rear_volume_l": null,
+              "label": null
+            }
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "764d0755f31f1b2c4921e3341704d330fb811cbbf59fee4f2a1d5be3b5cc6ff7",
+      "observation_planes": "742ae228710610314a85964459841df3225c0bec2ef3e7bd5e74a9199eca96c1",
+      "pressure::left": "7dd8f320bb51749b0b62e07eeb7ee4b0213554651a5dbb8fdc254f96ca5ac0cc",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "ca44c03946290ea1dc2e54a1f8912ca35e514d9412b30fb017f753c79cf0ab89",
+      "metadata::right": "0ab8c4e06841fd2bcfb69b068ea8513f9401d985004e525d0876e3dd0c40a1cf"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            56.95514740825257,
+            65.84234380289642,
+            65.75146429668781
+          ],
+          "phase_degrees": [
+            -16.836960569542523,
+            45.786099489672495,
+            78.12055002485643
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            15.527474575980381,
+            5.495981911088919,
+            5.372479923150835
+          ],
+          "imaginary": [
+            -25.48620763858787,
+            -1.35112206369713,
+            1.7006592847070787
+          ]
+        },
+        "driver": {
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "label": null,
+          "spec": {
+            "sd_cm2": 210.0,
+            "bl_t_m": 10.5,
+            "re_ohm": 5.3,
+            "le_mh": 0.5,
+            "mmd_g": 12.0,
+            "cms_m_per_n": 0.0004,
+            "rms_kg_per_s": 1.2,
+            "count": 1
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "peak_mm": 0.5641539505667074,
+            "values": [
+              0.5641539505667074,
+              0.06277944106004911,
+              0.015531502757488153
+            ],
+            "quantity": "one_way_peak_displacement"
+          },
+          "mmd_correction_g": 0.0,
+          "warnings": [],
+          "scale_convention": "engineering jw*U/S acceleration scale applied to exp(+ikr) solver fields as complex conjugates",
+          "source_id": "source-c",
+          "source_area_m2": 0.020999999999999998
+        }
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        56.95984834300344,
+        65.851785109319,
+        65.76114876776091
+      ],
+      "phase_degrees": [
+        -16.65776562171781,
+        45.805902100437365,
+        78.10381780292046
+      ]
+    }
+  },
+  "cad/bempp/prescribed": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"bempp\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "bempp",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "82c12b92cada4a8b9ecb1397d2ba1ae1e997f63c2cb97fe9d15d9aa55a4f5a68",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "pressure::left": "95ce84e348f0e4005dfa461054149a460c837b5dc383375c373349ec903de1c9",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "6455e6238dd57d5b71ce79de6fd34becf878355e30dc257535ec35562568670e",
+      "metadata::right": "9563eb112547ff2f6a46a932da1f321eca2d8552976230ace95b1005a8ad4ea3"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            13.010299956639813,
+            13.010299956639813,
+            13.010299956639813
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        16.53212513775344,
+        16.53212513775344,
+        16.53212513775344
+      ],
+      "phase_degrees": [
+        63.43494882292201,
+        63.43494882292201,
+        63.43494882292201
+      ]
+    }
+  },
+  "cad/bempp/lem": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":{\"sd_cm2\":210.0,\"bl_t_m\":10.5,\"re_ohm\":5.3,\"le_mh\":0.5,\"le2_mh\":null,\"re2_ohm\":null,\"mmd_g\":12.0,\"mms_g\":null,\"cms_m_per_n\":0.0004,\"vas_l\":null,\"fs_hz\":null,\"rms_kg_per_s\":1.2,\"qms\":null,\"xmax_mm\":null,\"power_w\":null,\"z_nom_ohm\":null,\"count\":1,\"rear_volume_l\":null,\"label\":null}}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"bempp\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": {
+              "sd_cm2": 210.0,
+              "bl_t_m": 10.5,
+              "re_ohm": 5.3,
+              "le_mh": 0.5,
+              "le2_mh": null,
+              "re2_ohm": null,
+              "mmd_g": 12.0,
+              "mms_g": null,
+              "cms_m_per_n": 0.0004,
+              "vas_l": null,
+              "fs_hz": null,
+              "rms_kg_per_s": 1.2,
+              "qms": null,
+              "xmax_mm": null,
+              "power_w": null,
+              "z_nom_ohm": null,
+              "count": 1,
+              "rear_volume_l": null,
+              "label": null
+            }
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "bempp",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "82c12b92cada4a8b9ecb1397d2ba1ae1e997f63c2cb97fe9d15d9aa55a4f5a68",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "pressure::left": "95ce84e348f0e4005dfa461054149a460c837b5dc383375c373349ec903de1c9",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "7b889a7a60f27abb086f0e8f4766471ed1816b1c591d0692f8fe1fe66ea75929",
+      "metadata::right": "0ab8c4e06841fd2bcfb69b068ea8513f9401d985004e525d0876e3dd0c40a1cf"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            56.95514740825257,
+            65.84234380289642,
+            65.75146429668781
+          ],
+          "phase_degrees": [
+            -16.836960569542523,
+            45.786099489672495,
+            78.12055002485643
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            15.527474575980381,
+            5.495981911088919,
+            5.372479923150835
+          ],
+          "imaginary": [
+            -25.48620763858787,
+            -1.35112206369713,
+            1.7006592847070787
+          ]
+        },
+        "driver": {
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "label": null,
+          "spec": {
+            "sd_cm2": 210.0,
+            "bl_t_m": 10.5,
+            "re_ohm": 5.3,
+            "le_mh": 0.5,
+            "mmd_g": 12.0,
+            "cms_m_per_n": 0.0004,
+            "rms_kg_per_s": 1.2,
+            "count": 1
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "peak_mm": 0.5641539505667074,
+            "values": [
+              0.5641539505667074,
+              0.06277944106004911,
+              0.015531502757488153
+            ],
+            "quantity": "one_way_peak_displacement"
+          },
+          "mmd_correction_g": 0.0,
+          "warnings": [],
+          "scale_convention": "engineering jw*U/S acceleration scale applied to exp(+ikr) solver fields as complex conjugates",
+          "source_id": "source-c",
+          "source_area_m2": 0.020999999999999998
+        }
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        56.95984834300344,
+        65.851785109319,
+        65.76114876776091
+      ],
+      "phase_degrees": [
+        -16.65776562171781,
+        45.805902100437365,
+        78.10381780292046
+      ]
+    }
+  },
+  "cad/metal/prescribed": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"metal\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "metal",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "82c12b92cada4a8b9ecb1397d2ba1ae1e997f63c2cb97fe9d15d9aa55a4f5a68",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "pressure::left": "95ce84e348f0e4005dfa461054149a460c837b5dc383375c373349ec903de1c9",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "6455e6238dd57d5b71ce79de6fd34becf878355e30dc257535ec35562568670e",
+      "metadata::right": "9563eb112547ff2f6a46a932da1f321eca2d8552976230ace95b1005a8ad4ea3"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            13.010299956639813,
+            13.010299956639813,
+            13.010299956639813
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        16.53212513775344,
+        16.53212513775344,
+        16.53212513775344
+      ],
+      "phase_degrees": [
+        63.43494882292201,
+        63.43494882292201,
+        63.43494882292201
+      ]
+    }
+  },
+  "cad/metal/lem": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":{\"sd_cm2\":210.0,\"bl_t_m\":10.5,\"re_ohm\":5.3,\"le_mh\":0.5,\"le2_mh\":null,\"re2_ohm\":null,\"mmd_g\":12.0,\"mms_g\":null,\"cms_m_per_n\":0.0004,\"vas_l\":null,\"fs_hz\":null,\"rms_kg_per_s\":1.2,\"qms\":null,\"xmax_mm\":null,\"power_w\":null,\"z_nom_ohm\":null,\"count\":1,\"rear_volume_l\":null,\"label\":null}}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"metal\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": {
+              "sd_cm2": 210.0,
+              "bl_t_m": 10.5,
+              "re_ohm": 5.3,
+              "le_mh": 0.5,
+              "le2_mh": null,
+              "re2_ohm": null,
+              "mmd_g": 12.0,
+              "mms_g": null,
+              "cms_m_per_n": 0.0004,
+              "vas_l": null,
+              "fs_hz": null,
+              "rms_kg_per_s": 1.2,
+              "qms": null,
+              "xmax_mm": null,
+              "power_w": null,
+              "z_nom_ohm": null,
+              "count": 1,
+              "rear_volume_l": null,
+              "label": null
+            }
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "metal",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "82c12b92cada4a8b9ecb1397d2ba1ae1e997f63c2cb97fe9d15d9aa55a4f5a68",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "pressure::left": "95ce84e348f0e4005dfa461054149a460c837b5dc383375c373349ec903de1c9",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "7b889a7a60f27abb086f0e8f4766471ed1816b1c591d0692f8fe1fe66ea75929",
+      "metadata::right": "0ab8c4e06841fd2bcfb69b068ea8513f9401d985004e525d0876e3dd0c40a1cf"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            56.95514740825257,
+            65.84234380289642,
+            65.75146429668781
+          ],
+          "phase_degrees": [
+            -16.836960569542523,
+            45.786099489672495,
+            78.12055002485643
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            15.527474575980381,
+            5.495981911088919,
+            5.372479923150835
+          ],
+          "imaginary": [
+            -25.48620763858787,
+            -1.35112206369713,
+            1.7006592847070787
+          ]
+        },
+        "driver": {
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "label": null,
+          "spec": {
+            "sd_cm2": 210.0,
+            "bl_t_m": 10.5,
+            "re_ohm": 5.3,
+            "le_mh": 0.5,
+            "mmd_g": 12.0,
+            "cms_m_per_n": 0.0004,
+            "rms_kg_per_s": 1.2,
+            "count": 1
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "peak_mm": 0.5641539505667074,
+            "values": [
+              0.5641539505667074,
+              0.06277944106004911,
+              0.015531502757488153
+            ],
+            "quantity": "one_way_peak_displacement"
+          },
+          "mmd_correction_g": 0.0,
+          "warnings": [],
+          "scale_convention": "engineering jw*U/S acceleration scale applied to exp(+ikr) solver fields as complex conjugates",
+          "source_id": "source-c",
+          "source_area_m2": 0.020999999999999998
+        }
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        56.95984834300344,
+        65.851785109319,
+        65.76114876776091
+      ],
+      "phase_degrees": [
+        -16.65776562171781,
+        45.805902100437365,
+        78.10381780292046
+      ]
+    }
+  },
+  "file/beat-cpu/prescribed": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "764d0755f31f1b2c4921e3341704d330fb811cbbf59fee4f2a1d5be3b5cc6ff7",
+      "observation_planes": "742ae228710610314a85964459841df3225c0bec2ef3e7bd5e74a9199eca96c1",
+      "pressure::left": "7dd8f320bb51749b0b62e07eeb7ee4b0213554651a5dbb8fdc254f96ca5ac0cc",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "3f32812bccf982590df5bb8d0cc0d49f409dc5535127468594b62bbd9792c70b",
+      "metadata::right": "9563eb112547ff2f6a46a932da1f321eca2d8552976230ace95b1005a8ad4ea3"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            13.010299956639813,
+            13.010299956639813,
+            13.010299956639813
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        16.53212513775344,
+        16.53212513775344,
+        16.53212513775344
+      ],
+      "phase_degrees": [
+        63.43494882292201,
+        63.43494882292201,
+        63.43494882292201
+      ]
+    }
+  },
+  "file/beat-cpu/lem": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":{\"sd_cm2\":210.0,\"bl_t_m\":10.5,\"re_ohm\":5.3,\"le_mh\":0.5,\"le2_mh\":null,\"re2_ohm\":null,\"mmd_g\":12.0,\"mms_g\":null,\"cms_m_per_n\":0.0004,\"vas_l\":null,\"fs_hz\":null,\"rms_kg_per_s\":1.2,\"qms\":null,\"xmax_mm\":null,\"power_w\":null,\"z_nom_ohm\":null,\"count\":1,\"rear_volume_l\":null,\"label\":null}}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": {
+              "sd_cm2": 210.0,
+              "bl_t_m": 10.5,
+              "re_ohm": 5.3,
+              "le_mh": 0.5,
+              "le2_mh": null,
+              "re2_ohm": null,
+              "mmd_g": 12.0,
+              "mms_g": null,
+              "cms_m_per_n": 0.0004,
+              "vas_l": null,
+              "fs_hz": null,
+              "rms_kg_per_s": 1.2,
+              "qms": null,
+              "xmax_mm": null,
+              "power_w": null,
+              "z_nom_ohm": null,
+              "count": 1,
+              "rear_volume_l": null,
+              "label": null
+            }
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "764d0755f31f1b2c4921e3341704d330fb811cbbf59fee4f2a1d5be3b5cc6ff7",
+      "observation_planes": "742ae228710610314a85964459841df3225c0bec2ef3e7bd5e74a9199eca96c1",
+      "pressure::left": "7dd8f320bb51749b0b62e07eeb7ee4b0213554651a5dbb8fdc254f96ca5ac0cc",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "ca44c03946290ea1dc2e54a1f8912ca35e514d9412b30fb017f753c79cf0ab89",
+      "metadata::right": "0ab8c4e06841fd2bcfb69b068ea8513f9401d985004e525d0876e3dd0c40a1cf"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            56.95514740825257,
+            65.84234380289642,
+            65.75146429668781
+          ],
+          "phase_degrees": [
+            -16.836960569542523,
+            45.786099489672495,
+            78.12055002485643
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            15.527474575980381,
+            5.495981911088919,
+            5.372479923150835
+          ],
+          "imaginary": [
+            -25.48620763858787,
+            -1.35112206369713,
+            1.7006592847070787
+          ]
+        },
+        "driver": {
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "label": null,
+          "spec": {
+            "sd_cm2": 210.0,
+            "bl_t_m": 10.5,
+            "re_ohm": 5.3,
+            "le_mh": 0.5,
+            "mmd_g": 12.0,
+            "cms_m_per_n": 0.0004,
+            "rms_kg_per_s": 1.2,
+            "count": 1
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "peak_mm": 0.5641539505667074,
+            "values": [
+              0.5641539505667074,
+              0.06277944106004911,
+              0.015531502757488153
+            ],
+            "quantity": "one_way_peak_displacement"
+          },
+          "mmd_correction_g": 0.0,
+          "warnings": [],
+          "scale_convention": "engineering jw*U/S acceleration scale applied to exp(+ikr) solver fields as complex conjugates",
+          "source_id": "source-c",
+          "source_area_m2": 0.020999999999999998
+        }
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        56.95984834300344,
+        65.851785109319,
+        65.76114876776091
+      ],
+      "phase_degrees": [
+        -16.65776562171781,
+        45.805902100437365,
+        78.10381780292046
+      ]
+    }
+  },
+  "file/bempp/prescribed": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"bempp\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "bempp",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "82c12b92cada4a8b9ecb1397d2ba1ae1e997f63c2cb97fe9d15d9aa55a4f5a68",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "pressure::left": "95ce84e348f0e4005dfa461054149a460c837b5dc383375c373349ec903de1c9",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "6455e6238dd57d5b71ce79de6fd34becf878355e30dc257535ec35562568670e",
+      "metadata::right": "9563eb112547ff2f6a46a932da1f321eca2d8552976230ace95b1005a8ad4ea3"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            13.010299956639813,
+            13.010299956639813,
+            13.010299956639813
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        16.53212513775344,
+        16.53212513775344,
+        16.53212513775344
+      ],
+      "phase_degrees": [
+        63.43494882292201,
+        63.43494882292201,
+        63.43494882292201
+      ]
+    }
+  },
+  "file/bempp/lem": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":{\"sd_cm2\":210.0,\"bl_t_m\":10.5,\"re_ohm\":5.3,\"le_mh\":0.5,\"le2_mh\":null,\"re2_ohm\":null,\"mmd_g\":12.0,\"mms_g\":null,\"cms_m_per_n\":0.0004,\"vas_l\":null,\"fs_hz\":null,\"rms_kg_per_s\":1.2,\"qms\":null,\"xmax_mm\":null,\"power_w\":null,\"z_nom_ohm\":null,\"count\":1,\"rear_volume_l\":null,\"label\":null}}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"bempp\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": {
+              "sd_cm2": 210.0,
+              "bl_t_m": 10.5,
+              "re_ohm": 5.3,
+              "le_mh": 0.5,
+              "le2_mh": null,
+              "re2_ohm": null,
+              "mmd_g": 12.0,
+              "mms_g": null,
+              "cms_m_per_n": 0.0004,
+              "vas_l": null,
+              "fs_hz": null,
+              "rms_kg_per_s": 1.2,
+              "qms": null,
+              "xmax_mm": null,
+              "power_w": null,
+              "z_nom_ohm": null,
+              "count": 1,
+              "rear_volume_l": null,
+              "label": null
+            }
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "bempp",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "82c12b92cada4a8b9ecb1397d2ba1ae1e997f63c2cb97fe9d15d9aa55a4f5a68",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "pressure::left": "95ce84e348f0e4005dfa461054149a460c837b5dc383375c373349ec903de1c9",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "7b889a7a60f27abb086f0e8f4766471ed1816b1c591d0692f8fe1fe66ea75929",
+      "metadata::right": "0ab8c4e06841fd2bcfb69b068ea8513f9401d985004e525d0876e3dd0c40a1cf"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            56.95514740825257,
+            65.84234380289642,
+            65.75146429668781
+          ],
+          "phase_degrees": [
+            -16.836960569542523,
+            45.786099489672495,
+            78.12055002485643
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            15.527474575980381,
+            5.495981911088919,
+            5.372479923150835
+          ],
+          "imaginary": [
+            -25.48620763858787,
+            -1.35112206369713,
+            1.7006592847070787
+          ]
+        },
+        "driver": {
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "label": null,
+          "spec": {
+            "sd_cm2": 210.0,
+            "bl_t_m": 10.5,
+            "re_ohm": 5.3,
+            "le_mh": 0.5,
+            "mmd_g": 12.0,
+            "cms_m_per_n": 0.0004,
+            "rms_kg_per_s": 1.2,
+            "count": 1
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "peak_mm": 0.5641539505667074,
+            "values": [
+              0.5641539505667074,
+              0.06277944106004911,
+              0.015531502757488153
+            ],
+            "quantity": "one_way_peak_displacement"
+          },
+          "mmd_correction_g": 0.0,
+          "warnings": [],
+          "scale_convention": "engineering jw*U/S acceleration scale applied to exp(+ikr) solver fields as complex conjugates",
+          "source_id": "source-c",
+          "source_area_m2": 0.020999999999999998
+        }
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        56.95984834300344,
+        65.851785109319,
+        65.76114876776091
+      ],
+      "phase_degrees": [
+        -16.65776562171781,
+        45.805902100437365,
+        78.10381780292046
+      ]
+    }
+  },
+  "file/metal/prescribed": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":null}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"metal\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": null
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "metal",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "82c12b92cada4a8b9ecb1397d2ba1ae1e997f63c2cb97fe9d15d9aa55a4f5a68",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "pressure::left": "95ce84e348f0e4005dfa461054149a460c837b5dc383375c373349ec903de1c9",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "6455e6238dd57d5b71ce79de6fd34becf878355e30dc257535ec35562568670e",
+      "metadata::right": "9563eb112547ff2f6a46a932da1f321eca2d8552976230ace95b1005a8ad4ea3"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            13.010299956639813,
+            13.010299956639813,
+            13.010299956639813
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        16.53212513775344,
+        16.53212513775344,
+        16.53212513775344
+      ],
+      "phase_degrees": [
+        63.43494882292201,
+        63.43494882292201,
+        63.43494882292201
+      ]
+    }
+  },
+  "file/metal/lem": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"normal\",\"driver\":{\"sd_cm2\":210.0,\"bl_t_m\":10.5,\"re_ohm\":5.3,\"le_mh\":0.5,\"le2_mh\":null,\"re2_ohm\":null,\"mmd_g\":12.0,\"mms_g\":null,\"cms_m_per_n\":0.0004,\"vas_l\":null,\"fs_hz\":null,\"rms_kg_per_s\":1.2,\"qms\":null,\"xmax_mm\":null,\"power_w\":null,\"z_nom_ohm\":null,\"count\":1,\"rear_volume_l\":null,\"label\":null}}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"metal\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "normal",
+            "driver": {
+              "sd_cm2": 210.0,
+              "bl_t_m": 10.5,
+              "re_ohm": 5.3,
+              "le_mh": 0.5,
+              "le2_mh": null,
+              "re2_ohm": null,
+              "mmd_g": 12.0,
+              "mms_g": null,
+              "cms_m_per_n": 0.0004,
+              "vas_l": null,
+              "fs_hz": null,
+              "rms_kg_per_s": 1.2,
+              "qms": null,
+              "xmax_mm": null,
+              "power_w": null,
+              "z_nom_ohm": null,
+              "count": 1,
+              "rear_volume_l": null,
+              "label": null
+            }
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "metal",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "82c12b92cada4a8b9ecb1397d2ba1ae1e997f63c2cb97fe9d15d9aa55a4f5a68",
+      "observation_planes": "7be2feb77cefd6a03f207895f8ed60ada3ae4f0105ec5d003c6374110f92bd82",
+      "pressure::left": "95ce84e348f0e4005dfa461054149a460c837b5dc383375c373349ec903de1c9",
+      "metadata::left": "5cc698c7c2d3e287b3732ff1231e5f30d170dc0396aca7ddaad2ed3da91bde8e",
+      "pressure::right": "7b889a7a60f27abb086f0e8f4766471ed1816b1c591d0692f8fe1fe66ea75929",
+      "metadata::right": "0ab8c4e06841fd2bcfb69b068ea8513f9401d985004e525d0876e3dd0c40a1cf"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            6.9897000433601875,
+            6.9897000433601875,
+            6.9897000433601875
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03042658335807268,
+            0.1521329167903634,
+            0.3042658335807268
+          ],
+          "imaginary": [
+            0.01521329167903634,
+            0.0760664583951817,
+            0.1521329167903634
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            56.95514740825257,
+            65.84234380289642,
+            65.75146429668781
+          ],
+          "phase_degrees": [
+            -16.836960569542523,
+            45.786099489672495,
+            78.12055002485643
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            15.527474575980381,
+            5.495981911088919,
+            5.372479923150835
+          ],
+          "imaginary": [
+            -25.48620763858787,
+            -1.35112206369713,
+            1.7006592847070787
+          ]
+        },
+        "driver": {
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "label": null,
+          "spec": {
+            "sd_cm2": 210.0,
+            "bl_t_m": 10.5,
+            "re_ohm": 5.3,
+            "le_mh": 0.5,
+            "mmd_g": 12.0,
+            "cms_m_per_n": 0.0004,
+            "rms_kg_per_s": 1.2,
+            "count": 1
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "peak_mm": 0.5641539505667074,
+            "values": [
+              0.5641539505667074,
+              0.06277944106004911,
+              0.015531502757488153
+            ],
+            "quantity": "one_way_peak_displacement"
+          },
+          "mmd_correction_g": 0.0,
+          "warnings": [],
+          "scale_convention": "engineering jw*U/S acceleration scale applied to exp(+ikr) solver fields as complex conjugates",
+          "source_id": "source-c",
+          "source_area_m2": 0.020999999999999998
+        }
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        56.95984834300344,
+        65.851785109319,
+        65.76114876776091
+      ],
+      "phase_degrees": [
+        -16.65776562171781,
+        45.805902100437365,
+        78.10381780292046
+      ]
+    }
+  },
+  "assembly/beat-cpu/coupled": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"required_features\":[\"wg-design-assembly-v1\"],\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"axial\",\"driver\":null,\"exterior_transducer\":{\"version\":1,\"re_ohm\":6.0,\"le_h\":0.0005,\"bl_n_per_a\":7.0,\"mmd_kg\":0.02,\"cms_m_per_n\":0.001,\"rms_n_s_per_m\":1.5,\"motion_axis\":[0.0,0.0,1.0]}},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"axial\",\"driver\":null,\"exterior_transducer\":{\"version\":1,\"re_ohm\":6.0,\"le_h\":0.0005,\"bl_n_per_a\":7.0,\"mmd_kg\":0.02,\"cms_m_per_n\":0.001,\"rms_n_s_per_m\":1.5,\"motion_axis\":[0.0,0.0,1.0]}}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "required_features": [
+          "wg-design-assembly-v1"
+        ],
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "axial",
+            "driver": null,
+            "exterior_transducer": {
+              "version": 1,
+              "re_ohm": 6.0,
+              "le_h": 0.0005,
+              "bl_n_per_a": 7.0,
+              "mmd_kg": 0.02,
+              "cms_m_per_n": 0.001,
+              "rms_n_s_per_m": 1.5,
+              "motion_axis": [
+                0.0,
+                0.0,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "axial",
+            "driver": null,
+            "exterior_transducer": {
+              "version": 1,
+              "re_ohm": 6.0,
+              "le_h": 0.0005,
+              "bl_n_per_a": 7.0,
+              "mmd_kg": 0.02,
+              "cms_m_per_n": 0.001,
+              "rms_n_s_per_m": 1.5,
+              "motion_axis": [
+                0.0,
+                0.0,
+                1.0
+              ]
+            }
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "764d0755f31f1b2c4921e3341704d330fb811cbbf59fee4f2a1d5be3b5cc6ff7",
+      "observation_planes": "742ae228710610314a85964459841df3225c0bec2ef3e7bd5e74a9199eca96c1",
+      "sphere_theta_deg": "f4ef1b3aa96e61dfe5672f3d6b62173283106001f9a707ac420bdc55e51f09e0",
+      "sphere_phi_deg": "81cd6b5074659d0823b6361236ec91f611f9e13fe997fd85c1f0b0a471473bce",
+      "pressure::left": "9278ccd36bf2d29c8100ffb9564560fa6714fd4634f0ed7df660494dc3d71122",
+      "sphere::left": "03a5b8daf06baa1d374959b2dcc29926ae2ba4391e1cf5914c0d4312784ef029",
+      "metadata::left": "b46722673b447715350a958a2b03cd8d30e0563a1d8ad419a23775125e22bb5d",
+      "pressure::right": "72f9ccb797c3c4a8e92adb7457eca79d8b57b1f307b12b5c9698ec8cbd6bf7cb",
+      "sphere::right": "03091dbafbad2340b02473ecbd8b8d7f597b0eba5b44a9fd3a20cf7b503ff44c",
+      "metadata::right": "a7119ff3de5c97cbd3abc118aead8c039e1e283de99cb47ca33db423284d9c5c"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            100.96910013008056,
+            114.94850021680094,
+            120.96910013008056
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            5.66,
+            5.66,
+            5.66
+          ],
+          "imaginary": [
+            2.83,
+            2.83,
+            2.83
+          ]
+        },
+        "acoustic_impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03389778799984407,
+            0.03389778799984407,
+            0.03389778799984407
+          ],
+          "imaginary": [
+            0.038740329142678935,
+            0.038740329142678935,
+            0.038740329142678935
+          ]
+        },
+        "driver": {
+          "label": "left",
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "electrical_impedance_ohm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "real": [
+              5.66,
+              5.66,
+              5.66
+            ],
+            "imaginary": [
+              2.83,
+              2.83,
+              2.83
+            ]
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "values": [
+              5.032921210448704,
+              1.0065842420897408,
+              0.5032921210448704
+            ],
+            "peak_mm": 5.032921210448704,
+            "quantity": "one_way_peak_displacement"
+          }
+        }
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            106.98970004336019,
+            120.96910013008056,
+            126.98970004336019
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            5.66,
+            5.66,
+            5.66
+          ],
+          "imaginary": [
+            2.83,
+            2.83,
+            2.83
+          ]
+        },
+        "driver": {
+          "label": "right",
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "electrical_impedance_ohm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "real": [
+              5.66,
+              5.66,
+              5.66
+            ],
+            "imaginary": [
+              2.83,
+              2.83,
+              2.83
+            ]
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "values": [
+              5.032921210448704,
+              1.0065842420897408,
+              0.5032921210448704
+            ],
+            "peak_mm": 5.032921210448704,
+            "quantity": "one_way_peak_displacement"
+          }
+        }
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        110.51152522447381,
+        124.49092531119419,
+        130.51152522447381
+      ],
+      "phase_degrees": [
+        63.43494882292201,
+        63.43494882292201,
+        63.43494882292201
+      ]
+    }
+  },
+  "cad/beat-cpu/coupled": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"axial\",\"driver\":null,\"exterior_transducer\":{\"version\":1,\"re_ohm\":6.0,\"le_h\":0.0005,\"bl_n_per_a\":7.0,\"mmd_kg\":0.02,\"cms_m_per_n\":0.001,\"rms_n_s_per_m\":1.5,\"motion_axis\":[0.0,0.0,1.0]}},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"axial\",\"driver\":null,\"exterior_transducer\":{\"version\":1,\"re_ohm\":6.0,\"le_h\":0.0005,\"bl_n_per_a\":7.0,\"mmd_kg\":0.02,\"cms_m_per_n\":0.001,\"rms_n_s_per_m\":1.5,\"motion_axis\":[0.0,0.0,1.0]}}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "axial",
+            "driver": null,
+            "exterior_transducer": {
+              "version": 1,
+              "re_ohm": 6.0,
+              "le_h": 0.0005,
+              "bl_n_per_a": 7.0,
+              "mmd_kg": 0.02,
+              "cms_m_per_n": 0.001,
+              "rms_n_s_per_m": 1.5,
+              "motion_axis": [
+                0.0,
+                0.0,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "axial",
+            "driver": null,
+            "exterior_transducer": {
+              "version": 1,
+              "re_ohm": 6.0,
+              "le_h": 0.0005,
+              "bl_n_per_a": 7.0,
+              "mmd_kg": 0.02,
+              "cms_m_per_n": 0.001,
+              "rms_n_s_per_m": 1.5,
+              "motion_axis": [
+                0.0,
+                0.0,
+                1.0
+              ]
+            }
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "764d0755f31f1b2c4921e3341704d330fb811cbbf59fee4f2a1d5be3b5cc6ff7",
+      "observation_planes": "742ae228710610314a85964459841df3225c0bec2ef3e7bd5e74a9199eca96c1",
+      "sphere_theta_deg": "f4ef1b3aa96e61dfe5672f3d6b62173283106001f9a707ac420bdc55e51f09e0",
+      "sphere_phi_deg": "81cd6b5074659d0823b6361236ec91f611f9e13fe997fd85c1f0b0a471473bce",
+      "pressure::left": "9278ccd36bf2d29c8100ffb9564560fa6714fd4634f0ed7df660494dc3d71122",
+      "sphere::left": "03a5b8daf06baa1d374959b2dcc29926ae2ba4391e1cf5914c0d4312784ef029",
+      "metadata::left": "b46722673b447715350a958a2b03cd8d30e0563a1d8ad419a23775125e22bb5d",
+      "pressure::right": "72f9ccb797c3c4a8e92adb7457eca79d8b57b1f307b12b5c9698ec8cbd6bf7cb",
+      "sphere::right": "03091dbafbad2340b02473ecbd8b8d7f597b0eba5b44a9fd3a20cf7b503ff44c",
+      "metadata::right": "a7119ff3de5c97cbd3abc118aead8c039e1e283de99cb47ca33db423284d9c5c"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            100.96910013008056,
+            114.94850021680094,
+            120.96910013008056
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            5.66,
+            5.66,
+            5.66
+          ],
+          "imaginary": [
+            2.83,
+            2.83,
+            2.83
+          ]
+        },
+        "acoustic_impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03389778799984407,
+            0.03389778799984407,
+            0.03389778799984407
+          ],
+          "imaginary": [
+            0.038740329142678935,
+            0.038740329142678935,
+            0.038740329142678935
+          ]
+        },
+        "driver": {
+          "label": "left",
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "electrical_impedance_ohm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "real": [
+              5.66,
+              5.66,
+              5.66
+            ],
+            "imaginary": [
+              2.83,
+              2.83,
+              2.83
+            ]
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "values": [
+              5.032921210448704,
+              1.0065842420897408,
+              0.5032921210448704
+            ],
+            "peak_mm": 5.032921210448704,
+            "quantity": "one_way_peak_displacement"
+          }
+        }
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            106.98970004336019,
+            120.96910013008056,
+            126.98970004336019
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            5.66,
+            5.66,
+            5.66
+          ],
+          "imaginary": [
+            2.83,
+            2.83,
+            2.83
+          ]
+        },
+        "driver": {
+          "label": "right",
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "electrical_impedance_ohm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "real": [
+              5.66,
+              5.66,
+              5.66
+            ],
+            "imaginary": [
+              2.83,
+              2.83,
+              2.83
+            ]
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "values": [
+              5.032921210448704,
+              1.0065842420897408,
+              0.5032921210448704
+            ],
+            "peak_mm": 5.032921210448704,
+            "quantity": "one_way_peak_displacement"
+          }
+        }
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        110.51152522447381,
+        124.49092531119419,
+        130.51152522447381
+      ],
+      "phase_degrees": [
+        63.43494882292201,
+        63.43494882292201,
+        63.43494882292201
+      ]
+    }
+  },
+  "file/beat-cpu/coupled": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"axial\",\"driver\":null,\"exterior_transducer\":{\"version\":1,\"re_ohm\":6.0,\"le_h\":0.0005,\"bl_n_per_a\":7.0,\"mmd_kg\":0.02,\"cms_m_per_n\":0.001,\"rms_n_s_per_m\":1.5,\"motion_axis\":[0.0,0.0,1.0]}},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"axial\",\"driver\":null,\"exterior_transducer\":{\"version\":1,\"re_ohm\":6.0,\"le_h\":0.0005,\"bl_n_per_a\":7.0,\"mmd_kg\":0.02,\"cms_m_per_n\":0.001,\"rms_n_s_per_m\":1.5,\"motion_axis\":[0.0,0.0,1.0]}}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "axial",
+            "driver": null,
+            "exterior_transducer": {
+              "version": 1,
+              "re_ohm": 6.0,
+              "le_h": 0.0005,
+              "bl_n_per_a": 7.0,
+              "mmd_kg": 0.02,
+              "cms_m_per_n": 0.001,
+              "rms_n_s_per_m": 1.5,
+              "motion_axis": [
+                0.0,
+                0.0,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "axial",
+            "driver": null,
+            "exterior_transducer": {
+              "version": 1,
+              "re_ohm": 6.0,
+              "le_h": 0.0005,
+              "bl_n_per_a": 7.0,
+              "mmd_kg": 0.02,
+              "cms_m_per_n": 0.001,
+              "rms_n_s_per_m": 1.5,
+              "motion_axis": [
+                0.0,
+                0.0,
+                1.0
+              ]
+            }
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "764d0755f31f1b2c4921e3341704d330fb811cbbf59fee4f2a1d5be3b5cc6ff7",
+      "observation_planes": "742ae228710610314a85964459841df3225c0bec2ef3e7bd5e74a9199eca96c1",
+      "sphere_theta_deg": "f4ef1b3aa96e61dfe5672f3d6b62173283106001f9a707ac420bdc55e51f09e0",
+      "sphere_phi_deg": "81cd6b5074659d0823b6361236ec91f611f9e13fe997fd85c1f0b0a471473bce",
+      "pressure::left": "9278ccd36bf2d29c8100ffb9564560fa6714fd4634f0ed7df660494dc3d71122",
+      "sphere::left": "03a5b8daf06baa1d374959b2dcc29926ae2ba4391e1cf5914c0d4312784ef029",
+      "metadata::left": "b46722673b447715350a958a2b03cd8d30e0563a1d8ad419a23775125e22bb5d",
+      "pressure::right": "72f9ccb797c3c4a8e92adb7457eca79d8b57b1f307b12b5c9698ec8cbd6bf7cb",
+      "sphere::right": "03091dbafbad2340b02473ecbd8b8d7f597b0eba5b44a9fd3a20cf7b503ff44c",
+      "metadata::right": "a7119ff3de5c97cbd3abc118aead8c039e1e283de99cb47ca33db423284d9c5c"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            100.96910013008056,
+            114.94850021680094,
+            120.96910013008056
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            5.66,
+            5.66,
+            5.66
+          ],
+          "imaginary": [
+            2.83,
+            2.83,
+            2.83
+          ]
+        },
+        "acoustic_impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            0.03389778799984407,
+            0.03389778799984407,
+            0.03389778799984407
+          ],
+          "imaginary": [
+            0.038740329142678935,
+            0.038740329142678935,
+            0.038740329142678935
+          ]
+        },
+        "driver": {
+          "label": "left",
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "electrical_impedance_ohm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "real": [
+              5.66,
+              5.66,
+              5.66
+            ],
+            "imaginary": [
+              2.83,
+              2.83,
+              2.83
+            ]
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "values": [
+              5.032921210448704,
+              1.0065842420897408,
+              0.5032921210448704
+            ],
+            "peak_mm": 5.032921210448704,
+            "quantity": "one_way_peak_displacement"
+          }
+        }
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            106.98970004336019,
+            120.96910013008056,
+            126.98970004336019
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            5.66,
+            5.66,
+            5.66
+          ],
+          "imaginary": [
+            2.83,
+            2.83,
+            2.83
+          ]
+        },
+        "driver": {
+          "label": "right",
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "electrical_impedance_ohm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "real": [
+              5.66,
+              5.66,
+              5.66
+            ],
+            "imaginary": [
+              2.83,
+              2.83,
+              2.83
+            ]
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "values": [
+              5.032921210448704,
+              1.0065842420897408,
+              0.5032921210448704
+            ],
+            "peak_mm": 5.032921210448704,
+            "quantity": "one_way_peak_displacement"
+          }
+        }
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        110.51152522447381,
+        124.49092531119419,
+        130.51152522447381
+      ],
+      "phase_degrees": [
+        63.43494882292201,
+        63.43494882292201,
+        63.43494882292201
+      ]
+    }
+  },
+  "assembly/beat-cpu/mixed": {
+    "request_json": "{\"geometry\":{\"type\":\"imported\",\"required_features\":[\"wg-design-assembly-v1\"],\"ingest_id\":\"wgi_00000000000000000000000000\",\"manifest_sha256\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"artifact_sha256\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"drive_channels\":[{\"id\":\"left\",\"source_ids\":[\"source-a\"],\"motion\":\"normal\",\"driver\":null},{\"id\":\"right\",\"source_ids\":[\"source-c\"],\"motion\":\"axial\",\"driver\":null,\"exterior_transducer\":{\"version\":1,\"re_ohm\":6.0,\"le_h\":0.0005,\"bl_n_per_a\":7.0,\"mmd_kg\":0.02,\"cms_m_per_n\":0.001,\"rms_n_s_per_m\":1.5,\"motion_axis\":[0.0,0.0,1.0]}}],\"combine\":null,\"drive_voltage_v\":2.83,\"rg_ohm\":0.0,\"max_drive_voltage_v\":null,\"mesh\":{\"rigid_size_mm\":8.0,\"transition_mm\":20.0,\"source_size_mm\":{\"source-a\":3.0,\"source-c\":4.0}},\"acknowledged_findings\":[],\"skipped_source_ids\":[],\"exterior_only\":false,\"passive_cardioid_rear_volume_l\":null,\"passive_cardioid_port_length_mm\":null,\"model_port_area_m2\":null,\"bem_port_area_m2\":null,\"port_area_source\":null,\"passive_cardioid_foam_resistance_pa_s_m3\":null,\"passive_cardioid_invert_port\":true,\"passive_cardioid_coupled\":false},\"options\":{\"engine\":\"beat-cpu\",\"accuracy\":\"fast\",\"solver_mode\":\"full_3d\",\"symmetry\":\"auto\",\"frequency_range\":null,\"num_frequencies\":null,\"frequency_spacing\":\"log\",\"frequencies_hz\":[100.0,500.0,1000.0],\"verbose\":false,\"mesh_ladder\":\"off\",\"mesh_validation_mode\":\"warn\",\"polar_config\":{\"angle_range\":[-180.0,180.0,37],\"angle_step\":null,\"distance\":2.0,\"norm_angle\":5.0,\"inclination\":45.0,\"enabled_axes\":[\"horizontal\",\"vertical\",\"diagonal\"],\"observation_origin\":\"mouth\",\"spherical_sampling\":false,\"field_plane\":false,\"spherical_theta_count\":37,\"spherical_phi_count\":72},\"ground_plane\":{\"enabled\":false,\"axis\":\"y\",\"height_m\":1.0},\"stage_delay_ms\":30},\"label\":null,\"parent_job_id\":null,\"client_request_id\":null,\"client_metadata\":{}}",
+    "setup": {
+      "geometry": {
+        "required_features": [
+          "wg-design-assembly-v1"
+        ],
+        "drive_channels": [
+          {
+            "id": "left",
+            "source_ids": [
+              "source-a"
+            ],
+            "motion": "normal",
+            "driver": null
+          },
+          {
+            "id": "right",
+            "source_ids": [
+              "source-c"
+            ],
+            "motion": "axial",
+            "driver": null,
+            "exterior_transducer": {
+              "version": 1,
+              "re_ohm": 6.0,
+              "le_h": 0.0005,
+              "bl_n_per_a": 7.0,
+              "mmd_kg": 0.02,
+              "cms_m_per_n": 0.001,
+              "rms_n_s_per_m": 1.5,
+              "motion_axis": [
+                0.0,
+                0.0,
+                1.0
+              ]
+            }
+          }
+        ],
+        "combine": null,
+        "drive_voltage_v": 2.83,
+        "rg_ohm": 0.0,
+        "max_drive_voltage_v": null,
+        "mesh": {
+          "rigid_size_mm": 8.0,
+          "transition_mm": 20.0,
+          "source_size_mm": {
+            "source-a": 3.0,
+            "source-c": 4.0
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": false,
+        "passive_cardioid_rear_volume_l": null,
+        "passive_cardioid_port_length_mm": null,
+        "model_port_area_m2": null,
+        "bem_port_area_m2": null,
+        "port_area_source": null,
+        "passive_cardioid_foam_resistance_pa_s_m3": null,
+        "passive_cardioid_invert_port": true,
+        "passive_cardioid_coupled": false
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "fast",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "frequency_range": null,
+        "num_frequencies": null,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100.0,
+          500.0,
+          1000.0
+        ],
+        "verbose": false,
+        "mesh_ladder": "off",
+        "mesh_validation_mode": "warn",
+        "polar_config": {
+          "angle_range": [
+            -180.0,
+            180.0,
+            37
+          ],
+          "angle_step": null,
+          "distance": 2.0,
+          "norm_angle": 5.0,
+          "inclination": 45.0,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": false,
+          "spherical_theta_count": 37,
+          "spherical_phi_count": 72
+        },
+        "ground_plane": {
+          "enabled": false,
+          "axis": "y",
+          "height_m": 1.0
+        },
+        "stage_delay_ms": 30
+      }
+    },
+    "basis_arrays_sha256": {
+      "version": "7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8",
+      "phase_convention": "e4ba72525d6279aa2dd528e61f3e73702ff84654be2d666f69472a438f9ab1d6",
+      "channel_ids": "28352476ac1ba0cd30eb51cd0f2e094bc07508b89f1e3772bda74685f9240840",
+      "frequencies_hz": "8e700071fbb664caf119768e31fec514cce1a939c65a84826109ab9104f12be1",
+      "observation_angles_deg": "764d0755f31f1b2c4921e3341704d330fb811cbbf59fee4f2a1d5be3b5cc6ff7",
+      "observation_planes": "742ae228710610314a85964459841df3225c0bec2ef3e7bd5e74a9199eca96c1",
+      "sphere_theta_deg": "f4ef1b3aa96e61dfe5672f3d6b62173283106001f9a707ac420bdc55e51f09e0",
+      "sphere_phi_deg": "81cd6b5074659d0823b6361236ec91f611f9e13fe997fd85c1f0b0a471473bce",
+      "pressure::left": "9278ccd36bf2d29c8100ffb9564560fa6714fd4634f0ed7df660494dc3d71122",
+      "sphere::left": "03a5b8daf06baa1d374959b2dcc29926ae2ba4391e1cf5914c0d4312784ef029",
+      "metadata::left": "5379533942195ecabf9ad80b7ae1ceba20359ab0eff8244ca4811ae6862125ab",
+      "pressure::right": "72f9ccb797c3c4a8e92adb7457eca79d8b57b1f307b12b5c9698ec8cbd6bf7cb",
+      "sphere::right": "03091dbafbad2340b02473ecbd8b8d7f597b0eba5b44a9fd3a20cf7b503ff44c",
+      "metadata::right": "a7119ff3de5c97cbd3abc118aead8c039e1e283de99cb47ca33db423284d9c5c"
+    },
+    "channels": {
+      "left": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            100.96910013008056,
+            114.94850021680094,
+            120.96910013008056
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "driver": null
+      },
+      "right": {
+        "spl_on_axis": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "spl": [
+            106.98970004336019,
+            120.96910013008056,
+            126.98970004336019
+          ],
+          "phase_degrees": [
+            63.43494882292201,
+            63.43494882292201,
+            63.43494882292201
+          ]
+        },
+        "impedance": {
+          "frequencies": [
+            100.0,
+            500.0,
+            1000.0
+          ],
+          "real": [
+            5.66,
+            5.66,
+            5.66
+          ],
+          "imaginary": [
+            2.83,
+            2.83,
+            2.83
+          ]
+        },
+        "driver": {
+          "label": "right",
+          "drive_voltage_v": 2.83,
+          "rg_ohm": 0.0,
+          "electrical_impedance_ohm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "real": [
+              5.66,
+              5.66,
+              5.66
+            ],
+            "imaginary": [
+              2.83,
+              2.83,
+              2.83
+            ]
+          },
+          "cone_excursion_mm": {
+            "frequencies": [
+              100.0,
+              500.0,
+              1000.0
+            ],
+            "values": [
+              5.032921210448704,
+              1.0065842420897408,
+              0.5032921210448704
+            ],
+            "peak_mm": 5.032921210448704,
+            "quantity": "one_way_peak_displacement"
+          }
+        }
+      }
+    },
+    "recombined_spl": {
+      "frequencies": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "spl": [
+        110.51152522447381,
+        124.49092531119419,
+        130.51152522447381
+      ],
+      "phase_degrees": [
+        63.43494882292201,
+        63.43494882292201,
+        63.43494882292201
+      ]
+    }
+  }
+}

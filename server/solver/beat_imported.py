@@ -416,6 +416,7 @@ def solve_imported_beat_from_msh_text(
                     "observation_spl_db": spl,
                     "observation_pressure_complex": pressure,
                     "impedance": impedance,
+                    "excitation_normalization": entry.get("excitation_normalization", "acceleration_legacy"),
                 },
                 config=_holder["config"],
                 context=_context,

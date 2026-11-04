@@ -13,6 +13,7 @@ from server.jobs.models import ImportedGeometrySource, SolveRequest
 
 from .context import SolverContext
 from .driver_lem import channel_drive_scaling
+from .excitation_basis import pressure_per_velocity_scale
 from .field_traces_store import field_trace_retention_plan
 from .frequency_sweep import live_execution_frequencies
 from .imported import mesh_frequency_validation
@@ -273,6 +274,7 @@ def apply_channel_driver(
         channel.driver,
         drive_voltage_v=drive_voltage_v,
         rg_ohm=rg_ohm,
+        excitation_normalization=getattr(result, "excitation_normalization", "acceleration_legacy"),
     )
     scale_channel_result(result, scale_raw)
     payload["source_id"] = source_id
@@ -313,13 +315,22 @@ def normalize_prescribed_result(result: Any, geometry: ImportedGeometrySource, *
     their established acceleration normalization.
     """
 
-    if geometry.normalization_for_engine(engine) != "rms_velocity":
+    normalization = geometry.normalization_for_engine(engine)
+    explicit = (geometry.excitation_normalization is not None
+                or geometry.excitation_normalization_by_engine is not None)
+    if explicit:
+        result.excitation_normalization = normalization
+    if normalization != "rms_velocity":
         return
-    scale = -2j * np.pi * np.asarray(result.frequencies_hz, dtype=float)
+    scale = pressure_per_velocity_scale(result.frequencies_hz)
     scale_channel_result(result, scale)
     impedance = getattr(result, "impedance", None)
     if impedance is not None:
         result.impedance = np.asarray(impedance) * scale
+    if explicit and isinstance(getattr(result, "surface_pressure_avg", None), Mapping):
+        result.surface_pressure_avg = {
+            tag: np.asarray(pressure) * scale for tag, pressure in result.surface_pressure_avg.items()
+        }
 
 
 def prescribed_entry(entry: Mapping[str, Any], frequency_hz: float,
@@ -335,7 +346,9 @@ def prescribed_entry(entry: Mapping[str, Any], frequency_hz: float,
         target: np.asarray(entry[source])[None, ...]
         for source, target in fields.items() if entry.get(source) is not None})
     normalize_prescribed_result(native, geometry, engine=engine)
-    return {**entry, **{source: getattr(native, target)[0] for source, target in fields.items() if hasattr(native, target)}}
+    return {**entry, **{source: getattr(native, target)[0] for source, target in fields.items() if hasattr(native, target)},
+            **({"excitation_normalization": native.excitation_normalization}
+               if hasattr(native, "excitation_normalization") else {})}
 
 
 # Compatibility names for callers of the original conversion helper.

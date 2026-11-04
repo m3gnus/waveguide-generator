@@ -447,7 +447,7 @@ export function resolveExteriorDriverPolicy(channels: CadDriveChannel[], options
       ? 'Choose Auto or BEAT CPU, Metal, CUDA or ROCm for FEM drivers.'
       : 'Choose BEAT CPU or BEAT Metal for coupled exterior drivers.') : null,
     notice: fixed
-      ? 'This engine solves every woofer at fixed velocity (1 m/s RMS), without its driver. To solve the drivers, set Advanced backend under Solver to Automatic, BEAT CPU or BEAT Metal.'
+      ? `This engine solves every woofer at ${engine === 'bempp' ? 'unit acceleration (1 m/s²)' : 'fixed velocity (1 m/s RMS)'}, without its driver. To solve the drivers, set Advanced backend under Solver to Automatic, BEAT CPU or BEAT Metal.`
       : null,
   };
 }

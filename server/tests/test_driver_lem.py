@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from server.jobs.models import DriveChannel, DriverSpec
+from server.jobs.models import DriveChannel, DriverSpec, SolveRequest
 from server.solver.driver_lem import (
     DriverMassLimitError,
     channel_drive_scaling,
@@ -142,6 +142,36 @@ def test_self_impedance_matches_the_addin_seam_by_hand() -> None:
     )
     expected = np.conjugate(omega * (1.0 - 2.0j)) / 0.01
     assert z[0] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("surface_average", [False, True])
+def test_result_basis_drives_numerically_identical_lem_output(surface_average):
+    from types import SimpleNamespace
+    from server.solver.imported_channels import apply_channel_driver, normalize_prescribed_result
+
+    outputs = []
+    frequencies = np.asarray([100., 1000.])
+    for normalization in ("acceleration_legacy", "rms_velocity"):
+        request = SolveRequest.model_validate({"geometry": {
+            "type": "imported", "ingest_id": "wgi_" + "0" * 26,
+            "manifest_sha256": "sha256:" + "1" * 64, "artifact_sha256": "sha256:" + "2" * 64,
+            "excitation_normalization": normalization,
+            "drive_channels": [{"id": "driver", "source_ids": ["source-c"], "driver": _spec()}],
+        }, "options": {"frequencies_hz": frequencies.tolist()}})
+        result = SimpleNamespace(frequencies_hz=frequencies,
+                                 pressure_complex=np.full((2, 1, 1), 0.02 + 0.01j),
+                                 impedance=np.full(2, 0.01 + 0.02j))
+        if surface_average:
+            result.surface_pressure_avg = {103: result.impedance.copy()}
+        normalize_prescribed_result(result, request.geometry)
+        payload = apply_channel_driver(request.geometry.drive_channels[0], result,
+            {"sources": [{"id": "source-c", "observed": {"total_area_mm2": 21000.}}]},
+            {"source-c": 103}, drive_voltage_v=2.83, rg_ohm=0.)
+        outputs.append((result, payload))
+    np.testing.assert_allclose(outputs[1][0].pressure_complex, outputs[0][0].pressure_complex, rtol=1e-14)
+    for key in ("real", "imaginary"):
+        np.testing.assert_allclose(outputs[1][1]["electrical_impedance_ohm"][key],
+                                   outputs[0][1]["electrical_impedance_ohm"][key], rtol=1e-14)
 
 
 def test_channel_scaling_produces_electrical_picture_and_warnings() -> None:

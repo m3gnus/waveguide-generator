@@ -183,7 +183,8 @@ it.each(['metal', 'bempp', 'beat-cuda', 'beat-rocm'] as const)('owns both unsupp
   expect(coupled.channels).toEqual(before);
   const fixed = resolveExteriorDriverPolicy(channels, { engine }, 'fixed_velocity');
   expect(fixed.blocker).toBeNull();
-  expect(fixed.notice).toContain('fixed velocity');
+  expect(fixed.notice).toContain(engine === 'bempp' ? 'unit acceleration (1 m/s²)' : 'fixed velocity (1 m/s RMS)');
+  if (engine === 'bempp') expect(fixed.notice).not.toContain('1 m/s RMS');
   expect(fixed.channels[0].exterior_transducer).toBeUndefined();
   expect(channels).toEqual(before);
 });
