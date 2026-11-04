@@ -292,7 +292,7 @@ def test_cancelled_child_and_superseded_result_never_publish(tmp_path, monkeypat
     async def scenario():
         started = asyncio.Event()
         release = asyncio.Event()
-        async def compute(*_args):
+        async def compute(*_args, **_kwargs):
             started.set()
             await release.wait()
             return prepared
@@ -346,7 +346,7 @@ def test_api_orders_prepare_and_load_before_older_child_publication(tmp_path, mo
         app, runtime = app_for(tmp_path, store)
         started, release = asyncio.Event(), asyncio.Event()
         owner = api.prepare_registration
-        async def compute(body, cancel_cb=None):
+        async def compute(body, cancel_cb=None, **_kwargs):
             if body.units == "cm":
                 started.set()
                 await release.wait()
@@ -480,6 +480,41 @@ def test_refused_requested_cut_uses_full_memory_and_polar_domain(tmp_path, monke
         assert record["polar_grid_derivation"]["axes"]["vertical"]["minimum_deg"] == -180
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("mode", ["auto", "declared"])
+def test_historical_prepare_and_reimport_reconstruct_base_bytes(tmp_path, mode):
+    from pathlib import Path
+    from server.jobs.models_api import mount_models_api
+    from test_mesh_replay import app_for
+    from test_models_api import call
+
+    package = json.loads((Path(__file__).parent / "fixtures/mesh_replay" / f"file-cut-{mode}-df52fbd27.wgreplay").read_text())
+
+    async def scenario():
+        app, store, runtime, _engine = app_for(tmp_path)
+        mount_models_api(app)
+        try:
+            first = (await call(app, "POST", "/api/mesh-replay", package))["record"]
+            registration = package["registration"]
+            settings = {key: value for key, value in registration.items() if key not in {"filename", "msh_text"}}
+            path = f'/api/models/{first["model_id"]}/prepare'
+            reused = (await call(app, "POST", path, settings))["prepared"]
+            assert reused["ingest_id"] == first["ingest_id"]
+            for endpoint, body in [(path, settings), ("/api/models/files", registration)]:
+                retained = json.loads(store.get_ingest(reused["ingest_id"])["record_json"])
+                Path(retained["mesh_store_path"]).unlink()
+                rebuilt = (await call(app, "POST", endpoint, body))["prepared"]
+                assert rebuilt["msh_text"].encode() == package["solver_msh_text"].encode()
+                assert rebuilt["manifest_sha256"] == first["manifest_sha256"]
+                assert json.loads(store.get_ingest(rebuilt["ingest_id"])["record_json"])["mesh_content_sha256"] == package["solver_sha256"]
+                reused = rebuilt
+            # Same original, but different settings, is still a new cut request.
+            await call(app, "POST", path, {**settings, "units": "cm"}, expected=422)
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("intent", [{"auto_cut": True}, {"domain_planes": ["x0"]}, {"domain_planes": ["y0"]}, {"domain_planes": ["x0", "y0"]}])

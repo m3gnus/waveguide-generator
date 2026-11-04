@@ -263,6 +263,29 @@ def _has_whole_areas(record: Mapping[str, Any], whole_areas_mm2: Mapping[str, fl
     )
 
 
+def _retained_file_preparation(record: dict[str, Any]) -> FilePreparation:
+    file = record["source_file"]
+    transform = file["transform"]
+    return FilePreparation(
+        units=transform["units"], forward=transform["forward"], up=transform["up"],
+        source_tags=file["source_tags"], roles=file.get("roles"), auto_cut=file.get("auto_cut", False),
+        domain_planes=file.get("domain_planes", [] if file.get("auto_cut") else record.get("symmetry", {}).get("domain_planes", [])),
+        reflect_planes=file.get("reflect_planes"),
+        remove_lid_planes=file.get("remove_lid_planes", list(transform.get("removed_lids", {}))),
+    )
+
+
+def _historical_preparation(store: Any, body: MeshRegistration) -> bool:
+    model_id = file_model_id(_sha256(body.msh_text.encode("utf-8")))
+    settings = body.model_dump(include=set(FilePreparation.model_fields) - {"source_tags", "roles"})
+    for row in store.list_model_ingests(model_id):
+        previous = _retained_file_preparation(json.loads(row["record_json"]))
+        if (previous.model_dump(exclude={"source_tags", "roles"}) == settings
+                and previous.driven_roles() == body.driven_roles()):
+            return True
+    return False
+
+
 def _register_mesh(
     store: Any,
     data_dir: Path,
@@ -276,7 +299,8 @@ def _register_mesh(
     roles = body.driven_roles()
     mesh, transform = prepared if prepared is not None else prepare_file_mesh(original, body.units, body.forward, body.up,
                                       domain_planes=body.domain_planes, reflect_planes=body.reflect_planes,
-                                      remove_lid_planes=body.remove_lid_planes, roles=roles, auto_cut=body.auto_cut)
+                                      remove_lid_planes=body.remove_lid_planes, roles=roles, auto_cut=body.auto_cut,
+                                      historical_reconstruction=_historical_preparation(store, body))
     effective_planes = transform.get("domain_planes", body.domain_planes)
     _enforce_dense_solver_memory_ceiling(
         mesh.triangles, imported_symmetry_from_cut_planes(effective_planes).quadrants,
@@ -424,7 +448,7 @@ async def prepare_registration(
                "remove_lid_planes": body.remove_lid_planes, "roles": body.driven_roles(), "auto_cut": body.auto_cut,
                "historical_reconstruction": historical_reconstruction}
     # New imports refuse cutting in pure preparation, before any native work.
-    # Replay alone opts into reconstructing the historical preparation.
+    # Retained settings and replay opt into reconstructing historical preparations.
     preparation = await asyncio.to_thread(prepare_file_mesh_input, original, **options)
     if preparation.needs_native_cut:
         try:
@@ -440,7 +464,8 @@ async def register_mesh_async(
 ) -> dict[str, Any]:
     attempt = RequestCancellation(None, commit_guard=commit_guard, cancel_cb=cancel_cb)
     try:
-        prepared = await prepare_registration(body, attempt.check)
+        historical = await asyncio.to_thread(_historical_preparation, store, body)
+        prepared = await prepare_registration(body, attempt.check, historical_reconstruction=historical)
         attempt.check()
         # The collection hold lives in the publication thread until its final
         # store transaction settles, even if the awaiting HTTP task leaves.
@@ -713,14 +738,8 @@ def _file_import_memory(
             answer["previous_roles"] = matching_roles
         if set(current_names) != set(previous_names):
             continue
-        transform = file["transform"]
-        preparation = {
-            "units": transform["units"], "forward": transform["forward"], "up": transform["up"],
-            "roles": matching_roles,
-            "domain_planes": file.get("domain_planes", [] if file.get("auto_cut") else record.get("symmetry", {}).get("domain_planes", [])),
-            "reflect_planes": file.get("reflect_planes"),
-            "remove_lid_planes": file.get("remove_lid_planes", list(transform.get("removed_lids", {}))),
-        }
+        preparation = _retained_file_preparation(record).model_dump(exclude={"source_tags", "auto_cut"})
+        preparation["roles"] = matching_roles
         if file.get("auto_cut"):
             preparation["auto_cut"] = True
         saved = read_setup(store, previous_id, record["ingest_id"])

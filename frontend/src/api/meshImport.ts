@@ -35,6 +35,7 @@ export interface RegisteredMesh {
   msh_text: string;
 }
 export interface FilePreparation {
+  auto_cut?: boolean;
   units: string; forward: string; up: string;
   source_tags?: number[];
   roles?: Record<string, string>;

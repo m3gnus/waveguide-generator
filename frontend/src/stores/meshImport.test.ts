@@ -925,10 +925,10 @@ it('inspects remembered axes without replacing declared symmetry or sending setu
   expect(useMeshImportStore.getState().summary?.lids?.x0.candidate).toBe(true);
 });
 
-it('rebuilds missing retained artifacts through normal registration using the remembered settings', async () => {
+it.each([{ auto_cut: true, domain_planes: [] }, { domain_planes: ['x0', 'y0'] }])('rebuilds missing retained artifacts using exact historical settings %j', async historical => {
   const setup = setupOf({ frequencies_hz: [137, 211], engine: 'metal' }, 'axial');
   const previous = { filename: 'speaker.msh', updated_at: '2026-10-26T08:31:00Z',
-    preparation: { units: 'mm', forward: '+z', up: '+y', roles: { 1: 'RIGID', 2: 'MF' } }, setup };
+    preparation: { units: 'mm', forward: '+z', up: '+y', roles: { 1: 'RIGID', 2: 'MF' }, ...historical }, setup };
   const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
     ? response({ ...summary, known_model: { model_id: record.model_id, latest_prepared_id: record.ingest_id }, previous_setup: previous })
     : String(url) === '/api/models/files' ? prepared(record)
@@ -1032,8 +1032,7 @@ it.each([{ planes: [] }, { planes: ['x0', 'y0'] }])('reopens a historical cut re
   await openImported({ kind: 'run', job: fileJob() }, fetcher);
   expect(registeredMesh()).toEqual(historical);
   expect(useMeshImportStore.getState().notice).toBeNull();
-  expect(useImportedModelStore.getState().fileDraft).toMatchObject({ domainPlanes: planes });
-  expect(useImportedModelStore.getState().fileDraft).not.toHaveProperty('autoCut');
+  expect(useImportedModelStore.getState().fileDraft).toMatchObject({ autoCut: true, domainPlanes: [] });
   expect(fetcher.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
   expect(fileMeshSubmission().options.frequencies_hz).toEqual([100, 200]);
 });

@@ -151,6 +151,7 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
       const preparation = previous?.preparation;
       editFileDraft({ roles, units: preparation?.units ?? summary.suggested_units ?? '',
         forward: preparation?.forward ?? '+z', up: preparation?.up ?? '+y',
+        ...(summary.known_model && preparation?.auto_cut ? { autoCut: true } : {}),
         domainPlanes: preparation?.domain_planes ?? summary.detected_planes ?? [],
         reflectPlanes: preparation?.reflect_planes ?? null, removeLidPlanes: preparation?.remove_lid_planes ?? [] });
       if (previous?.setup) {
@@ -238,6 +239,7 @@ async function prepareMeshFileIntent(fetcher: typeof fetch, inspectFrame: boolea
       const preparation = { units: draft.units, forward: draft.forward, up: draft.up,
         roles: Object.fromEntries(Object.entries(draft.roles ?? Object.fromEntries(draft.selected.map(tag => [tag, 'HF'])))
           .map(([tag, role]) => [tag, role ?? 'RIGID'])),
+        ...(draft.autoCut ? { auto_cut: true } : {}),
         domain_planes: draft.domainPlanes ?? [], reflect_planes: draft.reflectPlanes ?? null,
         remove_lid_planes: draft.removeLidPlanes ?? [] };
 

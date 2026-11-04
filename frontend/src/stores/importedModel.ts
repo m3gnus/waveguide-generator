@@ -43,6 +43,7 @@ export interface FileDraft {
   /** Legacy source assignments remain readable; new edits carry explicit roles. */
   selected: number[];
   roles?: Record<string, string | null>;
+  autoCut?: boolean;
   domainPlanes?: string[];
   removeLidPlanes?: string[];
   /** null lets preparation mirror a negative-side model automatically. */
@@ -224,7 +225,8 @@ function fileDraftOf(prepared: Extract<ImportedSource, { kind: 'file' }>['prepar
   return {
     units: file?.transform?.units ?? '', forward: file?.transform?.forward ?? '+z', up: file?.transform?.up ?? '+y',
     selected: Object.entries(roles).filter(([, role]) => role !== 'RIGID').map(([tag]) => Number(tag)),
-    roles, domainPlanes: record?.symmetry?.domain_planes ?? file?.domain_planes ?? [],
+    roles, ...(file?.auto_cut ? { autoCut: true } : {}),
+    domainPlanes: file?.domain_planes ?? (file?.auto_cut ? [] : record?.symmetry?.domain_planes ?? []),
     reflectPlanes: file?.reflect_planes ?? null,
     removeLidPlanes: file?.remove_lid_planes ?? Object.keys(file?.transform?.removed_lids ?? {}),
   };
