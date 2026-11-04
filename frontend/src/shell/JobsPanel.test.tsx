@@ -28,6 +28,8 @@ vi.mock('../jobs/jobDesign', () => ({
   hydrateJobDesign: () => designForFamily('OSSE'),
   jobDesignAvailability: () => ({ reopenable: true, source: 'v2-snapshot', reason_code: 'ok', reason: null, note: null }),
   jobRerunState: () => ({ enabled: true, reason: null }),
+  jobDesignWire: () => null,
+  openJobDesign: async (...args: unknown[]) => designMocks.replaceWithJobDesign(...args),
   replaceWithJobDesign: designMocks.replaceWithJobDesign,
 }));
 
