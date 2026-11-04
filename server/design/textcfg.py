@@ -1973,7 +1973,9 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         except AthImportError as exc:
             raise TextConfigError(exc.args[0]) from exc
         except (ConfigError, ValueError) as exc:
-            raise TextConfigError(ath_import_failure(exc)) from exc
+            raise TextConfigError(ath_import_failure(
+                exc, profile_block=_profile_block_name(payload["formula"], blocks),
+            )) from exc
         if uses_ath_v3_import(import_version):
             if 'athRosseTruncMm' in mesher_config:
                 payload['ath_rosse_trunc_mm'] = mesher_config['athRosseTruncMm']

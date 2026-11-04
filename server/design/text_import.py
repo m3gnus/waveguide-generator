@@ -67,8 +67,15 @@ _ATH_SETTING_FIXES = {
 }
 
 
-def ath_import_failure(reason: Exception, *, setting: str | None = None) -> AthImportGuidance:
-    """Log native diagnostics; display only authored setting names and remedies."""
+def ath_import_failure(
+    reason: Exception, *, setting: str | None = None, profile_block: str | None = None,
+) -> AthImportGuidance:
+    """Log native diagnostics; display only authored setting names and remedies.
+
+    ``profile_block`` is the profile block spelling in the source file. The
+    mesher names R-OSSE members canonically; a file that wrote ``ROSSE`` is told
+    to change ``ROSSE.<member>``, the name it actually contains.
+    """
     logger.warning("ATH import could not use the configuration: %s", reason,
                    exc_info=(type(reason), reason, reason.__traceback__))
     if setting == "ATH version comments":
@@ -96,7 +103,10 @@ def ath_import_failure(reason: Exception, *, setting: str | None = None) -> AthI
     # These are authored ATH file names, so use the existing client rule for
     # quoted user names. Unquoted internal names remain blocked by that owner.
     dotted_names = "|".join(re.escape(key) for key in sorted(_ATH_SETTING_FIXES, key=len, reverse=True) if "." in key)
-    return AthImportGuidance(re.sub(r"\b(?:" + dotted_names + r")\b", lambda match: f"“{match[0]}”", message))
+    message = re.sub(r"\b(?:" + dotted_names + r")\b", lambda match: f"“{match[0]}”", message)
+    if profile_block == "ROSSE":
+        message = message.replace("“R-OSSE.", "“ROSSE.")
+    return AthImportGuidance(message)
 
 
 def validate_ath_mesher_config(config: dict) -> None:
