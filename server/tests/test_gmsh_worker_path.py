@@ -8,22 +8,89 @@ damage is invisible from Python and only shows through
 ``GetEnvironmentVariableW``: anything afterwards that resolves an executable or
 lazily loads a DLL through PATH fails for no visible reason.
 
-``_preserve_native_windows_path`` snapshots PATH through kernel32 and restores
-it. Nothing exercised it directly, on either half of its contract.
+The mesher owns the guard. WG imports that same function and applies it to
+both ends of its worker-owned session.
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import sys
+from types import SimpleNamespace
 
 import pytest
+from hornlab_mesher import native_env
 
 from server.mesh import gmsh_worker
 
 
-pytestmark = pytest.mark.skipif(
+windows_only = pytest.mark.skipif(
     sys.platform != "win32", reason="the guard is a no-op off Windows"
 )
+
+
+def test_worker_reuses_the_mesher_path_guard_without_a_second_implementation() -> None:
+    assert gmsh_worker._preserve_native_windows_path is native_env.preserve_native_windows_path
+    assert not hasattr(gmsh_worker, "_read_native_windows_path")
+    assert not hasattr(gmsh_worker, "_kernel32")
+
+
+@pytest.mark.parametrize("failure", [None, "initialize", "body", "finalize"])
+def test_worker_guards_session_boundaries_and_preserves_errors(
+    monkeypatch: pytest.MonkeyPatch, failure: str | None,
+) -> None:
+    events = []
+    initialized = False
+    error = RuntimeError("native operation failed")
+
+    @contextmanager
+    def guard():
+        events.append("enter")
+        try:
+            with native_env.preserve_native_windows_path():
+                yield
+        finally:
+            events.append("exit")
+
+    def initialize(**kwargs):
+        nonlocal initialized
+        assert kwargs == {"interruptible": False}
+        events.append("initialize")
+        if failure == "initialize":
+            raise error
+        initialized = True
+
+    def finalize():
+        nonlocal initialized
+        events.append("finalize")
+        initialized = False
+        if failure == "finalize":
+            raise error
+
+    def build():
+        events.append("body")
+        if failure == "body":
+            raise error
+        return "mesh result"
+
+    monkeypatch.setitem(sys.modules, "gmsh", SimpleNamespace(
+        isInitialized=lambda: initialized, initialize=initialize, finalize=finalize,
+    ))
+    monkeypatch.setattr(gmsh_worker, "pin_gmsh_openmp_initial_thread", lambda: None)
+    monkeypatch.setattr(gmsh_worker, "_preserve_native_windows_path", guard)
+
+    if failure is None:
+        assert gmsh_worker._run_in_gmsh_session(build) == "mesh result"
+    else:
+        with pytest.raises(RuntimeError) as raised:
+            gmsh_worker._run_in_gmsh_session(build)
+        assert raised.value is error
+
+    expected = ["enter", "initialize", "exit"]
+    if failure != "initialize":
+        expected += ["body", "enter", "finalize", "exit"]
+    assert events == expected
+    assert not initialized
 
 
 def _fail_the_restore(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -33,7 +100,7 @@ def _fail_the_restore(monkeypatch: pytest.MonkeyPatch) -> None:
     module attribute would resolve back to the double and recurse.
     """
 
-    real = gmsh_worker._kernel32
+    real = native_env._kernel32
 
     class _FailingRestore:
         def __getattr__(self, name: str) -> object:
@@ -43,22 +110,24 @@ def _fail_the_restore(monkeypatch: pytest.MonkeyPatch) -> None:
         def SetEnvironmentVariableW(name: str, value: str | None) -> int:
             return 0
 
-    monkeypatch.setattr(gmsh_worker, "_kernel32", _FailingRestore())
+    monkeypatch.setattr(native_env, "_kernel32", _FailingRestore())
 
 
+@windows_only
 def test_restores_a_path_the_body_truncated() -> None:
     """The body's PATH damage does not outlive the guard."""
 
-    before = gmsh_worker._read_native_windows_path()
+    before = native_env._read_native_windows_path()
     assert before is not None
 
     with gmsh_worker._preserve_native_windows_path():
-        gmsh_worker._kernel32.SetEnvironmentVariableW("PATH", "C:/truncated")
-        assert gmsh_worker._read_native_windows_path() == "C:/truncated"
+        native_env._kernel32.SetEnvironmentVariableW("PATH", "C:/truncated")
+        assert native_env._read_native_windows_path() == "C:/truncated"
 
-    assert gmsh_worker._read_native_windows_path() == before
+    assert native_env._read_native_windows_path() == before
 
 
+@windows_only
 def test_a_failed_restore_does_not_mask_the_body_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -77,6 +146,7 @@ def test_a_failed_restore_does_not_mask_the_body_error(
             raise RuntimeError("geometry failed")
 
 
+@windows_only
 def test_a_failed_restore_still_raises_when_nothing_is_masked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

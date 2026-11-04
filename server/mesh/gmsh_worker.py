@@ -9,15 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-from contextlib import contextmanager
 import functools
 import logging
 import os
 from pathlib import Path
-import sys
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Any, TypeVar
+
+from hornlab_mesher.native_env import (
+    preserve_native_windows_path as _preserve_native_windows_path,
+)
 
 from server.platform.gmsh_openmp import pin_gmsh_openmp_initial_thread
 from server.platform.shutdown_backstop import shutdown_wait_limit
@@ -26,20 +28,6 @@ from server.platform.signal_rearm import (
     rearm_registered_signals,
     signal_rearm_is_needed,
 )
-
-if sys.platform == "win32":
-    import ctypes
-    from ctypes import wintypes
-
-    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    _kernel32.GetEnvironmentVariableW.argtypes = (
-        wintypes.LPCWSTR,
-        wintypes.LPWSTR,
-        wintypes.DWORD,
-    )
-    _kernel32.GetEnvironmentVariableW.restype = wintypes.DWORD
-    _kernel32.SetEnvironmentVariableW.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR)
-    _kernel32.SetEnvironmentVariableW.restype = wintypes.BOOL
 
 
 log = logging.getLogger("wg.mesh")
@@ -59,56 +47,6 @@ _shutting_down = False
 _calls_in_flight = 0
 _in_flight_condition = threading.Condition()
 _abandoned_call = False
-
-_ERROR_ENVVAR_NOT_FOUND = 203
-
-
-def _read_native_windows_path() -> str | None:
-    """Read PATH from Win32, whose value can diverge from ``os.environ``."""
-
-    ctypes.set_last_error(0)
-    size = _kernel32.GetEnvironmentVariableW("PATH", None, 0)
-    if size == 0:
-        error = ctypes.get_last_error()
-        if error in (0, _ERROR_ENVVAR_NOT_FOUND):
-            return None
-        raise ctypes.WinError(error)
-
-    while True:
-        buffer = ctypes.create_unicode_buffer(size)
-        ctypes.set_last_error(0)
-        length = _kernel32.GetEnvironmentVariableW("PATH", buffer, size)
-        if length == 0:
-            error = ctypes.get_last_error()
-            if error in (0, _ERROR_ENVVAR_NOT_FOUND):
-                return None
-            raise ctypes.WinError(error)
-        if length < size:
-            return buffer.value
-        size = length
-
-
-@contextmanager
-def _preserve_native_windows_path() -> Iterator[None]:
-    """Undo native PATH mutations made by a Windows Gmsh API call."""
-
-    if sys.platform != "win32":
-        yield
-        return
-
-    path = _read_native_windows_path()
-    try:
-        yield
-    finally:
-        if not _kernel32.SetEnvironmentVariableW("PATH", path):
-            failure = ctypes.WinError(ctypes.get_last_error())
-            # Raising from here would replace whatever the body was already
-            # raising, and the body's exception is the one that explains a
-            # failed mesh or export. Report a damaged PATH on its own only
-            # when the body succeeded and there is nothing to mask.
-            if sys.exc_info()[1] is None:
-                raise failure
-            log.error("Could not restore the native PATH after a Gmsh call: %s", failure)
 
 
 def _gmsh_executor() -> concurrent.futures.ThreadPoolExecutor:
