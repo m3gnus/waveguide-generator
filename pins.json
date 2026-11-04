@@ -18,7 +18,7 @@
     },
     "hornlab-sim": {
       "repo": "https://github.com/m3gnus/hornlab-sim.git",
-      "sha": "b21d2bd4d410cfaa6271b6a6499878a0cd4b0c6f"
+      "sha": "bf50b3b5fa20775fe9c248646a46efbe014d4a99"
     },
     "hornlab-waveguide-mesher": {
       "repo": "https://github.com/m3gnus/hornlab-waveguide-mesher.git",

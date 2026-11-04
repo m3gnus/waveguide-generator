@@ -156,3 +156,11 @@ Sampling reuses the existing profile cache and array evaluator, and preview
 resolution reuses already prepared geometry. The retained tree excludes the
 unqualified session-ownership and STEP fitting changes. No new geometry
 construction, meshing tolerance or refusal relaxation is claimed.
+
+The sim pin `bf50b3b5` combines Neumann traces with their pressures and reports
+unavailable combined radiated powers as unavailable. LEM-to-BEM path loading
+now honors mesh options; zero-drive impedance, zero-series termination and
+Hornresp export refusals follow their existing physical owners. These are
+intentional numerical/output corrections, qualified by standard-install and
+native seam suites. The schema unit test uses a stand-in; its known P2 coverage
+limitation remains recorded rather than being treated as real-schema coverage.
