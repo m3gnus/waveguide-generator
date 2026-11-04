@@ -286,7 +286,11 @@ def _save_chunk(folder, side, indices):
     (folder / f'{side}.channel-bases.bin').write_bytes(payload)
     (folder / f'{side}.plan.json').write_text(json.dumps(plan))
     (folder / f'{side}.request.json').write_text(json.dumps({'geometry': {'drive_channels': [{'id': k} for k in bases]},
-        'options': {'frequencies_hz': bases['HF'].frequencies_hz.tolist()}}))
+        'options': {'frequencies_hz': bases['HF'].frequencies_hz.tolist(), 'symmetry': 'half_yz',
+                    'polar_config': parity._make_setup({'symmetry': {'domain_planes': ['x0']}}, [], [],
+                        {**parity.polar_options(), 'angle_range': [0, 90, 3]})['options']['polar_config']}}))
+    (folder / f'{side}.record.json').write_text(json.dumps({
+        'normalisation': {'assembly_frame_is_solver_frame': True}, 'symmetry': {'domain_planes': ['x0']}}))
     mesh = half_tetrahedron()
     mesh.points *= .001
     (folder / f'{side}.msh').write_text(mesh_text(mesh))
@@ -855,3 +859,82 @@ def test_dense_commands_use_requested_cpu_python_and_study_budget(tmp_path, caps
     assert [c[c.index("--freqs") + 1] for c in commands[:-1]] == ["300.0", "500.0", "700.0", "1500.0", "2200.0"] * 2
     assert commands[-1][0] == str(executable)
     assert commands[-1][commands[-1].index("--recompute") + 1] == str(tmp_path / "a-explicit")
+
+
+@pytest.mark.parametrize("change", ["inactive", "weight", "delay"])
+def test_mismatched_excitation_is_incomparable_even_below_acoustic_tolerance(tmp_path, monkeypatch, change):
+    plan = {"radiator_ids": {"HF": "HF", "B": "B"}, "polar": {"distance": 2, "angle_range": [0, 90, 3]},
+            "drives": [{"radiator": "HF", "weight": 1., "delay_ms": 0.},
+                       {"radiator": "B", "weight": .001, "delay_ms": 0.}]}
+    other = copy.deepcopy(plan)
+    other["drives"][1].update({"weight": 0. if change == "inactive" else .001001} if change != "delay" else {"delay_ms": .001})
+    left, right = [parity.grouped_bases(_bases(), p) for p in (plan, other)]
+    monkeypatch.setattr(parity, "charts", lambda *a, **kw: pytest.fail("incomparable reached charts"))
+    entry = {"mesh_adequacy": {"A": {"max_valid_frequency_hz": 10000}}}
+    parity.finish_comparison(entry, tmp_path, left, right)
+    assert entry["status"] == "incomparable"
+    assert entry["metrics"]["LF"]["status"] == "incomparable"
+    assert entry["metrics"]["combined"]["status"] == "incomparable"
+
+
+@pytest.mark.parametrize("field", ["frame", "distance", "angles", "sphere", "symmetry", "request-symmetry", "missing-record", "chunk-distance"])
+def test_recompute_requires_matching_saved_observation_contracts(tmp_path, monkeypatch, field):
+    source, output = tmp_path / "saved", tmp_path / "compared"
+    folder = source / "test"
+    for side in ("A", "B"):
+        _save_chunk(folder, side, [0, 1])
+    if field == "chunk-distance":
+        folder = source / "extra" / "test"
+        _save_chunk(folder, "B", [0])
+        _save_chunk(folder, "A", [0])
+    request_path, record_path = folder / "B.request.json", folder / "B.record.json"
+    request, record = json.loads(request_path.read_text()), json.loads(record_path.read_text())
+    if field == "frame":
+        record["anchor"] = {"throat_frame": {"axis": [0, 0, 1], "u": [1, 0, 0], "v": [0, 1, 0], "origin_m": [0, .01, 0]}}
+    elif field in {"distance", "chunk-distance"}:
+        request["options"]["polar_config"]["distance"] = 3
+    elif field == "angles":
+        request["options"]["polar_config"]["angle_range"] = [-180, 180, 145]
+    elif field == "sphere":
+        request["options"]["polar_config"]["spherical_phi_count"] = 72
+    elif field in {"symmetry", "request-symmetry"}:
+        request["options"]["symmetry"] = "full"
+        if field == "symmetry":
+            record["symmetry"]["domain_planes"] = []
+    request_path.write_text(json.dumps(request))
+    record_path.write_text(json.dumps(record))
+    if field == "missing-record":
+        record_path.unlink()
+    # Different chunks use disjoint frequencies, so only observation validation can reject them.
+    if field == "chunk-distance":
+        for side in ("A", "B"):
+            _save_chunk(source / "test", side, [1])
+    monkeypatch.setattr(parity, "charts", lambda *a, **kw: pytest.fail("incomparable reached charts"))
+    assert parity.main(["--recompute", str(source), "--out", str(output)]) == 1
+    summary = json.loads((output / "summary.json").read_text())
+    assert summary["cases"]["test"]["status"] == "incomparable"
+    assert summary["status"] != "pass"
+
+
+def test_matching_inactive_groups_stay_not_driven():
+    plan = {"radiator_ids": {"HF": "HF", "B": "B"}, "polar": {"distance": 2, "angle_range": [0, 90, 3]},
+            "drives": [{"radiator": "HF", "weight": 1., "delay_ms": 0.},
+                       {"radiator": "B", "weight": 0., "delay_ms": 0.}]}
+    groups = parity.grouped_bases(_bases(), plan)
+    comparison = parity.compare_groups(groups, groups)
+    assert comparison["LF"] == {"status": "not-applicable", "reason": "LF not driven in ATH"}
+    assert comparison["combined"]["absolute"]["pass"] is True
+
+
+def test_recompute_refuses_saved_excitation_mismatch(tmp_path, monkeypatch):
+    source, output = tmp_path / "saved", tmp_path / "compared"
+    for side in ("A", "B"):
+        _save_chunk(source, side, [0, 1])
+    path = source / "B.plan.json"
+    plan = json.loads(path.read_text())
+    plan["drives"][1]["delay_ms"] = .00001
+    path.write_text(json.dumps(plan))
+    monkeypatch.setattr(parity, "charts", lambda *a, **kw: pytest.fail("incomparable reached charts"))
+    assert parity.main(["--recompute", str(source), "--out", str(output)]) == 1
+    summary = json.loads((output / "summary.json").read_text())
+    assert summary["status"] == summary["cases"]["test"]["status"] == "incomparable"

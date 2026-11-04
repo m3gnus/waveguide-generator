@@ -743,6 +743,9 @@ def finish_comparison(entry: dict[str, Any], folder: Path, left: Any, right: Any
     valid_hz = min(side["max_valid_frequency_hz"] for side in entry["mesh_adequacy"].values())
     entry["comparison_valid_hz"] = valid_hz
     entry["metrics"] = compare_groups(left, right, mesh_valid_hz=valid_hz)
+    if any(m["status"] == "incomparable" for m in entry["metrics"].values()):
+        entry["status"], entry["charts"] = "incomparable", []
+        return
     entry["charts"] = charts(folder, left, right, entry["metrics"], mesh_valid_hz=valid_hz)
     verdicts = [m["absolute"]["pass"] for m in entry["metrics"].values() if m["status"] == "complete"]
     entry["status"] = "pass" if verdicts and all(v is True for v in verdicts) else "fail" if any(v is False for v in verdicts) else "mesh-limited"
@@ -1006,8 +1009,11 @@ def grouped_bases(payload: bytes, plan: Mapping[str, Any]) -> dict[str, Any]:
     for group in ("HF", "LF", "combined"):
         members = [ids[d["radiator"]] for d in plan["drives"]
                    if d["weight"] != 0 and (group == "combined" or (d["radiator"] == "HF") == (group == "HF"))]
+        excitation = {d["radiator"]: {"weight": d["weight"], "delay_ms": d["delay_ms"]}
+                      for d in plan["drives"] if d["weight"] != 0
+                      and (group == "combined" or (d["radiator"] == "HF") == (group == "HF"))}
         if not members or all(processing[m]["weight"] == 0 for m in members):
-            groups[group] = {"status": "not-applicable", "reason": f"{group} not driven in ATH"}
+            groups[group] = {"status": "not-applicable", "reason": f"{group} not driven in ATH", "excitation": excitation}
             continue
         synthetic, _ = combine_drive_channels(
             bases, members=[group], member_channels={group: members}, member_processing=processing,
@@ -1028,7 +1034,7 @@ def grouped_bases(payload: bytes, plan: Mapping[str, Any]) -> dict[str, Any]:
         if not np.allclose(actual[selected], requested, rtol=0, atol=1e-8):
             raise ValueError("the solve grid does not contain the exact ATH observation angles")
         pressure = pressure[:, :, selected]
-        groups[group] = {"status": "complete", "frequencies_hz": np.asarray(synthetic.frequencies_hz).tolist(),
+        groups[group] = {"status": "complete", "excitation": excitation, "frequencies_hz": np.asarray(synthetic.frequencies_hz).tolist(),
                          "channel_normalisation": {m: normalisation[m] for m in members},
                          "angles_deg": requested.tolist(),
                          "pressure_real": pressure.real.tolist(), "pressure_imag": pressure.imag.tolist(),
@@ -1037,9 +1043,16 @@ def grouped_bases(payload: bytes, plan: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def compare_groups(a: Mapping[str, Any], b: Mapping[str, Any], *, mesh_valid_hz: float = math.inf) -> dict[str, Any]:
+    groups = ("HF", "LF", "combined")
+    mismatched = any(a[g]["status"] != b[g]["status"] or a[g].get("excitation") != b[g].get("excitation")
+                     for g in groups)
     comparisons = {}
-    for group in ("HF", "LF", "combined"):
+    for group in groups:
         left, right = a[group], b[group]
+        if mismatched and (left["status"] == "complete" or right["status"] == "complete"):
+            comparisons[group] = {"status": "incomparable", "reason":
+                f"{group} excitation or active groups differ. Use matching radiator weights and delays on A and B."}
+            continue
         if left["status"] != "complete" or right["status"] != "complete":
             comparisons[group] = {"status": "not-applicable", "reason": left.get("reason") or right.get("reason")}
             continue
@@ -1142,6 +1155,8 @@ def summary_table_rows(cases: Mapping[str, Any]) -> list[list[str]]:
     """Use the existing eligible band statistics, including polar SPL maxima."""
     rows = []
     for name, entry in cases.items():
+        if not entry["metrics"]:
+            rows.append([name, "—", "—", "—", "—", "—", entry["status"]])
         for group, metrics in entry["metrics"].items():
             if metrics["status"] != "complete":
                 rows.append([name, group, "—", "—", "—", "—", metrics["reason"]])
@@ -1298,6 +1313,20 @@ def _phase1_default() -> Path | None:
     return None
 
 
+def observation_signature(record: Mapping[str, Any], request: Mapping[str, Any],
+                          plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve saved observation contracts with the same owners as the solver."""
+    from server.solver.imported import imported_anchor_frame, imported_record_symmetry
+
+    options = request["options"]
+    frame = imported_anchor_frame(record)
+    symmetry = imported_record_symmetry(record).mode
+    if options["symmetry"] != symmetry:
+        raise EvidenceRefusal("Saved record and request symmetry differ. Restore the matching record and request.")
+    return {"frame": {k: v.tolist() for k, v in frame.items()},
+            "polar": options["polar_config"], "selected_polar": plan["polar"], "symmetry": symmetry}
+
+
 def recompute(source: Path, out: Path) -> int:
     """Re-read immutable meshes, requests and retained bases; never prepare or solve.
 
@@ -1311,6 +1340,7 @@ def recompute(source: Path, out: Path) -> int:
     cases: dict[str, Any] = {}
     chunks: dict[str, Any] = {}
     identities = {}
+    observations = {}
     for folder in folders:
         entry = json.loads((folder / "case.json").read_text())
         name = entry["case"]
@@ -1338,6 +1368,16 @@ def recompute(source: Path, out: Path) -> int:
             expected = {plan["radiator_ids"][d["radiator"]] for d in plan["drives"] if d["weight"] != 0}
             if expected != {c["id"] for c in request["geometry"]["drive_channels"]}:
                 raise EvidenceRefusal(f"{name}/{side}: saved request and radiator identities differ. Restore the matching plan and request.")
+            cases.setdefault(name, copy.deepcopy(entry))
+            try:
+                record = json.loads((folder / f"{side}.record.json").read_text())
+                observation = observation_signature(record, request, plan)
+                if name in observations and observations[name] != observation:
+                    raise EvidenceRefusal("Saved observation frames, distance, angle grids, DI sphere grid or symmetry differ. Use matching observation settings on both sides and all chunks.")
+                observations[name] = observation
+            except (EvidenceRefusal, ValueError, KeyError, OSError) as exc:
+                cases[name]["status"] = "incomparable"
+                cases[name].setdefault("issues", []).append(str(exc))
             identity = (_sha(mesh_path), plan)
             key = (name, side)
             if key in identities and identities[key] != identity:
@@ -1366,13 +1406,18 @@ def recompute(source: Path, out: Path) -> int:
             len(groups["combined"]["frequencies_hz"]), len(groups["combined"]["channel_normalisation"]))
             for side, groups in (("A", left), ("B", right))}
         calibrated_estimates({name: entry}, CALIBRATION)
-        finish_comparison(entry, folder, left, right)
+        if entry["status"] == "incomparable":
+            entry["metrics"], entry["charts"] = {}, []
+            entry["comparison_valid_hz"] = min(m["max_valid_frequency_hz"] for m in entry["mesh_adequacy"].values())
+        else:
+            finish_comparison(entry, folder, left, right)
         _write_json(folder / "case.json", entry)
         print(comparison_table(name, entry), flush=True)
     table_file = cross_case_summary(out, cases)
     success = all(e["status"] == "pass" for e in cases.values())
     _write_json(out / "summary.json", {"schema": "ath-lf-parity-v1", "recomputed_from_retained_bases": True,
-        "normalisation": NORMALISATION, "status": "pass" if success else "incomplete", "cases": cases,
+        "normalisation": NORMALISATION, "status": "pass" if success else
+        "incomparable" if any(e["status"] == "incomparable" for e in cases.values()) else "incomplete", "cases": cases,
         "charts": [table_file]})
     return 0 if success else 1
 
@@ -1398,6 +1443,8 @@ def join_measurements(chunks: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def comparison_table(name: str, entry: Mapping[str, Any]) -> str:
+    if entry["status"] == "incomparable":
+        return f"{name}: incomparable. " + " ".join(entry.get("issues", [])) + "\n"
     rows = [f"{name}: pass/fail only through {entry['comparison_valid_hz']:.1f} Hz; higher samples are mesh-limited.",
             "| Side | Triangles | Largest edge (mm) | Six elements/wavelength through (Hz) |", "|---|---:|---:|---:|"]
     for side, mesh in entry["mesh_adequacy"].items():
@@ -1624,7 +1671,7 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
         calibrated_estimates(results, calibration)
     for name, entry in results.items():
         _write_json(out / name / "case.json", entry)
-    refused = any(entry["status"] in {"not-importable", "refused", "failed-solve", "fail", "mesh-limited"} for entry in results.values())
+    refused = any(entry["status"] in {"not-importable", "refused", "failed-solve", "fail", "mesh-limited", "incomparable"} for entry in results.values())
     if args.calibrate_only:
         refused = not calibration_success
     summary = {"schema": "ath-lf-parity-v1", "dry_run": args.dry_run, "engine": args.engine, "side": args.side,
