@@ -703,10 +703,16 @@ describe('ParamPanel inventory UX', () => {
       });
     });
 
-    it.each(ids)('finds %s by its ATH key in the imported section', (id) => {
+    it.each(ids)('finds %s by its ATH key in the imported section', async (id) => {
       load('R-OSSE');
       const field = PARAMETER_REGISTRY.find((field) => field.id === id)!;
-      type(host.querySelector<HTMLInputElement>('input[type="search"]')!, field.legacyKey);
+      const entry = buildParameterPaletteEntries('R-OSSE', { mode: 'parametric', design: useDesignStore.getState().design })
+        .find((candidate) => candidate.id === `parameter-${id}`);
+      expect(entry?.matches?.(field.legacyKey!)).toBe(true);
+      await act(async () => {
+        entry!.run();
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      });
       expect(editor(id)).not.toBeNull();
       expect(editor(id).closest('[data-section]')?.getAttribute('data-section')).toBe('Imported ATH values');
     });
@@ -750,9 +756,11 @@ describe('ParamPanel inventory UX', () => {
     it.each([undefined, 'ath-2026-08c-v1', 'ath-2026-09a-v2'])('keeps v3 controls out of older imports and search (%s)', (version) => {
       load('R-OSSE', { text_import_version: version });
       const before = serializeDesign(useDesignStore.getState().design);
-      const search = host.querySelector<HTMLInputElement>('input[type="search"]')!;
-      type(search, 'Rot');
-      for (const id of ids) expect(editor(id)).toBeNull();
+      const entries = buildParameterPaletteEntries('R-OSSE', { mode: 'parametric', design: useDesignStore.getState().design });
+      for (const id of ids) {
+        expect(entries.find((entry) => entry.id === `parameter-${id}`)).toBeUndefined();
+        expect(editor(id)).toBeNull();
+      }
       expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
     });
 
