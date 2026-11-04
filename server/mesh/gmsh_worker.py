@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+from contextlib import AbstractContextManager
 import functools
 import logging
 import os
@@ -16,10 +17,6 @@ from pathlib import Path
 import threading
 from collections.abc import Callable
 from typing import Any, TypeVar
-
-from hornlab_mesher.native_env import (
-    preserve_native_windows_path as _preserve_native_windows_path,
-)
 
 from server.platform.gmsh_openmp import pin_gmsh_openmp_initial_thread
 from server.platform.shutdown_backstop import shutdown_wait_limit
@@ -47,6 +44,14 @@ _shutting_down = False
 _calls_in_flight = 0
 _in_flight_condition = threading.Condition()
 _abandoned_call = False
+
+
+def _preserve_native_windows_path() -> AbstractContextManager[None]:
+    """Load the mesher-owned guard only when a Gmsh session needs it."""
+
+    from hornlab_mesher.native_env import preserve_native_windows_path
+
+    return preserve_native_windows_path()
 
 
 def _gmsh_executor() -> concurrent.futures.ThreadPoolExecutor:

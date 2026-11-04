@@ -8,13 +8,15 @@ damage is invisible from Python and only shows through
 ``GetEnvironmentVariableW``: anything afterwards that resolves an executable or
 lazily loads a DLL through PATH fails for no visible reason.
 
-The mesher owns the guard. WG imports that same function and applies it to
-both ends of its worker-owned session.
+The mesher owns the guard. WG delegates lazily to that function and applies it
+to both ends of its worker-owned session.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
+from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -29,10 +31,54 @@ windows_only = pytest.mark.skipif(
 )
 
 
-def test_worker_reuses_the_mesher_path_guard_without_a_second_implementation() -> None:
-    assert gmsh_worker._preserve_native_windows_path is native_env.preserve_native_windows_path
+def test_worker_reuses_the_mesher_path_guard_without_a_second_implementation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = native_env.preserve_native_windows_path()
+    monkeypatch.setattr(native_env, "preserve_native_windows_path", lambda: context)
+
+    assert gmsh_worker._preserve_native_windows_path() is context
     assert not hasattr(gmsh_worker, "_read_native_windows_path")
     assert not hasattr(gmsh_worker, "_kernel32")
+
+
+@pytest.mark.parametrize("error", ["ModuleNotFoundError", "OSError", "RuntimeError"])
+def test_app_import_defers_an_unavailable_mesher_until_the_guard_is_used(error: str) -> None:
+    script = f"""
+import importlib.abc
+import sys
+
+assert not any(name.startswith("hornlab_mesher") for name in sys.modules)
+attempts = []
+failure = {error}("mesher unavailable")
+
+class UnavailableMesher(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "hornlab_mesher" or fullname.startswith("hornlab_mesher."):
+            attempts.append(fullname)
+            raise failure
+
+sys.meta_path.insert(0, UnavailableMesher())
+from server.app import create_app
+from server.mesh.gmsh_worker import _preserve_native_windows_path
+
+assert callable(create_app)
+assert attempts == []
+try:
+    with _preserve_native_windows_path():
+        raise AssertionError("the unavailable guard must fail before the body runs")
+except {error} as raised:
+    assert raised is failure
+assert attempts
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.parametrize("failure", [None, "initialize", "body", "finalize"])
@@ -42,12 +88,13 @@ def test_worker_guards_session_boundaries_and_preserves_errors(
     events = []
     initialized = False
     error = RuntimeError("native operation failed")
+    shared_guard = native_env.preserve_native_windows_path
 
     @contextmanager
     def guard():
         events.append("enter")
         try:
-            with native_env.preserve_native_windows_path():
+            with shared_guard():
                 yield
         finally:
             events.append("exit")
@@ -77,7 +124,7 @@ def test_worker_guards_session_boundaries_and_preserves_errors(
         isInitialized=lambda: initialized, initialize=initialize, finalize=finalize,
     ))
     monkeypatch.setattr(gmsh_worker, "pin_gmsh_openmp_initial_thread", lambda: None)
-    monkeypatch.setattr(gmsh_worker, "_preserve_native_windows_path", guard)
+    monkeypatch.setattr(native_env, "preserve_native_windows_path", guard)
 
     if failure is None:
         assert gmsh_worker._run_in_gmsh_session(build) == "mesh result"
