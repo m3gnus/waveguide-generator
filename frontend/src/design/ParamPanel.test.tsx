@@ -643,6 +643,75 @@ describe('ParamPanel inventory UX', () => {
       expect(serializeDesign(useDesignStore.getState().design).ath_axial_scale).toBe(1e-20);
     });
 
+    it('allows native features after clearing Scale.Z in the editor', async () => {
+      const validate = vi.spyOn(designIo, 'serializeDesignDocument').mockResolvedValue({ text: '', suggestedFilename: '' });
+      load('OSSE', { L: 120, r0: 12.7, a: 40, a0: 10, k: 1, s: 0, scale: 3, ath_axial_scale: 2 });
+      type(editor(ids[0]), '');
+      act(() => editor(ids[0]).blur());
+      expect(serializeDesign(useDesignStore.getState().design).ath_axial_scale).toBeNull();
+      const select = host.querySelector<HTMLSelectElement>('#osse-feature-mouth')!;
+      await act(async () => { select.value = 'roundover'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+      expect(validate).toHaveBeenCalledOnce();
+      expect(useDesignStore.getState().design).toMatchObject({ formula: 'OSSE-ROUNDOVER', scale: 3, L: 120, r0: 12.7 });
+      expect(host.querySelector('[role="alert"]')).toBeNull();
+    });
+
+    describe.each([
+      ['mouth lip', { ath_roundover: { radius: 10, segments: 5 } }, 'mesh.ath_roundover', '1', '0'],
+      ['Opus rear', { ath_rear_shape: 3 }, 'mesh.ath_rear_shape', '3', '1'],
+    ] as const)('Scale.Z compatibility with an ATH %s', (_name, mesh, id, on, off) => {
+      const select = () => host.querySelector<HTMLSelectElement>(`[data-parameter-id="${id}"] select`)!;
+      const choose = (value: string) => act(() => { select().value = value; select().dispatchEvent(new Event('change', { bubbles: true })); });
+
+      it('refuses entry until the conflicting feature is turned off', () => {
+        load('OSSE', { mesh: { wall_thickness: 5, ...mesh } });
+        const before = JSON.stringify(serializeDesign(useDesignStore.getState().design));
+        type(editor(ids[0]), '1');
+        expect(editor(ids[0]).getAttribute('aria-invalid')).toBe('true');
+        expect(editor(ids[0]).closest('.field-row')?.textContent).toContain('Clear ATH axial scale');
+        act(() => editor(ids[0]).blur());
+        expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before);
+        choose(off);
+        type(editor(ids[0]), '1');
+        act(() => editor(ids[0]).blur());
+        expect(serializeDesign(useDesignStore.getState().design).ath_axial_scale).toBe(1);
+      });
+
+      it.each([1, 1.2345678901234567])('refuses enabling the feature until Scale.Z=%s is cleared', (scale) => {
+        load('OSSE', { scale: 1, ath_axial_scale: scale, mesh: { wall_thickness: 5 } });
+        const before = JSON.stringify(serializeDesign(useDesignStore.getState().design));
+        expect(select().querySelector<HTMLOptionElement>(`option[value="${on}"]`)!.disabled).toBe(true);
+        expect(select().closest('[data-parameter-id]')?.textContent).toContain('Clear ATH axial scale');
+        choose(on);
+        expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before);
+        type(editor(ids[0]), '');
+        act(() => editor(ids[0]).blur());
+        expect(select().querySelector<HTMLOptionElement>(`option[value="${on}"]`)!.disabled).toBe(false);
+        choose(on);
+        expect(select().value).toBe(on);
+        expect(serializeDesign(useDesignStore.getState().design).mesh).toMatchObject(mesh);
+      });
+
+      it('preserves an imported conflict and allows clearing either side', () => {
+        const wire = { ath_axial_scale: 1.2345678901234567, mesh: { wall_thickness: 5, ...mesh } };
+        load('OSSE', wire);
+        const before = JSON.stringify(serializeDesign(useDesignStore.getState().design));
+        expect(editor(ids[0]).disabled).toBe(false);
+        expect(editor(ids[0]).getAttribute('aria-invalid')).toBe('true');
+        act(() => editor(ids[0]).focus());
+        act(() => editor(ids[0]).blur());
+        expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before);
+        type(editor(ids[0]), '');
+        act(() => editor(ids[0]).blur());
+        expect(serializeDesign(useDesignStore.getState().design)).toMatchObject({ ath_axial_scale: null, mesh });
+        expect(select().value).toBe(on);
+        load('OSSE', wire);
+        choose(off);
+        expect(editor(ids[0]).getAttribute('aria-invalid')).toBe('false');
+        expect(serializeDesign(useDesignStore.getState().design).ath_axial_scale).toBe(wire.ath_axial_scale);
+      });
+    });
+
     it.each(ids)('finds %s by its ATH key in the imported section', (id) => {
       load('R-OSSE');
       const field = PARAMETER_REGISTRY.find((field) => field.id === id)!;

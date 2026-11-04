@@ -92,6 +92,20 @@ describe('OSSE feature choices', () => {
     expect(useDesignStore.getState().design).toEqual(original);
   });
 
+  it.each(variants.slice(1))('allows %s after clearing an imported Scale.Z override', (family) => {
+    const original = { ...designForFamily('OSSE'), scale: 1.25, ath_axial_scale: 2, text_import_version: 'ath-2026-09a-v3' as const };
+    useDesignStore.getState().replaceDocument(original);
+    expect(() => useDesignStore.getState().setFamily(family, { preserveOsseBody: true })).toThrow('separate axial scale');
+    useDesignStore.getState().updateValue('ath_axial_scale', null);
+    expect(serializeDesign(useDesignStore.getState().design).ath_axial_scale).toBeNull();
+    useDesignStore.getState().setFamily(family, { preserveOsseBody: true });
+    expect(useDesignStore.getState().design).toMatchObject({ formula: family, scale: 1.25, L: original.L, r0: original.r0 });
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design.ath_axial_scale).toBeNull();
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design).toEqual(original);
+  });
+
   it.each([
     ['none', 'arc', 'on'], ['authored', 'arc', 'off'], ['authored', 'arc', 'on'],
     ['none', 'roundover', 'on'], ['authored', 'roundover', 'off'], ['authored', 'roundover', 'on'],

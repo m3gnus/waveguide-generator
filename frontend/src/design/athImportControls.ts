@@ -26,8 +26,15 @@ function enclosurePresent(design: DesignDocument): boolean {
 }
 
 const ENCLOSURE_PRESENT = 'This design came with an ATH enclosure, and ATH builds no mouth lip or Opus rear with one. Re-import the file without the enclosure to use them.';
+const AXIAL_SCALE_CONFLICT = 'Scale.Z cannot be combined with an ATH mouth lip or Opus rear. Clear ATH axial scale in Imported ATH values, or turn off the mouth lip and select a full rear.';
+
+/** The mesher refuses even a uniform Scale.Z override with these features. */
+export function axialScaleUnavailableReason(design: DesignDocument): string | undefined {
+  return design.mesh.ath_roundover || design.mesh.ath_rear_shape === 3 ? AXIAL_SCALE_CONFLICT : undefined;
+}
 
 export function opusMountingReason(design: DesignDocument): string | undefined {
+  if (design.ath_axial_scale != null) return AXIAL_SCALE_CONFLICT;
   if (design.enclosure.depth <= 0 && enclosurePresent(design) && design.simulation.sim_type !== 'infinite-baffle' && design.mesh.wall_thickness > 0) return ENCLOSURE_PRESENT;
   if (design.simulation.sim_type === 'infinite-baffle' || design.enclosure.depth > 0 || design.mesh.wall_thickness <= 0) {
     return 'The Opus rear needs a free-standing wall. Change Mounting to Thickened waveguide (freestanding) to use it.';
@@ -50,6 +57,7 @@ export function opusClampNote(design: DesignDocument): string | undefined {
  */
 export function lipUnavailableReason(design: DesignDocument): string | undefined {
   if (design.formula !== 'OSSE') return 'ATH builds the mouth lip on OSSE horns only.';
+  if (design.ath_axial_scale != null) return AXIAL_SCALE_CONFLICT;
   if (design.simulation.sim_type === 'infinite-baffle' || design.enclosure.depth > 0) {
     return 'The mouth lip needs a free-standing or bare horn. Change Mounting to Thickened waveguide (freestanding) or Bare shell to use it.';
   }

@@ -42,7 +42,7 @@ import { ExteriorDriverLibraryPicker, ChannelDriverPicker } from './DriverPicker
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
 import { useCadModelStatusLine } from '../shell/CadModelStatusLine';
 import { getAtPath, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
-import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason, rosseMorphNote } from './athImportControls';
+import { athControlError, axialScaleUnavailableReason, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason, rosseMorphNote } from './athImportControls';
 import { namespaceStorage } from '../stores/durableSettings';
 import type { SymmetryMode } from '../stores/solveOptions';
 import { SolveOptionsStoreProvider, useScopedSolveOptions } from '../stores/solveOptionsContext';
@@ -378,6 +378,7 @@ function passthroughStatus(field: ParameterDefinition, design: DesignDocument): 
 }
 
 function validationMessage(field: ParameterDefinition, design: DesignDocument): string | undefined {
+  if (field.id === 'common.ath_axial_scale' && design.ath_axial_scale != null) return axialScaleUnavailableReason(design);
   if (field.id === 'icw.hold_end' && (design.hold_end ?? 0) <= (design.hold_start ?? 0)) return 'Must exceed coverage hold start.';
   if (field.id === 'simulation.f2' && design.simulation.f2 <= design.simulation.f1) return 'Must exceed sweep start.';
   if (field.id === 'source.velocity' && design.source.velocity_convention === 'legacy' && ![1, 2].includes(design.source.velocity)) return 'Enter 1 (normal) or 2 (axial).';
@@ -399,6 +400,7 @@ function prospectiveValidation(field: ParameterDefinition, design: DesignDocumen
   if (field.id === 'icw.theta_max_deg' && value <= 90) return 'Must be greater than 90° and at most 180°.';
   const athError = athControlError(field.path, value);
   if (athError) return athError;
+  if (field.id === 'common.ath_axial_scale') return axialScaleUnavailableReason(design);
   if (field.id.startsWith('cross_section.') && value <= 0) return 'Must be greater than zero.';
   if (field.id === 'mesh.ath_roundover.radius') return lipRadiusWallError(design, { radius: value });
   if (field.id === 'mesh.wall_thickness') return lipRadiusWallError(design, { wall: value });

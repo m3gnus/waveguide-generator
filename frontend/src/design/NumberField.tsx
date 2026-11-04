@@ -329,7 +329,9 @@ export function NumberField({
     if (!drag.current) return;
     const delta = event.clientX - drag.current.x;
     const next = Math.min(max, floorAt(drag.current.value + delta * step));
-    const rounded = Number(next.toFixed(precision));
+    // A vertical move, or a return to the starting X, must keep the stored
+    // value exactly even when the field displays fewer decimal places.
+    const rounded = delta === 0 ? drag.current.value : Number(next.toFixed(precision));
     if (validate?.(rounded)) return;
     showCommitted(rounded);
     setDragDelta(rounded - drag.current.value);

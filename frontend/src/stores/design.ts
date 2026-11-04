@@ -681,7 +681,7 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
 function mergeFamilyParameters(current: DesignDocument, family: DesignFamily, options?: { preserveOsseBody: boolean }): DesignDocument {
   if (current.formula === family) return structuredClone(current);
   if (current.formula === 'OSSE' && isNativeFamily(family) && family !== 'SOURCE-DISK'
-    && current.ath_axial_scale !== undefined && current.ath_axial_scale !== current.scale) {
+    && current.ath_axial_scale != null && current.ath_axial_scale !== current.scale) {
     throw new Error('OSSE features cannot preserve this import’s separate axial scale. Keep editing the imported horn, or set Scale.Z equal to Scale in a copy of the source file and re-import before choosing OSSE features.');
   }
   if (options?.preserveOsseBody && current.formula === 'OSSE' && isNativeFamily(family)) requireLiteralOsseBody(current);

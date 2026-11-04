@@ -264,6 +264,54 @@ describe('NumberField', () => {
     root = createRoot(host);
   });
 
+  describe.each([false, true])('label scrubbing with preservePrecision=%s', (preservePrecision) => {
+    const startingValue = 1.2345678901234567;
+    const commit = vi.fn<(value: number) => void>();
+    let label: HTMLLabelElement;
+    let frame: FrameRequestCallback | undefined;
+    const pointer = (type: string, clientX: number, clientY = 0) => act(() => {
+      label.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0, pointerId: 1, clientX, clientY }));
+    });
+    const flushFrame = () => act(() => { const callback = frame; frame = undefined; callback?.(performance.now()); });
+
+    beforeEach(() => {
+      commit.mockClear();
+      vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(callback => { frame = callback; return 19; });
+      vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => { frame = undefined; });
+      function Field() {
+        const [value, setValue] = useState(startingValue);
+        return <NumberField label="Value" value={value} step={.001} precision={3} preservePrecision={preservePrecision}
+          onCommit={next => { commit(next); setValue(next); }}/>;
+      }
+      act(() => root.render(<Field/>));
+      label = host.querySelector('label')!;
+      Object.defineProperty(label, 'setPointerCapture', { value: vi.fn() });
+    });
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it.each(['pointerup', 'pointercancel', 'lostpointercapture'])('keeps a vertical gesture exact through %s and blur', (ending) => {
+      pointer('pointerdown', 100, 10);
+      pointer('pointermove', 100, 80);
+      flushFrame();
+      pointer(ending, 100, 80);
+      const input = host.querySelector('input')!;
+      act(() => input.focus());
+      act(() => input.blur());
+      expect(commit).not.toHaveBeenCalled();
+      expect(input.getAttribute('aria-valuenow')).toBe(String(startingValue));
+    });
+
+    it.each([false, true])('restores the exact starting value on return to the starting X (prior frame %s)', (flushBeforeReturn) => {
+      pointer('pointerdown', 100);
+      pointer('pointermove', 104);
+      if (flushBeforeReturn) flushFrame();
+      pointer('pointermove', 100, 80);
+      pointer('pointerup', 100, 80);
+      expect(commit.mock.calls.map(([value]) => value)).toEqual(flushBeforeReturn ? [1.239, startingValue] : []);
+      expect(host.querySelector('input')!.getAttribute('aria-valuenow')).toBe(String(startingValue));
+    });
+  });
+
   it('coalesces rapid label moves to one commit per animation frame', () => {
     const commit = vi.fn();
     let animationCallback: FrameRequestCallback | null = null;
