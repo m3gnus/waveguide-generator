@@ -1757,11 +1757,16 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             raise TextConfigError(f"invalid CadLink block: {exc}") from exc
     dialect: Literal["mwg", "ath"] = "mwg" if _MWG_SNIFF.search(text) else "ath"
     if dialect == "ath" and repeated and not any(_GEOMETRY_STAMP.match(c) for c in comments):
-        from hornlab_mesher.config_parser import _PROFILE_BLOCKS, _ath_item_ignored, ath_profile_members
+        from hornlab_mesher import config_parser as mesher_parser
 
         # Merge only fresh ATH profiles. Saved/native files keep their earlier
-        # last-block reading; the mesher owns ATH's member precedence.
-        profile_repeats = {name for name, _block in repeated if name in _PROFILE_BLOCKS}
+        # last-block reading; the mesher owns ATH's member precedence. Without
+        # its shared helper, retain the existing repeated-profile refusal.
+        ath_profile_members = getattr(mesher_parser, "ath_profile_members", None)
+        profile_repeats = (
+            {name for name, _block in repeated if name in mesher_parser._PROFILE_BLOCKS}
+            if callable(ath_profile_members) else set()
+        )
         for name in profile_repeats:
             declarations = [block for key, block in repeated if key == name] + [blocks[name]]
             blocks[name] = _RawBlock(
@@ -1776,7 +1781,7 @@ def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         populated_mesh = any(block.items or block.lines for name, block in repeated if name == "Mesh")
         repeated = [
             (name, block) for name, block in repeated
-            if name not in profile_repeats and not _ath_item_ignored(name, block=True)
+            if name not in profile_repeats and not mesher_parser._ath_item_ignored(name, block=True)
             and not (name == "Mesh" and not populated_mesh
                      and not blocks[name].items and not blocks[name].lines)
         ]

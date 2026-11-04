@@ -13,6 +13,8 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
+from hornlab_mesher import config_parser as mesher_parser
 
 from server.design.textcfg import (
     TextConfigError, _GEOMETRY_STAMP, _MWG_SNIFF, _formula, _lex, parse, serialize,
@@ -22,6 +24,7 @@ from server.preview.translate import design_to_mesher_config
 from server.tests._ath_contract import saved_v1
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ath_integrity"
+PROFILE_MERGE_SUPPORTED = callable(getattr(mesher_parser, "ath_profile_members", None))
 
 BASE = """OSSE = {
  L = 120
@@ -56,6 +59,19 @@ def geometry_bytes(design: DesignConfig) -> tuple[bytes, bytes | None]:
     grid = build_point_grid_arrays(params)
     outer = grid["outer_grid"]
     return grid["inner_grid"].tobytes(), None if outer is None else outer.tobytes()
+
+
+def assert_repeated_profile_refused(text: str) -> None:
+    with pytest.raises(TextConfigError, match="appears more than once") as caught:
+        parse(text)
+    assert "Combine the copies into one block" in str(caught.value)
+    with pytest.raises(HTTPException) as opened:
+        asyncio.run(open_design(text))
+    assert opened.value.status_code == 422
+    assert opened.value.detail == {
+        "type": "parse_error",
+        "message": f"{caught.value}. Correct the named value or line in the ATH text, then import it again.",
+    }
 
 
 UNSUPPORTED = {
@@ -118,6 +134,9 @@ def test_typo_fixture_is_refused_by_name_with_the_near_miss() -> None:
 
 
 def test_a_repeated_profile_imports_like_aths_merged_config() -> None:
+    if not PROFILE_MERGE_SUPPORTED:
+        assert_repeated_profile_refused(fixture("repeated"))
+        return
     expected = parse(fixture("merged")).design
     parsed = parse(fixture("repeated"))
     assert parsed.design == expected
@@ -300,6 +319,9 @@ def test_profile_merge_reaches_geometry_and_canonical_save(family: str, base: st
         "a = 45", "a = 30+5*sin(p)^2"
     ).replace("r0 = 12.7", "r0 = 11") + "Rot = 10\n"
     sampling = "Mesh.AngularSegments = 8\nMesh.LengthSegments = 20\nMesh.WallThickness = 2\n"
+    if not PROFILE_MERGE_SUPPORTED:
+        assert_repeated_profile_refused(text + sampling)
+        return
     parsed, expected = [parse(source + sampling) for source in (text, merged)]
     assert parsed.design == expected.design
     assert {item.key for item in parsed.ignored_settings} >= {f"{family}.Rot"}
@@ -328,14 +350,37 @@ def test_saved_repeated_profiles_retain_the_last_block_reading(header: str) -> N
 @pytest.mark.parametrize("member", ["Bogus = 2", "Throat.Ext.Length = 4", "frexp = frexp(1)"])
 def test_profile_merge_does_not_hide_unsupported_earlier_members(member: str) -> None:
     text = BASE.replace(" L = 120", f" {member}\n L = 120") + "OSSE = {\n a = 30\n}\n"
-    with pytest.raises(TextConfigError, match=member.split(" =")[0]):
+    match = member.split(" =")[0] if PROFILE_MERGE_SUPPORTED else "appears more than once"
+    with pytest.raises(TextConfigError, match=match):
         parse(text)
 
 
 def test_profile_merge_does_not_hide_malformed_earlier_rows() -> None:
     text = BASE.replace(" L = 120", " broken row\n L = 120") + "OSSE = {\n a = 30\n}\n"
-    with pytest.raises(TextConfigError, match="broken row"):
+    match = "broken row" if PROFILE_MERGE_SUPPORTED else "appears more than once"
+    with pytest.raises(TextConfigError, match=match):
         parse(text)
+
+
+@pytest.mark.parametrize("sections", [
+    "Report = {\n x = 1\n}\nReport = {\n y = 2\n}\n",
+    "Mesh = {\n}\nMesh = {\n ; empty\n}\n",
+])
+def test_legacy_repeated_blocks_open_without_mesher_merge_helper(monkeypatch, sections: str) -> None:
+    monkeypatch.delattr(mesher_parser, "ath_profile_members", raising=False)
+    text = BASE + sections
+    parsed = parse(text)
+    assert serialize(parsed) == text
+    assert DesignConfig.model_validate(asyncio.run(open_design(text))["design"]) == parsed.design
+    assert geometry_bytes(parsed.design) == geometry_bytes(parse(BASE).design)
+    assert geometry_bytes(parse(serialize(parsed.design)).design) == geometry_bytes(parsed.design)
+
+
+@pytest.mark.parametrize("family, base", [("OSSE", BASE), ("R-OSSE", ROSSE_BASE),
+                                        ("ROSSE", ROSSE_BASE.replace("R-OSSE", "ROSSE"))])
+def test_repeated_profiles_without_mesher_merge_helper_still_refuse(monkeypatch, family: str, base: str) -> None:
+    monkeypatch.delattr(mesher_parser, "ath_profile_members", raising=False)
+    assert_repeated_profile_refused(base + f"{family} = {{\n a = 30\n}}\n")
 
 
 @pytest.mark.parametrize(
