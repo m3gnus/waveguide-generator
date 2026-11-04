@@ -8,7 +8,6 @@ from typing import Any, Iterable, Mapping
 
 import numpy as np
 
-from server.contracts.assembly import ASSEMBLY_RECORD_FEATURE
 from server.contracts.geometry import (
     ImportedSymmetry as ImportedSymmetry,
     ImportedSymmetryUnsupportedError as ImportedSymmetryUnsupportedError,
@@ -399,13 +398,12 @@ def resolve_record_axial_axes(
     if not tags:
         return {}
     declared = {}
-    if ASSEMBLY_RECORD_FEATURE in (record.get("required_features") or ()):
-        for excitation in record.get("excitations") or ():
-            if excitation.get("motion") == "axial" and "motion_axis" in excitation:
-                for source_id in excitation["source_ids"]:
-                    tag = record["source_tags"][source_id]
-                    if tag in tags:
-                        declared[tag] = excitation["motion_axis"]
+    for excitation in record.get("excitations") or ():
+        if excitation.get("motion") == "axial" and "motion_axis" in excitation:
+            for source_id in excitation["source_ids"]:
+                tag = record["source_tags"][source_id]
+                if tag in tags:
+                    declared[tag] = excitation["motion_axis"]
     axes = resolve_source_axes(msh_text, tags, imported_domain_planes(record), declared_axes=declared)
     if record.get("native_source") is not None:
         # Native contour v1 declares the aligned motion axis explicitly;

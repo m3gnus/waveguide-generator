@@ -1035,8 +1035,6 @@ class ImportedGeometrySource(JobModel):
                     "Set generator resistance to 0 ohms or drive the surfaces separately "
                     "when a driver group contains multiple channels."
                 )
-            if len(channels) > 1 and not self.design_assembly and any(channel.patch_weights is not None for channel in channels):
-                raise ValueError("driver groups cannot combine weighted patch channels")
             if group.member_processing is None and any(
                 (channel.motion, channel.driver, channel.exterior_transducer)
                 != (first.motion, first.driver, first.exterior_transducer) for channel in channels[1:]

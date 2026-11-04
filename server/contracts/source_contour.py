@@ -29,9 +29,12 @@ def validate_contour_request(geometry, record):
             raise ValueError("design assembly channels must match the compiled radiator excitations")
         for channel in geometry.drive_channels:
             excitation = expected[channel.id]
+            # Records written before sketched diaphragms omit patch weights;
+            # their prescribed patches all retain unit weight on replay.
+            weights = excitation.get("patch_weights") or dict.fromkeys(excitation["source_ids"], 1.0)
             if (set(channel.source_ids) != set(excitation["source_ids"])
                     or channel.motion != excitation["motion"] or channel.driver is not None
-                    or (channel.patch_weights or dict.fromkeys(channel.source_ids, 1.0)) != excitation["patch_weights"]):
+                    or (channel.patch_weights or dict.fromkeys(channel.source_ids, 1.0)) != weights):
                 raise ValueError("design assembly request contradicts the compiled radiator excitation")
             if channel.exterior_transducer is not None:
                 if excitation["motion"] != "axial":

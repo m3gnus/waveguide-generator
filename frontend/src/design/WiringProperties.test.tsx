@@ -50,7 +50,7 @@ async function oneUndo(action: () => Promise<void>) {
   expect(assembly()).toEqual(after);
 }
 async function mount() {
-  const properties = frontViewProperties(() => undefined, () => true);
+  const properties = frontViewProperties(() => undefined, () => true, () => {});
   const adapter = frontViewAdapter(() => undefined, properties);
   const authority = new ProjectHistoryAuthority(frontViewBinding(emptyAssembly(ids)));
   controller = new PlainController({ initial: authority.current, adapter, authority, changed: () => {} });

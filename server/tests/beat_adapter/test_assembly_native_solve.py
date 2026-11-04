@@ -162,17 +162,30 @@ def _solve(solid, record, monkeypatch, solve_request):
 
 @pytest.mark.parametrize("producer", ["cad", "mesh-file"])
 @pytest.mark.parametrize("normalization", ["rms_velocity", "acceleration_legacy"])
-def test_identical_explicit_physics_ignores_geometry_producer(solid, record, monkeypatch, producer, normalization):
+@pytest.mark.parametrize("weight", [None, -.25, 0.])
+def test_identical_explicit_physics_ignores_geometry_producer(solid, record, monkeypatch, producer, normalization, weight):
     """Same admitted system, native wire, retained bases and recombined result."""
     monkeypatch.setattr(jobs.time, "time", lambda: 1000.)
     assembly = request(excitation_normalization=normalization)
-    imported = request(required_features=[], excitation_normalization=normalization)
-    other_record = {**record, "producer": producer, "required_features": []}
+    payload = assembly.model_dump(mode="json")
+    if weight is not None:
+        payload["geometry"]["drive_channels"][2]["patch_weights"] = {W2+'/piston': weight}
+        assembly = SolveRequest.model_validate(payload)
+    features = ["native-source-contour-v1"] if weight is not None else []
+    payload["geometry"]["required_features"] = features
+    imported = SolveRequest.model_validate(payload)
+    other_record = {**record, "producer": producer, "required_features": features}
     assert jobs.preflight(other_record, solid, imported.geometry.drive_channels, backend="cpu") is None
     before, compiled_before, _ = _solve(solid, record, monkeypatch, assembly)
     after, compiled_after, _ = _solve(solid, other_record, monkeypatch, imported)
     assert compiled_after.wire == compiled_before.wire
     assert after == before
+    bases = deserialize_channel_bases(after["_channel_bases_npz"])["results_by_id"]
+    frequencies = np.asarray([100., 300., 500.])
+    expected = (1. if weight is None else weight) * 3 * (1 + 2j) * frequencies / 100
+    if normalization == "acceleration_legacy":
+        expected /= -2j * np.pi * frequencies
+    np.testing.assert_allclose(bases[W2].pressure_complex[:, 0, 0], expected)
     replay = SolveRequest.model_validate_json(imported.model_dump_json())
     stored = {key: value for key, value in after.items() if not key.startswith("_")}
     recombined = recombine_stored_results(stored, after["_channel_bases_npz"], replay.geometry.combine, replay)
@@ -429,12 +442,22 @@ def test_wired_submission_selects_by_coupled_capability(engine, available):
             asyncio.run(resolve_imported_submission(validated, registry, request_refusal=None))
 
 
-def test_signed_prescribed_weights_reach_the_shared_beat_bases(solid, record):
-    from server.jobs.models import DriveChannel
+@pytest.mark.parametrize('producer,features', [
+    ('design-assembly', ['wg-design-assembly-v1']),
+    ('cad', ['native-source-contour-v1']), ('mesh-file', ['native-source-contour-v1']),
+])
+def test_signed_prescribed_weights_reach_the_shared_beat_bases(solid, record, producer, features):
     from server.solver.beat_adapter.request import imported_source_bases
     sources = ['horn-throat', W1+'/piston']
-    bases, ports = imported_source_bases(record, solid, [DriveChannel(
-        id='sketch', source_ids=sources, motion='normal', patch_weights=dict(zip(sources, [1., -.25])))])
+    payload = request(combine=False).model_dump(mode='json')
+    payload['geometry'].update(required_features=features, drive_channels=[
+        dict(id='sketch', source_ids=sources, motion='normal', patch_weights=dict(zip(sources, [1., -.25]))),
+        dict(id='other', source_ids=[W2+'/piston'], motion='normal'),
+    ], driver_groups=[dict(id='group', channel_ids=['sketch', 'other'],
+                           member_processing={'sketch': {}, 'other': {}})])
+    geometry = SolveRequest.model_validate(payload).geometry
+    record = {**record, 'producer': producer, 'required_features': features}
+    bases, ports = imported_source_bases(record, solid, geometry.drive_channels[:1])
     assert [b.weight for b in bases] == [1., -.25]
     assert len(ports['sketch']) == 2
 

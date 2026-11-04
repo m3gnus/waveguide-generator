@@ -1,5 +1,5 @@
 import type { CadSolveSetup } from '../api/cadOperations';
-import { effectiveImportedSetup, importedModelBlocker } from '../stores/importedModel';
+import { effectiveImportedSetup, importedModelBlocker, useImportedModelStore } from '../stores/importedModel';
 import { exteriorTransducerError } from '../stores/exteriorTransducer';
 import type { ImportedSolvePlan, ImportedSolveSubmission, ModelSolvePress } from './actions';
 import { bindImportedSetup, type ImportedSetup, type PreparedMeshIdentity } from './importedSetup';
@@ -317,9 +317,11 @@ export function incompleteDriverBlocker(state: Pick<SimulationData, 'driveChanne
 }
 
 /** Channel physics has one wire owner for CAD and file inputs. */
-export function simulationDriverGeometry(state: Pick<SimulationData, 'driveChannels' | 'channelDrivers' | 'driveVoltageV' | 'maxDriveVoltageV'>, retained?: ImportedSetup['geometry']): Pick<ImportedSetup['geometry'], 'drive_channels' | 'drive_voltage_v' | 'max_drive_voltage_v' | 'excitation_normalization'> {
+export function simulationDriverGeometry(state: Pick<SimulationData, 'driveChannels' | 'channelDrivers' | 'driveVoltageV' | 'maxDriveVoltageV'>, retained?: Pick<ImportedSetup['geometry'], 'excitation_normalization' | 'drive_voltage_v'>): Pick<ImportedSetup['geometry'], 'drive_channels' | 'drive_voltage_v' | 'max_drive_voltage_v' | 'excitation_normalization'> {
   return {
-      excitation_normalization: retained?.excitation_normalization ?? 'acceleration_legacy',
+      // Missing normalization is part of a legacy setup's replay contract.
+      ...(retained && retained.excitation_normalization === undefined ? {}
+        : { excitation_normalization: retained?.excitation_normalization ?? 'acceleration_legacy' }),
       drive_channels: state.driveChannels.map((channel) => {
         const driver = submittedDriver(state, channel);
         return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
@@ -349,7 +351,7 @@ export function simulationGeometry(
   state: Parameters<typeof combineWire>[0] & Pick<SimulationData, 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'>,
   sources: readonly RoleSource[],
   topology: PassiveCardioidTopology | null,
-  retained?: ImportedSetup['geometry'],
+  retained?: Pick<ImportedSetup['geometry'], 'excitation_normalization' | 'drive_voltage_v'>,
 ): { drivers: ReturnType<typeof simulationDriverGeometry>; effects: Partial<ImportedSetup['geometry']> } {
   const present = hasPassiveCardioidSurface(sources);
   const blocker = present ? passiveCardioidBlocker(state, topology) : null;
@@ -376,7 +378,13 @@ export function resolveCadImportedSetup(
   if (nativeError) throw new Error(nativeError);
   const fem = !state.exteriorOnly && (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0;
   const policy = resolveExteriorDriverPolicy(state.driveChannels, solveStore, 'block', fem);
-  const { drivers, effects } = simulationGeometry({ ...state, driveChannels: policy.channels }, state.selectedBundle?.sources ?? [], cadPassiveCardioidTopology(state));
+  const model = useImportedModelStore.getState();
+  const retained = model.input === 'cad' && model.prepared?.ingest_id === state.ingestRecord?.ingest_id
+    ? model.setup ?? model.setupEditBase?.retained : null;
+  // CAD's effective setup preserves retained voltage fields separately; the
+  // controls inherit only the saved excitation convention here.
+  const { drivers, effects } = simulationGeometry({ ...state, driveChannels: policy.channels }, state.selectedBundle?.sources ?? [], cadPassiveCardioidTopology(state),
+    retained ? { excitation_normalization: retained.geometry.excitation_normalization } : undefined);
   const options = solveStore.options() as ImportedSolveSubmission['options'];
   if (solveStore.frequencyMode === 'range') {
     options.frequency_range = [state.frequencyStartHz, state.frequencyEndHz];

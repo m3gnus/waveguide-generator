@@ -127,8 +127,11 @@ def test_old_mesher_cannot_silently_build_a_classic_source(monkeypatch):
         assembly_mesher_config(config)
 
 
-@pytest.mark.parametrize('weight', [1., 0.])
-def test_prescribed_axial_annulus_uses_compiled_axis_despite_small_net_area(weight):
+@pytest.mark.parametrize('producer,features', [
+    ('design-assembly', ['wg-design-assembly-v1']), ('cad', []), ('mesh-file', []),
+])
+@pytest.mark.parametrize('weight', [1., 0., -.25])
+def test_prescribed_axial_annulus_uses_compiled_axis_despite_small_net_area(weight, producer, features):
     from server.jobs.models import DriveChannel
     from server.solver.beat_adapter.request import build_imported_request, imported_source_bases
     from server.solver.beat_transducer_imported import excitation_plan
@@ -147,7 +150,7 @@ def test_prescribed_axial_annulus_uses_compiled_axis_despite_small_net_area(weig
     text = _msh(nodes, triangles)
     with pytest.raises(SourceAxisError, match='no outward axis'):
         resolve_source_axes(text, [101])
-    record = {'required_features': ['wg-design-assembly-v1'], 'source_tags': {'hf/annulus': 101},
+    record = {'producer': producer, 'required_features': features, 'source_tags': {'hf/annulus': 101},
               'normalisation': {'assembly_frame_is_solver_frame': True},
               'excitations': [{'id': 'hf', 'source_ids': ['hf/annulus'], 'motion': 'axial',
                                'motion_axis': [0., 0., 1.]}]}
