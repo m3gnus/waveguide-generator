@@ -51,16 +51,22 @@ def _post_asgi(path: str, payload: dict) -> tuple[int, bytes]:
     async def call() -> tuple[int, bytes]:
         messages: list[dict] = []
         delivered = False
+        response_complete = asyncio.Event()
 
         async def receive() -> dict:
             nonlocal delivered
             if not delivered:
                 delivered = True
                 return {"type": "http.request", "body": body, "more_body": False}
+            # End-of-body is not a client disconnect. Keep the client alive
+            # while threaded exports run, as a real ASGI transport does.
+            await response_complete.wait()
             return {"type": "http.disconnect"}
 
         async def send(message: dict) -> None:
             messages.append(message)
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                response_complete.set()
 
         await app(
             {
