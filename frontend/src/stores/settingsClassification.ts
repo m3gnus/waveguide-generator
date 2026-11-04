@@ -99,8 +99,6 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   designDraft: 'solve-affecting',
   designFiles: 'inert',
   sourceContourDraft: 'inert',
-  sourceAssemblyDraft: 'inert',
-  sourceAssemblyAuthoring: 'inert',
   // Display only: which annotations the sketch canvas draws.
   sketchView: 'inert',
   // Display only: which held CAD requests the pop-up leaves behind the chip.

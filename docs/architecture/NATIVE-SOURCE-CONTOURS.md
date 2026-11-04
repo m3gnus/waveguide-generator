@@ -52,8 +52,8 @@ the producer revision before moving the consumer dependency pin.
 `native-shared-horn-woofer-v1` carries two independent physical diaphragms in one
 full-domain scattering mesh and one front-centred observation frame. Per-source
 frames, source-qualified patch IDs and exact channel weights survive admission,
-dispatch and result metadata. WG's assembly editor supplies the actual authoring
-and preparation caller; see `source-contour-editor.md`.
+dispatch and result metadata. The legacy artifact reader remains after retirement
+of the Experimental assembly editor; see `source-contour-editor.md`.
 
 The additive `native-phase-plug-passages-v1` requires the mesher's canonical
 `SourceAssembly.phase_plugs` and `docs/phase-plug-passages.md` contract. The native

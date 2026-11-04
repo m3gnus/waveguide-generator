@@ -7,7 +7,7 @@ import { entityPoints } from '../model';
 import { toSolverSketch } from '../session';
 import { SketchController } from '../controller';
 import { applySourceCommand } from './sourceContour';
-import { INITIAL_ASSEMBLY } from '../../design/SourceAssemblyEditor';
+import { INITIAL_ASSEMBLY } from '../../design/sourceContextTestSupport';
 import { INITIAL_SOURCE } from '../../design/sourceContourEditing';
 import { sourceEditorApi } from '../../api/sourceEditor';
 import { namespaceStorage } from '../../stores/durableSettings';
@@ -119,7 +119,7 @@ describe('context ownership and canonical separation', () => {
     const malformed = structuredClone(envelope); malformed.sketch.entities.at(-1)!.construction = false;
     storage.setItem('', JSON.stringify(malformed)); expect(readSourceAuthoring(INITIAL_SOURCE).sketch).toEqual(initial.sketch);
   });
-  it('keeps actual validate and all assembly request bodies byte-identical with materialised context', async () => {
+  it('keeps actual validation request bodies byte-identical with materialised context', async () => {
     const bodies: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (_url, init) => { bodies.push(init.body); return { ok: true, json: async () => ({}), blob: async () => new Blob() }; }));
     const initial = seed(INITIAL_SOURCE), at = materialiseContext(initial.sketch, horn(), 'plug/core/inlet');
@@ -127,13 +127,7 @@ describe('context ownership and canonical separation', () => {
     if (!before.ok || !after.ok) throw new Error('Fixture must lower');
     await sourceEditorApi.validate(before.document); await sourceEditorApi.validate(after.document);
     expect(bodies[0]).toBe(bodies[1]);
-    const baseline = { ...structuredClone(INITIAL_ASSEMBLY), horn_config: { formula: 'OSSE' } };
-    for (const action of [sourceEditorApi.validateAssembly, sourceEditorApi.exportAssembly, sourceEditorApi.ingestAssembly]) {
-      await action({ ...baseline, horn: before.document }); await action({ ...baseline, horn: after.document });
-      expect(bodies.at(-1)).toBe(bodies.at(-2));
-    }
     expect(bodies.every(body => !body.includes('fingerprint') && !body.includes('context'))).toBe(true);
-    await sourceEditorApi.hornWall({ formula: 'OSSE' }); expect(bodies.at(-1)).toBe('{"horn_config":{"formula":"OSSE"}}');
   });
 });
 

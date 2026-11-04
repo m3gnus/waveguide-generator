@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 
 from server.platform import json_file
-from server.design.native import NATIVE_FORMULAS
 from server.cadlink.intake.native_source import read_native_source
 from server.source_editor import PresetStore, create_router
 from server.tests.native_geometry_oracle import certificate, segment
@@ -311,16 +310,12 @@ def test_real_bundle_reopens_exact_recipe_and_closed_mesh(client, kind, attachme
     assert not list((tmp_path / "tmp").iterdir())
 
 
-@pytest.mark.parametrize("formula", sorted(NATIVE_FORMULAS))
-def test_assembly_horn_profile_refuses_native_formulas_explicitly(client, formula):
-    from server.tests.test_native_formulas import design_payload
-
-    response = client.post("/api/source-editor/assembly/horn-profile", json=design_payload(formula))
-    assert response.status_code == 422
-    assert response.json()["detail"] == (
-        f"{formula} cannot be attached to a source assembly. "
-        "Choose OSSE, R-OSSE, ICW or Custom profile."
-    )
+@pytest.mark.parametrize("action", ["horn-profile", "horn-wall", "validate", "export", "ingest"])
+def test_retired_assembly_routes_are_absent(client, action):
+    path = "/api/source-editor/assembly/" + action
+    response = client.post(path, json={})
+    assert response.status_code == 404
+    assert path not in client.app.openapi()["paths"]
 
 
 def test_preset_authoring_is_opaque_beside_legacy_library_and_deleted(client, tmp_path):

@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { Editor } from './SourceContourEditor';
 import { sourceEditorApi } from '../api/sourceEditor';
 import { hornAssemblyContext, standaloneContext, wooferAssemblyContext } from '../sketch/adapters/sourceContext';
-import { INITIAL_ASSEMBLY } from './SourceAssemblyEditor';
+import { INITIAL_ASSEMBLY } from './sourceContextTestSupport';
 import { expandedPreset } from '../sketch/adapters/presetTestSupport';
 import { realSessionReady } from '../sketch/testSupport';
 import { seedPreset } from '../sketch/adapters/sourcePreset';

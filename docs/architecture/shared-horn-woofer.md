@@ -9,22 +9,17 @@ and certified within0.15mm on all moving and rigid facets. Existing22000-triangl
 and host-memory admission gates remain unchanged. A restricted field refines
 only the verified rigid horn-wall selector; it never becomes a source role.
 
-POST /api/source-editor/assembly/validate accepts horn and woofer SourceDocuments,
-dimensions and optional mesh_size_mm. Both documents are the contour editor's
-canonical shape/drive format. Dimensions are width_mm, height_mm, depth_mm,
-front_z_mm, horn_xy_mm, horn_length_mm, mouth_radius_mm, woofer_xy_mm and
-aperture_radius_mm. Physical source, rim and channel identities must be distinct.
-The initial scope uses parallel+Z axes and a straight circular conical horn.
+The old Experimental assembly editor and its assembly authoring routes are
+retired. These native artifact and imported-request contracts remain for existing
+bundles and stored runs. `server.cadlink.intake.native_source` delegates shared
+assembly recipes to `native_assembly.read_assembly`, which reconstructs the exact
+mesher `SourceAssembly` recipe. Standalone baffle export also still needs the
+mesher's `FrontBaffle`; neither module can be removed with the old editor.
 
-POST /api/source-editor/assembly/ingest builds the exact native bundle and
-publishes an immutable imported ingestion in the existing CAD-link registry.
-Its geometry response is a complete imported SolveRequest.geometry; submit it
-to the existing job API with engine metal. It includes exactly two authoritative
-channels, explicit required features, immutable artifact/manifest hashes and
-mesh sizes. It also returns source identities/frames and geometry certification.
-The endpoint is restart-gated and shares the bounded source export lock.
-Older installed meshers refuse this feature with503; application startup stays
-usable. The editor's existing single-source UI is unchanged.
+Stored results replay through the existing job results API directly from their
+persisted payload. Reopening an imported run uses its stored workspace and
+prepared mesh through the shared imported-model workflow. It does not invoke
+the retired editor or preparation helper.
 
 Source-qualified patch IDs are percent-encoded source/local identities, separated
 by /. Source frames identify the horn throat and woofer rim in metres; the common

@@ -175,34 +175,6 @@
     }
   },
   {
-    "route": "/api/source-editor/assembly/horn-profile:horn",
-    "status": 422,
-    "body": {
-      "detail": "General horn attachment requires a rotational wall and circular coaxial rims; noncircular or azimuth-varying geometry is unsupported. Use circular cross-sections and constant profile values around the horn before attaching it."
-    }
-  },
-  {
-    "route": "/api/source-editor/assembly/validate:depth",
-    "status": 422,
-    "body": {
-      "detail": "Horn source must clear enclosure back by more than 0.1 mm. Increase Enclosure depth to leave more than 0.1 mm behind the horn source."
-    }
-  },
-  {
-    "route": "/api/source-editor/assembly/validate:overlap",
-    "status": 422,
-    "body": {
-      "detail": "Horn and woofer apertures must be separated by more than 0.1 mm. Move the woofer away from the horn to leave more than 0.1 mm between their openings."
-    }
-  },
-  {
-    "route": "/api/source-editor/assembly/validate:plug",
-    "status": 422,
-    "body": {
-      "detail": "Passive bodies must clear source and mouth by more than 0.1 mm. Increase Plug inlet Z or reduce Plug outlet Z to leave more than 0.1 mm at the source and mouth."
-    }
-  },
-  {
     "route": "/api/source-editor/validate:arc",
     "status": 422,
     "body": {

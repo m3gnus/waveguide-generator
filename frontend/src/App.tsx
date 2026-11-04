@@ -3,7 +3,6 @@ import { bundleUrl, reportClientError } from './api/diagnostics';
 import { AppQueryProvider } from './queryClient';
 import { Shell } from './shell/Shell';
 import { SourceContourDialog } from './design/SourceContourEditor';
-import { SourceAssemblyDialog } from './design/SourceAssemblyEditor';
 import { FrontWorkspaceDialog } from './design/FrontWorkspace';
 import { failureWords } from './api/httpError';
 
@@ -97,5 +96,5 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, { messa
 }
 
 export default function App() {
-  return <AppErrorBoundary><AppQueryProvider><Shell /><SourceContourDialog /><SourceAssemblyDialog /><FrontWorkspaceDialog /></AppQueryProvider></AppErrorBoundary>;
+  return <AppErrorBoundary><AppQueryProvider><Shell /><SourceContourDialog /><FrontWorkspaceDialog /></AppQueryProvider></AppErrorBoundary>;
 }

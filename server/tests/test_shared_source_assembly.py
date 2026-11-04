@@ -80,7 +80,7 @@ def artifacts(tmp_path_factory):
     return result
 
 
-def ingest(path, root):
+def ingest(path, root, *, mesh_size_mm=None):
     manifest, _, _, _ = read_native_source(path)
     store = CadLinkStore(root / "registry.sqlite")
     try:
@@ -90,10 +90,11 @@ def ingest(path, root):
             store=store,
             data_dir=root,
             sizes={
-                "rigid_size_mm": 4,
-                "transition_mm": 3,
+                "rigid_size_mm": 4 if mesh_size_mm is None else mesh_size_mm,
+                "transition_mm": 3 if mesh_size_mm is None else mesh_size_mm,
                 "source_size_mm": {
-                    p["id"]: 2 for p in manifest["patches"] if p["role"] == "moving"
+                    p["id"]: 2 if mesh_size_mm is None else mesh_size_mm
+                    for p in manifest["patches"] if p["role"] == "moving"
                 },
             },
         )
@@ -387,56 +388,6 @@ def test_real_job_admission_and_common_frame_refusal(artifacts, tmp_path):
     bad["normalisation"]["source_frame"]["origin_m"][0] = 0.1
     with pytest.raises(ValueError, match="frame"):
         validate_contour_request(request(record).geometry, bad)
-
-
-def test_real_authoring_ingestion_api(tmp_path):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from server.source_editor import canonical_document, create_router
-
-    app = FastAPI()
-    store = CadLinkStore(tmp_path / "registry.sqlite")
-    store.initialize()
-    app.state.cadlink_store = store
-    app.include_router(create_router(tmp_path))
-    model, drives = case(True)
-    recipe = model.to_dict()
-    body = {
-        "horn": canonical_document(model.horn, drives[0]),
-        "woofer": canonical_document(model.woofer, drives[1]),
-        "dimensions": {
-            k: v for k, v in recipe.items() if k not in ("horn", "woofer", "version", "frame")
-        },
-        "mesh_size_mm": 3,
-    }
-    try:
-        with TestClient(app) as client:
-            validated = client.post("/api/source-editor/assembly/validate", json=body)
-            assert validated.status_code == 200, validated.text
-            assert validated.json()["source_origins_mm"] == {
-                "horn": [-13, 17, -17],
-                "woofer": [9, -15, 7],
-            }
-            bad = deepcopy(body)
-            bad["dimensions"]["horn_xy_mm"] = [9, -15]
-            assert client.post("/api/source-editor/assembly/ingest", json=bad).status_code == 422
-            result = client.post("/api/source-editor/assembly/ingest", json=body)
-            assert result.status_code == 200, result.text
-            geometry = result.json()["geometry"]
-            raw = {
-                "geometry": geometry,
-                "options": {"engine": "metal", "frequencies_hz": [100, 200]},
-            }
-            req = SolveRequest.model_validate(raw)
-            record = json.loads(store.get_ingest(geometry["ingest_id"])["record_json"])
-            validate_contour_request(req.geometry, record)
-            assert result.json()["geometric_quality"]["tolerance_mm"] == 0.15
-            assert len(req.geometry.drive_channels) == 2
-            assert "woofer/surround" in req.geometry.drive_channels[1].source_ids
-            assert req.geometry.drive_channels[1].patch_weights["woofer/surround"] == 0
-            assert "woofer/land" not in req.geometry.drive_channels[1].source_ids
-    finally:
-        store.close()
 
 
 @pytest.mark.parametrize(

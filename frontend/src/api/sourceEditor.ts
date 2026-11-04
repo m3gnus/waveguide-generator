@@ -1,6 +1,5 @@
 import { activityStore } from '../shell/activity';
 import { deadlineFetch } from './deadlineFetch';
-import type { CadReturnIngestRecord } from './cadlink';
 import { httpErrorMessage } from './httpError';
 
 export interface SourcePoint { id: string; r_mm: number; z_mm: number }
@@ -28,13 +27,7 @@ export interface SourceAssemblyDocument {
     woofer_xy_mm: [number, number]; aperture_radius_mm: number };
   phase_plugs: PhasePlug[]; mesh_size_mm: number; passage_refinement: 1 | 2 | 4;
 }
-export interface AssemblyValidation {
-  recipe?: { horn_length_mm: number; mouth_radius_mm: number };
-  geometry_sha256: string; horn_section_mm: Record<string, [number, number][]>;
-  passage_contract: { open_passage_count: number; clearances_mm: Record<string, number>; surface_tolerance_mm: number } | null;
-}
 export interface HornWall { wall_mm: [number, number][]; throat_radius_mm: number; horn_length_mm: number; mouth_radius_mm: number }
-export interface AssemblyIngestion { ingestion: CadReturnIngestRecord }
 
 async function response(path: string, method = 'GET', body?: unknown): Promise<Response> {
   const result = await deadlineFetch(fetch, `/api/source-editor${path}`, {
@@ -46,18 +39,7 @@ async function response(path: string, method = 'GET', body?: unknown): Promise<R
   }
   return result;
 }
-function assemblyPayload(document: SourceAssemblyDocument) {
-  if (!document.horn_config) return document;
-  const { horn_length_mm: _length, mouth_radius_mm: _radius, ...dimensions } = document.dimensions;
-  return { ...document, dimensions };
-}
 export const sourceEditorApi = {
-  hornWall: async (horn_config: Record<string, unknown>): Promise<HornWall> => (await response('/assembly/horn-wall', 'POST', { horn_config })).json(),
-  hornProfile: async (design: Record<string, unknown>): Promise<{ horn_config: Record<string, unknown>; throat_radius_mm: number; horn_length_mm: number; mouth_radius_mm: number; wall_max_radius_mm?: number }> => (await response('/assembly/horn-profile', 'POST', design)).json(),
-  validateAssembly: async (document: SourceAssemblyDocument): Promise<AssemblyValidation> => (await response('/assembly/validate', 'POST', assemblyPayload(document))).json(),
-  ingestAssembly: async (document: SourceAssemblyDocument): Promise<AssemblyIngestion> => (await response('/assembly/ingest', 'POST', assemblyPayload(document))).json(),
-  exportAssembly: async (document: SourceAssemblyDocument): Promise<Blob> => activityStore.track({ kind: 'export', label: 'Exporting assembly STEP' }, async () =>
-    (await response('/assembly/export', 'POST', assemblyPayload(document))).blob()),
   validate: async (document: SourceDocument): Promise<SourceValidation> => (await response('/validate', 'POST', document)).json(),
   expand: async (kind: 'flat' | 'dome' | 'cone', dimensions: Record<string, number>, document: SourceDocument): Promise<SourceValidation> => (await response('/expand', 'POST', {
     kind, dimensions, physical_source_id: document.contour.physical_source_id, rim_id: document.contour.rim_id, channel_id: document.drive.channel_id, motion: document.drive.motion,

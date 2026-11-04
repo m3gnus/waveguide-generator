@@ -1,4 +1,3 @@
-import type { SourceAssemblyDocument } from './sourceEditor';
 import { activityStore } from '../shell/activity';
 import { afterEach, expect, it, vi } from 'vitest';
 import { sourceEditorApi } from './sourceEditor';
@@ -35,14 +34,12 @@ it('sends authoring beside the unchanged preset document and omits it from valid
   expect(calls.at(-1)!.body).toBe(JSON.stringify({ document: INITIAL_SOURCE, attachment, mesh_size_mm: 2 }));
 });
 
-it.each(['source', 'assembly'] as const)('tracks %s STEP export through success and failure', async kind => {
+it('tracks source STEP export through success and failure', async () => {
   for (const fail of [false, true]) {
     activityStore.reset();
     let resolve!: (value: Response) => void;
     vi.stubGlobal('fetch', () => new Promise<Response>(done => { resolve = done; }));
-    const pending = kind === 'source'
-      ? sourceEditorApi.export(INITIAL_SOURCE, { kind: 'baffle', dimensions: {} }, 2)
-      : sourceEditorApi.exportAssembly({ horn: INITIAL_SOURCE } as SourceAssemblyDocument);
+    const pending = sourceEditorApi.export(INITIAL_SOURCE, { kind: 'baffle', dimensions: {} }, 2);
     expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'export' }]);
     const settled = pending.catch(error => error);
     resolve(new Response(fail ? JSON.stringify({ detail: 'export failed' }) : 'STEP', { status: fail ? 422 : 200 }));

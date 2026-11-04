@@ -23,36 +23,6 @@ def capture(route, response):
     return data
 
 
-@pytest.mark.parametrize("case", ["depth", "overlap", "plug", "horn"])
-def test_source_assembly_real_routes(case, tmp_path):
-    from server.source_editor import create_router
-    from test_source_assembly_editor import document
-
-    body = document()
-    path = "/api/source-editor/assembly/validate"
-    expected = {
-        "depth": "Enclosure depth",
-        "overlap": "woofer",
-        "plug": "Plug inlet Z",
-        "horn": "circular",
-    }[case]
-    if case == "depth":
-        body["dimensions"]["depth_mm"] = 24.05
-    if case == "overlap":
-        body["dimensions"]["woofer_xy_mm"] = [-13, 17]
-    if case == "plug":
-        body["phase_plugs"][0]["z0_mm"] = 0
-    if case == "horn":
-        path = "/api/source-editor/assembly/horn-profile"
-        body = {"formula": "OSSE", "r0": 4, "a": "32+5*cos(2*p)", "a0": 6, "L": 24}
-    app = FastAPI()
-    app.include_router(create_router(tmp_path))
-    response = TestClient(app).post(path, json=body)
-    assert response.status_code == 422, response.text
-    data = capture(path + ":" + case, response)
-    assert expected in str(data)
-
-
 @pytest.mark.parametrize(
     "case", ["roles", "scale", "segments", "velocity", "freeform", "frequencies", "edge", "ath"]
 )
@@ -447,6 +417,8 @@ def test_ui_catalog_matches_the_installed_mesher_package(tmp_path):
             str(frontend / "node_modules/vitest/vitest.mjs"),
             "run",
             "src/design/refusalCatalog.test.ts",
+            "--configLoader=runner",
+            "--cache=false",
         ],
         cwd=frontend,
         env={**os.environ, "CONTROL_CATALOG_OUTPUT": str(output)},
@@ -456,9 +428,14 @@ def test_ui_catalog_matches_the_installed_mesher_package(tmp_path):
         encoding="utf-8",
         check=True,
     )
-    assert json.loads(output.read_text(encoding="utf-8")) == json.loads(
+    active = json.loads(output.read_text(encoding="utf-8"))
+    installed = json.loads(
         files("hornlab_mesher").joinpath("control_labels.json").read_text(encoding="utf-8")
     )
+    # The retained legacy artifact readers still use the mesher's old assembly
+    # control names. Every active UI control must keep the same identity and
+    # wording; retired UI controls no longer need a current frontend owner.
+    assert active == {key: installed[key] for key in active}
 
 
 def test_fem_symmetry_refusal_crosses_the_projector(monkeypatch):

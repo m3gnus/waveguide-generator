@@ -7,7 +7,7 @@ import { applyCommand } from '../ops';
 import { parseSketch, toJSON, entityPoints } from '../model';
 import { contextData, materialiseContext } from '../context';
 import { hornAssemblyContext, standaloneContext } from './sourceContext';
-import { INITIAL_ASSEMBLY } from '../../design/SourceAssemblyEditor';
+import { INITIAL_ASSEMBLY } from '../../design/sourceContextTestSupport';
 import { parseSourceAuthoring, serializeSourceAuthoring } from './sourceAuthoring';
 import { withSourceContext } from './sourceContour';
 import { arcGeometry } from '../geometry';

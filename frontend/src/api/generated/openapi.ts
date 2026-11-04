@@ -2246,98 +2246,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/source-editor/assembly/export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Assembly Export Endpoint */
-        post: operations["assembly_export_endpoint_api_source_editor_assembly_export_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/source-editor/assembly/horn-profile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Assembly Horn Profile Endpoint
-         * @description Copy the current horn profile onto the assembly's new enclosure.
-         *
-         *     The action deliberately selects the full horn wall and the assembly
-         *     enclosure, independently of the old design's source, shell and mesh
-         *     symmetry. Profile/morph/guide/scale/axis changes remain authoritative.
-         */
-        post: operations["assembly_horn_profile_endpoint_api_source_editor_assembly_horn_profile_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/source-editor/assembly/horn-wall": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Assembly Horn Wall Endpoint */
-        post: operations["assembly_horn_wall_endpoint_api_source_editor_assembly_horn_wall_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/source-editor/assembly/ingest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Assembly Ingest Endpoint */
-        post: operations["assembly_ingest_endpoint_api_source_editor_assembly_ingest_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/source-editor/assembly/validate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Assembly Validate Endpoint */
-        post: operations["assembly_validate_endpoint_api_source_editor_assembly_validate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/source-editor/expand": {
         parameters: {
             query?: never;
@@ -2887,42 +2795,6 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
-        /** AssemblyDimensions */
-        AssemblyDimensions: {
-            /**
-             * Aperture Radius Mm
-             * @default 0
-             */
-            aperture_radius_mm?: number;
-            /** Depth Mm */
-            depth_mm: number;
-            /** Front Z Mm */
-            front_z_mm: number;
-            /** Height Mm */
-            height_mm: number;
-            /** Horn Length Mm */
-            horn_length_mm?: number | null;
-            /** Horn Xy Mm */
-            horn_xy_mm: [
-                number,
-                number
-            ];
-            /** Mouth Radius Mm */
-            mouth_radius_mm?: number | null;
-            /** Width Mm */
-            width_mm: number;
-            /**
-             * Woofer Xy Mm
-             * @default [
-             *       0,
-             *       0
-             *     ]
-             */
-            woofer_xy_mm?: [
-                number,
-                number
-            ];
-        };
         /**
          * AssemblyDriver
          * @description Optional T/S driver of one radiator, bound by identity, never label.
@@ -3007,29 +2879,6 @@ export interface components {
             x_mm?: number | null;
             /** Y Mm */
             y_mm?: number | null;
-        };
-        /** AssemblyRequest */
-        AssemblyRequest: {
-            dimensions: components["schemas"]["AssemblyDimensions"];
-            horn: components["schemas"]["SourceDocument"];
-            /** Horn Config */
-            horn_config?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Mesh Size Mm
-             * @default 2
-             */
-            mesh_size_mm?: number;
-            /**
-             * Passage Refinement
-             * @default 1
-             * @enum {integer}
-             */
-            passage_refinement?: 1 | 2 | 4;
-            /** Phase Plugs */
-            phase_plugs?: components["schemas"]["PhasePlug"][];
-            woofer?: components["schemas"]["SourceDocument"] | null;
         };
         /** AssemblySignalGroup */
         AssemblySignalGroup: {
@@ -5112,13 +4961,6 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
-        /** HornWallRequest */
-        HornWallRequest: {
-            /** Horn Config */
-            horn_config: {
-                [key: string]: unknown;
-            };
-        };
         /** ICWConfig */
         ICWConfig: {
             L?: components["schemas"]["Expr"] | null;
@@ -6508,23 +6350,6 @@ export interface components {
             result_kind: "parametric";
         } & {
             [key: string]: unknown;
-        };
-        /** PhasePlug */
-        PhasePlug: {
-            /** Id */
-            id: string;
-            /** Inner0 Mm */
-            inner0_mm: number;
-            /** Inner1 Mm */
-            inner1_mm: number;
-            /** Outer0 Mm */
-            outer0_mm: number;
-            /** Outer1 Mm */
-            outer1_mm: number;
-            /** Z0 Mm */
-            z0_mm: number;
-            /** Z1 Mm */
-            z1_mm: number;
         };
         /**
          * PlanAdjustment
@@ -11996,179 +11821,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SolverMeshResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    assembly_export_endpoint_api_source_editor_assembly_export_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AssemblyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/zip": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    assembly_horn_profile_endpoint_api_source_editor_assembly_horn_profile_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DesignConfig"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    assembly_horn_wall_endpoint_api_source_editor_assembly_horn_wall_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["HornWallRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    assembly_ingest_endpoint_api_source_editor_assembly_ingest_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AssemblyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    assembly_validate_endpoint_api_source_editor_assembly_validate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AssemblyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
                 };
             };
             /** @description Validation Error */

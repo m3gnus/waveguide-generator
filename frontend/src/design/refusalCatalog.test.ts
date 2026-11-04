@@ -6,7 +6,7 @@ import { PARAMETER_SECTION_DEFINITIONS, refusalControlCatalog } from './paramete
 
 // Editor controls keep their labels in their existing JSX owner. Extract the
 // literal labels for the backend catalog without adding a runtime UI dependency.
-const editors = ['SourceContourEditor.tsx', 'SourceAssemblyEditor.tsx', 'FreeformEditors.tsx', 'FrontProperties.tsx', 'ParamPanel.tsx'];
+const editors = ['SourceContourEditor.tsx', 'FreeformEditors.tsx', 'FrontProperties.tsx', 'ParamPanel.tsx'];
 const labels = new Set<string>();
 for (const file of editors) {
   const source = readFileSync(fileURLToPath(new URL(file, import.meta.url)).replace(/^\/@fs/, '')).toString();

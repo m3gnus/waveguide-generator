@@ -46,7 +46,7 @@ QUIET_REQUEST_ROUTES: frozenset[tuple[str, str]] = frozenset(
 #: work that outlives its request -- a deferred viewport, and a capture of the
 #: CAD document that copies tens of megabytes -- and it is refused before its
 #: handler runs, so the return stays on disk exactly as it was.
-RESTART_GATED_POSTS = frozenset({"/api/cadlink/ingest", "/api/source-editor/export", "/api/source-editor/assembly/ingest", "/api/source-editor/assembly/export"})
+RESTART_GATED_POSTS = frozenset({"/api/cadlink/ingest", "/api/source-editor/export"})
 
 
 class RequestMiddleware:

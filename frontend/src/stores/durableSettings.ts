@@ -60,8 +60,6 @@ export const SETTINGS_NAMESPACES = {
   designDraft: 'wg2.autosave.v1',
   designFiles: 'wg2.design.files.v1',
   sourceContourDraft: 'wg2.source-contour-draft.v1',
-  sourceAssemblyDraft: 'wg2.source-assembly-draft.v1',
-  sourceAssemblyAuthoring: 'wg2.source-assembly-authoring.v1',
   /** Sketch canvas view toggles: dimensions, names, constraints. */
   sketchView: 'wg2.sketch.view.v1',
   /** Held CAD requests the user answered "Later" for: the pop-up never opens them by itself again. */

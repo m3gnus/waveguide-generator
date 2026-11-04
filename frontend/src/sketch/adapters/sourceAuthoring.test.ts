@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { INITIAL_SOURCE } from '../../design/sourceContourEditing';
 import { materialiseContext } from '../context';
 import { hornAssemblyContext } from './sourceContext';
-import { INITIAL_ASSEMBLY } from '../../design/SourceAssemblyEditor';
+import { INITIAL_ASSEMBLY } from '../../design/sourceContextTestSupport';
 import { lower, seed, withSourceContext } from './sourceContour';
 import { newerEnvelope, parseSourceAuthoring, serializeSourceAuthoring, SOURCE_AUTHORING_VERSIONS } from './sourceAuthoring';
 

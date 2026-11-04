@@ -790,7 +790,7 @@ describe('source editor interactions', () => {
     const { hornAssemblyContext } = await import('../sketch/adapters/sourceContext');
     const { materialiseContext, contextData } = await import('../sketch/context');
     const { serializeSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
-    const { INITIAL_ASSEMBLY } = await import('./SourceAssemblyEditor');
+    const { INITIAL_ASSEMBLY } = await import('./sourceContextTestSupport');
     const state = sourceAdapter.seed(INITIAL_SOURCE);
     const context = hornAssemblyContext(INITIAL_ASSEMBLY.dimensions, [
       { id: 'core', z0_mm: 2, z1_mm: 6, inner0_mm: 0, outer0_mm: 2, inner1_mm: 0, outer1_mm: 3 },
@@ -1374,7 +1374,7 @@ describe('source editor interactions', () => {
     const { wooferAssemblyContext } = await import('../sketch/adapters/sourceContext');
     const { materialiseContext } = await import('../sketch/context');
     const { serializeSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
-    const { INITIAL_ASSEMBLY } = await import('./SourceAssemblyEditor');
+    const { INITIAL_ASSEMBLY } = await import('./sourceContextTestSupport');
     const context = (depth: number) => wooferAssemblyContext({ ...INITIAL_ASSEMBLY.dimensions, depth_mm: depth }, 12.7);
     const doc = structuredClone(INITIAL_SOURCE);
     doc.contour.points = [{ id: 'pole', r_mm: 0, z_mm: 0 }, { id: 'mid', r_mm: 6.35, z_mm: -Math.sqrt(7.5 ** 2 - 6.35 ** 2) }, { id: 'rim', r_mm: 12.7, z_mm: 0 }];
