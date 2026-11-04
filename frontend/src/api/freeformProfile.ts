@@ -6,7 +6,7 @@ import { stagedActivity } from '../shell/stagedActivity';
 
 /**
  * Typed client for the Custom profile (FREEFORM) curve service in
- * `server/preview/freeform.py`. The mesher owns every curve operation; this
+ * `server/jobs/freeform.py`. The mesher owns every curve operation; this
  * module only sends validated designs and checks that each answer belongs to
  * the request that asked for it.
  */

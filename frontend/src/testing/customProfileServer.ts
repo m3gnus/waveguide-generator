@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 import fixtures from '../../../shared/profile-inspection/mesher-profiles.json';
 
-/* Test stand-in for the Custom profile curve service (server/preview/freeform.py) and the profile export. */
+/* Test stand-in for the Custom profile curve service (server/jobs/freeform.py) and the profile export. */
 
 type Wire = Record<string, unknown>;
 type WirePoint = { t: number | { value: number }; r: number | { value: number }; join?: string; angle_deg?: number | null; angle_out_deg?: number | null; handle_in?: [number, number] | null; handle_out?: [number, number] | null };
