@@ -93,7 +93,7 @@ describe('one model display table', () => {
       expect(fieldPlaneJob([job], job.id)).toBe(job);
       expect(femFieldJob([job], job.id)).toBe(job);
       if (imported) {
-        expect(fetcher).toHaveBeenCalledWith(`/api/runs/${job.id}/workspace`, undefined);
+        expect(fetcher).toHaveBeenCalledWith(`/api/runs/${job.id}/workspace`, { signal: expect.any(AbortSignal) });
         expect(currentModelScene(model)?.ingestId).toBe(ingestId);
       } else expect(model.key).toBe(designFingerprint(hydrateJobDesign(job)!));
     }

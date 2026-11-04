@@ -62,6 +62,7 @@ def changed_paths(base: str = "HEAD") -> list[str]:
 def tests_for_changes(paths: list[str]) -> list[str]:
     areas = tomllib.loads(TEST_MAP.read_text(encoding="utf-8"))["areas"]
     selected: set[str] = set()
+    corpus: list[tuple[str, str, tuple[str, ...]]] | None = None
     for path in paths:
         if (
             Path(path).name == "conftest.py"
@@ -80,7 +81,9 @@ def tests_for_changes(paths: list[str]) -> list[str]:
             return FULL_SUITE.copy()
         prefix = max(matches, key=len)
         selected.update(areas[prefix])
-        selected.update(_tests_referencing(path, prefix))
+        if corpus is None:
+            corpus = _test_corpus()
+        selected.update(_tests_referencing(path, prefix, corpus))
         if path.endswith(".py") and path.startswith(SPINE_SOURCES):
             selected.update(t for t in SPINE_TESTS if (REPO_ROOT / t).is_file())
     return sorted(selected)
@@ -94,7 +97,18 @@ SPINE_TESTS = ("server/tests/test_real_pipeline.py",)
 _IMPORT_LINE = re.compile(r"^\s*(?:from\s+[\w.]+\s+)?import\s", re.M)
 
 
-def _tests_referencing(path: str, prefix: str) -> list[str]:
+def _test_corpus() -> list[tuple[str, str, tuple[str, ...]]]:
+    """Read and split each test once for this selection, including nested tests."""
+    corpus = []
+    for tests_dir in ("server/tests", "scripts/tests"):
+        for test in sorted((REPO_ROOT / tests_dir).rglob("test_*.py")):
+            text = test.read_text(encoding="utf-8", errors="replace")
+            imports = tuple(line for line in text.splitlines() if _IMPORT_LINE.match(line))
+            corpus.append((test.relative_to(REPO_ROOT).as_posix(), text, imports))
+    return corpus
+
+
+def _tests_referencing(path: str, prefix: str, corpus: list[tuple[str, str, tuple[str, ...]]]) -> list[str]:
     """Test files that name the changed module or its area, found at run time.
 
     The map's globs are the hand-kept part. This keeps a test that imports the
@@ -113,18 +127,12 @@ def _tests_referencing(path: str, prefix: str) -> list[str]:
     else:
         stem_re = None
     found = []
-    for tests_dir in ("server/tests", "scripts/tests"):
-        for test in sorted((REPO_ROOT / tests_dir).glob("test_*.py")):
-            text = test.read_text(encoding="utf-8", errors="replace")
-            hit = any(needle in text for needle in needles)
-            if not hit and stem_re is not None:
-                hit = any(
-                    stem_re.search(line)
-                    for line in text.splitlines()
-                    if _IMPORT_LINE.match(line)
-                )
-            if hit:
-                found.append(test.relative_to(REPO_ROOT).as_posix())
+    for test, text, imports in corpus:
+        hit = any(needle in text for needle in needles)
+        if not hit and stem_re is not None:
+            hit = any(stem_re.search(line) for line in imports)
+        if hit:
+            found.append(test)
     return found
 
 

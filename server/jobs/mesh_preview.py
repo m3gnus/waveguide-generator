@@ -78,12 +78,15 @@ class MeshEstimateResponse(BaseModel):
     surface_deviation_mm: float | None
 
 
-class SolverMeshResponse(BaseModel):
-    msh_text: str
+class SolverMeshSummary(BaseModel):
     stats: SolverMeshStats
     cut_planes: list[str]
     quadrants: int
     plan: SolvePlanResponse
+
+
+class SolverMeshResponse(SolverMeshSummary):
+    msh_text: str
 
 
 async def solver_mesh_response(
@@ -93,6 +96,7 @@ async def solver_mesh_response(
     *,
     options: SolveOptions | None = None,
     engine_registry: EngineRegistry,
+    representation: Literal["full", "summary"] = "full",
 ) -> dict[str, Any]:
     """Resolve the solve request, build its artifact, and return mesh plus plan.
 
@@ -153,8 +157,7 @@ async def solver_mesh_response(
         cancellation.close()
 
     stats = result["stats"]
-    return {
-        "msh_text": result["msh_text"],
+    response = {
         "stats": {
             "triangle_count": int(stats["triangle_count"]),
             "vertex_count": int(stats["vertex_count"]),
@@ -169,6 +172,9 @@ async def solver_mesh_response(
         "quadrants": quadrants,
         "plan": solve_plan_response(resolved).model_dump(mode="json"),
     }
+    if representation == "full":
+        response["msh_text"] = result["msh_text"]
+    return response
 
 
 def mount_solver_mesh(application: FastAPI, engine_registry: EngineRegistry) -> None:
@@ -187,14 +193,17 @@ def mount_solver_mesh(application: FastAPI, engine_registry: EngineRegistry) -> 
         finally:
             cancellation.close()
 
-    @application.post("/api/solver-mesh", response_model=SolverMeshResponse)
-    async def solver_mesh(request: Request, body: SolverMeshRequest) -> dict[str, Any]:
+    @application.post("/api/solver-mesh", response_model=SolverMeshResponse | SolverMeshSummary)
+    async def solver_mesh(
+        request: Request, body: SolverMeshRequest, representation: Literal["full", "summary"] = "full",
+    ) -> dict[str, Any]:
         return await solver_mesh_response(
             body.design,
             body.symmetry if "symmetry" in body.model_fields_set else None,
             request.is_disconnected,
             options=body.options,
             engine_registry=engine_registry,
+            representation=representation,
         )
 
 

@@ -57,7 +57,7 @@ export async function rerunWithPatch(
   // Reuse the same measured-mesh admission as an ordinary parametric Solve.
   // In particular, a changed symmetry must not carry an earlier choice to a
   // different artifact merely because the old request contained an override.
-  await postSolverMesh(JSON.stringify({ design: geometry.design, options }), fetcher);
+  await postSolverMesh(JSON.stringify({ design: geometry.design, options }), fetcher, undefined, 'summary');
   if (beforeSubmit && !beforeSubmit()) return null;
   const sourceLabel = typeof effective.label === 'string' && effective.label ? effective.label : jobId;
   const label = `${sourceLabel} (rerun)`;

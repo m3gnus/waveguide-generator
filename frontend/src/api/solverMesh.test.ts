@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { activityStore } from '../shell/activity';
 import { designForFamily } from '../stores/design';
 import { readsPlain } from './httpError';
 import { postSolverMesh, SolverMeshTooLarge, solverMeshDesignKey, type SolverMeshResult } from './solverMesh';
@@ -17,6 +18,8 @@ const result: SolverMeshResult = {
   quadrants: 1,
 };
 
+afterEach(() => activityStore.reset());
+
 function fetcherReturning(body: unknown, ok = true, status = 200): typeof fetch {
   return async () => ({
     ok,
@@ -27,6 +30,38 @@ function fetcherReturning(body: unknown, ok = true, status = 200): typeof fetch 
 }
 
 describe('postSolverMesh', () => {
+  it('requests the summary representation without changing the solve body', async () => {
+    const { msh_text: _mesh, ...summary } = result;
+    let sent: [RequestInfo | URL, RequestInit | undefined] | undefined;
+    const fetcher: typeof fetch = async (url, init) => { sent = [url, init]; return Response.json(summary); };
+    await expect(postSolverMesh('{"design":{}}', fetcher, undefined, 'summary')).resolves.toEqual(summary);
+    expect(sent?.[0]).toBe('/api/solver-mesh?representation=summary');
+    expect(sent?.[1]?.body).toBe('{"design":{}}');
+    await expect(postSolverMesh('{}', async () => Response.json(summary))).rejects.toThrow('Solver mesh response is invalid');
+  });
+
+  it.each([422, 409])('preserves Stop during a deferred %s refusal body and clears activity', async status => {
+    let reading!: () => void;
+    let lifetime: AbortSignal | null | undefined;
+    const bodyStarted = new Promise<void>(resolve => { reading = resolve; });
+    const fetcher: typeof fetch = async (_url, init) => {
+      lifetime = init?.signal;
+      const decode = () => new Promise<never>((_resolve, reject) => {
+        reading();
+        if (init?.signal?.aborted) reject(init.signal.reason);
+        else init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+      });
+      return { ok: false, status, json: decode, clone: () => ({ json: decode }) } as unknown as Response;
+    };
+    const pending = postSolverMesh('{}', fetcher).catch(error => error);
+    await bodyStarted;
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'solver-mesh', cancel: expect.any(Function) }]);
+    activityStore.getSnapshot()[0].cancel!();
+    const reason = await pending;
+    expect(reason).toMatchObject({ name: 'AbortError' });
+    expect(reason).toBe(lifetime?.reason);
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+  });
   it('returns a validated result and posts the given body verbatim', async () => {
     let sent: RequestInit | undefined;
     const fetcher: typeof fetch = async (_input, init) => {
@@ -64,7 +99,7 @@ describe('postSolverMesh', () => {
 
   it('says one plain thing when a refusal body is unreadable', async () => {
     const response = new Response('unreadable', { status: 422, statusText: 'Unprocessable Entity' });
-    await expect(postSolverMesh('{}', async () => response)).rejects.toThrow('WG could not finish this request');
+    await expect(postSolverMesh('{}', async () => response)).rejects.toThrow('WG could not build the solver mesh. Press Solve to try again.');
     expect(response.bodyUsed).toBe(true);
   });
 

@@ -2371,8 +2371,12 @@ describe('solve invocation mutex', () => {
       const { client, fetcher } = await mountPlanning(mode);
       const parametric = deferred<Response>();
       const body = deferred<typeof mocks.solvePlan>();
+      const readingBody = deferred<void>();
       const response = new Response();
-      const readBody = vi.spyOn(response, 'json').mockReturnValue(body.promise);
+      const readBody = vi.spyOn(response, 'json').mockImplementation(() => {
+        readingBody.resolve();
+        return body.promise;
+      });
       const imported = deferred<typeof mocks.importedPlan.plan>();
       if (mode === 'parametric') fetcher.mockReturnValueOnce(parametric.promise);
       else mocks.postImportedSolvePlan.mockReturnValueOnce(imported.promise);
@@ -2388,6 +2392,9 @@ describe('solve invocation mutex', () => {
       await act(async () => {
         parametric.resolve(response);
         imported.resolve({ ...mocks.importedPlan.plan, requested: 'bempp', engine: 'bempp' });
+        // The shared query consumes the response body after the fetch resolves.
+        // Observe that boundary instead of assuming act drained its microtasks.
+        if (mode === 'parametric') await readingBody.promise;
       });
       if (mode === 'parametric') {
         expect(readBody).toHaveBeenCalledOnce();
@@ -2605,6 +2612,34 @@ describe('solve invocation mutex', () => {
 
     expect(mocks.submitDesign).toHaveBeenCalledTimes(2);
     expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn1', 'horn2']);
+    expect(mocks.postSolverMesh.mock.calls).toHaveLength(2);
+    expect(mocks.postSolverMesh.mock.calls.every(call => call[3] === 'summary')).toBe(true);
+  });
+
+  it.each([422, 409])('Stop during a %s mesh refusal body prevents submission and error notices', async status => {
+    const actual = await vi.importActual<typeof import('../api/solverMesh')>('../api/solverMesh');
+    mocks.postSolverMesh.mockImplementationOnce(actual.postSolverMesh);
+    const reading = deferred<void>();
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      const decode = () => new Promise<never>((_resolve, reject) => {
+        reading.resolve();
+        if (init?.signal?.aborted) reject(init.signal.reason);
+        else init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+      });
+      return { ok: false, status, json: decode, clone: () => ({ json: decode }) } as unknown as Response;
+    });
+    vi.stubGlobal('fetch', fetcher);
+    await act(async () => {
+      const pending = runCurrentDesign(designForFamily('OSSE'));
+      await reading.promise;
+      activityStore.getSnapshot().find(item => item.kind === 'solver-mesh')!.cancel!();
+      await pending;
+    });
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    expect(fetcher.mock.calls.map(([url]) => String(url))).not.toContain('/api/solve');
+    // The requested-solve owner retains its existing cancellation feedback.
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('Stopped');
+    expect(activityStore.getSnapshot()).toHaveLength(0);
   });
 
   it('continues the exact parametric mesh after the shared limit choice', async () => {

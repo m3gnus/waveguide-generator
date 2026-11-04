@@ -501,7 +501,7 @@ describe('jobs panel run list', () => {
       host.querySelector<HTMLButtonElement>('[aria-label="Select #19 · Retained setup"]')!.click();
       await new Promise(resolve => setTimeout(resolve, 0));
     });
-    expect(fetcher).toHaveBeenCalledWith(`/api/runs/${imported.id}/workspace`, undefined);
+    expect(fetcher).toHaveBeenCalledWith(`/api/runs/${imported.id}/workspace`, { signal: expect.any(AbortSignal) });
     expect(reportStatus.mock.calls.at(-1)?.[0]).toContain('Specific retained input unavailable');
     expect(useCadReturnStore.getState().ingestRecord).toBeNull();
   });

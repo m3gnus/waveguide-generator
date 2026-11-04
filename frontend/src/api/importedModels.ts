@@ -1,6 +1,7 @@
 import { activityOperation } from '../shell/activityOperation';
 import type { CadSourceInventoryEntry } from './cadOperations';
 import { isAbortError, refusalText } from './httpError';
+import { deadlineFetch } from './deadlineFetch';
 import type { ImportedSetup } from '../jobs/importedSetup';
 
 /** A refused read, with the status and code the server gave so a caller can tell a gone model from a failed one. */
@@ -74,18 +75,33 @@ export interface RunWorkspace {
   refusal?: { code: string; message: string } | null;
 }
 
+const isReadTimeout = (error: unknown): boolean =>
+  !!error && typeof error === 'object' && 'name' in error && error.name === 'TimeoutError';
+
 export async function requestImportedModel<T>(path: string, fetcher: typeof fetch, what: string, init?: RequestInit): Promise<T> {
-  const response = await fetcher(path, init);
-  if (!response.ok) {
-    const body = await response.json().catch((error: unknown) => {
-      if (isAbortError(error)) throw error;
-      return null;
-    }) as { error?: { message?: unknown; code?: unknown }; detail?: unknown } | null;
-    const message = refusalText(typeof body?.error?.message === 'string' ? body.error.message : body?.detail, what, `${what} could not be read. Try again.`);
-    throw new ImportedModelApiError(message, response.status,
-      typeof body?.error?.code === 'string' ? body.error.code : null);
+  let lifetime: AbortSignal | null | undefined;
+  try {
+    const response = await deadlineFetch((input, options) => {
+      lifetime = options?.signal;
+      return fetcher(input, options);
+    }, path, init);
+    if (!response.ok) {
+      const body = await response.json().catch((error: unknown) => {
+        if (isAbortError(error) || isReadTimeout(error)) throw error;
+        return null;
+      }) as { error?: { message?: unknown; code?: unknown }; detail?: unknown } | null;
+      const message = refusalText(typeof body?.error?.message === 'string' ? body.error.message : body?.detail, what, `${what} could not be read. Try again.`);
+      throw new ImportedModelApiError(message, response.status,
+        typeof body?.error?.code === 'string' ? body.error.code : null);
+    }
+    return await response.json() as T;
+  } catch (error) {
+    // Some WebViews reject a timed-out body with AbortError instead of the signal's reason.
+    if (isReadTimeout(error) || isReadTimeout(lifetime?.reason)) {
+      throw new Error(`${what} took too long to load. Try opening it again.`, { cause: error });
+    }
+    throw error;
   }
-  return response.json() as Promise<T>;
 }
 
 /** The one read a run is reopened from: its model, prepared mesh, original and setup. */

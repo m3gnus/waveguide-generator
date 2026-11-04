@@ -7468,6 +7468,15 @@ export interface components {
             /** Warnings */
             warnings: string[];
         };
+        /** SolverMeshSummary */
+        SolverMeshSummary: {
+            /** Cut Planes */
+            cut_planes: string[];
+            plan: components["schemas"]["SolvePlanResponse"];
+            /** Quadrants */
+            quadrants: number;
+            stats: components["schemas"]["SolverMeshStats"];
+        };
         /** SolverSelectionRequest */
         SolverSelectionRequest: {
             /**
@@ -12102,7 +12111,9 @@ export interface operations {
     };
     solver_mesh_api_solver_mesh_post: {
         parameters: {
-            query?: never;
+            query?: {
+                representation?: "full" | "summary";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -12119,7 +12130,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SolverMeshResponse"];
+                    "application/json": components["schemas"]["SolverMeshResponse"] | components["schemas"]["SolverMeshSummary"];
                 };
             };
             /** @description Validation Error */

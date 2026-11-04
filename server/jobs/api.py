@@ -301,6 +301,17 @@ def _recover_client_request_id(body: Any) -> str | None:
     return normalized
 
 
+def _solve_refusal_response(exc: BaseException, *, stage: str, client_request_id: str | None = None) -> JSONResponse:
+    # Deferred like Retry's classifier import: model solves also use the jobs package.
+    from server.jobs.model_solve import refusal_from
+
+    refusal = refusal_from(exc)
+    return _error_response(
+        refusal.status, code=refusal.code, stage=stage,
+        message=str(refusal), details=refusal.details, client_request_id=client_request_id,
+    )
+
+
 class _JobsContractRoute(APIRoute):
     """Use the public error envelope for solve submission and planning."""
 
@@ -434,14 +445,8 @@ def create_jobs_router(
             plan = resolved.symmetry_metadata["solver_plan"]
             if plan.get("refusal") and not plan.get("readiness"):
                 raise SymmetryValidationError(plan["refusal"])
-        except UnknownEngineError as exc:
-            return _error_response(
-                422,
-                code="unknown_engine",
-                stage="planning",
-                message=str(exc),
-                client_request_id=body.client_request_id,
-            )
+        except (UnknownEngineError, RemovedSolverError, EngineUnavailableError) as exc:
+            return _solve_refusal_response(exc, stage="planning", client_request_id=body.client_request_id)
         except ImportedSolveRefusal as exc:
             return _error_response(
                 422,
@@ -451,14 +456,6 @@ def create_jobs_router(
                 details=exc.details,
                 client_request_id=body.client_request_id,
             )
-        except RemovedSolverError as exc:
-            return _error_response(
-                422,
-                code=exc.code,
-                stage="planning",
-                message=str(exc),
-                client_request_id=body.client_request_id,
-            )
         except (SymmetryValidationError, ValueError) as exc:
             return _error_response(
                 422,
@@ -466,15 +463,6 @@ def create_jobs_router(
                 stage="planning",
                 message=str(exc) if isinstance(exc, SymmetryValidationError) else user_error_message(exc),
                 details=getattr(exc, "details", None),
-                client_request_id=body.client_request_id,
-            )
-        except EngineUnavailableError as exc:
-            return _error_response(
-                503,
-                code="engine_unavailable",
-                stage="planning",
-                message=str(exc),
-                details=exc.details,
                 client_request_id=body.client_request_id,
             )
         return solve_plan_response(resolved)
@@ -506,22 +494,8 @@ def create_jobs_router(
                 job_id = await submit_imported_request(runtime, body)
             else:
                 job_id = await runtime.submit(body)
-        except UnknownEngineError as exc:
-            return _error_response(
-                422,
-                code="unknown_engine",
-                stage="submission",
-                message=str(exc),
-                client_request_id=body.client_request_id,
-            )
-        except RemovedSolverError as exc:
-            return _error_response(
-                422,
-                code=exc.code,
-                stage="submission",
-                message=str(exc),
-                client_request_id=body.client_request_id,
-            )
+        except (UnknownEngineError, RemovedSolverError, EngineUnavailableError) as exc:
+            return _solve_refusal_response(exc, stage="submission", client_request_id=body.client_request_id)
         except SymmetryValidationError as exc:
             return _error_response(
                 422,
@@ -535,15 +509,6 @@ def create_jobs_router(
             return _error_response(
                 422,
                 code=exc.reason_code,
-                stage="submission",
-                message=str(exc),
-                details=exc.details,
-                client_request_id=body.client_request_id,
-            )
-        except EngineUnavailableError as exc:
-            return _error_response(
-                503,
-                code="engine_unavailable",
                 stage="submission",
                 message=str(exc),
                 details=exc.details,
@@ -675,13 +640,7 @@ def create_jobs_router(
             ValueError,
             EngineUnavailableError,
         ) as exc:
-            from server.jobs.model_solve import refusal_from
-
-            refusal = refusal_from(exc)
-            return _error_response(
-                refusal.status, code=refusal.code, stage="retry",
-                message=str(refusal), details=refusal.details,
-            )
+            return _solve_refusal_response(exc, stage="retry")
 
     @router.get("/api/status/{job_id}", response_model=JobStatusResponse)
     async def job_status(job_id: str) -> JobStatusResponse:

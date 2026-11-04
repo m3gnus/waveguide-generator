@@ -1,5 +1,5 @@
 import { abortableActivity } from '../shell/activityOperation';
-import { refusalText, ProgramFault } from './httpError';
+import { httpErrorMessage, isAbortError, ProgramFault } from './httpError';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import type { SolveOptionsStore } from '../stores/solveOptions';
 import type { components } from './generated/openapi';
@@ -10,6 +10,7 @@ import type { components } from './generated/openapi';
  * (a frequency sweep, a polar setting) comes back with the same key. */
 export type SolverMeshStats = components['schemas']['SolverMeshStats'];
 export type SolverMeshResult = components['schemas']['SolverMeshResponse'];
+export type SolverMeshSummary = components['schemas']['SolverMeshSummary'];
 
 /** The measured solve mesh needs the person's choice before continuing. */
 export class SolverMeshTooLarge extends Error {
@@ -46,14 +47,6 @@ export function solverMeshDesignKey(design: DesignDocument): string {
   });
 }
 
-async function detail(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { detail?: unknown };
-    return refusalText(body.detail, 'solver mesh');
-  } catch { /* fall through */ }
-  return refusalText(null, 'solver mesh');
-}
-
 /**
  * Build (or fetch from the server's shared artifact cache) the authoritative
  * solver mesh for an already-serialised solve design.
@@ -65,13 +58,16 @@ async function detail(response: Response): Promise<string> {
  * `signal` genuinely cancels: the endpoint watches for the disconnect and the
  * build abandons at its next cooperative checkpoint.
  */
+export function postSolverMesh(body: string, fetcher?: typeof fetch, signal?: AbortSignal): Promise<SolverMeshResult>;
+export function postSolverMesh(body: string, fetcher: typeof fetch, signal: AbortSignal | undefined, representation: 'summary'): Promise<SolverMeshSummary>;
 export async function postSolverMesh(
   body: string,
   fetcher: typeof fetch = fetch,
   signal?: AbortSignal,
-): Promise<SolverMeshResult> {
+  representation: 'full' | 'summary' = 'full',
+): Promise<SolverMeshResult | SolverMeshSummary> {
   return abortableActivity({ kind: 'solver-mesh', label: 'Building the solver mesh' }, fetcher, signal, async (fetcher, signal) => {
-    const response = await fetcher('/api/solver-mesh', {
+    const response = await fetcher(representation === 'summary' ? '/api/solver-mesh?representation=summary' : '/api/solver-mesh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
@@ -79,7 +75,10 @@ export async function postSolverMesh(
     });
     if (!response.ok) {
       if (response.status === 409) {
-        const payload = await response.clone().json().catch(() => null) as { detail?: unknown } | null;
+        const payload = await response.clone().json().catch((error: unknown) => {
+          if (isAbortError(error)) throw error;
+          return null;
+        }) as { detail?: unknown } | null;
         const value = payload?.detail;
         if (value && typeof value === 'object' && 'code' in value && value.code === 'mesh_too_large'
           && 'triangles' in value && typeof value.triangles === 'number'
@@ -88,18 +87,18 @@ export async function postSolverMesh(
           throw new SolverMeshTooLarge(`This mesh has ${value.triangles.toLocaleString()} triangles, above the limit of ${value.limit.toLocaleString()} for the part WG solves. Raise Max surface deviation or a mesh resolution in Simulation › Mesh, or press Solve to choose.`, value.triangles, value.limit, value.mesh_cache_key);
         }
       }
-      throw new Error(await detail(response));
+      throw new Error(await httpErrorMessage(response, 'WG could not build the solver mesh. Press Solve to try again.'));
     }
     const result = await response.json() as Partial<SolverMeshResult> & { stats?: Partial<SolverMeshStats> };
     if (
-      typeof result.msh_text !== 'string'
+      (representation === 'full' && typeof result.msh_text !== 'string')
       || typeof result.stats?.mesh_cache_key !== 'string'
       || typeof result.stats.triangle_count !== 'number'
       || !Array.isArray(result.cut_planes)
     ) {
       throw new ProgramFault('Solver mesh response is invalid');
     }
-    return result as SolverMeshResult;
+    return result as SolverMeshResult | SolverMeshSummary;
   });
 }
 

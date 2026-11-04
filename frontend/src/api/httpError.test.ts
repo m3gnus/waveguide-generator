@@ -143,7 +143,7 @@ describe('HTTP detail helper ownership', () => {
   });
 
   it.each(['designIo', 'importedModels', 'meshReplay', 'solverMesh'])('%s imports the formatter from its HTTP owner', name => {
-    const formatterImports = imports(`./${name}.ts`).filter(({ bindings }) => /\b(?:formatApiDetail|refusalText)\b/.test(bindings));
+    const formatterImports = imports(`./${name}.ts`).filter(({ bindings }) => /\b(?:formatApiDetail|refusalText|httpErrorMessage)\b/.test(bindings));
     expect(formatterImports.map(({ owner }) => owner)).toEqual(['./httpError']);
     expect(imports(`./${name}.ts`).filter(({ bindings, owner }) =>
       owner === '../jobs/actions' && !bindings.startsWith('type '))).toEqual([]);

@@ -21,7 +21,7 @@ import { compareSelection, provisionalResults, resultsCache } from '../api/resul
 import { preferencesStore } from '../prefs/preferences';
 import { type CadReturnIngestRecord } from '../api/cadlink';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetDesignStore } from '../stores/design';
+import { resetDesignStore, serializeSolveDesign } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -236,8 +236,9 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     visible = new Set(['viewport', 'geometry']);
     publishVisiblePanels(visible);
     bindWorkspaceNavigation(dockActivate);
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input) === '/api/solver-mesh'
-      ? new Response(JSON.stringify({ msh_text: 'mesh', stats: { mesh_cache_key: 'test', triangle_count: 1 }, cut_planes: [] }),
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input) === '/api/solver-mesh?representation=summary'
+      ? new Response(JSON.stringify({ stats: { mesh_cache_key: 'test', triangle_count: 1 }, cut_planes: [], quadrants: 1,
+        plan: { engine: 'metal', formulation: 'full-3d', reason: 'test', eligibility_reasons: [] } }),
         { status: 200, headers: { 'Content-Type': 'application/json' } })
       : resultResponse()));
     mocks.solveModel.mockResolvedValue('job-1');
@@ -533,6 +534,13 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     expect(button.disabled).toBe(false);
     await act(async () => { button.click(); await flush(8); });
     expect(mocks.submitDesign).toHaveBeenCalledOnce();
+    const [design, options] = mocks.submitDesign.mock.calls[0];
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).startsWith('/api/solver-mesh'))).toEqual([
+      ['/api/solver-mesh?representation=summary', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ design: serializeSolveDesign(design), options }), signal: expect.any(AbortSignal),
+      }],
+    ]);
     const parametric = { ...cadJob('job-p', 'wgi_first'), config_summary: {}, cad_source: null } as JobItem;
     await jobs([parametric]);
     expect(compareSelection.getSnapshot().primary).toBe('job-p');

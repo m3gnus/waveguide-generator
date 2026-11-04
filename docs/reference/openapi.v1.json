@@ -14902,11 +14902,11 @@
           }
         },
         "required": [
-          "msh_text",
           "stats",
           "cut_planes",
           "quadrants",
-          "plan"
+          "plan",
+          "msh_text"
         ],
         "title": "SolverMeshResponse",
         "type": "object"
@@ -14976,6 +14976,35 @@
           "mesh_cache_hit"
         ],
         "title": "SolverMeshStats",
+        "type": "object"
+      },
+      "SolverMeshSummary": {
+        "properties": {
+          "cut_planes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cut Planes",
+            "type": "array"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/SolvePlanResponse"
+          },
+          "quadrants": {
+            "title": "Quadrants",
+            "type": "integer"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/SolverMeshStats"
+          }
+        },
+        "required": [
+          "stats",
+          "cut_planes",
+          "quadrants",
+          "plan"
+        ],
+        "title": "SolverMeshSummary",
         "type": "object"
       },
       "SolverSelectionRequest": {
@@ -21783,6 +21812,22 @@
     "/api/solver-mesh": {
       "post": {
         "operationId": "solver_mesh_api_solver_mesh_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "representation",
+            "required": false,
+            "schema": {
+              "default": "full",
+              "enum": [
+                "full",
+                "summary"
+              ],
+              "title": "Representation",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -21798,7 +21843,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SolverMeshResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SolverMeshResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SolverMeshSummary"
+                    }
+                  ],
+                  "title": "Response Solver Mesh Api Solver Mesh Post"
                 }
               }
             },

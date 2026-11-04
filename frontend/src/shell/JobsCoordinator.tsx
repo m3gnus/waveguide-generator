@@ -502,7 +502,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       return jobId;
     } catch (error) {
       solveAttention.releaseSolve();
-      if (!(error instanceof DOMException && error.name === 'AbortError')) reportError(failureWords(error), opts.attention);
+      if (!isAbortError(error)) reportError(failureWords(error), opts.attention);
       throw error;
     } finally {
       submissionInFlight.current = false;
@@ -565,7 +565,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       const snapshot = structuredClone(nextDesign);
       const metadata = { label, designRevision: nextRevision, designUid: document.designUid, designId: document.identity?.designId, designName, legacyDesignName: document.legacyDesignName };
       try {
-        await awaitSolveStep(postSolverMesh(JSON.stringify({ design: toSolveDesign(snapshot), options }), fetch, continuation?.signal), continuation);
+        await awaitSolveStep(postSolverMesh(JSON.stringify({ design: toSolveDesign(snapshot), options }), fetch, continuation?.signal, 'summary'), continuation);
       } catch (error) {
         if (!(error instanceof SolverMeshTooLarge)) throw error;
         if (!beforePost(continuation)) return null;

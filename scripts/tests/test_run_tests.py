@@ -13,6 +13,78 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import run_tests  # noqa: E402
 
 
+@pytest.fixture
+def selector_corpus(tmp_path, monkeypatch):
+    sources = {
+        "server/tests/test_direct.py": "from server.solver.mesh import build\n",
+        "server/tests/nested/test_import.py": "from unrelated import api\n",
+        "scripts/tests/test_path.py": "PATH = 'server/jobs/api'\n",
+        "scripts/tests/test_bare.py": "import mesh\n",
+        "scripts/tests/test_not_import.py": "text = 'mesh'\n",
+    }
+    for name, text in sources.items():
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    mapping = tmp_path / "map.toml"
+    mapping.write_text('[areas]\n"server/solver/" = ["mapped-solver"]\n"server/jobs/" = ["mapped-jobs"]\n')
+    monkeypatch.setattr(run_tests, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(run_tests, "TEST_MAP", mapping)
+    return tmp_path, sources
+
+
+@pytest.mark.parametrize(("paths", "expected"), [
+    (["server/solver/mesh.py"], ["mapped-solver", "server/tests/test_direct.py", "scripts/tests/test_bare.py"]),
+    (["server/jobs/api.py"], ["mapped-jobs", "server/tests/nested/test_import.py", "scripts/tests/test_path.py"]),
+    (["server/solver/mesh.py", "server/jobs/api.py"], ["mapped-solver", "mapped-jobs", "server/tests/test_direct.py",
+      "server/tests/nested/test_import.py", "scripts/tests/test_path.py", "scripts/tests/test_bare.py"]),
+    (["server/tests/nested/test_import.py"], ["server/tests/nested/test_import.py"]),
+    (["unknown.py"], run_tests.FULL_SUITE),
+    (["shared/js/frame.mjs"], run_tests.FULL_SUITE),
+    (["server/tests/test_deleted.py"], run_tests.FULL_SUITE),
+    ([], []),
+])
+def test_changed_selection_keeps_mapped_nested_and_fallback_rules(selector_corpus, paths, expected):
+    selected = run_tests.tests_for_changes(paths)
+    assert selected == (expected if expected == run_tests.FULL_SUITE else sorted(expected))
+
+
+def test_changed_selection_reads_each_test_once_and_reloads_next_invocation(selector_corpus, monkeypatch):
+    root, sources = selector_corpus
+    original = Path.read_text
+    reads = []
+
+    def counted(path, *args, **kwargs):
+        if path.name.startswith("test_"):
+            reads.append(path.relative_to(root).as_posix())
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted)
+    paths = ["server/solver/mesh.py", "server/jobs/api.py", "server/solver/other.py"]
+    first = run_tests.tests_for_changes(paths)
+    assert sorted(reads) == sorted(sources)
+    (root / "scripts/tests/test_bare.py").write_text("import other\n")
+    reads.clear()
+    second = run_tests.tests_for_changes(paths)
+    assert sorted(reads) == sorted(sources)
+    assert "scripts/tests/test_bare.py" in first
+    # It now names a different changed module, and a later call sees that edit.
+    assert "scripts/tests/test_bare.py" in second
+    assert "scripts/tests/test_bare.py" not in run_tests.tests_for_changes([paths[0]])
+
+
+@pytest.mark.parametrize("paths", [[], ["unknown.py"], ["server/tests/test_direct.py"]])
+def test_changed_selection_loads_no_corpus_until_needed(selector_corpus, monkeypatch, paths):
+    original = Path.read_text
+
+    def no_corpus(path, *args, **kwargs):
+        assert not path.name.startswith("test_")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", no_corpus)
+    run_tests.tests_for_changes(paths)
+
+
 def test_no_targets_is_refused(capsys):
     with pytest.raises(SystemExit) as refused:
         run_tests.build_command([])
@@ -315,14 +387,16 @@ def test_changed_selects_direct_consumers(changed, expected):
     assert expected in run_tests.tests_for_changes([changed])
 
 
-def test_every_mapped_python_file_selects_the_tests_that_import_it():
+def test_every_mapped_python_file_selects_the_tests_that_import_it(monkeypatch):
     """For each source module in a mapped area, any test that imports it by
     dotted name is selected when that module changes."""
 
     areas = run_tests.tomllib.loads(run_tests.TEST_MAP.read_text(encoding="utf-8"))["areas"]
-    tests = [*(run_tests.REPO_ROOT / "server/tests").glob("test_*.py"),
-             *(run_tests.REPO_ROOT / "scripts/tests").glob("test_*.py")]
-    texts = {test: test.read_text(encoding="utf-8", errors="replace") for test in tests}
+    # This audit never edits the corpus. Reuse one real snapshot across its
+    # independent selections; invocation freshness is exercised separately above.
+    corpus = run_tests._test_corpus()
+    monkeypatch.setattr(run_tests, "_test_corpus", lambda: corpus)
+    texts = {name: text for name, text, _imports in corpus}
     missing = []
     for prefix in areas:
         for source in sorted((run_tests.REPO_ROOT / prefix).rglob("*.py")):
@@ -330,12 +404,12 @@ def test_every_mapped_python_file_selects_the_tests_that_import_it():
             if "tests" in relative.parts or source.name == "__init__.py":
                 continue
             dotted = ".".join(relative.with_suffix("").parts)
+            consumers = [name for name, text in texts.items()
+                         if f"import {dotted}" in text or f"from {dotted} import" in text]
+            if not consumers:
+                continue
             selected = set(run_tests.tests_for_changes([relative.as_posix()]))
             if selected == set(run_tests.FULL_SUITE):
                 continue
-            for test, text in texts.items():
-                if f"import {dotted}" in text or f"from {dotted} import" in text:
-                    name = test.relative_to(run_tests.REPO_ROOT).as_posix()
-                    if name not in selected:
-                        missing.append((relative.as_posix(), name))
+            missing.extend((relative.as_posix(), name) for name in consumers if name not in selected)
     assert not missing, missing

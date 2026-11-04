@@ -57,9 +57,50 @@ beforeEach(() => {
   resetImportedModelStore();
   resetDesignModel();
 });
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('openImported', () => {
+  it.each(['workspace', 'model', 'setup'].flatMap(read => ['headers', 'body', 'aborted body'].map(stage => ({ read, stage }))))(
+    'settles a stalled $read $stage read and can retry the identical saved setup', async ({ read, stage }) => {
+      vi.useFakeTimers();
+      vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), ms);
+        return controller.signal;
+      });
+      const source = read === 'workspace' ? { kind: 'run' as const, job: run() }
+        : { kind: 'model' as const, modelId: mesh.model_id!, preparedId: mesh.ingest_id };
+      let stall = true;
+      const fetcher: typeof fetch = async (url, init) => {
+        const target = String(url).includes('/workspace') ? 'workspace' : String(url).includes('/setup') ? 'setup' : 'model';
+        const value = target === 'workspace' ? workspace() : target === 'setup' ? { setup, revision_id: 'wgs_run' }
+          : { model: workspace().model, prepared: mesh, latest_prepared: mesh, original_available: true };
+        if (!stall || target !== read) return json(value);
+        const pending = () => new Promise<never>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(stage === 'aborted body'
+            ? new DOMException('The operation was aborted', 'AbortError') : init.signal!.reason), { once: true });
+        });
+        return stage === 'headers' ? pending() : { ok: true, json: pending } as unknown as Response;
+      };
+      const opening = openImported(source, fetcher).catch(error => error);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(useImportedModelStore.getState().phase).toBe('loading');
+      expect(activityStore.getSnapshot()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(useImportedModelStore.getState()).toMatchObject({ phase: 'failed', error: expect.stringContaining('took too long') });
+      expect(await opening).toMatchObject({ message: expect.stringContaining('Try opening it again') });
+      expect(useMeshImportStore.getState().busy).toBe(false);
+      expect(activityStore.getSnapshot()).toHaveLength(0);
+      expect(importedModelBlocker('file')).toBe(useImportedModelStore.getState().error);
+      stall = false;
+      expect(await openImported(source, fetcher)).toBe(true);
+      expect(useImportedModelStore.getState()).toMatchObject({ phase: 'ready', error: null, prepared: mesh, setup });
+      expect(JSON.stringify(useImportedModelStore.getState().setup)).toBe(JSON.stringify(setup));
+      expect((useImportedModelStore.getState().prepared as RegisteredMesh).msh_text).toBe(MSH);
+      expect(activityStore.getSnapshot()).toHaveLength(0);
+    },
+  );
+
   it.each([false, true])('keeps one activity through all model discovery reads (failure=%s)', async fail => {
     const first = deferred<Response>(); let calls = 0;
     const started = vi.spyOn(activityStore, 'start');
