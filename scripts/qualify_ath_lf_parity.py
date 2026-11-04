@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 from typing import Any, Mapping, Sequence
+import uuid
 
 import numpy as np
 
@@ -37,12 +38,14 @@ if str(ROOT) not in sys.path:
 from scripts import qualify_assembly as assembly  # noqa: E402
 
 DEFAULT_CASES = ("b-base", "a-explicit", "b-pair", "mtm-q14", "b-morph")
-DEFAULT_FREQS = tuple(float(f) for f in np.geomspace(200, 8000, 12))
-DEFAULT_RESOLUTION_MM = 48.
+DEFAULT_FREQS = (200., 1000., 3000.)
+DEFAULT_RESOLUTION_MM = 11.
+# Coordinator b-base/B measurement, rounded from 28.94 s (4 November 2026).
+CALIBRATION = {"triangles": 4130, "seconds_per_frequency_per_channel": 29., "symmetry": "half_yz"}
 BANDS = (("below_1k", 0, 1000), ("1k_5k", 1000, 5000),
          ("5k_10k", 5000, 10000), ("10k_20k", 10000, 20000.0001))
 NORMALISATION = {
-    "basis": "unit RMS acceleration, solver exp(-jwt); A unchanged, B divided by -j*2*pi*f",
+    "basis": "unit RMS acceleration, solver exp(-jwt); each retained channel's source_normalization determines conversion via acceleration_scale / scale_channel_result; unknown or voltage bases refused",
     "weights": "ABEC Driving_Values Value * Weight and Delay; no crossover, gain matching or time alignment",
     "wg_override": "Harness only: WG member weights use ATH effective weights; omitted ATH DrivingWeight is 0 (rigid). Product importer unchanged.",
     "groups": "HF and all LF radiators separately; combined is their coherent equal-weight sum after ATH weights",
@@ -632,7 +635,7 @@ def geometry_parity(reference: Mapping[str, Any], record: Mapping[str, Any], wg_
 
 
 def metric_differences(freqs: Sequence[float], angles: Sequence[float], a: np.ndarray, b: np.ndarray,
-                       di_a: Sequence[float], di_b: Sequence[float]) -> dict[str, Any]:
+                       di_a: Sequence[float], di_b: Sequence[float], *, mesh_valid_hz: float = math.inf) -> dict[str, Any]:
     """Absolute SPL/phase errors, with deep-null exclusion and raw band totals.
 
     Pressure shape is (frequency, plane, angle). Each curve's maximum is
@@ -651,8 +654,12 @@ def metric_differences(freqs: Sequence[float], angles: Sequence[float], a: np.nd
         raise ValueError("the polar grid has no on-axis observation")
     on = int(zero[0])
     levels = [20 * np.log10(np.maximum(np.abs(p), 1e-20) / 20e-6) for p in (a, b)]
-    eligible = ((levels[0] >= levels[0].max(axis=0, keepdims=True) - 20)
-                & (levels[1] >= levels[1].max(axis=0, keepdims=True) - 20)
+    valid = f <= mesh_valid_hz
+    # Out-of-band peaks must not exclude otherwise valid low-frequency samples.
+    reference = [level[valid].max(axis=0, keepdims=True) if valid.any() else level.max(axis=0, keepdims=True)
+                 for level in levels]
+    eligible = ((levels[0] >= reference[0] - 20)
+                & (levels[1] >= reference[1] - 20)
                 & (np.abs(a) > 1e-20) & (np.abs(b) > 1e-20))
     delta = levels[1] - levels[0]
     phase = np.angle(b * np.conj(a), deg=True)
@@ -675,16 +682,20 @@ def metric_differences(freqs: Sequence[float], angles: Sequence[float], a: np.nd
         entries = {}
         for quantity, (values, mask) in quantities.items():
             values, mask = values[selected], mask[selected]
+            adequate = valid[selected].reshape((-1,) + (1,) * (values.ndim - 1))
+            adequate = np.broadcast_to(adequate, values.shape)
             tolerance = 5 if quantity == "phase_deg" else .3 if quantity == "di_db" else 1 if low >= 10000 else .5
-            checked = stats(values[mask])
-            entries[quantity] = {"raw": stats(values), "eligible": checked, "deep_null": stats(values[~mask]),
+            checked = stats(values[mask & adequate])
+            entries[quantity] = {"raw": stats(values), "eligible": checked, "deep_null": stats(values[~mask & adequate]),
+                                 "mesh_limited": stats(values[~adequate]),
                                  "tolerance": tolerance, "pass": checked["max_abs"] <= tolerance if checked["count"] else None}
         bands[label] = entries
     verdicts = [entry["pass"] for band in bands.values() for entry in band.values() if entry["pass"] is not None]
-    acoustic_samples = bool(eligible[:, :, polar].any())
+    acoustic_samples = bool(eligible[valid][:, :, polar].any())
     return {"bands": bands, "pass": all(verdicts) if verdicts and acoustic_samples else None,
             "spl_delta_db": delta.tolist(), "phase_delta_deg": phase.tolist(), "di_delta_db": di.tolist(),
-            "eligible_mask": eligible.tolist()}
+            "eligible_mask": (eligible & valid[:, None, None]).tolist(), "mesh_valid_mask": valid.tolist(),
+            "frequency_status": ["valid" if v else "mesh-limited" for v in valid]}
 
 
 def _make_setup(record: Mapping[str, Any], channels: list[dict[str, Any]], freqs: Sequence[float],
@@ -712,20 +723,45 @@ def _cpu_estimate(count: int, frequencies: int, channels: int) -> dict[str, Any]
             "frequencies": frequencies, "channels": channels}
 
 
+def mesh_adequacy(mesh: Any, scale_m: float) -> dict[str, Any]:
+    """Use the mesher's realized-edge rule, including rigid enclosure facets."""
+    from hornlab_mesher.mesh_validation import _edge_frequency_stats
+    from server.solver.acoustics import reference_sound_speed_m_per_s
+    from server.solver.mesh_ladder import LADDER_ELEMENTS_PER_WAVELENGTH
+
+    stats = _edge_frequency_stats(mesh.points, mesh.triangles, unit_scale_to_m=scale_m,
+        elements_per_wavelength=LADDER_ELEMENTS_PER_WAVELENGTH, speed_of_sound_m_s=reference_sound_speed_m_per_s())
+    if stats["max_edge_m"] <= 0:
+        raise EvidenceRefusal("The saved mesh has no positive edge length. Restore the solve's mesh before comparing results.")
+    return {"triangles": len(mesh.triangles), "max_edge_mm": stats["max_edge_m"] * 1000,
+            "max_valid_frequency_hz": stats["max_valid_frequency_hz"],
+            "elements_per_wavelength": LADDER_ELEMENTS_PER_WAVELENGTH,
+            "sound_speed_m_s": reference_sound_speed_m_per_s()}
+
+
+def finish_comparison(entry: dict[str, Any], folder: Path, left: Any, right: Any) -> None:
+    valid_hz = min(side["max_valid_frequency_hz"] for side in entry["mesh_adequacy"].values())
+    entry["comparison_valid_hz"] = valid_hz
+    entry["metrics"] = compare_groups(left, right, mesh_valid_hz=valid_hz)
+    entry["charts"] = charts(folder, left, right, entry["metrics"], mesh_valid_hz=valid_hz)
+    verdicts = [m["absolute"]["pass"] for m in entry["metrics"].values() if m["status"] == "complete"]
+    entry["status"] = "pass" if verdicts and all(v is True for v in verdicts) else "fail" if any(v is False for v in verdicts) else "mesh-limited"
+
+
 def calibrated_estimates(results: Mapping[str, Any], calibration: Mapping[str, Any]) -> None:
-    """Conservative serial A+B estimate; expose scaling and contention margin."""
+    """Serial planning only: measured 29 s/frequency/channel, cost proportional to N^1.5."""
     for entry in results.values():
         estimates = entry.get("estimated_beat_cpu_time", {})
         for estimate in estimates.values():
             seconds = (calibration["seconds_per_frequency_per_channel"] * estimate["frequencies"]
-                       * estimate["channels"] * (estimate["triangles"] / calibration["triangles"]) ** 2.5)
+                       * estimate["channels"] * (estimate["triangles"] / calibration["triangles"]) ** 1.5)
             estimate.update(kind="scaled from one b-base/B CPU frequency, including its startup",
-                            minutes=round(seconds / 60, 2), contention_minutes=round(2 * seconds / 60, 2))
+                            minutes=round(seconds / 60, 2))
         if set(estimates) == {"A", "B"}:
-            minutes = sum(item["contention_minutes"] for item in estimates.values())
+            minutes = sum(item["minutes"] for item in estimates.values())
             entry["estimated_pair_minutes"] = round(minutes, 2)
             entry["broker_budget"] = {"under_15_minutes": minutes < 15,
-                                      "assumption": "serial A+B, N^2.5, linear frequencies/channels, 2x shared-CPU margin; estimate only"}
+                                      "assumption": "serial A+B, N^1.5, linear frequencies/channels; estimate only, no contention allowance"}
 
 
 def _build_x_half_sync(dump: dict[str, Any], work_dir: str, *, cancel_cb: Any = None) -> dict[str, Any]:
@@ -812,6 +848,7 @@ def prepare_case(name: str, phase1: Path, data_dir: Path, store: Any, freqs: Seq
         result["open_edges"] = edge_figure(folder, original, weld_reference(_full_mesh(half, ["x0"]))[0])
     dump = parsed.design.model_dump(mode="json")
     result["product_imported_signal_groups"] = copy.deepcopy(dump["assembly"]["signal_groups"])
+    fixture_identities(dump, name)
     result["effective_weights"] = match_ath_weights(dump, reference["drives"])
     result["parity_signal_groups"] = dump["assembly"]["signal_groups"]
     result["import_notes"] = parsed.migration_names
@@ -824,6 +861,7 @@ def prepare_case(name: str, phase1: Path, data_dir: Path, store: Any, freqs: Seq
     mesh_b = parse_file_mesh(built["msh_text"])
     mesh_b, result["wg_x_half"] = x_half_reference(mesh_b, 1.)
     result["wg_triangles"] = len(mesh_b.triangles)
+    result["mesh_adequacy"] = {"A": mesh_adequacy(half, scale_m), "B": mesh_adequacy(mesh_b, 1.)}
     result["wg_boundary_integrity"] = file_mesh_integrity(mesh_b, ["x0"])
     result["wg_mesh_sha256"] = hashlib.sha256(built["msh_text"].encode()).hexdigest()
     result["wg_mesher_identity"] = mesher_identity()
@@ -897,6 +935,8 @@ def prepare_case(name: str, phase1: Path, data_dir: Path, store: Any, freqs: Seq
                               "radiator_ids": {d["radiator"]: d["radiator"] if variant == "A" else b_ids[d["radiator"]]
                                                for d in reference["drives"]}, "drives": reference["drives"],
                               "variant": variant, "polar": polar}
+            if out is not None:
+                _write_json(out / name / f"{variant}.plan.json", {k: v for k, v in plans[variant].items() if k != "requests"})
         if not plans:
             result["status"] = "refused"
             return result, plans
@@ -906,6 +946,24 @@ def prepare_case(name: str, phase1: Path, data_dir: Path, store: Any, freqs: Seq
     else:
         result["status"] = "refused"
     return result, plans
+
+
+def fixture_identities(dump: dict[str, Any], name: str) -> None:
+    """Freeze identities only in this newly imported qualification fixture.
+
+    textcfg correctly mints fresh UUIDs on each import. Independent broker
+    chunks must instead rebuild the same fixture/mesh/plan, without changing
+    product import or any saved user design.
+    """
+    radiators = {}
+    for woofer in dump["assembly"]["woofers"]:
+        old = woofer["id"]
+        woofer["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"ath-lf-parity/{name}/{woofer['ath']['key']}"))
+        radiators[old] = woofer["id"]
+    for group in dump["assembly"]["signal_groups"]:
+        for member in group["members"]:
+            member["radiator_id"] = radiators.get(member["radiator_id"], member["radiator_id"])
+        group["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"ath-lf-parity/{name}/group/{group['label']}"))
 
 
 def match_ath_weights(dump: dict[str, Any], drives: Sequence[Mapping[str, Any]]) -> dict[str, float]:
@@ -925,22 +983,31 @@ def match_ath_weights(dump: dict[str, Any], drives: Sequence[Mapping[str, Any]])
 
 
 def grouped_bases(payload: bytes, plan: Mapping[str, Any]) -> dict[str, Any]:
+    from server.solver.beat_adapter.results import acceleration_scale
     from server.solver.combine import combine_drive_channels, deserialize_channel_bases
     from server.solver.imported_channels import scale_channel_result
+    from server.solver.pressure_basis import _stored_metadata
 
     unpacked = deserialize_channel_bases(payload)
     bases = copy.deepcopy(unpacked["results_by_id"])
-    if plan["variant"] == "B":
-        for basis in bases.values():
-            scale_channel_result(basis, 1 / (-2j * np.pi * np.asarray(basis.frequencies_hz)))
+    normalisation = {}
+    for channel, basis in bases.items():
+        metadata = _stored_metadata(payload, channel)
+        source = metadata.get("source_normalization")
+        if source == "native_rms_velocity":
+            scale_channel_result(basis, np.asarray([acceleration_scale(f) for f in basis.frequencies_hz]))
+        elif source != "unit_normal_acceleration":
+            raise EvidenceRefusal(f"Channel {channel!r} has unsupported or missing source_normalization {source!r}. Retain prescribed acceleration/velocity basis metadata before comparing this solve.")
+        normalisation[channel] = {"source_normalization": source, "target": "unit_normal_acceleration",
+                                  "conversion": "acceleration_scale" if source == "native_rms_velocity" else "identity"}
     ids = plan["radiator_ids"]
     processing = {ids[d["radiator"]]: {"weight": d["weight"], "delay_ms": d["delay_ms"]} for d in plan["drives"]}
     groups = {}
     for group in ("HF", "LF", "combined"):
         members = [ids[d["radiator"]] for d in plan["drives"]
-                   if group == "combined" or (d["radiator"] == "HF") == (group == "HF")]
+                   if d["weight"] != 0 and (group == "combined" or (d["radiator"] == "HF") == (group == "HF"))]
         if not members or all(processing[m]["weight"] == 0 for m in members):
-            groups[group] = {"status": "not-applicable", "reason": "ATH has no driven radiator in this signal group"}
+            groups[group] = {"status": "not-applicable", "reason": f"{group} not driven in ATH"}
             continue
         synthetic, _ = combine_drive_channels(
             bases, members=[group], member_channels={group: members}, member_processing=processing,
@@ -962,13 +1029,14 @@ def grouped_bases(payload: bytes, plan: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError("the solve grid does not contain the exact ATH observation angles")
         pressure = pressure[:, :, selected]
         groups[group] = {"status": "complete", "frequencies_hz": np.asarray(synthetic.frequencies_hz).tolist(),
+                         "channel_normalisation": {m: normalisation[m] for m in members},
                          "angles_deg": requested.tolist(),
                          "pressure_real": pressure.real.tolist(), "pressure_imag": pressure.imag.tolist(),
                          "di_db": np.asarray(power["directivity_index_db"]).tolist()}
     return groups
 
 
-def compare_groups(a: Mapping[str, Any], b: Mapping[str, Any]) -> dict[str, Any]:
+def compare_groups(a: Mapping[str, Any], b: Mapping[str, Any], *, mesh_valid_hz: float = math.inf) -> dict[str, Any]:
     comparisons = {}
     for group in ("HF", "LF", "combined"):
         left, right = a[group], b[group]
@@ -984,14 +1052,15 @@ def compare_groups(a: Mapping[str, Any], b: Mapping[str, Any]) -> dict[str, Any]
         if min(levels) <= 1e-20:
             raise ValueError("lowest-frequency on-axis reference is silent; cannot normalise")
         comparisons[group] = {"status": "complete", "absolute": metric_differences(
-            left["frequencies_hz"], left["angles_deg"], pa, pb, left["di_db"], right["di_db"]),
+            left["frequencies_hz"], left["angles_deg"], pa, pb, left["di_db"], right["di_db"], mesh_valid_hz=mesh_valid_hz),
             "lowest_frequency_aligned": metric_differences(left["frequencies_hz"], left["angles_deg"],
-                pa * 20e-6 / levels[0], pb * 20e-6 / levels[1], left["di_db"], right["di_db"]),
+                pa * 20e-6 / levels[0], pb * 20e-6 / levels[1], left["di_db"], right["di_db"], mesh_valid_hz=mesh_valid_hz),
             "lowest_frequency_b_minus_a_db": float(20 * np.log10(levels[1] / levels[0]))}
     return comparisons
 
 
-def charts(folder: Path, a: Mapping[str, Any], b: Mapping[str, Any], comparison: Mapping[str, Any]) -> list[str]:
+def charts(folder: Path, a: Mapping[str, Any], b: Mapping[str, Any], comparison: Mapping[str, Any], *,
+           mesh_valid_hz: float | None = None) -> list[str]:
     import hornlab_plots as plots
 
     files = []
@@ -1006,7 +1075,8 @@ def charts(folder: Path, a: Mapping[str, Any], b: Mapping[str, Any], comparison:
         filename = f"{group}-on-axis.png"
         plots.save_frequency_response_plot(folder / filename, [plots.FrequencyResponseCurve(f, level[:, 0, on], label)
             for level, label in zip(levels, ("A: ATH geometry", "B: WG geometry"))],
-            title=f"{folder.name} / {group}: unit acceleration, ATH weights", theme="classic")
+            title=f"{folder.name} / {group}: unit acceleration, ATH weights (grey: mesh-limited)",
+            mesh_valid_hz=mesh_valid_hz, colors={"mesh_limit": "0.5"}, theme="classic")
         files.append(filename)
         curves = []
         for index, plane in enumerate(("horizontal", "vertical")):
@@ -1016,7 +1086,7 @@ def charts(folder: Path, a: Mapping[str, Any], b: Mapping[str, Any], comparison:
                 span = (-max(1, float(np.abs(delta).max())), max(1, float(np.abs(delta).max()))) if label == "B-minus-A" else (
                     min(float(level.min()) for level in levels), max(float(level.max()) for level in levels))
                 _heatmap(folder / filename, f, angles, values.T, span,
-                         f"{folder.name} / {group} / {plane} / {label} (absolute dB)")
+                         f"{folder.name} / {group} / {plane} / {label} (absolute dB; grey: mesh-limited)", mesh_valid_hz=mesh_valid_hz)
                 files.append(filename)
             curves.append(plots.FrequencyResponseCurve(f, np.max(np.abs(delta), axis=1), f"{plane} max |SPL error|"))
         phase = np.asarray(entry["absolute"]["phase_delta_deg"])
@@ -1024,18 +1094,19 @@ def charts(folder: Path, a: Mapping[str, Any], b: Mapping[str, Any], comparison:
                                                      f"{plane} max |phase error|")
                         for index, plane in enumerate(("horizontal", "vertical"))]
         phase_file = f"{group}-phase-difference.png"
-        plots.save_frequency_response_plot(folder / phase_file, phase_curves, title=f"{folder.name} / {group}: raw phase differences",
-                                            ylabel="Absolute phase difference [deg]", theme="classic", span_db=10)
+        plots.save_frequency_response_plot(folder / phase_file, phase_curves, title=f"{folder.name} / {group}: raw phase differences (grey: mesh-limited)",
+                                            ylabel="Absolute phase difference [deg]", mesh_valid_hz=mesh_valid_hz, colors={"mesh_limit": "0.5"}, theme="classic", span_db=10)
         files.append(phase_file)
         curves.append(plots.FrequencyResponseCurve(f, np.abs(entry["absolute"]["di_delta_db"]), "|DI error|"))
         filename = f"{group}-difference-vs-frequency.png"
-        plots.save_frequency_response_plot(folder / filename, curves, title=f"{folder.name} / {group}: differences",
-                                            ylabel="Absolute difference [dB]", theme="classic", span_db=10)
+        plots.save_frequency_response_plot(folder / filename, curves, title=f"{folder.name} / {group}: differences (grey: mesh-limited)",
+                                            ylabel="Absolute difference [dB]", mesh_valid_hz=mesh_valid_hz, colors={"mesh_limit": "0.5"}, theme="classic", span_db=10)
         files.append(filename)
     return files
 
 
-def _heatmap(path: Path, freqs: Any, angles: Any, values: Any, span: tuple[float, float], title: str) -> None:
+def _heatmap(path: Path, freqs: Any, angles: Any, values: Any, span: tuple[float, float], title: str, *,
+             mesh_valid_hz: float | None = None) -> None:
     """Canonical renderer, with an absolute/signed colour range and no clipping.
 
     The installed renderer predates its configurable display_range_db option.
@@ -1054,8 +1125,15 @@ def _heatmap(path: Path, freqs: Any, angles: Any, values: Any, span: tuple[float
         try:
             fig.patch.set_facecolor(plots.get_theme("classic").figure_bg)
             plots.render_single_heatmap(ax, np.asarray(freqs), np.asarray(angles), np.asarray(values), title,
-                                        reference_level=0., theme="classic")
+                                        reference_level=0., mesh_valid_hz=mesh_valid_hz, colors={"mesh_limit": "0.5"}, theme="classic")
             ax.collections[0].set_clim(low, high)
+            # The canonical marker's background span lies under the opaque
+            # heatmap. Raise its grey span so out-of-band cells are visible as
+            # mesh-limited while retaining the unmodified values and colourbar.
+            if mesh_valid_hz is not None:
+                for patch in ax.patches:
+                    patch.set_zorder(4)
+                    patch.set_alpha(.65)
             fig.tight_layout()
             fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         finally:
@@ -1074,29 +1152,158 @@ def _phase1_default() -> Path | None:
     return None
 
 
+def recompute(source: Path, out: Path) -> int:
+    """Re-read immutable meshes, requests and retained bases; never prepare or solve.
+
+    Accept either one case directory, an old summary directory, or a tree of
+    side/frequency jobs printed by --print-commands. Repeated chunks must
+    describe the same mesh and excitation; overlapping frequencies refuse.
+    """
+    from server.mesh.file_import import parse_file_mesh
+
+    folders = [source] if (source / "case.json").is_file() else sorted({p.parent for p in source.rglob("case.json")})
+    cases: dict[str, Any] = {}
+    chunks: dict[str, Any] = {}
+    identities = {}
+    for folder in folders:
+        entry = json.loads((folder / "case.json").read_text())
+        name = entry["case"]
+        if not re.fullmatch(r'[a-zA-Z0-9_-]+', name):
+            raise EvidenceRefusal("Saved case name is invalid. Restore a case with a simple directory name.")
+        for side in ("A", "B"):
+            basis = folder / f"{side}.channel-bases.bin"
+            if not basis.is_file():
+                continue
+            request = json.loads((folder / f"{side}.request.json").read_text())
+            mesh_path = folder / f"{side}.msh"
+            plan_path = folder / f"{side}.plan.json"
+            if plan_path.is_file():
+                plan = json.loads(plan_path.read_text())
+            else:
+                # Legacy evidence predates plan retention. Identities come from
+                # its saved signal groups (never from channel ordering).
+                ids = {"HF": assembly.HF_RADIATOR_ID}
+                for group in entry["parity_signal_groups"]:
+                    if group["label"] in {"LF A", "LF B"} and len(group["members"]) == 1:
+                        ids[group["label"][-1]] = group["members"][0]["radiator_id"]
+                plan = {"variant": side, "drives": entry["ath_drives"], "polar": entry["observations"]["polar"],
+                        "radiator_ids": {d["radiator"]: d["radiator"] if side == "A" else ids[d["radiator"]]
+                                         for d in entry["ath_drives"]}}
+            expected = {plan["radiator_ids"][d["radiator"]] for d in plan["drives"] if d["weight"] != 0}
+            if expected != {c["id"] for c in request["geometry"]["drive_channels"]}:
+                raise EvidenceRefusal(f"{name}/{side}: saved request and radiator identities differ. Restore the matching plan and request.")
+            identity = (_sha(mesh_path), plan)
+            key = (name, side)
+            if key in identities and identities[key] != identity:
+                raise EvidenceRefusal(f"{name}/{side}: chunks have different meshes or excitation plans. Compare only chunks from one prepared case.")
+            identities[key] = identity
+            measured = grouped_bases(basis.read_bytes(), plan)
+            first = next(g for g in measured.values() if g["status"] == "complete")
+            if first["frequencies_hz"] != request["options"]["frequencies_hz"]:
+                raise EvidenceRefusal(f"{name}/{side}: saved request and basis frequencies differ. Restore the matching request.")
+            cases.setdefault(name, copy.deepcopy(entry))
+            cases[name].setdefault("mesh_adequacy", {})[side] = mesh_adequacy(parse_file_mesh(mesh_path.read_text()), 1.)
+            chunks.setdefault(name, {}).setdefault(side, []).append(measured)
+    if not cases:
+        raise EvidenceRefusal("No retained channel bases found. Supply the case or broker output directory containing *.channel-bases.bin and case.json.")
+    out.mkdir(parents=True, exist_ok=True)
+    for name, entry in cases.items():
+        if set(chunks[name]) != {"A", "B"}:
+            raise EvidenceRefusal(f"{name}: both A and B retained bases are required. Finish the missing side job before recomputing.")
+        left, right = (join_measurements(chunks[name][side]) for side in ("A", "B"))
+        folder = out / name
+        folder.mkdir(exist_ok=True)
+        entry["normalisation"] = NORMALISATION
+        entry["recomputed_from_retained_bases"] = True
+        entry["solves"] = {side: {"status": "retained", "measurement": groups} for side, groups in (("A", left), ("B", right))}
+        entry["estimated_beat_cpu_time"] = {side: _cpu_estimate(entry["mesh_adequacy"][side]["triangles"],
+            len(groups["combined"]["frequencies_hz"]), len(groups["combined"]["channel_normalisation"]))
+            for side, groups in (("A", left), ("B", right))}
+        calibrated_estimates({name: entry}, CALIBRATION)
+        finish_comparison(entry, folder, left, right)
+        _write_json(folder / "case.json", entry)
+        print(comparison_table(name, entry), flush=True)
+    success = all(e["status"] == "pass" for e in cases.values())
+    _write_json(out / "summary.json", {"schema": "ath-lf-parity-v1", "recomputed_from_retained_bases": True,
+        "normalisation": NORMALISATION, "status": "pass" if success else "incomplete", "cases": cases})
+    return 0 if success else 1
+
+
+def join_measurements(chunks: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Concatenate disjoint frequency chunks after the shared basis conversion."""
+    result = copy.deepcopy(chunks[0])
+    for group, target in result.items():
+        if any(c[group]["status"] != target["status"] for c in chunks):
+            raise EvidenceRefusal("Chunk drive groups differ. Use chunks from one prepared excitation plan.")
+        if target["status"] != "complete":
+            continue
+        if any(c[group]["angles_deg"] != target["angles_deg"] or
+               c[group]["channel_normalisation"] != target["channel_normalisation"] for c in chunks):
+            raise EvidenceRefusal("Chunk observation grids or channel normalizations differ. Use one solve configuration.")
+        frequencies = np.concatenate([c[group]["frequencies_hz"] for c in chunks])
+        order = np.argsort(frequencies)
+        if np.any(np.diff(frequencies[order]) <= 0):
+            raise EvidenceRefusal("Retained chunks repeat a frequency. Select a directory with exactly one result per side and frequency.")
+        for field in ("frequencies_hz", "pressure_real", "pressure_imag", "di_db"):
+            target[field] = np.concatenate([c[group][field] for c in chunks], axis=0)[order].tolist()
+    return result
+
+
+def comparison_table(name: str, entry: Mapping[str, Any]) -> str:
+    rows = [f"{name}: pass/fail only through {entry['comparison_valid_hz']:.1f} Hz; higher samples are mesh-limited.",
+            "| Side | Triangles | Largest edge (mm) | Six elements/wavelength through (Hz) |", "|---|---:|---:|---:|"]
+    for side, mesh in entry["mesh_adequacy"].items():
+        rows.append(f"| {side} | {mesh['triangles']} | {mesh['max_edge_mm']:.3f} | {mesh['max_valid_frequency_hz']:.1f} |")
+    rows += ["", "| Group / band | On-axis max dB | H max dB | V max dB | Phase max deg | DI max dB | Status |",
+             "|---|---:|---:|---:|---:|---:|---|"]
+    for group, metrics in entry["metrics"].items():
+        if metrics["status"] != "complete":
+            rows.append(f"| {group} | — | — | — | — | — | {metrics['reason']} |")
+            continue
+        for band, quantities in metrics["absolute"]["bands"].items():
+            values = [quantities[q]["eligible"]["max_abs"] for q in
+                      ("on_axis_spl_db", "horizontal_spl_db", "vertical_spl_db", "phase_deg", "di_db")]
+            if all(v is None for v in values) and not any(q["raw"]["count"] for q in quantities.values()):
+                continue
+            status = "mesh-limited" if all(v is None for v in values) else "pass" if all(q["pass"] is not False for q in quantities.values()) else "fail"
+            rows.append(f"| {group} / {band} | " + " | ".join("—" if v is None else f"{v:.4f}" for v in values) + f" | {status} |")
+    return "\n".join(rows) + "\n"
+
+
 def coordinator_commands(args: Any, cases: Sequence[str]) -> list[str]:
     """Exact solve argv for the broker owner; printing never prepares a runtime."""
     out = args.out.resolve()
     base = [sys.executable, "scripts/qualify_ath_lf_parity.py", "--phase1", str(args.phase1.resolve()),
             "--resolution-mm", str(args.resolution_mm), "--max-triangles", str(args.max_triangles)]
-    commands = [shlex.join([*base, "--case", "b-base", "--side", "B", "--calibrate", "--out", str(out / "calibration")])]
+    broker = next((p / "scratchpads/compute-broker/broker" for p in ROOT.parents
+                   if (p / "scratchpads/compute-broker/broker").is_file()), Path("broker"))
+    commands = []
     for name in cases:
-        commands.append(shlex.join([*base, "--case", name, "--side", "both", "--freqs",
-                                   *[str(f) for f in args.command_freqs],
-                                   "--calibration", str(out / "calibration" / "calibration.json"),
-                                   "--out", str(out / name)]))
+        for side in ("A", "B"):
+            for frequency in args.command_freqs:
+                solve = [*base, "--case", name, "--side", side, "--freqs", str(frequency),
+                         "--out", str(out / name / f"{side}-{frequency:g}")]
+                if args.calibration:
+                    solve += ["--calibration", str(args.calibration.resolve())]
+                commands.append(shlex.join([str(broker), "submit", "--lane", "compute", "--expected", "15", "--priority", "3",
+                    "--requester", args.requester, "--purpose", f"ATH LF parity {name}/{side} {frequency:g} Hz; N^1.5 estimate, guarded below 15 min",
+                    "--cwd", str(ROOT), "--", *solve]))
+        commands.append(shlex.join([sys.executable, "scripts/qualify_ath_lf_parity.py", "--recompute", str(out / name),
+                                   "--out", str(out / "comparisons" / name)]))
     return commands
 
 
 def dry_run_table(results: Mapping[str, Any]) -> str:
     rows = ["A uses retained ATH sampling in a sandbox dry run; B uses the requested resolution.",
             "Open edges below are for each reflected closed surface; half-domain symmetry rims remain open by design.",
-            "", "| Case | A triangles | B triangles | A open edges | B open edges | Symmetry | Status |",
-            "|---|---:|---:|---:|---:|---|---|"]
+            "", "| Case | A triangles | B triangles | A open edges | B open edges | A valid through Hz | B valid through Hz | Symmetry | Status |",
+            "|---|---:|---:|---:|---:|---:|---:|---|---|"]
     for name, entry in results.items():
         counts = [entry.get(key, {}).get("reflected_integrity", {}).get("open_edge_count", "unavailable")
                   for key in ("ath_x_half", "wg_x_half")]
-        rows.append(f"| {name} | {entry.get('ath_boundary_triangles', 'unavailable')} | {entry.get('wg_triangles', 'unavailable')} | {counts[0]} | {counts[1]} | x=0, half_yz | {entry['status']} |")
+        valid = [entry.get("mesh_adequacy", {}).get(side, {}).get("max_valid_frequency_hz") for side in ("A", "B")]
+        limits = [f"{v:.1f}" if v is not None else "unavailable" for v in valid]
+        rows.append(f"| {name} | {entry.get('ath_boundary_triangles', 'unavailable')} | {entry.get('wg_triangles', 'unavailable')} | {counts[0]} | {counts[1]} | {limits[0]} | {limits[1]} | x=0, half_yz | {entry['status']} |")
     return "\n".join(rows) + "\n"
 
 
@@ -1105,19 +1312,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cases", nargs="+", default=list(DEFAULT_CASES), help="case names, space or comma separated")
     parser.add_argument("--case", help="one case for a coordinator broker job; overrides --cases")
     parser.add_argument("--side", choices=["A", "B", "both"], default="both", help="solve one side and retain its bases, or compare both")
-    parser.add_argument("--freqs", nargs="+", help="Hz, space or comma separated; default 12 log-spaced points, 200–8000 Hz")
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--freqs", nargs="+", help="Hz, space or comma separated; default 200, 1000, 3000 Hz; split to one frequency per broker job if needed")
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--recompute", type=Path, help="compare retained *.channel-bases.bin with saved case/plan/request/mesh files; no geometry build or solve")
     parser.add_argument("--engine", choices=["beat-cpu"], default="beat-cpu")
-    parser.add_argument("--max-triangles", type=int, default=8000)
+    parser.add_argument("--max-triangles", type=int, default=22000)
     parser.add_argument("--resolution-mm", type=float, default=DEFAULT_RESOLUTION_MM, help="same copied-cfg horn, enclosure and LF characteristic length for A and B; existing mesher chord-error floors still apply")
     parser.add_argument("--retained-reference", action="store_true", help="diagnose retained meshes without ATH regeneration; never a coarse parity solve")
     parser.add_argument("--calibrate", "--calibrate-only", dest="calibrate_only", action="store_true", help="exactly one b-base/B CPU solve at 1000 Hz, at most 115 seconds; no ATH regeneration")
     parser.add_argument("--calibration", type=Path, help="previous calibration.json used for dry-run planning")
     parser.add_argument("--dry-run", action="store_true", help="import and mesh only; never discover or start a solver")
-    parser.add_argument("--print-commands", action="store_true", help="print one calibration and one both-side command per selected case, then exit; broker owner submits them")
+    parser.add_argument("--print-commands", action="store_true", help="print separate broker side/frequency jobs and a final retained-basis comparison per case")
+    parser.add_argument("--requester", default="assembly-ath-parity-r4", help="broker requester session name used in printed commands")
     parser.add_argument("--phase1", type=Path, default=_phase1_default(), help="external phase-1 evidence directory")
     parser.add_argument("--timeout", type=float, default=3600, help="per-geometry solve timeout in seconds")
     args = parser.parse_args(argv)
+    if args.out is None:
+        if args.recompute is None:
+            parser.error("supply --out outside this worktree")
+        args.out = args.recompute.resolve() / "recomputed"
+    out = args.out.resolve()
+    if out == ROOT or ROOT in out.parents:
+        parser.error("--out must be outside this worktree")
+    if args.recompute:
+        if args.dry_run or args.calibrate_only or args.print_commands:
+            parser.error("--recompute cannot prepare, calibrate, or print solve commands")
+        try:
+            return recompute(args.recompute.resolve(), out)
+        except (EvidenceRefusal, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     if args.case:
         args.cases = [args.case]
     if args.calibrate_only:
@@ -1145,14 +1369,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--cases must be simple directory names")
     if len(cases) != len(set(cases)):
         parser.error("--cases must not repeat a case")
-    # Never place scratch artifacts in the source checkout by accident.
-    out = args.out.resolve()
-    if out == ROOT or ROOT in out.parents:
-        parser.error("--out must be outside this worktree")
     if args.print_commands:
         args.command_freqs = freqs
         print("# Coordinator: submit each following command as a separate compute-broker job.")
-        print("# Run calibration first; use its measured estimates to reserve each case below 15 minutes.")
+        print("# Planning: 29 s/frequency/channel at 4,130 triangles, cost proportional to N^1.5; no contention margin.")
+        print("# Each solve reserves 15 minutes and refuses an estimate >=15 minutes. Run each case's recompute after all its jobs finish.")
         print("\n".join(coordinator_commands(args, cases)))
         return 0
     out.mkdir(parents=True, exist_ok=True)
@@ -1193,7 +1414,7 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
             print(f"{name}: {entry['status']}; A={entry.get('ath_boundary_triangles', '?')} B={entry.get('wg_triangles', '?')} triangles", flush=True)
     finally:
         store.close()
-    calibration = json.loads(args.calibration.read_text()) if args.calibration else None
+    calibration = json.loads(args.calibration.read_text()) if args.calibration else copy.deepcopy(CALIBRATION)
     calibration_success = False
     if args.calibrate_only:
         calibration = None
@@ -1221,14 +1442,12 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
         # Refuse the whole batch before the first solve when any reference is
         # invalid or over budget. The coordinator can select the ready subset.
         if all(entry["status"] == "ready" for entry in results.values()):
-            if calibration is None:
-                raise EvidenceRefusal("CPU calibration is missing. Run --case b-base --side B --calibrate once, then supply --calibration.")
-            if calibration.get("symmetry") != "half_yz" or calibration.get("resolution_mm") != args.resolution_mm:
-                raise EvidenceRefusal("CPU calibration uses another domain or resolution. Recalibrate the X-half mesh at the requested --resolution-mm.")
+            if calibration.get("symmetry") != "half_yz":
+                raise EvidenceRefusal("CPU calibration uses another domain. Supply the X-half CPU calibration; triangle scaling handles the requested resolution.")
             calibrated_estimates(results, calibration)
             sides = ("A", "B") if args.side == "both" else (args.side,)
-            if any(sum(entry["estimated_beat_cpu_time"][v]["contention_minutes"] for v in sides) >= 15 for entry in results.values()):
-                raise EvidenceRefusal("Estimated selected solve exceeds 15 minutes. Coarsen --resolution-mm and prepare both sides again.")
+            if any(sum(entry["estimated_beat_cpu_time"][v]["minutes"] for v in sides) >= 15 for entry in results.values()):
+                raise EvidenceRefusal("Estimated selected solve exceeds 15 minutes. Split --side A/B and --freqs into one frequency per job, then --recompute their parent directory.")
             async def collect(runtime: Any, job_id: str, response: Mapping[str, Any], request: Any) -> Any:
                 plan = next(p for p in plans.values() if p["requests"]["beat-cpu"]["request"] is request)
                 payload = await asyncio.to_thread(runtime.store.get_channel_bases, job_id)
@@ -1247,10 +1466,7 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
                     entry["status"] = "side-complete"
                 elif complete:
                     left, right = (outcomes[v]["measurement"] for v in ("A", "B"))
-                    entry["metrics"] = compare_groups(left, right)
-                    entry["charts"] = charts(out / name, left, right, entry["metrics"])
-                    verdicts = [m["absolute"]["pass"] for m in entry["metrics"].values() if m["status"] == "complete"]
-                    entry["status"] = "pass" if verdicts and all(v is True for v in verdicts) else "fail"
+                    finish_comparison(entry, out / name, left, right)
                 else:
                     entry["status"] = "failed-solve"
                 _write_json(out / name / "case.json", entry)
@@ -1258,7 +1474,7 @@ def _run(args: Any, cases: list[str], freqs: list[float], out: Path, session_pat
         calibrated_estimates(results, calibration)
     for name, entry in results.items():
         _write_json(out / name / "case.json", entry)
-    refused = any(entry["status"] in {"not-importable", "refused", "failed-solve", "fail"} for entry in results.values())
+    refused = any(entry["status"] in {"not-importable", "refused", "failed-solve", "fail", "mesh-limited"} for entry in results.values())
     if args.calibrate_only:
         refused = not calibration_success
     summary = {"schema": "ath-lf-parity-v1", "dry_run": args.dry_run, "engine": args.engine, "side": args.side,

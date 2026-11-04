@@ -191,7 +191,8 @@ def _bases(velocity=False):
             pressure_complex=np.ones((2, 2, 3), complex) * scale[:, None, None],
             sphere_pressure_complex=np.ones((2, theta.size), complex) * scale[:, None],
             sphere_theta_deg=theta.ravel(), sphere_phi_deg=phi.ravel())
-    return serialize_channel_bases(data)
+    return serialize_channel_bases(data, metadata_by_id={name: {
+        "source_normalization": "native_rms_velocity" if velocity else "unit_normal_acceleration"} for name in data})
 
 
 def test_grouping_reuses_combine_signed_weights_and_acceleration_conversion():
@@ -207,13 +208,171 @@ def test_grouping_reuses_combine_signed_weights_and_acceleration_conversion():
     assert no_lf["LF"]["status"] == "not-applicable"
 
 
-def test_charts_use_classic_theme_and_write_pngs(tmp_path):
+@pytest.mark.parametrize("variant", ["A", "B"])
+@pytest.mark.parametrize("velocity", [False, True])
+def test_normalisation_comes_from_each_retained_channel_not_geometry(variant, velocity):
+    plan = {"variant": variant, "radiator_ids": {"HF": "HF", "B": "B"},
+            "polar": {"distance": 2, "angle_range": [0, 90, 3]},
+            "drives": [{"radiator": "HF", "weight": 1, "delay_ms": 0}, {"radiator": "B", "weight": 1, "delay_ms": 0}]}
+    grouped = parity.grouped_bases(_bases(velocity=velocity), plan)
+    assert np.asarray(grouped["combined"]["pressure_real"]) == pytest.approx(np.full((2, 2, 3), 2.))
+    assert np.asarray(grouped["combined"]["pressure_imag"]) == pytest.approx(np.zeros((2, 2, 3)))
+    assert {m['conversion'] for m in grouped['combined']['channel_normalisation'].values()} == {
+        'acceleration_scale' if velocity else 'identity'}
+
+
+@pytest.mark.parametrize('normalisation', [None, 'native_rms_voltage', 'unknown'])
+def test_missing_or_nonmechanical_basis_is_refused_instead_of_guessed(normalisation):
+    from server.solver.combine import deserialize_channel_bases
+
+    bases = deserialize_channel_bases(_bases())['results_by_id']
+    payload = serialize_channel_bases(bases, metadata_by_id={k: {'source_normalization': normalisation} for k in bases})
+    with pytest.raises(parity.EvidenceRefusal, match='source_normalization.*Retain'):
+        parity.grouped_bases(payload, {'variant': 'A'})
+
+
+def test_normalisation_can_differ_between_channels_in_one_solve():
+    from server.solver.combine import deserialize_channel_bases
+    from server.solver.imported_channels import scale_channel_result
+
+    bases = deserialize_channel_bases(_bases())['results_by_id']
+    scale_channel_result(bases['B'], -2j * np.pi * np.asarray(bases['B'].frequencies_hz))
+    payload = serialize_channel_bases(bases, metadata_by_id={
+        'HF': {'source_normalization': 'unit_normal_acceleration'}, 'B': {'source_normalization': 'native_rms_velocity'}})
+    plan = {'variant': 'A', 'radiator_ids': {'HF': 'HF', 'B': 'B'}, 'polar': {'distance': 2, 'angle_range': [0, 90, 3]},
+            'drives': [{'radiator': 'HF', 'weight': 1, 'delay_ms': 0}, {'radiator': 'B', 'weight': -.5, 'delay_ms': 0}]}
+    groups = parity.grouped_bases(payload, plan)
+    assert np.asarray(groups['combined']['pressure_real']) == pytest.approx(np.full((2, 2, 3), .5))
+
+
+def test_mesh_limit_gates_spl_phase_di_and_ignores_out_of_band_peaks_for_nulls():
+    f, angles, a = fields()
+    b = a.copy()
+    a[2:] *= 1e5
+    b[2:] *= 1e8 * 1j
+    di = [0, 0, 10, 10, 10]
+    result = parity.metric_differences(f, angles, a, b, np.zeros(5), di, mesh_valid_hz=1000)
+    assert result['pass'] is True
+    assert result['frequency_status'] == ['valid', 'valid', 'mesh-limited', 'mesh-limited', 'mesh-limited']
+    assert result['bands']['below_1k']['on_axis_spl_db']['eligible']['count'] == 1
+    for quantity in result['bands']['5k_10k'].values():
+        assert quantity['pass'] is None and quantity['eligible']['count'] == 0
+        assert quantity['mesh_limited']['count'] > 0
+    assert parity.metric_differences(f, angles, a, b, np.zeros(5), di, mesh_valid_hz=50)['pass'] is None
+
+
+def test_mesh_adequacy_uses_largest_edge_and_correct_units():
+    mesh = FileMesh(np.array([[0., 0, 0], [30, 0, 0], [0, 40, 0]]), np.array([[0, 1, 2]]), np.array([1]), {})
+    result = parity.mesh_adequacy(mesh, .001)
+    assert result['max_edge_mm'] == pytest.approx(50)
+    assert result['max_valid_frequency_hz'] == pytest.approx(result['sound_speed_m_s'] / (.05 * 6))
+    mesh.points *= .001
+    assert parity.mesh_adequacy(mesh, 1.) == result
+
+
+def _save_chunk(folder, side, indices):
+    from server.mesh.file_import import mesh_text
+    from server.solver.combine import deserialize_channel_bases
+
+    folder.mkdir(parents=True, exist_ok=True)
+    bases = deserialize_channel_bases(_bases())['results_by_id']
+    for result in bases.values():
+        result.frequencies_hz = result.frequencies_hz[indices]
+        result.pressure_complex = result.pressure_complex[indices]
+        result.sphere_pressure_complex = result.sphere_pressure_complex[indices]
+    payload = serialize_channel_bases(bases, metadata_by_id={k: {'source_normalization': 'unit_normal_acceleration'} for k in bases})
+    plan = {'variant': side, 'radiator_ids': {'HF': 'HF', 'B': 'B'}, 'polar': {'distance': 2, 'angle_range': [0, 90, 3]},
+            'drives': [{'radiator': 'HF', 'weight': 1, 'delay_ms': 0}, {'radiator': 'B', 'weight': .5, 'delay_ms': 0}]}
+    (folder / f'{side}.channel-bases.bin').write_bytes(payload)
+    (folder / f'{side}.plan.json').write_text(json.dumps(plan))
+    (folder / f'{side}.request.json').write_text(json.dumps({'geometry': {'drive_channels': [{'id': k} for k in bases]},
+        'options': {'frequencies_hz': bases['HF'].frequencies_hz.tolist()}}))
+    mesh = half_tetrahedron()
+    mesh.points *= .001
+    (folder / f'{side}.msh').write_text(mesh_text(mesh))
+    (folder / 'case.json').write_text(json.dumps({'case': 'test', 'status': 'side-complete'}))
+
+
+@pytest.mark.parametrize('split', [False, True])
+def test_recompute_uses_saved_bases_and_joins_side_frequency_jobs_without_preparing(tmp_path, monkeypatch, split):
+    source, output = tmp_path / 'saved', tmp_path / 'compared'
+    if split:
+        for side in ['A', 'B']:
+            for index in [0, 1]:
+                _save_chunk(source / f'{side}-{index}' / 'test', side, [index])
+    else:
+        for side in ['A', 'B']:
+            _save_chunk(source / 'test', side, [0, 1])
+    before = {p: p.read_bytes() for p in source.rglob('*') if p.is_file()}
+    monkeypatch.setattr(parity, 'prepare_case', lambda *a: pytest.fail('recompute prepared geometry'))
+    monkeypatch.setattr(parity.assembly, '_solve', lambda *a, **kw: pytest.fail('recompute started solver'))
+    monkeypatch.setattr(parity, 'charts', lambda *a, **kw: [])
+    assert parity.main(['--recompute', str(source), '--out', str(output)]) == 0
+    summary = json.loads((output / 'summary.json').read_text())
+    entry = summary['cases']['test']
+    assert entry['status'] == 'pass' and entry['recomputed_from_retained_bases']
+    assert entry['solves']['B']['measurement']['HF']['frequencies_hz'] == [100, 1000]
+    assert entry['metrics']['combined']['absolute']['bands']['1k_5k']['phase_deg']['eligible']['max_abs'] == 0
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+@pytest.mark.parametrize('problem', ['missing-side', 'overlap', 'changed-mesh', 'changed-request'])
+def test_recompute_refuses_incomplete_or_inconsistent_retained_evidence(tmp_path, monkeypatch, problem):
+    source, output = tmp_path / 'saved', tmp_path / 'compared'
+    _save_chunk(source / 'one' / 'test', 'A', [0, 1])
+    if problem != 'missing-side':
+        _save_chunk(source / 'one' / 'test', 'B', [0, 1])
+    if problem in {'overlap', 'changed-mesh'}:
+        extra = source / 'extra' / 'test'
+        _save_chunk(extra, 'A', [0])
+        if problem == 'changed-mesh':
+            mesh = extra / 'A.msh'
+            mesh.write_text(mesh.read_text() + '\n')
+    if problem == 'changed-request':
+        request = source / 'one' / 'test' / 'A.request.json'
+        data = json.loads(request.read_text())
+        data['options']['frequencies_hz'] = [200, 2000]
+        request.write_text(json.dumps(data))
+    monkeypatch.setattr(parity, 'charts', lambda *a, **kw: pytest.fail('invalid evidence reached charts'))
+    assert parity.main(['--recompute', str(source), '--out', str(output)]) == 1
+    assert not (output / 'summary.json').exists()
+
+
+def test_charts_use_classic_theme_and_write_pngs(tmp_path, monkeypatch):
+    import hornlab_plots as plots
+
+    axes = []
+    render = plots.render_single_heatmap
+
+    def capture(ax, *args, **kwargs):
+        axes.append(ax)
+        return render(ax, *args, **kwargs)
+
+    monkeypatch.setattr(plots, 'render_single_heatmap', capture)
     plan = {"variant": "A", "radiator_ids": {"HF": "HF"}, "polar": {"distance": 2, "angle_range": [0, 90, 3]},
             "drives": [{"radiator": "HF", "weight": 1, "delay_ms": 0}]}
     groups = parity.grouped_bases(_bases(), plan)
-    files = parity.charts(tmp_path, groups, groups, parity.compare_groups(groups, groups))
+    files = parity.charts(tmp_path, groups, groups, parity.compare_groups(groups, groups), mesh_valid_hz=800)
     assert len(files) == 18  # HF + combined: overlay, six heatmaps, phase + SPL differences.
     assert all((tmp_path / filename).read_bytes().startswith(b"\x89PNG") for filename in files)
+    assert len(axes) == 12
+    assert all(ax.patches and all(patch.get_zorder() == 4 and patch.get_alpha() == .65 for patch in ax.patches) for ax in axes)
+    assert all(patch.get_facecolor()[:3] == (.5, .5, .5) for ax in axes for patch in ax.patches)
+
+
+def test_new_fixture_imports_freeze_identities_for_independent_frequency_jobs():
+    from server.design.schema import DesignConfig
+    from server.design.textcfg import parse
+
+    text = 'OSSE = {\nL = 120\n}\nMesh.Enclosure = {\nLFSource.B = {\nRadius = 50\nDrivingWeight = 1\n}\n}\n'
+    left, right = [parse(text).design.model_dump(mode='json') for _ in range(2)]
+    assert left['assembly']['woofers'][0]['id'] != right['assembly']['woofers'][0]['id']
+    before = copy.deepcopy(left['assembly']['woofers'][0])
+    parity.fixture_identities(left, 'test')
+    parity.fixture_identities(right, 'test')
+    assert left == right
+    assert {k: v for k, v in left['assembly']['woofers'][0].items() if k != 'id'} == {k: v for k, v in before.items() if k != 'id'}
+    assert DesignConfig.model_validate(left).root.assembly is not None
 
 
 def test_dry_run_and_invalid_reference_never_start_the_solve_driver(tmp_path, monkeypatch):
@@ -341,8 +500,7 @@ def test_ready_dry_run_never_starts_solver(tmp_path, monkeypatch):
     monkeypatch.setattr(parity.assembly, "_solve", lambda *a, **kw: pytest.fail("dry run started a solve"))
     assert parity.main(["--out", str(tmp_path), "--phase1", str(tmp_path), "--cases", "test", "--dry-run"]) == 0
     summary = json.loads((tmp_path / "summary.json").read_text())
-    assert summary["status"] == "geometry-only" and len(summary["frequencies_hz"]) == 12
-    assert summary["frequencies_hz"][-1] == 8000 and summary["frequencies_hz"][0] == 200
+    assert summary["status"] == "geometry-only" and summary["frequencies_hz"] == [200, 1000, 3000]
 
 
 @pytest.mark.parametrize("case", ["../escape", "bad/name", ""])
@@ -452,8 +610,9 @@ def test_calibration_mode_runs_exactly_one_b_base_b_frequency(tmp_path, monkeypa
     entries = {'test': {'estimated_beat_cpu_time': {'A': parity._cpu_estimate(5000, 12, 2),
                                                  'B': parity._cpu_estimate(5000, 12, 2)}}}
     parity.calibrated_estimates(entries, calibration)
-    assert entries['test']['estimated_pair_minutes'] == 16
-    assert not entries['test']['broker_budget']['under_15_minutes']
+    assert entries['test']['estimated_pair_minutes'] == 8
+    assert entries['test']['broker_budget']['under_15_minutes']
+    assert 'N^1.5' in entries['test']['broker_budget']['assumption']
 
 
 def test_b_lip_is_explicit_only_and_ath_arcs_are_unused():
@@ -544,17 +703,20 @@ def test_both_requests_use_shared_persisted_x_half_symmetry():
         assert setup['options']['symmetry'] == 'half_yz'
 
 
-def test_coordinator_commands_print_one_calibration_then_each_pair_without_preparing(tmp_path, monkeypatch, capsys):
+def test_coordinator_commands_print_split_broker_jobs_then_recompute_without_preparing(tmp_path, monkeypatch, capsys):
     import shlex
 
     monkeypatch.setattr(parity, 'prepare_case', lambda *a: pytest.fail('printing commands prepared geometry'))
     assert parity.main(['--print-commands', '--out', str(tmp_path), '--phase1', str(tmp_path)]) == 0
     commands = [shlex.split(line) for line in capsys.readouterr().out.splitlines() if not line.startswith('#')]
-    assert len(commands) == 6
-    assert commands[0][commands[0].index('--case') + 1] == 'b-base'
-    assert commands[0][commands[0].index('--side') + 1] == 'B' and '--calibrate' in commands[0]
-    assert [c[c.index('--case') + 1] for c in commands[1:]] == list(parity.DEFAULT_CASES)
-    assert all(c[c.index('--side') + 1] == 'both' and '--calibration' in c for c in commands[1:])
+    assert len(commands) == len(parity.DEFAULT_CASES) * 7
+    assert 'a-explicit' in parity.DEFAULT_CASES and 'mtm-q14' in parity.DEFAULT_CASES
+    for index, case in enumerate(parity.DEFAULT_CASES):
+        jobs = commands[index * 7:index * 7 + 6]
+        assert all(c[1] == 'submit' and c[c.index('--case') + 1] == case for c in jobs)
+        assert [c[c.index('--side') + 1] for c in jobs] == ['A'] * 3 + ['B'] * 3
+        assert [c[c.index('--freqs') + 1] for c in jobs] == ['200.0', '1000.0', '3000.0'] * 2
+        assert '--recompute' in commands[index * 7 + 6]
 
 
 @pytest.mark.parametrize('side', ['A', 'B'])
