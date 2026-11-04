@@ -1059,6 +1059,144 @@ def compare_groups(a: Mapping[str, Any], b: Mapping[str, Any], *, mesh_valid_hz:
     return comparisons
 
 
+def _frequency_axes(ax: Any, freqs: Sequence[float], title: str, ylabel: str,
+                    mesh_valid_hz: float | None) -> None:
+    """Reuse the canonical axes and mesh-limit renderer for report panels."""
+    from hornlab_plots.charts import _add_log_grid, _apply_canonical_axes
+    from hornlab_plots._grid import freq_formatter
+    from hornlab_plots._heatmap import _draw_mesh_valid_markers
+    from hornlab_plots.style import apply_theme_overrides
+    from matplotlib.ticker import FuncFormatter
+
+    theme = apply_theme_overrides("classic", colors={"mesh_limit": "0.5"})
+    ax.set_xscale("log")
+    _apply_canonical_axes(ax, "Frequency [Hz]", ylabel, title, theme=theme)
+    ax.xaxis.set_major_formatter(FuncFormatter(freq_formatter))
+    lo, hi = min(freqs), max(freqs)
+    if lo == hi:
+        lo, hi = lo / 1.1, hi * 1.1
+    _add_log_grid(ax, lo, hi, detailed=True, theme=theme)
+    ax.set_xlim(lo, hi)
+    if mesh_valid_hz is not None:
+        _draw_mesh_valid_markers(ax, lo=lo, hi=hi, mesh_valid_hz=mesh_valid_hz,
+                                span_zorder=0, line_zorder=1, theme=theme)
+
+
+def _on_axis_panel(ax: Any, left: Mapping[str, Any], right: Mapping[str, Any],
+                   title: str, mesh_valid_hz: float | None) -> None:
+    import hornlab_plots as plots
+
+    on = int(np.argmin(np.abs(left["angles_deg"])))
+    theme = plots.get_theme("classic")
+    for data, label, color, style, marker in zip(
+            (left, right), ("A: ATH geometry", "B: WG geometry"),
+            theme.palette, ("-", "--"), ("o", "s")):
+        level = 20 * np.log10(np.maximum(np.hypot(data["pressure_real"], data["pressure_imag"]), 1e-20) / 20e-6)
+        ax.semilogx(data["frequencies_hz"], level[:, 0, on], label=label,
+                    color=color, linestyle=style, marker=marker)
+    _frequency_axes(ax, left["frequencies_hz"], title, "SPL [dB re 20 µPa]", mesh_valid_hz)
+    ax.legend()
+
+
+def case_summary_figure(folder: Path, a: Mapping[str, Any], b: Mapping[str, Any],
+                        comparison: Mapping[str, Any], mesh_valid_hz: float | None) -> str:
+    """Three on-axis overlays and signed on-axis error; no interpolation."""
+    import hornlab_plots as plots
+    from hornlab_plots.style import theme_rc_context
+    import matplotlib.pyplot as plt
+
+    theme = plots.get_theme("classic")
+    with theme_rc_context(theme):
+        fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+        try:
+            fig.patch.set_facecolor(theme.figure_bg)
+            error_ax = axes.flat[3]
+            frequencies = None
+            for group, ax, color in zip(("HF", "LF", "combined"), axes.flat, theme.palette):
+                if comparison[group]["status"] != "complete":
+                    ax.set_axis_off()
+                    ax.text(.5, .5, f"{group}: {comparison[group]['reason']}", ha="center", transform=ax.transAxes)
+                    continue
+                _on_axis_panel(ax, a[group], b[group], group, mesh_valid_hz)
+                frequencies = a[group]["frequencies_hz"]
+                on = int(np.argmin(np.abs(a[group]["angles_deg"])))
+                delta = np.asarray(comparison[group]["absolute"]["spl_delta_db"])[:, 0, on]
+                error_ax.semilogx(frequencies, delta, color=color, marker="o", label=group)
+            if frequencies is not None:
+                f = np.asarray(frequencies)
+                tolerance = np.where(f < 10000, .5, 1.)
+                error_ax.fill_between(f, -tolerance, tolerance, color=theme.palette[3],
+                                      alpha=theme.fill_alpha, label="SPL tolerance ±0.5 / ±1 dB", step="post")
+                _frequency_axes(error_ax, frequencies, "On-axis B − A (raw samples)", "ΔSPL [dB]", mesh_valid_hz)
+                error_ax.legend()
+            fig.suptitle(f"{folder.name}: ATH / WG geometry parity\nUnit RMS acceleration · ATH weights · markers = solved samples · grey = mesh-limited")
+            fig.tight_layout()
+            filename = "summary.png"
+            fig.savefig(folder / filename, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+            return filename
+        finally:
+            plt.close(fig)
+
+
+def summary_table_rows(cases: Mapping[str, Any]) -> list[list[str]]:
+    """Use the existing eligible band statistics, including polar SPL maxima."""
+    rows = []
+    for name, entry in cases.items():
+        for group, metrics in entry["metrics"].items():
+            if metrics["status"] != "complete":
+                rows.append([name, group, "—", "—", "—", "—", metrics["reason"]])
+                continue
+            for band, quantities in metrics["absolute"]["bands"].items():
+                if not any(q["raw"]["count"] for q in quantities.values()):
+                    continue
+                spl = [quantities[q]["eligible"]["max_abs"] for q in
+                       ("on_axis_spl_db", "horizontal_spl_db", "vertical_spl_db")]
+                spl = [v for v in spl if v is not None]
+                values = [max(spl) if spl else None, quantities["phase_deg"]["eligible"]["max_abs"],
+                          quantities["di_db"]["eligible"]["max_abs"]]
+                status = ("mesh-limited" if all(v is None for v in values) else
+                          "FAIL" if any(q["pass"] is False for q in quantities.values()) else "PASS")
+                band_label = band.replace("below_", "<").replace("_", "–")
+                rows.append([name, group, band_label, *["—" if v is None else f"{v:.4f}" for v in values], status])
+    return rows
+
+
+def cross_case_summary(out: Path, cases: Mapping[str, Any]) -> str:
+    import hornlab_plots as plots
+    from hornlab_plots.style import theme_rc_context
+    import matplotlib.pyplot as plt
+
+    rows = summary_table_rows(cases)
+    theme = plots.get_theme("classic")
+    with theme_rc_context(theme):
+        fig, ax = plt.subplots(figsize=(14, max(4, 2.5 + .36 * len(rows))))
+        try:
+            fig.patch.set_facecolor(theme.figure_bg)
+            ax.set_axis_off()
+            ax.set_title("ATH / WG geometry parity — band maxima", color=theme.text_color)
+            table = ax.table(cellText=rows, colLabels=["Case", "Group", "Band [Hz]", "Max |ΔSPL| [dB]",
+                             "Max |phase| [°]", "Max |ΔDI| [dB]", "Status"],
+                             cellLoc="center", loc="center")
+            table.auto_set_font_size(False)
+            table.set_fontsize(10)
+            table.scale(1, 1.5)
+            for (row, _), cell in table.get_celld().items():
+                cell.set_facecolor(theme.axes_bg)
+                cell.set_edgecolor(theme.spine_color)
+                cell.get_text().set_color(theme.text_color)
+                if row == 0:
+                    cell.get_text().set_weight("bold")
+            fig.text(.5, .035, "Eligible, mesh-valid samples only; SPL includes on-axis and H/V 0–90°. Deep nulls excluded.\n"
+                     "Tolerances: SPL ≤0.5 dB (<10k), ≤1 dB (10–20k); phase ≤5°; DI ≤0.3 dB. Unsampled bands omitted.",
+                     ha="center", color=theme.text_color)
+            fig.tight_layout(rect=(0, .1, 1, 1))
+            filename = "cross-case-summary.png"
+            fig.savefig(out / filename, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+            return filename
+        finally:
+            plt.close(fig)
+
+
 def charts(folder: Path, a: Mapping[str, Any], b: Mapping[str, Any], comparison: Mapping[str, Any], *,
            mesh_valid_hz: float | None = None) -> list[str]:
     import hornlab_plots as plots
@@ -1069,14 +1207,21 @@ def charts(folder: Path, a: Mapping[str, Any], b: Mapping[str, Any], comparison:
             continue
         left, right = a[group], b[group]
         f, angles = left["frequencies_hz"], left["angles_deg"]
-        on = int(np.argmin(np.abs(angles)))
         levels = [20 * np.log10(np.maximum(np.hypot(data["pressure_real"], data["pressure_imag"]), 1e-20) / 20e-6)
                   for data in (left, right)]
         filename = f"{group}-on-axis.png"
-        plots.save_frequency_response_plot(folder / filename, [plots.FrequencyResponseCurve(f, level[:, 0, on], label)
-            for level, label in zip(levels, ("A: ATH geometry", "B: WG geometry"))],
-            title=f"{folder.name} / {group}: unit acceleration, ATH weights (grey: mesh-limited)",
-            mesh_valid_hz=mesh_valid_hz, colors={"mesh_limit": "0.5"}, theme="classic")
+        from hornlab_plots.style import theme_rc_context
+        import matplotlib.pyplot as plt
+
+        with theme_rc_context("classic"):
+            fig, ax = plt.subplots(figsize=(11, 5))
+            try:
+                fig.patch.set_facecolor(plots.get_theme("classic").figure_bg)
+                _on_axis_panel(ax, left, right, f"{folder.name} / {group}: unit acceleration, ATH weights", mesh_valid_hz)
+                fig.tight_layout()
+                fig.savefig(folder / filename, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+            finally:
+                plt.close(fig)
         files.append(filename)
         curves = []
         for index, plane in enumerate(("horizontal", "vertical")):
@@ -1102,6 +1247,7 @@ def charts(folder: Path, a: Mapping[str, Any], b: Mapping[str, Any], comparison:
         plots.save_frequency_response_plot(folder / filename, curves, title=f"{folder.name} / {group}: differences (grey: mesh-limited)",
                                             ylabel="Absolute difference [dB]", mesh_valid_hz=mesh_valid_hz, colors={"mesh_limit": "0.5"}, theme="classic", span_db=10)
         files.append(filename)
+    files.append(case_summary_figure(folder, a, b, comparison, mesh_valid_hz))
     return files
 
 
@@ -1223,9 +1369,11 @@ def recompute(source: Path, out: Path) -> int:
         finish_comparison(entry, folder, left, right)
         _write_json(folder / "case.json", entry)
         print(comparison_table(name, entry), flush=True)
+    table_file = cross_case_summary(out, cases)
     success = all(e["status"] == "pass" for e in cases.values())
     _write_json(out / "summary.json", {"schema": "ath-lf-parity-v1", "recomputed_from_retained_bases": True,
-        "normalisation": NORMALISATION, "status": "pass" if success else "incomplete", "cases": cases})
+        "normalisation": NORMALISATION, "status": "pass" if success else "incomplete", "cases": cases,
+        "charts": [table_file]})
     return 0 if success else 1
 
 
@@ -1273,7 +1421,7 @@ def comparison_table(name: str, entry: Mapping[str, Any]) -> str:
 def coordinator_commands(args: Any, cases: Sequence[str]) -> list[str]:
     """Exact solve argv for the broker owner; printing never prepares a runtime."""
     out = args.out.resolve()
-    base = [sys.executable, "scripts/qualify_ath_lf_parity.py", "--phase1", str(args.phase1.resolve()),
+    base = [str(args.command_python), "scripts/qualify_ath_lf_parity.py", "--phase1", str(args.phase1.resolve()),
             "--resolution-mm", str(args.resolution_mm), "--max-triangles", str(args.max_triangles)]
     broker = next((p / "scratchpads/compute-broker/broker" for p in ROOT.parents
                    if (p / "scratchpads/compute-broker/broker").is_file()), Path("broker"))
@@ -1282,13 +1430,13 @@ def coordinator_commands(args: Any, cases: Sequence[str]) -> list[str]:
         for side in ("A", "B"):
             for frequency in args.command_freqs:
                 solve = [*base, "--case", name, "--side", side, "--freqs", str(frequency),
-                         "--out", str(out / name / f"{side}-{frequency:g}")]
+                         "--out", str(out / name / f"{side}-{frequency:g}"), "--timeout", "840"]
                 if args.calibration:
                     solve += ["--calibration", str(args.calibration.resolve())]
-                commands.append(shlex.join([str(broker), "submit", "--lane", "compute", "--expected", "15", "--priority", "3",
+                commands.append(shlex.join([str(broker), "submit", "--lane", "compute", "--expected", "14", "--priority", "4",
                     "--requester", args.requester, "--purpose", f"ATH LF parity {name}/{side} {frequency:g} Hz; N^1.5 estimate, guarded below 15 min",
                     "--cwd", str(ROOT), "--", *solve]))
-        commands.append(shlex.join([sys.executable, "scripts/qualify_ath_lf_parity.py", "--recompute", str(out / name),
+        commands.append(shlex.join([str(args.command_python), "scripts/qualify_ath_lf_parity.py", "--recompute", str(out / name),
                                    "--out", str(out / "comparisons" / name)]))
     return commands
 
@@ -1323,7 +1471,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--calibration", type=Path, help="previous calibration.json used for dry-run planning")
     parser.add_argument("--dry-run", action="store_true", help="import and mesh only; never discover or start a solver")
     parser.add_argument("--print-commands", action="store_true", help="print separate broker side/frequency jobs and a final retained-basis comparison per case")
-    parser.add_argument("--requester", default="assembly-ath-parity-r4", help="broker requester session name used in printed commands")
+    parser.add_argument("--command-python", type=Path, default=Path(sys.executable),
+                        help="Python executable for printed broker and recompute commands (use the CPU-ready venv)")
+    parser.add_argument("--requester", default="Assembly: diaphragms, L/C/R wiring, physics, ATH parity", help="broker requester session name used in printed commands")
     parser.add_argument("--phase1", type=Path, default=_phase1_default(), help="external phase-1 evidence directory")
     parser.add_argument("--timeout", type=float, default=3600, help="per-geometry solve timeout in seconds")
     args = parser.parse_args(argv)
@@ -1373,7 +1523,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.command_freqs = freqs
         print("# Coordinator: submit each following command as a separate compute-broker job.")
         print("# Planning: 29 s/frequency/channel at 4,130 triangles, cost proportional to N^1.5; no contention margin.")
-        print("# Each solve reserves 15 minutes and refuses an estimate >=15 minutes. Run each case's recompute after all its jobs finish.")
+        print("# Each solve reserves 14 minutes with an 840-second solve timeout and refuses an estimate >=15 minutes. Run each case's recompute after all its jobs finish.")
         print("\n".join(coordinator_commands(args, cases)))
         return 0
     out.mkdir(parents=True, exist_ok=True)

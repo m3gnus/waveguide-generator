@@ -353,7 +353,7 @@ def test_charts_use_classic_theme_and_write_pngs(tmp_path, monkeypatch):
             "drives": [{"radiator": "HF", "weight": 1, "delay_ms": 0}]}
     groups = parity.grouped_bases(_bases(), plan)
     files = parity.charts(tmp_path, groups, groups, parity.compare_groups(groups, groups), mesh_valid_hz=800)
-    assert len(files) == 18  # HF + combined: overlay, six heatmaps, phase + SPL differences.
+    assert len(files) == 19  # HF + combined detail plots, plus one case summary.
     assert all((tmp_path / filename).read_bytes().startswith(b"\x89PNG") for filename in files)
     assert len(axes) == 12
     assert all(ax.patches and all(patch.get_zorder() == 4 and patch.get_alpha() == .65 for patch in ax.patches) for ax in axes)
@@ -774,3 +774,84 @@ def test_lf_coverage_finds_rigid_ath_cone_and_cap_and_refuses_an_incomplete_half
     mesh.triangles = mesh.triangles[:1]
     with pytest.raises(parity.EvidenceRefusal, match='cone or dust cap'):
         parity.lf_half_coverage(mesh, woofers)
+
+
+def test_on_axis_panel_uses_theme_categories_and_distinct_solved_sample_traces():
+    import hornlab_plots as plots
+    import matplotlib.pyplot as plt
+
+    plan = {"variant": "A", "radiator_ids": {"HF": "HF"}, "polar": {"distance": 2, "angle_range": [0, 90, 3]},
+            "drives": [{"radiator": "HF", "weight": 1, "delay_ms": 0}]}
+    group = parity.grouped_bases(_bases(), plan)["HF"]
+    fig, ax = plt.subplots()
+    try:
+        parity._on_axis_panel(ax, group, group, "HF", None)
+        a, b = [line for line in ax.lines if line.get_label().startswith(("A:", "B:"))]
+        assert [line.get_color() for line in (a, b)] == list(plots.get_theme("classic").palette[:2])
+        assert [line.get_linestyle() for line in (a, b)] == ["-", "--"]
+        assert [line.get_marker() for line in (a, b)] == ["o", "s"]
+        assert min(group["frequencies_hz"]) in ax.get_xticks()
+        assert list(a.get_xdata()) == group["frequencies_hz"]
+        assert list(b.get_xdata()) == group["frequencies_hz"]
+        assert [text.get_text() for text in ax.get_legend().get_texts()] == ["A: ATH geometry", "B: WG geometry"]
+    finally:
+        plt.close(fig)
+
+
+def test_summary_panels_keep_raw_signed_errors_and_shaded_tolerance(tmp_path, monkeypatch):
+    import matplotlib.figure
+
+    plan = {"variant": "A", "radiator_ids": {"HF": "HF"}, "polar": {"distance": 2, "angle_range": [0, 90, 3]},
+            "drives": [{"radiator": "HF", "weight": 1, "delay_ms": 0}]}
+    left = parity.grouped_bases(_bases(), plan)
+    right = copy.deepcopy(left)
+    for group in right.values():
+        if group["status"] == "complete":
+            group["pressure_real"] = (np.asarray(group["pressure_real"]) * 10 ** (-.2 / 20)).tolist()
+            group["pressure_imag"] = (np.asarray(group["pressure_imag"]) * 10 ** (-.2 / 20)).tolist()
+    comparison = parity.compare_groups(left, right)
+    captured = []
+    monkeypatch.setattr(matplotlib.figure.Figure, "savefig", lambda fig, *a, **kw: captured.append(fig))
+    assert parity.case_summary_figure(tmp_path, left, right, comparison, 800) == "summary.png"
+    fig = captured[0]
+    assert len(fig.axes) == 4
+    assert not fig.axes[1].axison  # Rigid LF remains explicitly not applicable.
+    error = fig.axes[3]
+    assert np.allclose(error.lines[0].get_ydata(), -.2)
+    assert error.collections  # Filled tolerance band, separate from mesh-limited span.
+    vertices = error.collections[0].get_paths()[0].vertices
+    assert set(vertices[:, 1]) == {-.5, .5}
+    assert error.get_legend() is not None
+
+
+def test_cross_case_table_reuses_eligible_band_maxima_and_omits_unsampled_bands(tmp_path):
+    plan = {"variant": "A", "radiator_ids": {"HF": "HF"}, "polar": {"distance": 2, "angle_range": [0, 90, 3]},
+            "drives": [{"radiator": "HF", "weight": 1, "delay_ms": 0}]}
+    groups = parity.grouped_bases(_bases(), plan)
+    cases = {"example": {"metrics": parity.compare_groups(groups, groups, mesh_valid_hz=800)}}
+    rows = parity.summary_table_rows(cases)
+    assert any(row[:3] == ["example", "HF", "<1k"] and row[3:] == ["0.0000"] * 3 + ["PASS"] for row in rows)
+    assert any(row[:3] == ["example", "HF", "1k–5k"] and row[3:] == ["—"] * 3 + ["mesh-limited"] for row in rows)
+    assert not any(row[2] == "10k–20k" for row in rows)
+    assert (tmp_path / parity.cross_case_summary(tmp_path, cases)).read_bytes().startswith(b"\x89PNG")
+
+
+def test_dense_commands_use_requested_cpu_python_and_study_budget(tmp_path, capsys):
+    import shlex
+
+    executable = tmp_path / "cpu-ready-python"
+    assert parity.main(["--print-commands", "--case", "a-explicit", "--freqs", "300", "500", "700", "1500", "2200",
+                        "--command-python", str(executable), "--out", str(tmp_path)]) == 0
+    commands = [shlex.split(line) for line in capsys.readouterr().out.splitlines() if not line.startswith("#")]
+    assert len(commands) == 11
+    for command in commands[:-1]:
+        assert command[command.index("--lane") + 1] == "compute"
+        assert command[command.index("--priority") + 1] == "4"
+        assert command[command.index("--expected") + 1] == "14"
+        assert command[command.index("--requester") + 1] == "Assembly: diaphragms, L/C/R wiring, physics, ATH parity"
+        assert command[command.index("--") + 1] == str(executable)
+        assert command[command.index("--resolution-mm") + 1] == "11.0"
+        assert command[command.index("--timeout") + 1] == "840"
+    assert [c[c.index("--freqs") + 1] for c in commands[:-1]] == ["300.0", "500.0", "700.0", "1500.0", "2200.0"] * 2
+    assert commands[-1][0] == str(executable)
+    assert commands[-1][commands[-1].index("--recompute") + 1] == str(tmp_path / "a-explicit")
