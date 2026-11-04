@@ -1073,7 +1073,7 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
     reports those samples and the resolved centres for the front view.
     """
 
-    config, placement, _geometry = _assembly_preparation(design)
+    config, placement, _resolved = _assembly_preparation(design)
     return config, placement
 
 
@@ -1107,7 +1107,8 @@ def _assembly_preparation(design: DesignConfig) -> tuple[dict[str, Any], dict[st
     config.setdefault("mesh", {})["quadrants"] = FULL_DOMAIN_QUADRANTS
     probe = deepcopy(config)
     try:
-        geometry = resolve_geometry(probe).geometry
+        resolved_geometry = resolve_geometry(probe)
+        geometry = resolved_geometry.geometry
         bottom, top = mouth_y_edges(geometry.inner_points)
     except (ValueError, ConfigError) as exc:
         from server.preview.errors import user_error_message
@@ -1134,7 +1135,7 @@ def _assembly_preparation(design: DesignConfig) -> tuple[dict[str, Any], dict[st
         "mouth_top_mm": top,
         "woofers": [{key: row[key] for key in ("radiator_id", "x_mm", "y_mm", "radius_mm")} for row in resolved],
     }
-    return config, placement, geometry
+    return config, placement, resolved_geometry
 
 
 def _assembly_front_context_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
@@ -1144,12 +1145,11 @@ def _assembly_front_context_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
     build uses; the build itself certifies the 0.1 mm clearances exactly.
     """
 
-    from hornlab_mesher.config_builder import resolve_geometry
-    from hornlab_mesher.builders.enclosure import enclosure_box_bounds
+    from hornlab_mesher.config_builder import resolve_enclosure_bounds, resolve_geometry
 
     design = DesignConfig.model_validate(design_dump)
     try:
-        config, placement, geometry = _assembly_preparation(design)
+        config, placement, resolved = _assembly_preparation(design)
     except AssemblyRefusal as exc:
         return {"refusal": str(exc)}
     probe = deepcopy(config)
@@ -1158,18 +1158,12 @@ def _assembly_front_context_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
     # ATH can change the enclosure envelope after placement. Ordinary inputs
     # are unchanged: reuse their original resolved geometry and sampling grid.
     if (probe.get("enclosure") or {}).get("ath_lf_envelope"):
-        geometry = resolve_geometry(probe).geometry
+        resolved = resolve_geometry(probe)
+    geometry = resolved.geometry
     ring = np.asarray(geometry.inner_points)[:, -1, :2]
     step = max(1, len(ring) // 256)
     outline = [[float(x), float(y)] for x, y in ring[::step]]
-    bounds = None
-    if probe.get("mode") == "enclosure" and geometry.enclosure is not None:
-        bounds = enclosure_box_bounds(
-            geometry.inner_points, geometry.enclosure, closed=geometry.closed,
-            symmetry_planes=tuple(geometry.symmetry_planes), warn_prefix=None,
-            surface_fit=geometry.surface_fit, preserve_grid=geometry.preserve_grid,
-            boundary_recipe=getattr(geometry, "freeform_wall", None),
-        )
+    bounds = resolve_enclosure_bounds(probe, resolved=resolved, warn_prefix=None)
     baffle = None if bounds is None else {
         "x0_mm": bounds["bx0"], "x1_mm": bounds["bx1"], "y0_mm": bounds["by0"], "y1_mm": bounds["by1"],
         "edge_mm": bounds.get("clamped_edge", 0.0),

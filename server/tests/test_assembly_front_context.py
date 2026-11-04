@@ -100,15 +100,29 @@ def test_front_context_reuses_resolved_geometry_without_changing_its_answer(name
 
     case = resolved_context_cases[name]
     calls = []
+    bounds_calls = []
     original = config_builder.resolve_geometry
+    original_bounds = config_builder.resolve_enclosure_bounds
 
     def counted(*args, **kwargs):
-        calls.append(1)
-        return original(*args, **kwargs)
+        resolved = original(*args, **kwargs)
+        calls.append(resolved)
+        return resolved
+
+    def shared_bounds(config, **kwargs):
+        bounds_calls.append((copy.deepcopy(config), kwargs))
+        return original_bounds(config, **kwargs)
 
     monkeypatch.setattr(config_builder, "resolve_geometry", counted)
+    monkeypatch.setattr(config_builder, "resolve_enclosure_bounds", shared_bounds)
     assert _assembly_front_context_sync(case["design"]) == geometry_snapshot(case["context"])
     assert len(calls) == resolutions
+    assert len(bounds_calls) == 1
+    probe, kwargs = bounds_calls[0]
+    assert kwargs["resolved"] is calls[-1]
+    assert kwargs["warn_prefix"] is None
+    assert "woofers" not in probe["enclosure"]
+    assert bool(probe["enclosure"].get("ath_lf_envelope")) == (name == "ath-envelope")
 
 
 @pytest.mark.parametrize("name", ["ordinary", "ath-envelope"])
