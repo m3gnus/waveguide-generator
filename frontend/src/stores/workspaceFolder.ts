@@ -6,6 +6,7 @@ import {
   type WorkspaceFolder,
 } from '../api/workspace';
 import { failureWords } from '../api/httpError';
+import { activityStore } from '../shell/activity';
 
 /** Effective Runs folder shared by the run list and CAD project menu.
  * Selecting changes the root while keeping migrated overrides in place.
@@ -55,7 +56,7 @@ export const useWorkspaceFolderStore = create<WorkspaceFolderStore>((set) => ({
   async open() {
     const request = ++generation;
     set({ busy: 'open', error: null });
-    const pending = openWorkspaceFolder();
+    const pending = activityStore.track({ kind: 'folder-open', label: 'Opening the Runs folder' }, () => openWorkspaceFolder());
     mutation = pending;
     try {
       const folder = await pending;
@@ -73,7 +74,7 @@ export const useWorkspaceFolderStore = create<WorkspaceFolderStore>((set) => ({
   async select(path?: string) {
     const request = ++generation;
     set({ busy: 'select', error: null });
-    const pending = selectWorkspaceFolder(path);
+    const pending = activityStore.track({ kind: 'folder-select', label: 'Choosing the WG folder' }, () => selectWorkspaceFolder(path));
     mutation = pending;
     try {
       const folder = await pending;

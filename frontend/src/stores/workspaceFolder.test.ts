@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getWorkspaceFolder, openWorkspaceFolder, selectWorkspaceFolder } from '../api/workspace';
 import { resetWorkspaceFolderStore, useWorkspaceFolderStore } from './workspaceFolder';
+import { activityStore } from '../shell/activity';
 
 vi.mock('../api/workspace', () => ({
   getWorkspaceFolder: vi.fn(), openWorkspaceFolder: vi.fn(), selectWorkspaceFolder: vi.fn(),
@@ -18,9 +19,11 @@ describe('workspace folder request ownership', () => {
     const pending = useWorkspaceFolderStore.getState()[action]();
     const loading = useWorkspaceFolderStore.getState().load();
     expect(useWorkspaceFolderStore.getState().busy).toBe(action);
+    expect(activityStore.getSnapshot().some(item => item.label === (action === 'open' ? 'Opening the Runs folder' : 'Choosing the WG folder'))).toBe(true);
     finish({ path: '/new/runs', selected: true });
     await Promise.all([pending, loading]);
     expect(useWorkspaceFolderStore.getState()).toMatchObject({ path: '/new/runs', busy: null, loaded: true });
+    expect(activityStore.getSnapshot()).toHaveLength(0);
   });
 
   it('rejects a slow read started before a selection', async () => {

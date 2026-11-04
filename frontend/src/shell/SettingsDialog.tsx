@@ -17,6 +17,7 @@ import { RootFolderControls } from './RootFolderControls';
 import type { SettingsSection } from './settingsNavigation';
 import { focusableSelector, useModalDialogFocus } from './dialogFocus';
 import { failureWords } from '../api/httpError';
+import { activityStore } from './activity';
 
 export type Theme = 'dark' | 'light';
 
@@ -150,17 +151,18 @@ const CAPTURE_CHOICES: Array<{ mode: CadCaptureMode; label: string; detail: stri
 ];
 
 function CadFolderSettings() {
-  const [capture, setCapture] = useState<CadCaptureMode>('run');
+  const [capture, setCapture] = useState<CadCaptureMode | null>(null);
   const [error, setError] = useState<string>();
   const requestGeneration = useRef(0);
   const captureGeneration = useRef(0);
-  const confirmedCapture = useRef<CadCaptureMode>('run');
+  const confirmedCapture = useRef<CadCaptureMode | null>(null);
   const captureWrite = useRef<Promise<void>>(Promise.resolve());
 
-  useEffect(() => {
+  const loadCapture = useCallback(() => {
     const request = ++requestGeneration.current;
     const captureRequest = captureGeneration.current;
-    void getCadWorkspace().then(
+    setError(undefined);
+    void activityStore.track({ kind: 'settings-read', label: 'Reading the Fusion model preference' }, () => getCadWorkspace()).then(
       (value) => {
         if (request !== requestGeneration.current) return;
         if (captureRequest === captureGeneration.current) {
@@ -171,20 +173,25 @@ function CadFolderSettings() {
       },
       (reason: unknown) => { if (request === requestGeneration.current) setError(failureWords(reason)); },
     );
+  }, []);
+
+  useEffect(() => {
+    loadCapture();
     return () => {
       requestGeneration.current += 1;
       captureGeneration.current += 1;
     };
-  }, []);
+  }, [loadCapture]);
 
   const chooseCapture = async (mode: CadCaptureMode) => {
+    if (confirmedCapture.current === null) return;
     // Optimistic: the chosen option is the state, and a refused write puts the
     // previous one back rather than leaving the radio disagreeing with the file
     // the add-in reads.
     const request = ++captureGeneration.current;
     setCapture(mode); setError(undefined);
     const write = captureWrite.current.then(async () => {
-      const saved = await setCaptureMode(mode);
+      const saved = await activityStore.track({ kind: 'settings-write', label: 'Saving the Fusion model preference' }, () => setCaptureMode(mode));
       confirmedCapture.current = saved;
       return saved;
     });
@@ -205,7 +212,7 @@ function CadFolderSettings() {
   return <div className="cad-setup-folder">
     <RootFolderControls cadlinkOnly/>
     <p className="cad-settings-note">WG creates <code>wglink</code> and <code>wgreturn</code> inside the WGLink folder.</p>
-    <fieldset className="cad-settings-capture">
+    <fieldset className="cad-settings-capture" disabled={capture === null}>
       <legend>Keep the Fusion model:</legend>
       {CAPTURE_CHOICES.map(({ mode, label, detail }) => <label key={mode} className="ui-check">
         <input
@@ -213,12 +220,16 @@ function CadFolderSettings() {
           name="cad-capture-mode"
           value={mode}
           checked={capture === mode}
+          disabled={capture === null}
           onChange={() => void chooseCapture(mode)}
         />
         <span><b>{label}</b><small>{detail}</small></span>
       </label>)}
     </fieldset>
-    {error && <Notice tone="error" role="status">{error}</Notice>}
+    {capture === null && !error && <p className="cad-settings-note" role="status">Reading the Fusion model preference…</p>}
+    {error && <Notice tone="error" role="status">
+      {capture === null ? <>WG could not read the Fusion model preference. {error} Retry to read it again. <button className="btn" onClick={loadCapture}>Retry</button></> : error}
+    </Notice>}
   </div>;
 }
 
@@ -239,7 +250,7 @@ function OnshapeConnectionStatus({ onConnection }: {
   const check = useCallback(async (refresh: boolean) => {
     setChecking(true); setError(null);
     try {
-      const next = await getOnshapeConnection(refresh);
+      const next = await activityStore.track({ kind: 'onshape-check', label: 'Checking the Onshape connection' }, () => getOnshapeConnection(refresh));
       setConnection(next);
       onConnection?.(next);
     } catch (reason) {
@@ -248,11 +259,10 @@ function OnshapeConnectionStatus({ onConnection }: {
   }, [onConnection]);
   useEffect(() => { void check(false); }, [check]);
 
-  if (checking && connection === null) return <p className="cad-settings-note">Checking the Onshape connection…</p>;
-  if (error) return <Notice tone="error" role="status">{error}</Notice>;
-  if (!connection) return null;
-
   return <div className="cad-settings-connection">
+    {checking && <p className="cad-settings-note" role="status">Checking the Onshape connection…</p>}
+    {error && <Notice tone="error" role="status">{error} Check connection to try again.</Notice>}
+    {connection && !error && <>
     {connection.configured
       ? connection.reachable
         ? <p className="cad-settings-note" role="status">
@@ -271,6 +281,7 @@ function OnshapeConnectionStatus({ onConnection }: {
     {connection.insecureKeyFile && <Notice tone="warning" role="status">
       That key file is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.
     </Notice>}
+    </>}
     <div className="settings-theme-options">
       <button className="btn" disabled={checking} onClick={() => void check(true)}>{checking ? 'Checking…' : 'Check connection'}</button>
     </div>

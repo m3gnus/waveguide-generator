@@ -212,13 +212,13 @@ function ProjectSwitcher({ current, label, onOpened, onError }: {
  * panel height. The workspace folder is the same store as Settings, so a
  * change made in either place names the same folder everywhere.
  */
-function ProjectOverflowMenu({ project, onNotice, onError }: {
+function ProjectOverflowMenu({ project, folder, onNotice, onError }: {
   project: { lineageId: string; name: string; archiveFolder: string | null } | null;
+  folder: ReturnType<typeof useWorkspaceFolder>;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const folder = useWorkspaceFolder();
 
   const reveal = async () => {
     if (!project) return;
@@ -245,7 +245,6 @@ function ProjectOverflowMenu({ project, onNotice, onError }: {
       <button role="menuitem" disabled={!folder.path || folder.busy !== null} title="Open the Runs folder every CAD project is archived under. Its effective path is shown in Settings → WG folder." onClick={() => { setOpen(false); void folder.open(); }}><Icon name="folder"/>Open Runs folder</button>
       <button role="menuitem" disabled={folder.busy !== null} title="Choose the WG folder. Existing overrides and files are kept." onClick={() => { setOpen(false); void folder.select(); }}>Change WG folder…</button>
       <div className="cad-overflow-path" title={folder.path ?? undefined}>{folder.path ?? (folder.loaded ? 'WG cannot read the Runs folder. Choose the WG folder in Settings.' : 'Loading…')}</div>
-      {folder.error && <div className="cad-projects-folder-error" role="status">{folder.error}</div>}
     </div>}
   </div>;
 }
@@ -261,6 +260,7 @@ function ProjectOverflowMenu({ project, onNotice, onError }: {
  */
 export function CadProjectHeader() {
   const project = useCurrentCadProject();
+  const folder = useWorkspaceFolder();
   const model = useCadModelState();
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -281,8 +281,9 @@ export function CadProjectHeader() {
           ? (runs.length ? `${pluralized(runs.length, 'run')} in this project` : 'No runs in this project yet')
           : 'Send a design to CAD, or switch to one you already have.'}</p>}
       </div>
-      <ProjectOverflowMenu project={project} onNotice={setNotice} onError={setError}/>
+      <ProjectOverflowMenu project={project} folder={folder} onNotice={setNotice} onError={setError}/>
     </header>
+    {folder.error && <Notice tone="error" role="status">{folder.error}</Notice>}
     {notice && <Notice tone="info" role="status">{notice}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
   </section>;

@@ -95,6 +95,10 @@ function nameList(names: readonly string[] | undefined): string {
   return ` (${shown}${more})`;
 }
 
+function noteText(items: readonly { note: string }[]): string {
+  return items.map(item => item.note.trim()).filter(Boolean).join(' ');
+}
+
 /**
  * What an opened file's parse report says, in the status line.
  *
@@ -106,19 +110,17 @@ function nameList(names: readonly string[] | undefined): string {
 export function reportText(report: ImportReport): string {
   const { blockCount, keyCount, blocksPreserved, keysPreserved } = report.passthrough;
   const summary = `${report.dialect.toUpperCase()} · migrations: ${report.migrationsApplied.length || 'none'} · passthrough: ${blockCount} blocks${nameList(blocksPreserved)}, ${keyCount} keys preserved${nameList(keysPreserved)}`;
-  const notes = [...report.migrationsApplied, ...report.ignoredSettings ?? []]
-    .map((item) => item.note.trim())
-    .filter(Boolean);
-  return notes.length ? `${summary} · ${notes.join(' ')}` : summary;
+  const notes = noteText([...report.migrationsApplied, ...report.ignoredSettings ?? []]);
+  return notes ? `${summary} · ${notes}` : summary;
 }
 
 /**
- * The status line after opening a file. The parse report -- dialect,
- * passthrough lists, migration and ignored-setting notes -- is developer
- * detail nobody acts on, so it shows only with Developer details on.
+ * Ignored settings carry the server's correction for the file's author.
+ * Keep the technical parse inventory behind Developer details.
  */
 export function openedMessage(filename: string, report: ImportReport, developer: boolean): string {
-  return developer ? `Opened ${filename} · ${reportText(report)}` : `Opened ${filename}`;
+  const details = developer ? reportText(report) : noteText(report.ignoredSettings ?? []);
+  return `Opened ${filename}${details ? ` · ${details}` : ''}`;
 }
 
 /**

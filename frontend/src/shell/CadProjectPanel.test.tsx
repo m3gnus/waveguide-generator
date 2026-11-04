@@ -357,6 +357,43 @@ describe('CAD project history', () => {
 
     expect(host.textContent).toContain('No CAD project open');
   });
+
+  it.each([
+    ['Open Runs folder', '/api/workspace/open'],
+    ['Change WG folder', '/api/folders/select'],
+  ])('shows %s failures after closing the menu and clears them on a successful retry', async (label, endpoint) => {
+    let fail = true;
+    const remedy = 'Folder access was denied. Choose a folder your account can modify, then try again.';
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === endpoint) {
+        if (fail) throw new Error(remedy);
+        return json({ selected: true, path: '/runs' });
+      }
+      if (path === '/api/workspace/path') return json({ selected: true, path: '/runs' });
+      if (path === '/api/cadlink/designs') return json(projects);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    setJobs([]);
+    await render(<CadProjectHeader/>);
+    const choose = async () => {
+      act(() => host.querySelector<HTMLButtonElement>('.cad-overflow-trigger')!.click());
+      const button = [...host.querySelectorAll<HTMLButtonElement>('.cad-overflow-menu button')]
+        .find(button => button.textContent?.includes(label))!;
+      await act(async () => button.click());
+    };
+    await choose();
+    expect(host.querySelector('.cad-overflow-menu')).toBeNull();
+    const feedback = host.querySelector('[role="status"]');
+    expect(feedback?.textContent).toBe(remedy);
+    expect(feedback?.closest('[role="menu"]')).toBeNull();
+    fail = false;
+    await choose();
+    expect(host.querySelector('.cad-overflow-menu')).toBeNull();
+    expect(host.textContent).not.toContain(remedy);
+    expect(fetchMock.mock.calls.filter(([url]) => url === endpoint)).toHaveLength(2);
+  });
   it('clears the previous project documents while the new lineage loads and after failure', async () => {
     const nextLineage = 'wgl_next_project';
     setJobs([

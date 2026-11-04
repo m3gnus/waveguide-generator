@@ -4,6 +4,7 @@ import { commandShortcutLabel } from './platformKeys';
 import { trapDialogFocus } from './dialogFocus';
 
 export type PaletteKind = 'Parameters' | 'Jobs' | 'Commands';
+const PALETTE_KINDS: PaletteKind[] = ['Parameters', 'Jobs', 'Commands'];
 
 export interface PaletteEntry {
   id: string;
@@ -31,7 +32,12 @@ export function CommandPalette({ entries }: { entries: PaletteEntry[] }) {
   const previousFocus = useRef<HTMLElement | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const dialog = useRef<HTMLDivElement>(null);
-  const visible = useMemo(() => entries.filter((entry) => entryMatches(entry, query)), [entries, query]);
+  const visible = useMemo(() => {
+    const matches = entries.filter((entry) => entryMatches(entry, query));
+    return PALETTE_KINDS.flatMap(kind => matches.filter(entry => entry.kind === kind));
+  }, [entries, query]);
+  const selectedIndex = Math.min(activeIndex, Math.max(0, visible.length - 1));
+  const activeEntry = visible[selectedIndex];
   const shortcut = commandShortcutLabel('K');
 
   const openPalette = () => {
@@ -71,6 +77,10 @@ export function CommandPalette({ entries }: { entries: PaletteEntry[] }) {
   }, [open]);
 
   useEffect(() => setActiveIndex(0), [query]);
+  useEffect(() => setActiveIndex(selectedIndex), [selectedIndex]);
+  useEffect(() => {
+    if (open && activeEntry) document.getElementById(`palette-${activeEntry.id}`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [open, activeEntry]);
 
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === 'Tab') {
@@ -80,13 +90,13 @@ export function CommandPalette({ entries }: { entries: PaletteEntry[] }) {
       closePalette();
     } else if (event.key === 'ArrowDown') {
       event.preventDefault();
-      setActiveIndex((index) => visible.length ? (index + 1) % visible.length : 0);
+      setActiveIndex(visible.length ? (selectedIndex + 1) % visible.length : 0);
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
-      setActiveIndex((index) => visible.length ? (index - 1 + visible.length) % visible.length : 0);
+      setActiveIndex(visible.length ? (selectedIndex - 1 + visible.length) % visible.length : 0);
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      run(visible[activeIndex]);
+      run(activeEntry);
     }
   };
 
@@ -94,15 +104,15 @@ export function CommandPalette({ entries }: { entries: PaletteEntry[] }) {
     <button className="command-affordance" onClick={openPalette} aria-haspopup="dialog" aria-expanded={open}><Icon name="search"/><span>Search parameters, designs, jobs, commands…</span><kbd>{shortcut}</kbd></button>
     {open && <div className="modal-backdrop command-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closePalette(); }}>
       <div ref={dialog} className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown}>
-        <div className="command-search"><Icon name="search"/><input ref={input} role="combobox" aria-label="Search commands" aria-controls="command-palette-results" aria-expanded="true" aria-activedescendant={visible[activeIndex] ? `palette-${visible[activeIndex].id}` : undefined} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search parameters, jobs, and commands…"/><kbd>{shortcut}</kbd></div>
+        <div className="command-search"><Icon name="search"/><input ref={input} role="combobox" aria-label="Search commands" aria-controls="command-palette-results" aria-expanded="true" aria-activedescendant={activeEntry ? `palette-${activeEntry.id}` : undefined} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search parameters, jobs, and commands…"/><kbd>{shortcut}</kbd></div>
         <div id="command-palette-results" className="command-results" role="listbox">
           {!visible.length && <div className="command-empty" role="status"><b>No matches</b><span>Try a parameter label, key, symbol, job name, or command.</span></div>}
-          {(['Parameters', 'Jobs', 'Commands'] as const).map((kind) => {
+          {PALETTE_KINDS.map((kind) => {
             const group = visible.filter((entry) => entry.kind === kind);
             if (!group.length) return null;
             return <section key={kind} role="group" aria-labelledby={`command-group-${kind.toLocaleLowerCase()}`}><h3 id={`command-group-${kind.toLocaleLowerCase()}`}>{kind}</h3>{group.map((entry) => {
               const index = visible.indexOf(entry);
-              return <button id={`palette-${entry.id}`} key={entry.id} role="option" aria-selected={index === activeIndex} disabled={entry.disabled} onMouseMove={() => setActiveIndex(index)} onClick={() => run(entry)}><span>{entry.label}<small>{entry.detail}</small></span><em>{entry.kind === 'Parameters' ? 'Parameter' : entry.kind === 'Jobs' ? 'Result' : 'Run'}</em></button>;
+              return <button id={`palette-${entry.id}`} key={entry.id} role="option" aria-selected={index === selectedIndex} disabled={entry.disabled} onMouseMove={() => setActiveIndex(index)} onClick={() => run(entry)}><span>{entry.label}<small>{entry.detail}</small></span><em>{entry.kind === 'Parameters' ? 'Parameter' : entry.kind === 'Jobs' ? 'Result' : 'Run'}</em></button>;
             })}</section>;
           })}
         </div>

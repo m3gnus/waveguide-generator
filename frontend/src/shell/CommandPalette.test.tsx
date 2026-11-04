@@ -88,6 +88,56 @@ describe('CommandPalette', () => {
     expect(options.map((option) => option.getAttribute('aria-selected'))).toEqual(['false', 'true', 'false']);
   });
 
+  it('navigates interleaved entries in DOM order, scrolling each active option into view', async () => {
+    const interleaved: PaletteEntry[] = [
+      entries[2], entries[0],
+      { id: 'cad-link', kind: 'Commands', label: 'CAD Link', run: vi.fn() },
+      entries[1],
+      { id: 'parameter-length', kind: 'Parameters', label: 'Length', run: vi.fn() },
+    ];
+    const scroll = vi.fn();
+    // jsdom has no layout; inspect the browser scroll request on the active row.
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
+    try {
+      act(() => root.render(<CommandPalette entries={interleaved}/>));
+      act(() => host.querySelector<HTMLButtonElement>('.command-affordance')!.click());
+      const input = host.querySelector<HTMLInputElement>('[role="combobox"]')!;
+      const options = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+      expect(options.map(option => option.id)).toEqual([
+        'palette-parameter-mouth', 'palette-parameter-length', 'palette-job-alpha', 'palette-settings', 'palette-cad-link',
+      ]);
+      for (const option of options) {
+        expect(input.getAttribute('aria-activedescendant')).toBe(option.id);
+        expect(option.getAttribute('aria-selected')).toBe('true');
+        expect(scroll).toHaveBeenLastCalledWith({ block: 'nearest' });
+        expect(scroll.mock.instances.at(-1)).toBe(option);
+        act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })));
+      }
+      // Wraps in both directions, and Enter runs the same entry the DOM selects.
+      expect(input.getAttribute('aria-activedescendant')).toBe(options[0].id);
+      act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })));
+      expect(input.getAttribute('aria-activedescendant')).toBe(options.at(-1)!.id);
+      await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+      expect(interleaved[2].run).toHaveBeenCalledOnce();
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+    }
+  });
+
+  it('clamps the selection when entries disappear, including an empty list', async () => {
+    act(() => host.querySelector<HTMLButtonElement>('.command-affordance')!.click());
+    const input = host.querySelector<HTMLInputElement>('[role="combobox"]')!;
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })));
+    act(() => root.render(<CommandPalette entries={[entries[0]]}/>));
+    expect(input.getAttribute('aria-activedescendant')).toBe('palette-parameter-mouth');
+    expect(host.querySelector('[aria-selected="true"]')?.id).toBe('palette-parameter-mouth');
+    act(() => root.render(<CommandPalette entries={[]}/>));
+    expect(input.hasAttribute('aria-activedescendant')).toBe(false);
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })));
+    act(() => root.render(<CommandPalette entries={[entries[1]]}/>));
+    expect(input.getAttribute('aria-activedescendant')).toBe('palette-job-alpha');
+  });
+
   it('routes a selected parameter to its owning dock panel', async () => {
     const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
     const parameter = buildParameterPaletteEntries().find((entry) => entry.id === 'parameter-simulation.f1')!;

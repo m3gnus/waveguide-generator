@@ -21,7 +21,12 @@ export type ActivityKind =
   | 'cad-import'
   | 'mesh-import'
   | 'engine-check'
-  | 'recombine';
+  | 'recombine'
+  | 'folder-open'
+  | 'folder-select'
+  | 'settings-read'
+  | 'settings-write'
+  | 'onshape-check';
 
 export interface ActivityProgress {
   done: number;

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../prefs/preferences';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { resetDriverLibraryStore } from '../stores/driverLibrary';
+import { activityStore } from './activity';
 import { SettingsDialog, type Theme } from './SettingsDialog';
 
 function Harness() {
@@ -14,8 +15,9 @@ function Harness() {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((settle) => { resolve = settle; });
-  return { promise, resolve };
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((settle, fail) => { resolve = settle; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 describe('SettingsDialog', () => {
@@ -282,6 +284,68 @@ describe('SettingsDialog', () => {
     expect(cad.textContent).toContain('disk is read-only');
   });
 
+  it('waits for the capture preference before offering a choice, then writes Keep once', async () => {
+    const initial = deferred<Response>();
+    const write = deferred<Response>();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') return initial.promise;
+      if (path === '/api/cad-workspace/capture-document') return write.promise;
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    const cad = host.querySelector<HTMLElement>('#settings-cad')!;
+    const choices = [...cad.querySelectorAll<HTMLInputElement>('input[name="cad-capture-mode"]')];
+    expect(choices.map(choice => choice.checked)).toEqual([false, false]);
+    expect(choices.every(choice => choice.matches(':disabled'))).toBe(true);
+    expect(cad.textContent).toContain('Reading the Fusion model preference');
+    expect(activityStore.getSnapshot().some(item => item.label === 'Reading the Fusion model preference')).toBe(true);
+    act(() => choices[0].click());
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/capture-document'))).toHaveLength(0);
+
+    await act(async () => initial.resolve(Response.json({ path: '/cad', captureMode: 'off' })));
+    expect(choices.map(choice => choice.checked)).toEqual([false, true]);
+    expect(choices.every(choice => !choice.matches(':disabled'))).toBe(true);
+    await act(async () => choices[0].click());
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/capture-document'))).toHaveLength(1);
+    expect(activityStore.getSnapshot().some(item => item.label === 'Saving the Fusion model preference')).toBe(true);
+    await act(async () => write.resolve(Response.json({ captureMode: 'run' })));
+    expect(choices[0].checked).toBe(true);
+    expect(activityStore.getSnapshot()).toHaveLength(0);
+  });
+
+  it('keeps capture unknown after a read failure and rereads on Retry before one write', async () => {
+    let reads = 0;
+    const initial = deferred<Response>();
+    const retry = deferred<Response>();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') return ++reads === 1 ? initial.promise : retry.promise;
+      if (path === '/api/cad-workspace/capture-document') return Promise.resolve(Response.json({ captureMode: 'run' }));
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    await act(async () => initial.reject(new Error('The preference could not be read.')));
+    const cad = host.querySelector<HTMLElement>('#settings-cad')!;
+    const choices = [...cad.querySelectorAll<HTMLInputElement>('input[name="cad-capture-mode"]')];
+    expect(choices.map(choice => choice.checked)).toEqual([false, false]);
+    expect(choices.every(choice => choice.matches(':disabled'))).toBe(true);
+    expect(cad.textContent).toContain('The preference could not be read.');
+    const button = [...cad.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Retry')!;
+    expect(button).toBeDefined();
+    await act(async () => button.click());
+    expect(reads).toBe(2);
+    expect(choices.every(choice => choice.matches(':disabled'))).toBe(true);
+    expect(cad.textContent).not.toContain('The preference could not be read.');
+    await act(async () => retry.resolve(Response.json({ path: '/cad', captureMode: 'off' })));
+    expect(choices[1].checked).toBe(true);
+    await act(async () => choices[0].click());
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/capture-document'))).toHaveLength(1);
+    expect(choices[0].checked).toBe(true);
+  });
+
   it('serializes rapid capture choices so the latest choice is the last server write', async () => {
     const firstWrite = deferred<Response>();
     const secondWrite = deferred<Response>();
@@ -365,6 +429,44 @@ describe('SettingsDialog', () => {
     // Scoped to the setup steps: the project-folder block below them legitimately
     // offers a path field, and a section-wide query would stop guarding the keys.
     expect(section.querySelector('.cad-setup-steps input')).toBeNull();
+  });
+
+  it('keeps Check connection available after a failed read and recovers without remounting', async () => {
+    preferencesStore.update({ cadApplication: 'onshape' });
+    const initial = deferred<Response>();
+    const retry = deferred<Response>();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/cadlink/onshape/connection') return initial.promise;
+      if (path === '/api/cadlink/onshape/connection?refresh=true') return retry.promise;
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    const cad = host.querySelector<HTMLElement>('#settings-cad')!;
+    const button = [...cad.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent?.includes('Check'))!;
+    expect(button).toBeDefined();
+    expect(button.disabled).toBe(true);
+    expect(activityStore.getSnapshot().some(item => item.label === 'Checking the Onshape connection')).toBe(true);
+    await act(async () => initial.reject(new Error('Onshape could not be reached.')));
+    expect(cad.textContent).toContain('Onshape could not be reached.');
+    expect(cad.contains(button)).toBe(true);
+    expect(button.textContent).toBe('Check connection');
+    expect(button.disabled).toBe(false);
+    await act(async () => button.click());
+    expect(button.disabled).toBe(true);
+    expect(cad.textContent).not.toContain('Onshape could not be reached.');
+    await act(async () => retry.resolve(Response.json({
+      configured: true, reachable: true, credentialsPath: '/config/onshape.env',
+      insecureKeyFile: false, account: { name: 'Recovered account' }, plan: null,
+    })));
+    expect(cad.textContent).toContain('Connected as Recovered account');
+    expect(cad.contains(button)).toBe(true);
+    expect(button.disabled).toBe(false);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/onshape/connection')).map(([url]) => url))
+      .toEqual(['/api/cadlink/onshape/connection', '/api/cadlink/onshape/connection?refresh=true']);
+    expect(activityStore.getSnapshot()).toHaveLength(0);
   });
 
   it('says where to put a key pair that is not configured yet', async () => {

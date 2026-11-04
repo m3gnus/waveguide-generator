@@ -6,7 +6,7 @@ import { jobsSocket, type JobsSnapshot } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
 import { toSolveDesign } from '../jobs/actions';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
-import { NATIVE_FAMILIES, resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
+import { NATIVE_FAMILIES, resetDesignStore, serializeDesign, useDesignStore, type DesignDocument } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { wgSolveSettingsFromStore } from '../stores/designWire';
@@ -142,6 +142,32 @@ async function chooseLocalDesign(file: { name: string; text: () => Promise<strin
   Object.defineProperty(input, 'files', { configurable: true, value: [file] });
   await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
 }
+
+it('shows the OSSE.Rot remedy on a normal open without changing the imported design or wire values', async () => {
+  const opened = {
+    ...openedResponse(150),
+    ignoredSettings: [{ key: 'OSSE.Rot', value: '30', note: 'ATH ignores OSSE.Rot; use top-level Rot.' }],
+    migrationsApplied: [{ name: 'technical-migration', note: 'Technical migration inventory.' }],
+  };
+  const responseBytes = JSON.stringify(opened);
+  const wireBytes = JSON.stringify(serializeDesign(opened.design));
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === '/api/design/open') {
+      expect(init?.body).toBe('OSSE = {\n  Rot = 30\n}\n');
+      return Response.json(opened);
+    }
+    return Response.json({ items: [] });
+  }));
+  act(() => root.render(<DesignFileMenu/>));
+  expect(preferencesStore.getSnapshot().showDeveloperDetails).toBe(false);
+  await chooseLocalDesign({ name: 'horn.cfg', text: async () => 'OSSE = {\n  Rot = 30\n}\n' });
+
+  const feedback = container.querySelector('[role="status"]')?.textContent;
+  expect(feedback).toBe('Opened horn.cfg · ATH ignores OSSE.Rot; use top-level Rot.');
+  expect(useDesignStore.getState().design).toEqual(opened.design);
+  expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(wireBytes);
+  expect(JSON.stringify(opened)).toBe(responseBytes);
+});
 
 describe('design file export menu', () => {
   it.each(['file', 'cad'] as const)('refuses parked parametric exports while %s B is shown', input => {

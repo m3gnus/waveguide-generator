@@ -66,11 +66,13 @@ describe('opened-file report line', () => {
     passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
   };
 
-  it('says only which file opened unless Developer details is on', () => {
+  it('shows ignored-setting remedies while keeping technical details optional', () => {
     const report = { ...base, ignoredSettings: [{ key: 'Mesh.SubdomainSlices', value: '', note: 'Mesh.SubdomainSlices is not applied.' }] };
-    expect(openedMessage('a.cfg', report, false)).toBe('Opened a.cfg');
+    expect(openedMessage('a.cfg', report, false)).toBe('Opened a.cfg · Mesh.SubdomainSlices is not applied.');
     expect(openedMessage('a.cfg', report, true)).toBe(`Opened a.cfg · ${reportText(report)}`);
     expect(openedMessage('a.cfg', report, true)).toContain('Mesh.SubdomainSlices is not applied.');
+    expect(openedMessage('a.cfg', base, false)).toBe('Opened a.cfg');
+    expect(openedMessage('a.cfg', { ...base, ignoredSettings: [{ key: 'empty', value: '', note: '  ' }] }, false)).toBe('Opened a.cfg');
   });
 
   it('says what a migration did, not which identifier it has', () => {
