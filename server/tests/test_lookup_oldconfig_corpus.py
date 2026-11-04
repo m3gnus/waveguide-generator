@@ -119,8 +119,8 @@ def test_native_payload_api_and_run_open_use_same_import_without_changing_origin
     old_snapshot = deepcopy(snapshot)
     resolution = resolve_job_design(snapshot)
     assert snapshot == old_snapshot
-    assert resolution.snapshot['design'] == expected
-    assert resolution.note == applications[-1].note
+    assert resolution.snapshot == old_snapshot
+    assert resolution.note is None
 
 
 def test_import_keeps_best_fit_when_explicit_conversion_would_refuse():
@@ -144,18 +144,30 @@ def test_disjoint_axial_origin_still_opens_and_reports_actual_placement(origin):
     assert DesignConfig.model_validate(payload).formula == 'FREEFORM'
 
 
-def test_a_failed_run_design_import_does_not_hide_historical_results(monkeypatch):
+def test_history_does_not_attempt_a_run_design_import(monkeypatch):
     import server.design.migrate as migration
-    from hornlab_mesher.errors import UserRefusal
     original = {'version': 1, 'design': frozen('implicit-dimensions')['design']}
     before = deepcopy(original)
     def refusal(_payload):
-        raise UserRefusal('Import', 'Unrepresentable geometry.', 'Edit the original data.')
+        pytest.fail('History must not import geometry')
     monkeypatch.setattr(migration, 'apply_migrations', refusal)
     resolved = resolve_job_design(original)
-    assert not resolved.reopenable
+    assert resolved.reopenable
     assert resolved.snapshot == before
     assert original == before
+
+
+def test_full_explicit_axial_sample_map_keeps_its_authored_count_on_import():
+    payload = {'formula': 'LOOKUP', 'lookup_profile': [[0, 12.7], [100, 80]],
+               'mesh': {'length_segments': 2, 'z_map_points': '0,0.2,1'}}
+    original, _ = _legacy_grid(legacy_lookup_source(payload))
+    np.testing.assert_allclose(original[0, :, 2], [0, 20, 100])
+    migrated, applications = apply_migrations(payload)
+    assert migrated['formula'] == 'FREEFORM'
+    assert migrated['mesh']['length_segments']['value'] == 2
+    assert migrated['mesh']['z_map_points'] == '0,0.2,1'
+    np.testing.assert_allclose(_inner_grid(DesignConfig.model_validate(migrated), profile_sampling=True)[0, :, 2], [0, 20, 100])
+    assert 'Maximum generated-grid change' in applications[-1].note
 
 
 def test_exactly_one_mm_interior_corner_gap_survives_t_roundoff():

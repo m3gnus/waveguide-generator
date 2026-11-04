@@ -66,29 +66,14 @@ def resolve_job_design(snapshot: Mapping[str, Any] | None) -> DesignResolution:
     if not isinstance(snapshot, Mapping) or not snapshot:
         return _UNAVAILABLE_NO_DESIGN
     if _is_v2_snapshot(snapshot):
-        # Response-only adaptation: stored result artifacts and snapshot bytes
-        # remain historical. Only editor/re-solve consumers receive the import.
-        wire = snapshot.get("design", snapshot)
-        note = None
-        if isinstance(wire, Mapping) and wire.get("formula") == "LOOKUP":
-            from server.design.migrate import apply_migrations
-            try:
-                wire, applications = apply_migrations(wire)
-            except Exception:
-                # A historical result must remain listable/downloadable even
-                # if today's geometry authority cannot read its design. This
-                # failure affects editor/rebuild availability only, never bytes.
-                return DesignResolution(reopenable=False, source="v2-snapshot",
-                    reason_code="unreadable_design", reason=UNREADABLE_REASON,
-                    snapshot=dict(snapshot))
-            note = applications[-1].note
-            snapshot = ({**snapshot, "design": wire} if "design" in snapshot else wire)
+        # Classification is deliberately cheap and preserves result identity.
+        # The design-open / rebuild consumers own migration, on demand; listing
+        # history and serializing WebSocket snapshots must never fit geometry.
         return DesignResolution(
             reopenable=True,
             source="v2-snapshot",
             reason_code="ok",
             snapshot=dict(snapshot),
-            note=note,
         )
     return DesignResolution(
         reopenable=False,

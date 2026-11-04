@@ -28,7 +28,8 @@ import {
   EXPORT_CANCELLED_MESSAGE,
 } from '../shell/exportDestinationPrompt';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
-import { canLoadJobDesign, hydrateJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
+import { canLoadJobDesign, hydrateJobDesign, jobDesignAvailability, jobDesignForRebuild, jobRerunState } from './jobDesign';
+import { useDesignStore } from '../stores/design';
 import { exportStemForJob, exportSubdirectoryForJob } from './exportNaming';
 import { designFileExtension } from '../stores/designName';
 import './RunExportControl.css';
@@ -298,8 +299,9 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   });
 
   const sendRunToCad = () => execute(job.id, [], async (): Promise<RunExportOutcome> => {
-    const design = hydrateJobDesign(job);
+    const { design, notice } = await jobDesignForRebuild(job);
     if (!design) throw new Error(designAvailability.reason ?? 'This run has no recoverable design.');
+    if (notice) useDesignStore.setState({ loadNotice: notice });
     const result = await sendDesignToCad(
       design,
       job.design_revision,

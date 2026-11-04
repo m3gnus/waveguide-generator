@@ -831,13 +831,12 @@ describe('ParamPanel inventory UX', () => {
     }
   });
 
-  it('shows an imported Custom profile notice without a retired family option', () => {
+  it('keeps the import notice with the app-level owner without a retired family option', () => {
     const loaded = designForFamily('FREEFORM');
     act(() => useDesignStore.getState().replaceDocument(loaded, { notice: 'Opened as Custom profile. Profile curve unchanged. Maximum generated-grid change 0.2 mm.' }));
     expect(host.querySelector<HTMLSelectElement>('#family')!.value).toBe('FREEFORM');
     expect(host.querySelector('option[value="LOOKUP"]')).toBeNull();
-    expect(host.querySelector('.conversion-notice')?.textContent).toContain('Maximum generated-grid change 0.2 mm');
-    act(() => [...host.querySelectorAll<HTMLButtonElement>('.conversion-notice button')].find((button) => button.textContent === 'Dismiss')!.click());
+    expect(useDesignStore.getState().loadNotice).toContain('Maximum generated-grid change 0.2 mm');
     expect(host.querySelector('.conversion-notice')).toBeNull();
   });
 

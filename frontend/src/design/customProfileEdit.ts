@@ -890,11 +890,12 @@ export function convertToCustomProfileBuilder(fetcher: typeof fetch = fetch): Ed
     const result = await convertToCustomProfile(design, profileRequestKey(origin, design), fetcher, signal);
     if (!isCurrentOrigin(origin)) throw new StaleFreeformResponse('Discarded a conversion for an older design.');
     const report = result.report;
+    const kept = report.features.some(feature => feature.name === 'Rolled-back lip removed');
     const measured = (label: string, d: ConversionReport['wall']) => `${label}: ${d.max_deviation_mm.toFixed(5)} mm at ${d.azimuth_deg}°, z = ${d.z_mm.toFixed(5)} mm (physical mm, Scale applied).`;
     return { after: result.design, notes: [
       `Conversion verdict: ${result.verdict}.`, measured('H', report.H), measured('V', report.V),
-      measured('Whole wall maximum', report.wall), measured('Mouth outline', report.mouth),
-      `Axial extent change: ${report.axial_extent_deviation_mm.toFixed(5)} mm.`,
+      measured(kept ? 'Kept wall maximum' : 'Whole wall maximum', report.wall), measured(kept ? 'Kept mouth outline' : 'Mouth outline', report.mouth),
+      `${kept ? 'Kept axial' : 'Axial'} extent change: ${report.axial_extent_deviation_mm.toFixed(5)} mm.`,
       `Source-cap angle: ${report.source_cap_angle_before_deg.toFixed(5)}° → ${report.source_cap_angle_after_deg.toFixed(5)}°.`,
       ...report.features.map(feature => feature.message), report.method.grid, ...report.method.limits,
     ],

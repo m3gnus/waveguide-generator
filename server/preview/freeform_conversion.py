@@ -125,7 +125,7 @@ def _legacy_grid(source: DesignConfig, *, authored: bool = False) -> tuple[np.nd
     config.pop('enclosure', None)
     config['mesh'].update(quadrants=1234, wallThickness=0, verticalOffset=0, scaleToMetres=False,
                           angularSegments=ANGULAR)
-    if not authored and not _active_morph(source):
+    if not authored and not _active_morph(source) and not (source.root.mesh.z_map_points or '').strip():
         config['mesh']['lengthSegments'] = AXIAL
     else:
         config['mesh']['lengthSegments'] = max(1, int(math.floor(_number(source.root.mesh.length_segments, 40)+.5)))
@@ -167,12 +167,41 @@ def _meridians(points: np.ndarray) -> np.ndarray:
     return result
 
 
-def _monotone(wall: np.ndarray, feature: str = '') -> None:
-    dz = np.diff(wall[:, :, 0], axis=1)
-    dr = np.diff(wall[:, :, 1], axis=1)
-    if np.any((dz < -1e-10) | ((dz <= 0) & (abs(dr) > 1e-9))):
-        _refuse(f'The generated profile{feature} rolls back or folds in z; a Custom profile cannot represent it.',
-                'Keep this horn in its original family, or reduce its rollback/truncation until every meridian advances toward the mouth, then convert again.')
+def _kept_wall(wall: np.ndarray) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Keep each meridian through its maximum z; retain the removed lip to report.
+
+    Counts may differ between meridians. Keep the actual generated nodes rather
+    than resampling away a crease or moving a meridian's fold to its neighbour's.
+    """
+    kept, lips = [], []
+    for rows in wall:
+        end = int(np.argmax(rows[:, 0]))
+        lip = rows[end:] if end < len(rows)-1 else rows[:0]
+        # Repeated identical endpoint samples are not a removed feature.
+        if len(lip) and np.all(np.linalg.norm(lip-lip[0], axis=1) <= 1e-9):
+            lip = rows[:0]
+        span = rows[:end+1].copy() if len(lip) else rows.copy()
+        dz, dr = np.diff(span, axis=0).T
+        if len(span) < 2 or np.any((dz < -1e-10) | ((dz <= 0) & (abs(dr) > 1e-9))):
+            _refuse('The kept generated wall does not advance in z before its maximum; a Custom profile cannot represent it.',
+                    'Keep this horn in its original family, or simplify the folds before converting again.')
+        kept.append(span)
+        lips.append(lip)
+    return kept, lips
+
+
+def _lip_change(lips: Sequence[np.ndarray], mouth: np.ndarray) -> FeatureChange | None:
+    removed = [(lip, end) for lip, end in zip(lips, mouth) if len(lip)]
+    if not removed:
+        return None
+    axial = max(float(np.ptp(lip[:, 0])) for lip, _ in removed)
+    radial = max(float(np.ptp(lip[:, 1])) for lip, _ in removed)
+    distance = max(float(np.linalg.norm(lip-end, axis=1).max()) for lip, end in removed)
+    return FeatureChange(name='Rolled-back lip removed', change='removed',
+        message=f'Rolled-back lip removed: axial length {axial:.6g} mm; radial extent {radial:.6g} mm; '
+                f'maximum sampled distance to the converted mouth at the same azimuth {distance:.6g} mm. '
+                'Conversion ends at each meridian’s maximum z. Wall and mouth deviations measure only the kept part; '
+                'the removed lip is excluded from the 0.5 mm wall limit. The verdict is approximate.')
 
 
 def _cap_angle(design: DesignConfig, points: np.ndarray) -> float:
@@ -195,7 +224,7 @@ def _cap_angle(design: DesignConfig, points: np.ndarray) -> float:
 def _radial_difference(left: np.ndarray, right: np.ndarray, *, align_disjoint: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """Symmetric radial distance of all branches at each common z.
 
-    Comparison can inspect a rollback even though conversion must refuse it.
+    Comparison can inspect every branch of a rollback.
     At a fold, matching only the first radius would hide the rolled lip.
     """
     lo = max(left[:, 0].min(), right[:, 0].min())
@@ -240,6 +269,7 @@ def _radial_difference(left: np.ndarray, right: np.ndarray, *, align_disjoint: b
 def compare_generated_designs(
     before: DesignConfig, after: DesignConfig, *, features: list[FeatureChange] | None = None,
     before_points: np.ndarray | None = None, after_points: np.ndarray | None = None,
+    before_wall: Sequence[np.ndarray] | None = None,
     align_disjoint: bool = False, include_construction: bool = True,
 ) -> GeneratedComparison:
     """Compare any two buildable ring-grid families using the export owner.
@@ -249,7 +279,8 @@ def compare_generated_designs(
     """
     first = _sample(before) if before_points is None else before_points
     second = _sample(after) if after_points is None else after_points
-    a, b = _meridians(first), _meridians(second)
+    a = _meridians(first) if before_wall is None else before_wall
+    b = _meridians(second)
     deviations = []
     extent = 0.0
     for phi, left, right in zip(AZIMUTHS, a, b):
@@ -258,14 +289,14 @@ def compare_generated_designs(
         peak = int(np.argmax(delta))
         deviations.append(WallDeviation(max_deviation_mm=float(delta[peak]), azimuth_deg=float(phi),
                                         z_mm=float(grid[peak]), sample_count=len(grid)))
-    mouth_delta = np.linalg.norm(a[:, -1, :] - b[:, -1, :], axis=1)
+    mouth_delta = np.linalg.norm(np.array([rows[-1] for rows in a]) - b[:, -1, :], axis=1)
     peak = int(np.argmax(mouth_delta))
     return GeneratedComparison(
         H=deviations[0], V=deviations[ANGULAR // 4],
         off_axis=[d for d in deviations if d.azimuth_deg not in (0, 90)],
         wall=max(deviations, key=lambda d: d.max_deviation_mm),
         mouth=WallDeviation(max_deviation_mm=float(mouth_delta[peak]), azimuth_deg=float(AZIMUTHS[peak]),
-                            z_mm=float(a[peak, -1, 0]), sample_count=ANGULAR),
+                            z_mm=float(a[peak][-1, 0]), sample_count=ANGULAR),
         axial_extent_deviation_mm=float(extent),
         source_cap_angle_before_deg=_cap_angle(before, first), source_cap_angle_after_deg=_cap_angle(after, second),
         features=[*(_feature_changes(before, after) if features is None else features),
@@ -282,9 +313,9 @@ def compare_generated_designs(
     )
 
 
-def _construction_changes(before: DesignConfig, after: DesignConfig) -> list[FeatureChange]:
+def _construction_changes(before: DesignConfig, after: DesignConfig, *, removed_lip: bool = False) -> list[FeatureChange]:
     """Measure construction the bare bore deliberately omits, using its owner."""
-    from hornlab_mesher.config_builder import resolve_geometry
+    from hornlab_mesher.config_builder import resolve_geometry, resolve_enclosure_bounds
     from hornlab_mesher.rear_compatibility import geometry_rear_ring
     from hornlab_mesher.builders.point_grid_freestanding import _restored_outer_throat_points
     from hornlab_mesher.errors import UserRefusal
@@ -299,25 +330,42 @@ def _construction_changes(before: DesignConfig, after: DesignConfig) -> list[Fea
         numeric = legacy_lookup_source(payload) if isinstance(design.root, LookupConfig) else DesignConfig.model_validate(payload)
         configs.append(_legacy_config(numeric) if isinstance(numeric.root, LookupConfig) else design_to_mesher_config(numeric))
     # Bare/infinite-baffle/enclosure designs have no offset outer shell/rear.
-    if all(config['mode'] != 'freestanding' for config in configs):
+    if all(config['mode'] != 'freestanding' for config in configs) and not removed_lip:
         return []
     geometries = []
+    resolutions = []
     problems = []
     for label, config in zip(('Original', 'Converted'), configs):
         # Keep the production sampling contract: rear normals and hence the
         # rear plane depend on it. Do not substitute legacy point-grid normals.
         try:
-            geometries.append(resolve_geometry(config).geometry)
+            resolved = resolve_geometry(config)
+            resolutions.append(resolved)
+            geometries.append(resolved.geometry)
         except UserRefusal as exc:
             words = public_error_message(exc)
             if words is None:
                 raise
             problems.append(FeatureChange(name='Outer construction', change='changed',
-                message=f'{label} outer/rear construction could not be generated: {words} Its surface change is unmeasured.'))
+                message=f'{label} enclosure/baffle/outer/rear construction could not be generated: {words} Its surface change is unmeasured.'))
     if problems:
         return problems
-    outer = [getattr(g, 'outer_points', None) for g in geometries]
     changes = []
+    if removed_lip and any(config['mode'] in ('enclosure', 'infinite-baffle') for config in configs):
+        rings = [_meridians(g.inner_points)[:, -1] for g in geometries]
+        displacement = float(np.linalg.norm(rings[0]-rings[1], axis=1).max())
+        if displacement > MATCH_MM:
+            changes.append(FeatureChange(name='Baffle opening', change='changed',
+                message=f'The baffle opening follows the kept mouth after lip removal; maximum sampled opening displacement {displacement:.6g} mm.'))
+        bounds = [resolve_enclosure_bounds(config, resolved=resolved) for config, resolved in zip(configs, resolutions)]
+        if all(bound is not None for bound in bounds):
+            moved = [f'{key} {bounds[0][key]:.6g} → {bounds[1][key]:.6g} mm'
+                     for key in ('bx0', 'bx1', 'by0', 'by1', 'z_front', 'z_back')
+                     if abs(bounds[0][key]-bounds[1][key]) > MATCH_MM]
+            if moved:
+                changes.append(FeatureChange(name='Enclosure / baffle bounds', change='changed',
+                    message='Enclosure / baffle placement changes after lip removal (authored settings retained): '+ '; '.join(moved)+'.'))
+    outer = [getattr(g, 'outer_points', None) for g in geometries]
     if any(points is None for points in outer):
         if not all(points is None for points in outer):
             changes.append(FeatureChange(name='Outer wall / rear body', change='changed',
@@ -661,7 +709,7 @@ def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Ca
         selected.sort()
 
 
-def _refine_generated(candidate: DesignConfig, wall: np.ndarray, scale: float, seeds: Callable,
+def _refine_generated(candidate: DesignConfig, wall: Sequence[np.ndarray], scale: float, seeds: Callable,
                       check: Callable) -> tuple[DesignConfig, np.ndarray]:
     """Spend the remaining anchors where the generated grid actually differs."""
     length = _number(candidate.root.length)*scale
@@ -729,7 +777,7 @@ def _refine_generated(candidate: DesignConfig, wall: np.ndarray, scale: float, s
             radii = freeform_evaluate_profile(_params(trial), 'H' if index == 0 else 'V', sampled[:, 0]/scale)*scale
             actual = np.column_stack((sampled[:, 0], radii))
             _, deviations = _radial_difference(wall[index], actual)
-            maximum = max(float(deviations.max()), abs(actual[-1, 1]-wall[index, -1, 1]))
+            maximum = max(float(deviations.max()), abs(actual[-1, 1]-wall[index][-1, 1]))
             if maximum < best[0]:
                 best = maximum, trial
             return maximum
@@ -741,11 +789,11 @@ def _refine_generated(candidate: DesignConfig, wall: np.ndarray, scale: float, s
     return candidate, generated
 
 
-def _fit_stations(wall: np.ndarray, length: float, scale: float, check: Callable) -> list[dict]:
+def _fit_stations(wall: Sequence[np.ndarray], length: float, scale: float, check: Callable) -> list[dict]:
     """Fit each selected ring with the mesher's own station-outline evaluator."""
     from hornlab_mesher.freeform import _station_radius, _resolve_active_station_blend
     phi = np.radians(AZIMUTHS)
-    z = np.unique(np.r_[wall[0, :, 0], wall[ANGULAR//4, :, 0], np.linspace(0, length, 129)])
+    z = np.unique(np.r_[wall[0][:, 0], wall[ANGULAR//4][:, 0], np.linspace(0, length, 129)])
     radii = np.array([np.interp(z, meridian[:, 0], meridian[:, 1]) for meridian in wall]).T
     h, v = radii[:, 0], radii[:, ANGULAR//4]
     descriptors: dict[int, dict] = {0: {'shape': 'ellipse'}}
@@ -797,15 +845,17 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
                 'Keep this source body, or choose a horn family before converting.')
     check()
     original = _sample(source)
-    wall = _meridians(original)
-    _monotone(wall, ' with the ATH Mesh.Roundover rollback lip' if source.root.mesh.ath_roundover else '')
+    kept, lips = _kept_wall(_meridians(original))
+    # Preserve physical placement for comparison; fitting starts at z = 0.
+    wall = [rows.copy() for rows in kept]
     progress('sample')
-    origins = wall[:, 0, 0].copy()
+    origins = np.array([rows[0, 0] for rows in wall])
     if np.max(abs(origins)) > REFUSE_MM and not importing:
         _refuse('The generated throat is more than 0.5 mm from z = 0; a Custom profile starts at zero.',
                 'Shift the imported table so its first z is zero, then convert again.')
-    wall[:, :, 0] -= origins[:, None]
-    length = float(wall[0, -1, 0])
+    for rows, origin in zip(wall, origins):
+        rows[:, 0] -= origin
+    length = float(wall[0][-1, 0])
     scale = _number(source.root.scale, 1)
     common, features = _preserve_shared(source)
     if np.max(abs(origins)) > 1e-8:
@@ -891,7 +941,7 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
         h = _fit_plane(wall[0], seeds(0), scale, check)
         v = h if shared else _fit_plane(wall[ANGULAR//4], seeds(math.pi/2), scale, check)
         v['points'][0]['r'] = h['points'][0]['r']
-        if np.ptp(wall[:, 0, 1]) > 1e-8:
+        if np.ptp([rows[0, 1] for rows in wall]) > 1e-8:
             features.append(FeatureChange(name='Throat outline', change='changed',
                 message='The generated throat is fitted as one circle; its outline change is included in the wall and source-cap measurements.'))
         stations = ([{'t': 0, 'shape': 'ellipse'}, {'t': 1, 'shape': 'ellipse'}] if shared
@@ -904,14 +954,22 @@ def _convert_design(source: DesignConfig, content_key: str, *, check: Callable,
     if not lookup:
         candidate, generated = _refine_generated(candidate, wall, scale, seeds, check)
     report = compare_generated_designs(source, candidate, features=features, before_points=original,
-                                      after_points=generated, align_disjoint=importing, include_construction=False)
+                                      before_wall=kept, after_points=generated, align_disjoint=importing, include_construction=False)
+    if lip := _lip_change(lips, _meridians(_sample(candidate) if generated is None else generated)[:, -1, :]):
+        report.features.append(lip)
+        report.method.grid = 'Kept wall through each meridian’s maximum z. '+report.method.grid
+        report.method.limits.append('This conversion compares only the wall kept through each meridian’s maximum z. '
+                                    'The removed lip is measured separately as a named feature, outside the wall refusal limit.')
+        counts = [len(rows)-1 for rows in kept]
+        report.method.limits.append(f'Kept axial segments per meridian: {min(counts)}–{max(counts)}; '
+                                    'axial_segments_before counts the complete original sampling, including the removed lip.')
     maximum = max(report.wall.max_deviation_mm, report.mouth.max_deviation_mm, report.axial_extent_deviation_mm)
     if curve_error is not None:
         report.curve_deviation_mm = curve_error
     if maximum > REFUSE_MM and not importing:
         _refuse(f'The best Custom profile differs by {maximum:.4f} mm, above the 0.5 mm conversion limit (up to 64 anchors and 32 stations).',
-                'Keep the original family, or simplify the profile/morph and try again; no geometry was cropped or substituted.')
-    report.features.extend(_construction_changes(source, candidate))
+                'Keep the original family, or simplify the kept profile/morph and try again.')
+    report.features.extend(_construction_changes(source, candidate, removed_lip=lip is not None))
     progress('compare')
     same = maximum <= MATCH_MM and abs(report.source_cap_angle_before_deg-report.source_cap_angle_after_deg) <= .01 and not report.features
     progress('ready')
@@ -935,8 +993,11 @@ def conversion_notice(result: ConvertResponse) -> str:
     report = result.report
     maximum = max(report.wall.max_deviation_mm, report.mouth.max_deviation_mm, report.axial_extent_deviation_mm)
     curve = report.curve_deviation_mm or 0
-    fit = 'Profile curve unchanged.' if curve < 1e-9 else f'Maximum profile curve change {curve:.6g} mm.'
+    removed_lip = any(feature.name == 'Rolled-back lip removed' for feature in report.features)
+    fit = ('Kept wall fitted through the fold.' if removed_lip else
+           'Profile curve unchanged.' if curve < 1e-9 else f'Maximum profile curve change {curve:.6g} mm.')
     limit = ' The fit exceeds the 0.01 mm profile tolerance.' if curve > MATCH_MM else ''
     refusal = ' This exceeds the 0.5 mm explicit-conversion limit; opened with the best fit.' if maximum > REFUSE_MM else ''
-    return (f'Opened as Custom profile. {fit} Maximum generated-grid change {maximum:.6g} mm.'
+    scope = 'kept ' if removed_lip else ''
+    return (f'Opened as Custom profile. {fit} Maximum {scope}generated-grid change {maximum:.6g} mm.'
             f'{limit}{refusal} ' + ' '.join(f.message for f in report.features))

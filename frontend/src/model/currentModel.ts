@@ -3,7 +3,8 @@ import { cadJobAboutModel, latestCadJobs, isFailedCadPreparation, isHeldCadJob }
 import { previewSocket } from '../api/previewSocket';
 import { useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
-import { canLoadJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
+import { canLoadJobDesign, openJobDesign } from '../jobs/jobDesign';
+import { DesignOpenSupersededError } from '../design/openCadProject';
 import { designFingerprint, jobDesignFingerprint } from '../results/runCoherence';
 import { cadModelSelection, useCadModelSelection } from '../stores/cadModelState';
 import { currentDesignLoadSource, currentDocumentLoad, useDesignStore, type DesignDocument } from '../stores/design';
@@ -357,5 +358,8 @@ export function latestSolvedParametricJob(jobs: JobItem[]): JobItem | null {
 export function restoreParametricWorkingDesign(): void {
   if (currentDesignLoadSource() !== 'cad-project-switch') return;
   const job = latestSolvedParametricJob(jobsSocket.getSnapshot().jobs);
-  if (job) replaceWithJobDesign(job, { keepHistory: true });
+  if (job) void openJobDesign(job, { keepHistory: true }).catch((error: unknown) => {
+    if (error instanceof DesignOpenSupersededError) return;
+    useDesignStore.setState({ loadNotice: error instanceof Error ? error.message : 'This run’s design could not be opened.' });
+  });
 }

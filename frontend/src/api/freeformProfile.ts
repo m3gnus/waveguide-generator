@@ -36,7 +36,7 @@ export interface ConversionResult {
   verdict: ConversionVerdict;
 }
 
-/** Explicit conversion only: the server fits and compares the complete generated wall. */
+/** Explicit conversion: the server reports kept-wall deviations and any removed lip separately. */
 export function convertToCustomProfile(
   design: DesignDocument, contentKey: string, fetcher: typeof fetch = fetch, signal?: AbortSignal,
 ): Promise<ConversionResult> {

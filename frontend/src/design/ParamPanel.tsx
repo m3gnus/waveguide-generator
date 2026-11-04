@@ -1192,7 +1192,6 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   const [freeformChoice, setFreeformChoice] = useState(false);
   const conversionEdit = useProfileEdit();
   const [conversionNotice, setConversionNotice] = useState<string | null>(null);
-  const loadNotice = useDesignStore((state) => state.loadNotice);
   const searching = Boolean(query.trim());
   const definitions = useMemo(() => (workspaceMode === 'cad' ? CAD_PARAMETER_SECTION_DEFINITIONS : PARAMETER_SECTION_DEFINITIONS)
     .filter((definition) => definition.tab === tab)
@@ -1383,7 +1382,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
         </option>}
       </select>
     </SelectRow>
-    {(loadNotice || conversionNotice) && <Notice tone="warning" className="conversion-notice" actions={<button className="btn" onClick={() => { setConversionNotice(null); useDesignStore.setState({ loadNotice: null }); }}>Dismiss</button>}>{loadNotice || conversionNotice}</Notice>}
+    {conversionNotice && <Notice tone="warning" className="conversion-notice" actions={<button className="btn" onClick={() => setConversionNotice(null)}>Dismiss</button>}>{conversionNotice}</Notice>}
     {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Start a Custom profile">
       <b>Start a Custom profile</b><span>Start blank, or preview a conversion of the current design with its generated-wall, mouth and source-cap report.</span>
       <div><button className="btn" onClick={() => { setFamily('FREEFORM'); rememberUnseparatedVertical(useDesignStore.getState().design); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button className="btn" onClick={() => { setFreeformChoice(false); conversionEdit.propose('Convert to Custom profile', convertToCustomProfileBuilder()); }}>Convert current design</button><button className="btn" onClick={() => setFreeformChoice(false)}>Cancel</button></div>

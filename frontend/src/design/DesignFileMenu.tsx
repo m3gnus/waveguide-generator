@@ -203,6 +203,7 @@ export function DesignFileMenu() {
   const [renaming, setRenaming] = useState(false);
   const nameDraft = useDesignNameDraft(designName, () => setRenaming(false));
   const [message, setMessage] = useState<string | null>(null);
+  const loadNotice = useDesignStore((state) => state.loadNotice);
   const { outcome: sendOutcome, requestId: sentRequest } = useCadSendOutcome();
   /** What a send from this menu left out, said only with that send's outcome. */
   const [sendNote, setSendNote] = useState<{ requestId: string | null; text: string } | null>(null);
@@ -647,13 +648,14 @@ export function DesignFileMenu() {
           onClick={() => { setOpen(false); setMoveRunsOpen(true); }}><span>Move earlier runs…</span></button>
       </>}
     </div>}
-    {(message || adoptionCandidate || sendOutcome) && <div
+    {(message || loadNotice || adoptionCandidate || sendOutcome) && <div
       role={sendOutcome?.tone === 'error' ? 'alert' : 'status'}
       className={`design-menu-status${sendOutcome?.tone === 'error' ? ' error' : ''}`}
-      onClick={() => { setMessage(null); setAdoptionCandidate(null); showCadSendOutcome(null); }}
+      onClick={() => { setMessage(null); useDesignStore.setState({ loadNotice: null }); setAdoptionCandidate(null); showCadSendOutcome(null); }}
     >
       {/* Both, when both exist: a menu message never hides a send's outcome. */}
       {message && message !== sendOutcome?.text && <div>{message}</div>}
+      {loadNotice && <div data-outcome="design-import">{loadNotice}</div>}
       {sendOutcome && <div data-outcome="cad-send">{sendOutcome.text}{sendNote?.requestId === sentRequest ? sendNote?.text : ''}</div>}
       {adoptionCandidate && <button className="btn"
         type="button"

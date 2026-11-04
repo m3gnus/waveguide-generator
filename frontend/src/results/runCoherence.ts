@@ -1,6 +1,7 @@
 import type { JobItem } from '../api/jobsSocket';
 import { parseDecimalInput } from '../design/decimalInput';
-import { hydrateJobDesign } from '../jobs/jobDesign';
+import { hydrateJobDesign, jobDesignWire } from '../jobs/jobDesign';
+import { needsDesignImport } from '../api/designIo';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 
 /**
@@ -76,7 +77,11 @@ export function jobDesignFingerprint(job: Pick<JobItem, 'id' | 'script_snapshot'
   // path exactly: legacy sidecars do not override scalar wire parameters;
   // expressions at actual wire paths do. Never promote sidecars into a document.
   const design = hydrateJobDesign(job);
-  const fingerprint = design ? designFingerprint(design) : null;
+  const wire = jobDesignWire(job);
+  // A retired source still has its own immutable identity. Never compare a
+  // fitted editor approximation as if it had produced this historical result.
+  const fingerprint = wire && needsDesignImport(wire) ? fnv1a(canonicalJson(wire))
+    : design ? designFingerprint(design) : null;
   jobDesignFingerprints.set(job.id, { snapshot: job.script_snapshot, fingerprint });
   return fingerprint;
 }

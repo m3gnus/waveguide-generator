@@ -17,8 +17,9 @@ import { pinRunCadDocument } from '../api/cadProjects';
 import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildRunRecord } from '../jobs/runArchive';
+import { jobDesignForRebuild } from '../jobs/jobDesign';
 import { MISSING_RUN_DESIGN_EXPORT_REASON, runExportReason, resultExportSelection, resultExportSnapshot } from './exportContext';
-import { serializeDesign, type DesignDocument } from '../stores/design';
+import { serializeDesign, useDesignStore, type DesignDocument } from '../stores/design';
 import { designFileExtension } from '../stores/designName';
 import { designWireWithSolveSettings } from '../stores/designWire';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
@@ -695,10 +696,16 @@ function exportActivityLabel(format: ExportFormat): string {
 export async function runExportFormat(format: ExportFormat, context: ExportContext): Promise<string[]> {
   return activityOperation({ kind: 'export', label: exportActivityLabel(format) }, context.fetcher ?? fetch, async (fetcher) => {
     context = { ...context, fetcher };
-    if (context.selectedRun) {
-      const reason = runExportReason(context.selectedRun, format);
+    const selectedRun = context.selectedRun;
+    if (selectedRun) {
+      const reason = runExportReason(selectedRun, format);
       if (reason) throw new Error(reason);
-      context = { ...context, ...resultExportSnapshot(context.selectedRun) };
+      context = { ...context, ...resultExportSnapshot(selectedRun) };
+      if (['step', 'stl', 'fusion_csv', 'mwg_config'].includes(format) && !context.design) {
+        const rebuilt = await jobDesignForRebuild(selectedRun, fetcher);
+        context.design = rebuilt.design ?? undefined;
+        if (rebuilt.notice) useDesignStore.setState({ loadNotice: rebuilt.notice });
+      }
     }
     const baseName = exportContextBaseName(context);
     const saveText = context.saveText ?? downloadText;

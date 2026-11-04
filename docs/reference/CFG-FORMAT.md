@@ -279,6 +279,20 @@ validation share this import path. Opening does not rewrite the file. Saving or
 exporting the editable design writes normal `Freeform.*` keys in `.cfg`, including
 when the requested old filename ended in `.mwg` or `.json`. Stored run artifacts
 and original snapshot bytes are retained; regenerating geometry uses the import.
+History listing and WebSocket snapshots preserve the historical design and its
+result identity without fitting geometry. Conversion runs only when that design
+is opened for editing or rebuilt. Its measured import notice appears in the
+app-level design status area, independent of parameter tabs, filters and sections.
+
+Explicit conversion of a generated wall that rolls back in z keeps each meridian
+through its maximum z. The report names **Rolled-back lip removed**, with the
+removed part's axial length and radial extent in physical mm and its maximum
+sampled distance to the converted mouth at the same azimuth. This always yields
+**approximate**. The 0.5 mm conversion limit applies to the kept wall, kept mouth
+and kept axial extent; the removed lip is measured separately. The fitted mouth
+angle uses the kept end slope. Changes to resolved enclosure/baffle placement or
+outer/rear construction are reported, including construction that cannot be
+generated. Other conversion refusals remain in force.
 
 ## FREEFORM: disk representation versus typed model
 

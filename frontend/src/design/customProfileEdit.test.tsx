@@ -301,6 +301,22 @@ describe('Custom profile commit and preview', () => {
     const conversionReply = (body: Record<string, unknown>) => new Response(JSON.stringify({ content_key: body.content_key,
       design: serializeDesign(custom()), report: conversionReport, verdict: 'approximate' }));
 
+    it('shows the removed lip dimensions separately from the kept wall in the conversion preview', async () => {
+      load(designForFamily('R-OSSE'));
+      const message = 'Rolled-back lip removed: axial length 5.21551 mm; radial extent 11.2769 mm; maximum sampled distance to the converted mouth 12.4332 mm.';
+      const fetcher = routes({ '/convert': body => new Response(JSON.stringify({ content_key: body.content_key,
+        design: serializeDesign(custom()), verdict: 'approximate', report: { ...conversionReport,
+          features: [{ name: 'Rolled-back lip removed', change: 'removed', message }] } })) });
+      act(() => root.render(<Probe fetcher={fetcher} />));
+      await act(async () => edit.propose('Convert', convertToCustomProfileBuilder(fetcher)));
+      await vi.waitFor(() => expect(edit.preview?.validation.status).toBe('ready'));
+      const notes = edit.preview!.notes.join(' ');
+      expect(notes).toContain('Conversion verdict: approximate');
+      expect(notes).toContain('Kept wall maximum: 0.02000 mm');
+      expect(notes).toContain('Kept mouth outline:');
+      expect(notes).toContain(message);
+    });
+
     it('previews a conversion with its report, cancels untouched and accepts the entire family change in one Undo step', async () => {
       const original = { ...designForFamily('OSSE'), scale: 2, extra_keys: { Note: 'retain me' } };
       original._expressions = { scale: { value: 2, raw: '1+1' } };

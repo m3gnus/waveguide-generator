@@ -13,7 +13,7 @@ from server.design.schema import DesignConfig
 from server.design.textcfg import parse
 from server.jobs.operation_progress import mount_operation_progress
 from server.preview.freeform import mount_freeform
-from server.preview.freeform_conversion import compare_generated_designs, convert_design, legacy_lookup_source
+from server.preview.freeform_conversion import compare_generated_designs, convert_design, conversion_notice, legacy_lookup_source
 
 
 @pytest.fixture
@@ -119,7 +119,6 @@ def test_large_lookup_is_approximate_or_refused_without_truncating(client):
 
 
 @pytest.mark.parametrize('payload, message', [
-    ({'formula':'R-OSSE'}, 'rolls back'),
     ({'formula':'OSSE','L':-10}, 'Enter positive Horn length'),
 ])
 def test_refusal_is_actionable_and_echoes_key(client,payload,message):
@@ -179,7 +178,7 @@ def test_comparison_core_reuses_generated_geometry_and_detects_off_axis_changes(
     assert report.mouth.max_deviation_mm > 1
 
 
-def test_ath_roundover_is_named_in_report_and_foldback_refusal(client):
+def test_ath_roundover_is_named_in_report_and_removed_lip(client):
     source = parse('OSSE={\nL=80\nr0=8\na=35\na0=5\ns=.5\n}\nABEC.SimType=2\n'
                    'Mesh.AngularSegments=16\nMesh.LengthSegments=16\n'
                    'Mesh.Roundover={\nRadius=3\nSegments=3\n}\n').design
@@ -190,9 +189,74 @@ def test_ath_roundover_is_named_in_report_and_foldback_refusal(client):
     assert any(feature.name == 'ATH Mesh.Roundover' for feature in report.features)
     assert report.wall.max_deviation_mm > .01
     response = client.post('/api/design/freeform/convert',json={'design':source.model_dump(mode='json'),'content_key':'lip'})
-    assert response.status_code == 422
-    assert 'ATH Mesh.Roundover' in response.json()['detail']
-    assert 'Keep this horn' in response.json()['detail']
+    assert response.status_code == 200, response.text
+    assert response.json()['verdict'] == 'approximate'
+    assert any(feature['name'] == 'Rolled-back lip removed' for feature in response.json()['report']['features'])
+
+
+@pytest.fixture(scope='module')
+def default_rosse_conversion():
+    return convert({'formula': 'R-OSSE'})
+
+
+def test_default_rosse_converts_through_fold_and_reports_removed_lip(default_rosse_conversion):
+    from server.preview.freeform_conversion import _sample, _meridians, _end_angle, _kept_wall
+    result = default_rosse_conversion
+    original = _meridians(_sample(DesignConfig.model_validate({'formula': 'R-OSSE'})))
+    kept, _ = _kept_wall(original)
+    assert result.verdict == 'approximate'
+    assert_honest(result)
+    assert result.design.root.length.constant_value() == pytest.approx(original[0, :, 0].max())
+    assert result.design.root.profile_h.mouth_angle_deg.constant_value() == pytest.approx(_end_angle(kept[0], mouth=True))
+    assert result.design.root.profile_h.mouth_angle_deg.constant_value() > 89
+    lip = next(f for f in result.report.features if f.name == 'Rolled-back lip removed')
+    assert lip.change == 'removed'
+    assert float(re.search(r'axial length ([\d.]+)', lip.message)[1]) == pytest.approx(5.21551, abs=1e-5)
+    assert float(re.search(r'radial extent ([\d.]+)', lip.message)[1]) == pytest.approx(11.2769, abs=1e-4)
+    assert float(re.search(r'azimuth ([\d.]+)', lip.message)[1]) == pytest.approx(12.4332, abs=1e-4)
+    assert result.report.wall.max_deviation_mm == pytest.approx(.009511758, abs=1e-5)
+    assert result.report.mouth.max_deviation_mm < .01
+    assert result.report.axial_extent_deviation_mm == 0
+    # Measuring the entire original lip would violate the kept-wall budget.
+    assert compare_generated_designs(DesignConfig.model_validate({'formula': 'R-OSSE'}), result.design,
+                                     include_construction=False).wall.max_deviation_mm > .5
+    notice = conversion_notice(result)
+    assert lip.message in notice
+    assert 'kept' in notice and 'approximate' in notice
+
+
+def test_fold_cut_retains_each_meridians_own_maximum_and_measures_physical_lip():
+    from server.preview.freeform_conversion import _kept_wall, _lip_change
+    original = np.array([[[0, 1], [10, 2], [9, 4], [8, 6]],
+                         [[0, 1], [8, 2], [12, 4], [11, 7]]], dtype=float)
+    kept, lips = _kept_wall(original)
+    assert [len(rows) for rows in kept] == [2, 3]
+    np.testing.assert_array_equal([rows[-1] for rows in kept], [[10, 2], [12, 4]])
+    assert 'axial length 2 mm; radial extent 4 mm' in _lip_change(lips, np.array([rows[-1] for rows in kept])).message
+    unchanged, empty = _kept_wall(original[:, :2])
+    np.testing.assert_array_equal(unchanged, original[:, :2])
+    assert _lip_change(empty, original[:, 1]) is None
+
+
+def test_fold_before_later_maximum_still_refuses():
+    from hornlab_mesher.errors import UserRefusal
+    from server.preview.freeform_conversion import _kept_wall
+    with pytest.raises(UserRefusal, match='kept generated wall'):
+        _kept_wall(np.array([[[0, 1], [2, 3], [1, 4], [3, 5]]]))
+
+
+@pytest.mark.parametrize('mounting', ['infinite-baffle', 'enclosure'])
+def test_lip_dependent_baffle_and_enclosure_changes_are_reported(default_rosse_conversion, mounting):
+    from server.preview.freeform_conversion import _construction_changes
+    before = DesignConfig.model_validate({'formula': 'R-OSSE', 'simulation': {'sim_type': 'infinite-baffle' if mounting == 'infinite-baffle' else 'freestanding'},
+                                          'enclosure': {'depth': 300 if mounting == 'enclosure' else 0}})
+    payload = default_rosse_conversion.design.model_dump(mode='json')
+    payload['simulation'] = before.root.simulation.model_dump(mode='json')
+    payload['enclosure'] = before.root.enclosure.model_dump(mode='json')
+    features = _construction_changes(before, DesignConfig.model_validate(payload), removed_lip=True)
+    assert any(f.name == 'Baffle opening' and 'mm' in f.message for f in features)
+    if mounting == 'enclosure':
+        assert any(f.name == 'Enclosure / baffle bounds' and '→' in f.message for f in features)
 
 
 def test_morph_is_baked_with_stations_and_reported_as_approximate():

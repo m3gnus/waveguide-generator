@@ -101,6 +101,21 @@ def test_replay_preserves_a_design_from_a_versioned_snapshot() -> None:
     assert request.label == "Stored design"
 
 
+@pytest.mark.parametrize('in_config', [False, True])
+def test_replay_imports_lookup_only_for_the_new_request(in_config):
+    from copy import deepcopy
+    wire = {'formula': 'LOOKUP', 'lookup_profile': [[0, 12.7], [100, 80]],
+            'mesh': {'length_segments': 2, 'z_map_points': '0,0.2,1'}}
+    snapshot = {'version': 1, 'design': wire}
+    row = {'config_json': {'design': wire, 'design_snapshot': snapshot} if in_config else {},
+           'script_snapshot': snapshot}
+    before = deepcopy(row)
+    replay = _replay_request(row)
+    assert replay.design.formula == 'FREEFORM'
+    assert replay.design.root.length.constant_value() == 100
+    assert row == before
+
+
 def test_replay_ignores_retired_option_in_an_experimental_job_record() -> None:
     stored = _request().model_dump(mode="json")
     stored["options"]["beat_precision"] = "float64"

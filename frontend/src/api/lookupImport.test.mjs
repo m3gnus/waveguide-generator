@@ -6,7 +6,9 @@ import { restoreAutosave, writeAutosave } from '../stores/autosave';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { buildParameterCatalog } from '../design/parameterCatalogWire';
 import { applyOpenedDesign } from '../design/openCadProject';
-import { replaceWithJobDesign } from '../jobs/jobDesign';
+import { canLoadJobDesign, jobRerunState, openJobDesign } from '../jobs/jobDesign';
+import { designFingerprint, jobDesignFingerprint } from '../results/runCoherence';
+import { currentModel, runVerdict } from '../model/currentModel';
 
 const python = process.env.WG_TEST_PYTHON;
 const legacy = JSON.parse(readFileSync('../server/tests/data/lookup_oldconfig_corpus/morph-snapping.json', 'utf8')).design;
@@ -94,14 +96,26 @@ it.skipIf(!python)('opens and roundtrips a non-circular table as separate constr
   }
 }, 60000);
 
-it.skipIf(!python)('opens a converted run snapshot for editing with its notice', async () => {
-  const opened = await openDesignText(JSON.stringify(legacy), serverFetch);
-  const job = { script_snapshot: { version: 1, design: opened.design }, design_availability: {
-    reopenable: true, source: 'v2-snapshot', reason_code: 'ok', reason: null, note: importNotice(opened),
+it.skipIf(!python)('lazily opens a historical run for editing without changing its design or result identity', async () => {
+  const job = { id: 'historical-lookup', status: 'complete', has_results: true, config_summary: {},
+    script_snapshot: { version: 1, design: legacy }, design_availability: {
+    reopenable: true, source: 'v2-snapshot', reason_code: 'ok', reason: null, note: null,
   } };
-  expect(replaceWithJobDesign(job)).toBe(true);
+  const original = structuredClone(job);
+  const fingerprint = jobDesignFingerprint(job);
+  expect(fingerprint).not.toBeNull();
+  const fetcher = vi.fn(serverFetch);
+  expect(canLoadJobDesign(job)).toBe(true);
+  expect(jobRerunState(job)).toEqual({ enabled: true, reason: null });
+  expect(fetcher).not.toHaveBeenCalled();
+  expect(await openJobDesign(job, undefined, fetcher)).toBe(true);
+  expect(fetcher).toHaveBeenCalledOnce();
   expect(useDesignStore.getState().design.formula).toBe('FREEFORM');
   expect(useDesignStore.getState().loadNotice).toContain('Source shape preserved');
+  expect(job).toEqual(original);
+  expect(jobDesignFingerprint(job)).toBe(fingerprint);
+  expect(designFingerprint(useDesignStore.getState().design)).not.toBe(fingerprint);
+  expect(runVerdict(job, currentModel())).not.toBe('current');
 }, 20000);
 
 

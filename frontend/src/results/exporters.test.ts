@@ -3,7 +3,7 @@ import { activityStore } from '../shell/activity';
 import { buildGeometryExport } from '../api/designIo';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
-import { designForFamily, serializeDesign } from '../stores/design';
+import { designForFamily, serializeDesign, useDesignStore } from '../stores/design';
 import { resultExportSnapshot } from './exportContext';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
@@ -230,6 +230,26 @@ describe('result exporters', () => {
     await expect(runExportFormat('step', { selectedRun: { ...selectedRun, script_snapshot: null }, design: captured,
       jobStem: 'saved-run', preferences: preferencesStore.getSnapshot(), fetcher })).rejects.toThrow('did not keep its design');
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('imports a retired snapshot only for an explicit geometry rebuild and preserves the historical run', async () => {
+    const selectedRun = { id: 'lookup-geometry', config_summary: {}, design_revision: 7,
+      script_snapshot: { version: 1, design: { formula: 'LOOKUP', lookup_profile: [[0, 12.7], [100, 80]] } } } as unknown as JobItem;
+    const original = structuredClone(selectedRun);
+    const converted = serializeDesign(designForFamily('FREEFORM'));
+    const note = 'Opened as Custom profile. Maximum generated-grid change 0.2 mm.';
+    const fetcher = vi.fn<typeof fetch>(async url => String(url) === '/api/design/open'
+      ? new Response(JSON.stringify({ design: converted, migrationsApplied: [{ name: '007_custom_profile_import', note }] }))
+      : new Response('rebuilt geometry'));
+    expect(resultExportSnapshot(selectedRun).design).toBeUndefined();
+    expect(fetcher).not.toHaveBeenCalled();
+    await runExportFormat('step', { selectedRun, design: designForFamily('OSSE'), designRevision: 99,
+      jobStem: 'saved-run', preferences: preferencesStore.getSnapshot(), fetcher, saveBlob: vi.fn() });
+    expect(fetcher.mock.calls[0][0]).toBe('/api/design/open');
+    const built = fetcher.mock.calls.find(([url]) => String(url).startsWith('/api/export/step'))!;
+    expect(JSON.parse(String(built[1]?.body))).toMatchObject({ design: converted, designRevision: 7 });
+    expect(selectedRun).toEqual(original);
+    expect(useDesignStore.getState().loadNotice).toBe(note);
   });
 
   it.each(['step', 'stl', 'fusion_csv'] as const)('refuses %s geometry generation for a captured assembly run', async format => {

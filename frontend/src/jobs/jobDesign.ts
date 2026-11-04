@@ -1,8 +1,9 @@
 import { mintDesignUid } from '../stores/designUid';
 import { useDocumentStore } from '../stores/document';
-import { hydrateDesignDocument } from '../api/designIo';
+import { hydrateDesignDocument, importNotice, needsDesignImport, openDesignText } from '../api/designIo';
 import type { JobItem } from '../api/jobsSocket';
 import { useDesignStore, type DesignDocument } from '../stores/design';
+import { assertDesignOpenCurrent, takeDesignOpenTicket } from '../design/openCadProject';
 
 /** The server's verdict on a job's stored design. See server/jobs/design_availability.py. */
 export interface DesignAvailability {
@@ -49,6 +50,13 @@ export function replaceWithJobDesign(
 ): boolean {
   const design = hydrateJobDesign(job);
   if (!design) return false;
+  return applyJobDesign(job, design, options, job.design_availability?.note);
+}
+
+function applyJobDesign(
+  job: Parameters<typeof replaceWithJobDesign>[0], design: DesignDocument,
+  options: Parameters<typeof replaceWithJobDesign>[1], notice?: string | null,
+): boolean {
   const sameDocument = job.design_uid != null
     && job.design_uid === useDocumentStore.getState().designUid;
   // Browsing an earlier run of this same document keeps its current name,
@@ -56,7 +64,7 @@ export function replaceWithJobDesign(
   // Legacy runs without a recorded name keep the name already on screen.
   useDesignStore.getState().replaceDocument(design, {
     ...options,
-    notice: job.design_availability?.note,
+    notice,
     documentState: sameDocument ? undefined : {
       designUid: job.design_uid ?? mintDesignUid(),
       designName: job.design_name ?? useDocumentStore.getState().designName,
@@ -67,6 +75,29 @@ export function replaceWithJobDesign(
     },
   });
   return true;
+}
+
+/** Import retired designs only when opened. The run's snapshot stays historical. */
+export async function openJobDesign(
+  job: Parameters<typeof replaceWithJobDesign>[0],
+  options?: Parameters<typeof replaceWithJobDesign>[1], fetcher: typeof fetch = fetch,
+): Promise<boolean> {
+  const wire = jobDesignWire(job);
+  if (!wire || !needsDesignImport(wire)) return replaceWithJobDesign(job, options);
+  const ticket = takeDesignOpenTicket();
+  const { design, notice } = await jobDesignForRebuild(job, fetcher);
+  assertDesignOpenCurrent(ticket, 'this run’s design');
+  return design ? applyJobDesign(job, design, options, notice) : false;
+}
+
+/** Resolve editable geometry for an explicit rebuild/export without changing the run. */
+export async function jobDesignForRebuild(job: JobDesignFields, fetcher: typeof fetch = fetch): Promise<{
+  design: DesignDocument | null; notice: string | null;
+}> {
+  const wire = jobDesignWire(job);
+  if (!wire || !needsDesignImport(wire)) return { design: hydrateJobDesign(job), notice: job.design_availability?.note ?? null };
+  const opened = await openDesignText(JSON.stringify(wire), fetcher);
+  return { design: hydrateDesignDocument(opened.design), notice: importNotice(opened) };
 }
 
 /**
@@ -85,7 +116,7 @@ export function jobDesignAvailability(job: JobDesignFields): DesignAvailability 
       reason: stated.reopenable ? null : stated.reason || UNAVAILABLE_FALLBACK,
     };
   }
-  const hydrated = hydrateJobDesign(job) !== null;
+  const hydrated = readableJobDesign(job);
   return {
     reopenable: hydrated,
     source: hydrated ? 'v2-snapshot' : 'none',
@@ -101,8 +132,8 @@ const CLIENT_UNREADABLE =
 /**
  * Whether this job's design can actually be put back on screen, and why not.
  *
- * The server's verdict is not the last word: it says the design converted,
- * this says the browser could also hydrate it. Both have to hold before a
+ * The server's verdict classifies the stored format. The browser must either
+ * hydrate it or recognize it as input for the lazy importer before a
  * control that reruns a design is allowed to be live, because the failure the
  * user would otherwise see is a run of the *current* design under an old job's
  * name -- which looks like it worked.
@@ -113,13 +144,18 @@ export function jobRerunState(job: JobDesignFields): { enabled: boolean; reason:
   // reopenable as editor designs, but rerun does not need design hydration.
   if (availability.source === 'cad-import') return { enabled: true, reason: null };
   if (!availability.reopenable) return { enabled: false, reason: availability.reason };
-  if (hydrateJobDesign(job) === null) return { enabled: false, reason: CLIENT_UNREADABLE };
+  if (!readableJobDesign(job)) return { enabled: false, reason: CLIENT_UNREADABLE };
   return { enabled: true, reason: null };
 }
 
 /** True when this job's design can be put back on screen. */
 export function canLoadJobDesign(job: JobDesignFields): boolean {
-  return jobDesignAvailability(job).reopenable && hydrateJobDesign(job) !== null;
+  return jobDesignAvailability(job).reopenable && readableJobDesign(job);
+}
+
+function readableJobDesign(job: JobDesignFields): boolean {
+  const wire = jobDesignWire(job);
+  return Boolean(wire && needsDesignImport(wire)) || hydrateJobDesign(job) !== null;
 }
 
 /** Imported history opens retained solver inputs, not a parametric document. */

@@ -97,6 +97,22 @@ function open(): HTMLButtonElement[] {
   return [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')];
 }
 
+it.each(['parametric', 'cad'] as const)('shows a measured import notice with the menu closed in %s mode', (mode) => {
+  workspaceModeStore.setMode(mode);
+  const notice = 'Rolled-back lip removed: axial length 5.21551 mm; radial extent 11.2769 mm; maximum distance 12.4332 mm. Kept wall change 0.009512 mm.';
+  act(() => {
+    useDesignStore.getState().replaceDocument(useDesignStore.getState().design, { notice });
+    root.render(<DesignFileMenu />);
+  });
+  expect(container.querySelector('[role="menu"]')).toBeNull();
+  const status = container.querySelector('[data-outcome="design-import"]')!;
+  expect(status.textContent).toBe(notice);
+  expect(status.closest('[role="status"]')).not.toBeNull();
+  act(() => status.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(useDesignStore.getState().loadNotice).toBeNull();
+  expect(container.querySelector('[data-outcome="design-import"]')).toBeNull();
+});
+
 function itemNamed(label: string): HTMLButtonElement {
   const found = open().find((item) => item.textContent?.startsWith(label));
   if (!found) throw new Error(`no export menu item named ${label}`);

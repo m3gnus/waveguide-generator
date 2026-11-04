@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { resetDesignStore, serializeDesign, serializeSolveDesign, useDesignStore } from '../stores/design';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { designForFamily, resetDesignStore, serializeDesign, serializeSolveDesign, useDesignStore } from '../stores/design';
+import { takeDesignOpenTicket } from '../design/openCadProject';
 import parentLegacySubmission from './fixtures/legacySidecar.parent.solve.json?raw';
 import {
   canLoadJobDesign,
@@ -8,6 +9,7 @@ import {
   jobDesignAvailability,
   jobRerunState,
   replaceWithJobDesign,
+  openJobDesign,
 } from './jobDesign';
 
 describe('versioned job design snapshots', () => {
@@ -61,6 +63,34 @@ describe('versioned job design snapshots', () => {
     // that was on screen beforehand must still come back.
     useDesignStore.getState().undo();
     expect(useDesignStore.getState().design.a).toBe(33);
+  });
+});
+
+describe('lazy historical imports', () => {
+  beforeEach(() => resetDesignStore());
+  const job = { script_snapshot: { version: 1, design: { formula: 'LOOKUP', lookup_profile: [[0, 12.7], [100, 80]] } } };
+
+  it.each(['edit', 'newer-open'] as const)('keeps newer work when a pending import is superseded by %s', async (cause) => {
+    let finish!: (response: Response) => void;
+    const fetcher = vi.fn<typeof fetch>(() => new Promise(resolve => { finish = resolve; }));
+    const pending = openJobDesign(job, undefined, fetcher);
+    expect(fetcher).toHaveBeenCalledOnce();
+    if (cause === 'edit') useDesignStore.getState().updateField('a', 31);
+    else takeDesignOpenTicket();
+    const design = useDesignStore.getState().design;
+    finish(new Response(JSON.stringify({ design: serializeDesign(designForFamily('FREEFORM')), migrationsApplied: [] })));
+    await expect(pending).rejects.toMatchObject({ name: 'DesignOpenSupersededError' });
+    expect(useDesignStore.getState().design).toBe(design);
+    expect(useDesignStore.getState().loadNotice).toBeNull();
+  });
+
+  it('leaves the run and editor unchanged when import fails', async () => {
+    const before = structuredClone(job);
+    const design = useDesignStore.getState().design;
+    const fetcher = vi.fn<typeof fetch>(async () => { throw new Error('offline'); });
+    await expect(openJobDesign(job, undefined, fetcher)).rejects.toThrow('offline');
+    expect(useDesignStore.getState().design).toBe(design);
+    expect(job).toEqual(before);
   });
 });
 

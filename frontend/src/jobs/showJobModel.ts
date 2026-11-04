@@ -3,7 +3,8 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
-import { replaceWithJobDesign } from './jobDesign';
+import { jobDesignWire, openJobDesign, replaceWithJobDesign } from './jobDesign';
+import { needsDesignImport } from '../api/designIo';
 import { openImported } from '../stores/importedModel';
 import { useMeshFreshnessStore } from './meshFreshness';
 // The rails a reopened imported run is shown in: the file and the CAD rail.
@@ -32,7 +33,14 @@ export async function showJobModel(
       return false;
     }
   }
-  if (!replaceWithJobDesign(job, { keepHistory: true })) {
+  let opened: boolean;
+  try {
+    opened = needsDesignImport(jobDesignWire(job) ?? {})
+      ? await openJobDesign(job, { keepHistory: true })
+      : replaceWithJobDesign(job, { keepHistory: true });
+  }
+  catch (error) { onError(failureWords(error)); return false; }
+  if (!opened) {
     showUnreadableRun(job);
     onError('This run did not keep a design WG can read, so its model cannot be shown.');
     return false;
