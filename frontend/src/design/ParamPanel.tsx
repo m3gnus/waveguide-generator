@@ -1300,7 +1300,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
       revealId={workspaceMode === 'parametric' ? `parametric.section.${definition.title}` : undefined}
     >
       {workspaceMode === 'parametric' && definition.title === 'Mounting' && <FrontWorkspaceLauncher />}
-      {showCustom && definition.title === 'Profile' && (design.formula === 'FREEFORM' || design.formula === 'LOOKUP') && <ProfileCanvasLauncher />}
+      {showCustom && definition.title === 'Profile' && design.formula === 'FREEFORM' && <ProfileCanvasLauncher />}
       {showOuterBodyMode && <WallEnclosureModeControl design={design} mounting={workspaceMode === 'parametric'} serverError={workspaceMode === 'parametric' ? previewErrorForParameter(PARAMETER_REGISTRY.find((field) => field.id === 'simulation.sim_type')!, currentPreviewFields) : undefined} />}
       {/* Domain is an execution option, not a saved design parameter. Keeping
           it independent of mesh.quadrants prevents the round-trip-only ATH

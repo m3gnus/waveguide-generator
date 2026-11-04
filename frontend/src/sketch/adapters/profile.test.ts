@@ -159,30 +159,6 @@ describe('profile adapter', () => {
   });
 });
 
-describe('legacy LOOKUP adapter', () => {
-  it('uses the exact native polyline with no 64-point cap, no curve query and no join/angle edits', async () => {
-    const lookup = designForFamily('LOOKUP');
-    lookup.lookup_profile = Array.from({ length: 80 }, (_, i) => [i * 2, 12.7 + i]);
-    useDesignStore.getState().replaceDocument(lookup);
-    const domain = createProfileAdapter(() => ({}), 'lookup');
-    const items = domain.display(lookup, { selection: [], scale: 1 }).items;
-    expect(items.find(item => item.id === 'H:curve')).toMatchObject({ points: lookup.lookup_profile.map(([x, y]) => ({ x, y })) });
-    expect(items.filter(item => item.kind === 'point')).toHaveLength(80);
-    expect(items.filter(item => item.kind === 'point').every(item => item.kind === 'point' && item.glyph === 'corner')).toBe(true);
-    expect(domain.tools).toHaveLength(1);
-    expect(domain.apply(lookup, { kind: 'join', plane: 'H', index: 1, join: 'smooth' })).toHaveProperty('error');
-    const authority = new ProjectHistoryAuthority(profileBinding(vi.fn(), 'lookup'));
-    const controller = new ProfileController({ initial: authority.current, authority, adapter: domain, presentation: () => ({}), blocked: () => false, drafting: vi.fn(), propose: vi.fn() });
-    const insert = vi.spyOn(owner, 'editLookupAnchor');
-    await controller.command({ kind: 'insert', plane: 'H', z: 3, mode: 'exact' }); await controller.enqueue(async () => {});
-    expect(insert).toHaveBeenCalled(); expect(controller.current.lookup_profile).toHaveLength(81);
-    expect(controller.current.lookup_profile![2]).toEqual([3, 14.2]);
-    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
-    await controller.undo(); await controller.enqueue(async () => {}); expect(controller.current.lookup_profile).toEqual(lookup.lookup_profile);
-    controller.destroy();
-  });
-});
-
 describe('native profile project bridge', () => {
   it('rebases a FREEFORM drag after an unrelated edit, then commits the preview', async () => {
     const authority = new ProjectHistoryAuthority(profileBinding(vi.fn()));
@@ -201,24 +177,6 @@ describe('native profile project bridge', () => {
     await controller.enqueue(async () => {});
     expect(useDesignStore.getState().design).toMatchObject({ throat_ext_length: 12, profile_h: { points: expect.arrayContaining([expect.objectContaining({ t: .375, r: 40 })]) } });
     expect(useDesignStore.temporal.getState().pastStates.at(-1)?.design?.throat_ext_length).toBe(12);
-    controller.destroy();
-  });
-
-  it('rebases LOOKUP commands and drags after unrelated parameter edits', async () => {
-    const lookup = designForFamily('LOOKUP'); lookup.lookup_profile = [[0, 12.7], [40, 30], [120, 140]];
-    useDesignStore.getState().replaceDocument(lookup); useDesignStore.temporal.getState().clear();
-    const authority = new ProjectHistoryAuthority(profileBinding(vi.fn(), 'lookup'));
-    const controller = new ProfileController({ adapter: createProfileAdapter(() => ({}), 'lookup'), authority, initial: authority.current,
-      presentation: () => ({}), propose: vi.fn(), drafting: vi.fn(), blocked: () => false });
-    useDesignStore.getState().updateValue('throat_ext_length', 12);
-    await controller.command({ kind: 'move', plane: 'H', index: 1, at: { x: 45, y: 35 } });
-    await controller.enqueue(async () => {});
-    expect(useDesignStore.getState().design).toMatchObject({ throat_ext_length: 12, lookup_profile: [[0, 12.7], [45, 35], [120, 140]] });
-    useDesignStore.getState().updateValue('throat_ext_length', 18);
-    await controller.beginDrag([anchorId('H', 1)]);
-    await controller.dragTo([{ id: anchorId('H', 1), at: { x: 50, y: 40 } }]);
-    await controller.endDrag();
-    expect(useDesignStore.getState().design).toMatchObject({ throat_ext_length: 18, lookup_profile: [[0, 12.7], [50, 40], [120, 140]] });
     controller.destroy();
   });
 

@@ -1,7 +1,7 @@
-import type { CurvesResponse, InsertMode, PlaneCurve } from '../../api/freeformProfile';
+import type { CurvesResponse, InsertMode } from '../../api/freeformProfile';
 import type { ProfileSamples } from '../../api/profileSamples';
 import {
-  activePlanes, deleteAnchor, editLookupAnchor, insertAnchorBuilder, isSharedProfile, setAnchorAngle, setAnchorJoin, setAnchorValue,
+  activePlanes, deleteAnchor, insertAnchorBuilder, isSharedProfile, setAnchorAngle, setAnchorJoin, setAnchorValue,
   type EditBuilder, type Plane, type ProfileEditResult,
 } from '../../design/customProfileEdit';
 import { useDesignStore, type DesignDocument, type FreeformPoint } from '../../stores/design';
@@ -37,10 +37,7 @@ export function parseAnchor(id: string) {
   const match = /^([HV]):anchor:(\d+)$/.exec(id);
   return match ? { plane: match[1] as Plane, index: Number(match[2]) } : undefined;
 }
-export const profilePoints = (design: DesignDocument, plane: Plane): FreeformPoint[] => design.formula === 'LOOKUP'
-  ? (design.lookup_profile ?? []).map(([z, r]) => ({ t: z / (design.length ?? 120), r, join: 'corner' as const }))
-  : (plane === 'H' ? design.profile_h : design.profile_v)!.points;
-const sharedCanvas = (design: DesignDocument) => design.formula === 'LOOKUP' || isSharedProfile(design);
+export const profilePoints = (design: DesignDocument, plane: Plane): FreeformPoint[] => (plane === 'H' ? design.profile_h : design.profile_v)!.points;
 export function equalProfiles(samples: ProfileSamples): boolean {
   return samples.H.length === samples.V.length && samples.H.every((p, i) =>
     Math.abs(p.z - samples.V[i].z) < 1e-5 && Math.abs(p.r - samples.V[i].r) < 1e-5);
@@ -49,11 +46,6 @@ export function equalProfiles(samples: ProfileSamples): boolean {
 /** All edit semantics stay in the table's owner. No curve evaluator lives here. */
 export function profileEdit(state: DesignDocument, command: Exclude<ProfileCommand, { kind: 'insert' }>, curves?: CurvesResponse): ProfileEditResult {
   const { plane, index } = command;
-  if (state.formula === 'LOOKUP') {
-    if (command.kind === 'join' || command.kind === 'angle') throw new Error('Legacy LOOKUP has corners only; join and angle tools are disabled.');
-    return editLookupAnchor(state, command.kind === 'delete' ? { kind: 'delete', index }
-      : { kind: 'move', index, z: index === 0 ? undefined : command.at.x, r: command.at.y }, true);
-  }
   switch (command.kind) {
     case 'delete': return deleteAnchor(state, plane, index);
     case 'join': return setAnchorJoin(state, plane, index, command.join, curves);
@@ -84,36 +76,24 @@ export function profileCommandBuilder(commands: ProfileCommand[], curves?: Curve
 }
 
 const profileFields = ['formula', 'length', 'scale', 'profile_h', 'profile_v', 'shared_profile', '_expressions', '_absent'] as const;
-const lookupFields = ['formula', 'length', 'scale', 'lookup_profile', '_expressions', '_absent'] as const;
 /** Keep the editor's bound fields, rebasing everything else onto the live document. */
 export function rebaseProfileDocument(state: DesignDocument, document: DesignDocument): DesignDocument {
-  const fields = state.formula === 'LOOKUP' ? lookupFields : profileFields;
-  return { ...document, ...Object.fromEntries(fields.map(field => [field, state[field]])) };
+  return { ...document, ...Object.fromEntries(profileFields.map(field => [field, state[field]])) };
 }
 
 /** Native, sidecar-free profile binding. Drag writes only changed coordinate leaves,
  * preserving all untouched expressions and omissions exactly as setAnchorValue does. */
-export function profileBinding(onMissing: () => void, mode: 'freeform' | 'lookup' = 'freeform'): ProjectBinding<DesignDocument> {
+export function profileBinding(onMissing: () => void): ProjectBinding<DesignDocument> {
   const coordinates = (['h', 'v'] as const).flatMap(plane => Array.from({ length: 64 }, (_, i) =>
     ['t', 'r'].map(field => `profile_${plane}.points.${i}.${field}`)).flat());
   return {
-    get paths() { return mode === 'lookup'
-      ? [...lookupFields, ...(useDesignStore.getState().design.lookup_profile ?? []).flatMap((_point, index) => [0, 1].map(axis => `lookup_profile.${index}.${axis}`))]
-      : [...profileFields, ...coordinates]; },
+    paths: [...profileFields, ...coordinates],
     read: () => {
       const design = useDesignStore.getState().design;
-      return mode === 'lookup' ? design.formula === 'LOOKUP' && design.lookup_profile ? design : undefined
-        : design.formula === 'FREEFORM' && design.profile_h && design.profile_v ? design : undefined;
+      return design.formula === 'FREEFORM' && design.profile_h && design.profile_v ? design : undefined;
     },
     write: (after, values) => {
       const updates: Record<string, unknown> = {};
-      if (mode === 'lookup') {
-        after.lookup_profile!.forEach((pair, index) => pair.forEach((value, axis) => {
-          const path = `lookup_profile.${index}.${axis}`;
-          if (values[path] !== value) updates[path] = value;
-        }));
-        return updates;
-      }
       for (const plane of ['H', 'V'] as const) profilePoints(after, plane).forEach((point, index) => {
         for (const field of ['t', 'r'] as const) {
           const path = `profile_${plane.toLowerCase()}.points.${index}.${field}`;
@@ -137,20 +117,20 @@ const textItem = (id: string, text: string, at: XY, role = 'profile-label'): Dis
   layout: { path: '', arrows: '', at, rotation: 0, placement: { offset: 0, along: .5 } },
 });
 
-export function createProfileAdapter(presentation: () => ProfilePresentation = () => ({}), mode: 'freeform' | 'lookup' = 'freeform'): DomainAdapter<DesignDocument, DesignDocument, ProfileCommand> {
+export function createProfileAdapter(presentation: () => ProfilePresentation = () => ({})): DomainAdapter<DesignDocument, DesignDocument, ProfileCommand> {
   const factor = (state: DesignDocument) => presentation().scaled ? state.scale : 1;
-  const planes = (state: DesignDocument): Plane[] => state.formula === 'LOOKUP' ? ['H'] : activePlanes(state).filter(plane => isSharedProfile(state) || !presentation().plane || presentation().plane === 'both' || presentation().plane === plane);
+  const planes = (state: DesignDocument): Plane[] => activePlanes(state).filter(plane => isSharedProfile(state) || !presentation().plane || presentation().plane === 'both' || presentation().plane === plane);
   const adapter: DomainAdapter<DesignDocument, DesignDocument, ProfileCommand> = {
     id: 'custom-profile', axes: { x: { label: 'z', unit: 'mm' }, y: { label: 'r', unit: 'mm', clamp: { min: 0 } } },
     labels: { drawing: 'Custom profile drawing', tools: 'Profile tools' }, viewControls: { fitAll: false, legend: false },
     seed: document => document, lower: state => ({ ok: true, document: state }),
-    status: state => (state.formula === 'LOOKUP' ? (state.lookup_profile?.length ?? 0) < 2 : (state.profile_h?.points.length ?? 0) < 2 || (state.profile_v?.points.length ?? 0) < 2)
+    status: state => ((state.profile_h?.points.length ?? 0) < 2 || (state.profile_v?.points.length ?? 0) < 2)
       ? { kind: 'unfinished', hint: 'Add a throat and mouth in the profile table.' }
       : presentation().error ? { kind: 'invalid', problems: [{ code: 'profile-curve', ids: ['H:curve', 'V:curve'], message: presentation().error! }] } : { kind: 'valid' },
     serializeAuthoring: () => undefined,
     apply: (state, command) => {
       try {
-        if (command.kind === 'insert') return state.formula === 'LOOKUP' ? editLookupAnchor(state, { kind: 'insert', z: command.z }).after : { error: 'Insertion needs a fresh mesher curve and the server edit preview.' };
+        if (command.kind === 'insert') return { error: 'Insertion needs a fresh mesher curve and the server edit preview.' };
         return profileEdit(state, command, presentation().curves).after;
       } catch (reason) { return { error: reason instanceof Error ? reason.message : String(reason) }; }
     },
@@ -166,11 +146,11 @@ export function createProfileAdapter(presentation: () => ProfilePresentation = (
           points: generated[plane].map(({ z, r }) => ({ x: z / (p.scaled ? 1 : p.generatedScale ?? state.scale), y: r / (p.scaled ? 1 : p.generatedScale ?? state.scale) })) });
       }
       for (const plane of planes(state)) {
-        const curve = state.formula === 'LOOKUP' ? lookupCurve(state) : p.curves?.[plane], before = p.before?.[plane];
+        const curve = p.curves?.[plane], before = p.before?.[plane];
         if (before) items.push({ id: `${plane}:before`, kind: 'polyline', role: `profile-${plane}`, editable: false, state: ['ghost'], label: `Previous ${plane} curve`, points: before.samples.map(([z, r]) => point(z, r)) });
         if (curve) {
           items.push({ id: `${plane}:curve`, kind: 'polyline', role: `profile-authored profile-${plane}`, editable: true, stale: p.stale,
-            label: `Authored ${sharedCanvas(state) ? 'H = V' : plane}`, points: curve.samples.map(([z, r]) => point(z, r)) });
+            label: `Authored ${isSharedProfile(state) ? 'H = V' : plane}`, points: curve.samples.map(([z, r]) => point(z, r)) });
           curve.spans.forEach((span, index) => {
             const left = profilePoints(state, plane)[index], right = profilePoints(state, plane)[index + 1];
             if (!left || !right) return;
@@ -226,25 +206,19 @@ export function createProfileAdapter(presentation: () => ProfilePresentation = (
       const anchor = parseAnchor(hit);
       return anchor && planes(state).includes(anchor.plane) ? { ids: [hit], move: (_state, _delta, at) => [{ kind: 'move', ...anchor, at: { x: at.x / factor(state), y: at.y / factor(state) } }] } : undefined;
     },
-    tools: (mode === 'lookup' ? ['exact' as const] : ['exact', 'refit'] as const).map(insertMode => ({
+    tools: (['exact', 'refit'] as const).map(insertMode => ({
       id: `insert-${insertMode}`, group: 'Profile', label: insertMode === 'exact' ? 'Insert exact' : 'Insert refit', icon: 'M2 8H14M8 2V14',
       hint: () => `Click the authored curve to insert a point (${insertMode}).`,
       pointer: (event, state) => {
         if (event.phase !== 'down' || !event.hit?.endsWith(':curve')) return {};
-        if (mode !== 'lookup' && (presentation().stale || !presentation().curves)) return { commands: [{ kind: 'insert', plane: event.hit[0] as Plane, z: NaN, mode: insertMode }], done: true };
+        if (presentation().stale || !presentation().curves) return { commands: [{ kind: 'insert', plane: event.hit[0] as Plane, z: NaN, mode: insertMode }], done: true };
         return { commands: [{ kind: 'insert', plane: event.hit[0] as Plane, z: event.at.x / factor(state), mode: insertMode }], done: true };
       },
     })),
     properties: (state, selection) => presentation().properties?.(state, selection) ?? [],
-    statusLine: (state, cursor, message) => `z ${cursor.x.toFixed(2)}, r ${cursor.y.toFixed(2)} ${presentation().scaled ? 'scaled ' : 'design '}mm · ${message || (presentation().stale ? 'Updating authored curve…' : `Drag a point · ${sharedCanvas(state) ? 'H = V' : 'H and V'} · Delete removes · Esc cancels`)}`,
+    statusLine: (state, cursor, message) => `z ${cursor.x.toFixed(2)}, r ${cursor.y.toFixed(2)} ${presentation().scaled ? 'scaled ' : 'design '}mm · ${message || (presentation().stale ? 'Updating authored curve…' : `Drag a point · ${isSharedProfile(state) ? 'H = V' : 'H and V'} · Delete removes · Esc cancels`)}`,
   };
   return adapter;
-}
-
-function lookupCurve(state: DesignDocument): PlaneCurve {
-  const points = state.lookup_profile ?? [];
-  return { samples: points, inflections: [], spans: points.slice(1).map(() => ({ straight: true, bezier: [] })),
-    anchors: points.map(([z, r]) => ({ z, r, t: z / (state.length ?? 120), join: 'corner', handleIn: null, handleOut: null, explicitIn: false, explicitOut: false, angleInDeg: null, angleOutDeg: null })) };
 }
 
 function addAxisLabels(items: DisplayItem[], ui: DisplayUI, scaled: boolean) {

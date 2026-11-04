@@ -1,5 +1,5 @@
 import { useDesignStore, type DesignDocument } from '../stores/design';
-import { commitProfileEdit, currentEditOrigin, ProfileEditRefusal, type EditBuilder } from '../design/customProfileEdit';
+import { ProfileEditRefusal, type EditBuilder } from '../design/customProfileEdit';
 import { PlainController, type PlainControllerOptions } from './workspace/plainController';
 import { profileCommandBuilder, rebaseProfileDocument, type ProfileCommand, type ProfilePresentation } from './adapters/profile';
 
@@ -22,17 +22,6 @@ export class ProfileController extends PlainController<DesignDocument, DesignDoc
       if (this.profile.blocked()) throw new ProfileEditRefusal('Accept or cancel the current profile preview first.');
       const resolved = typeof commands === 'function' ? commands(this.current) : commands;
       const list = Array.isArray(resolved) ? resolved : [resolved];
-      if (this.current.formula === 'LOOKUP') {
-        const before = this.current;
-        let after = before;
-        for (const command of list) {
-          const result = this.profile.adapter.apply(after, command);
-          if ('error' in result) throw new ProfileEditRefusal(result.error);
-          after = result;
-        }
-        commitProfileEdit(currentEditOrigin(), before, after);
-        return this.current;
-      }
       if (list.some(command => command.kind === 'insert') && (this.profile.presentation().stale || !this.profile.presentation().curves)) {
         throw new ProfileEditRefusal('Wait for the current authored curve before inserting a point.');
       }
@@ -46,9 +35,6 @@ export class ProfileController extends PlainController<DesignDocument, DesignDoc
     await super.beginDrag(ids); this.profile.drafting(true);
   }
   override async endDrag(cancel = false) {
-    if (this.current.formula === 'LOOKUP') {
-      await super.endDrag(cancel); this.profile.drafting(false); return;
-    }
     // Queue after the last frame. External Undo/Open may already have cancelled it.
     const candidate = await this.enqueue(async () => this.dragging && this.dragStart && JSON.stringify(this.current) !== JSON.stringify(this.dragStart)
       ? { before: this.dragStart, after: this.current } : undefined);

@@ -35,43 +35,6 @@ export class ProfileEditRefusal extends Error {
   override name = 'ProfileEditRefusal';
 }
 
-/** Legacy LOOKUP remains an exact polyline. Shared by its table and canvas. */
-export function lookupPositionError(points: [number, number][], index: number, z: number): string | undefined {
-  return (index > 0 && z <= points[index - 1][0]) || (index < points.length - 1 && z >= points[index + 1][0])
-    ? 'lookupProfile z values must be strictly increasing' : undefined;
-}
-export type LookupAnchorEdit = { kind: 'move'; index: number; z?: number; r?: number }
-  | { kind: 'insert'; z: number } | { kind: 'delete'; index: number };
-export function editLookupAnchor(design: DesignDocument, edit: LookupAnchorEdit, positiveRadius = false): ProfileEditResult {
-  const points = design.lookup_profile;
-  if (design.formula !== 'LOOKUP' || !points) throw new ProfileEditRefusal('Open a legacy LOOKUP profile first.');
-  const after = structuredClone(design), next = after.lookup_profile!;
-  if (edit.kind === 'insert') {
-    const index = points.findIndex(([z]) => z > edit.z);
-    if (index <= 0 || edit.z === points[index - 1][0]) throw new ProfileEditRefusal('Insert z must be strictly inside a polyline span.');
-    const [z0, r0] = points[index - 1], [z1, r1] = points[index];
-    next.splice(index, 0, [edit.z, r0 + (r1 - r0) * (edit.z - z0) / (z1 - z0)]);
-    remapListMetadata(after, 'lookup_profile', points.length, old => old >= index ? old + 1 : old);
-  } else if (edit.kind === 'delete') {
-    if (points.length <= 2) throw new ProfileEditRefusal('Keep at least two legacy profile points.');
-    next.splice(edit.index, 1);
-    remapListMetadata(after, 'lookup_profile', points.length, old => old === edit.index ? null : old > edit.index ? old - 1 : old);
-  } else {
-    if (edit.z !== undefined) {
-      const message = lookupPositionError(points, edit.index, edit.z);
-      if (message) throw new ProfileEditRefusal(message);
-      if (!Number.isFinite(edit.z)) throw new ProfileEditRefusal('Enter a finite number.');
-      next[edit.index][0] = edit.z;
-    }
-    if (edit.r !== undefined) {
-      if (!Number.isFinite(edit.r) || positiveRadius && !(edit.r > 0)) throw new ProfileEditRefusal('Radius must be greater than 0 mm.');
-      next[edit.index][1] = edit.r;
-    }
-    clearMetadata(after, [edit.z !== undefined ? `lookup_profile.${edit.index}.0` : '', edit.r !== undefined ? `lookup_profile.${edit.index}.1` : '']);
-  }
-  return { after, notes: ['Legacy LOOKUP keeps its exact straight-line profile and native mesher path.'] };
-}
-
 export interface ProfileEditResult {
   after: DesignDocument;
   /** What the user should know before accepting: pins kept or released, rewritten values. */
@@ -732,7 +695,7 @@ export function profileRequestKey(origin: EditOrigin, ...designs: DesignDocument
   return `cp:${origin.load}.${origin.generation}.${origin.revision}:${requestSequence}:${content}`;
 }
 
-const COMMITTED_FIELDS = ['length', 'profile_h', 'profile_v', 'shared_profile', 'cross_sections', 'lookup_profile'] as const;
+const COMMITTED_FIELDS = ['length', 'profile_h', 'profile_v', 'shared_profile', 'cross_sections'] as const;
 
 /**
  * Commit a previewed candidate as one project Undo step.

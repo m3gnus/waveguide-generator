@@ -32,7 +32,7 @@ export function ProfileCanvasLauncher() {
 export function ProfileCanvasDialog() {
   const open = useSyncExternalStore(profileCanvasVisibility.subscribe, profileCanvasVisibility.getSnapshot, profileCanvasVisibility.getSnapshot);
   const formula = useDesignStore(state => state.design.formula);
-  const eligible = formula === 'FREEFORM' || formula === 'LOOKUP';
+  const eligible = formula === 'FREEFORM';
   useEffect(() => { if (!eligible) closeProfileCanvas(); }, [eligible]);
   return eligible ? <ProfileCanvas open={open} onClose={closeProfileCanvas}/> : null;
 }
@@ -64,7 +64,6 @@ export function useGeneratedProfile(design: DesignDocument, revision: number, id
 
 function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () => void }) {
   const design = useDesignStore(state => state.design), revision = useDesignStore(state => state.designRevision), identity = useDesignStore(state => state.loadGeneration);
-  const legacy = design.formula === 'LOOKUP';
   const invalidInputs = useSyncExternalStore(parameterPanelValidity.subscribe, parameterPanelValidity.getSnapshot, parameterPanelValidity.getSnapshot);
   const currentCurves = useCurrentProfileCurves(), generated = useGeneratedProfile(design, revision, identity), edit = useProfileEdit();
   const [state, setState] = useState(design), [session, setSession] = useState<PlainController<DesignDocument, DesignDocument, ProfileCommand>>();
@@ -76,7 +75,7 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
   const draftOwner = useRef(Symbol('profile-canvas'));
   const setDraft = useCallback((value: Parameters<typeof setProfileDraft>[0]) => setProfileDraft(value, draftOwner.current), []);
   const anyDraft = useProfileDraftBlocker();
-  const curveError = legacy || !currentCurves.refused ? undefined : currentCurves.error;
+  const curveError = !currentCurves.refused ? undefined : currentCurves.error;
   const curveQuery = useRef(currentCurves); curveQuery.current = currentCurves;
   useEffect(() => {
     const query = curveQuery.current;
@@ -87,7 +86,7 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
   const lastValid = useRef<{ identity: number; design: DesignDocument } | undefined>(undefined);
   if (!currentCurves.stale && currentCurves.curves && !currentCurves.error && !edit.preview && !dragging) lastValid.current = { identity, design };
   const presentation = useRef<ProfilePresentation>({});
-  const adapter = useMemo(() => createProfileAdapter(() => presentation.current, legacy ? 'lookup' : 'freeform'), [legacy]);
+  const adapter = useMemo(() => createProfileAdapter(() => presentation.current), []);
   const selected = selection.flatMap(id => parseAnchor(id) ?? []).filter(anchor => !isSharedProfile(design) || anchor.plane === 'H')[0];
   const preview = edit.preview;
   const previewCurves = preview?.validation.status === 'ready' ? preview.validation.value : undefined;
@@ -116,8 +115,8 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
   }, [session, setDraft]);
 
   useLayoutEffect(() => {
-    if (design.formula !== 'FREEFORM' && !legacy) return;
-    const authority = new ProjectHistoryAuthority(profileBinding(() => { setSelection([]); setDraft(null); }, legacy ? 'lookup' : 'freeform'));
+    if (design.formula !== 'FREEFORM') return;
+    const authority = new ProjectHistoryAuthority(profileBinding(() => { setSelection([]); setDraft(null); }));
     const options = { adapter, initial: authority.current, authority, changed: setState, preview: setState };
     const controller = new ProfileController({ ...options, presentation: () => presentation.current,
       propose: (label, builder) => latest.current.edit.propose(label, builder), drafting: setDragging,
@@ -126,7 +125,7 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
     const unsubscribe = controller.subscribeHistory(() => { setDragging(false); });
     setState(authority.current); setSession(controller);
     return () => { unsubscribe(); controller.destroy(); setDraft(null); };
-  }, [adapter, identity, design.formula, legacy, setDraft]);
+  }, [adapter, identity, design.formula, setDraft]);
 
   const unfinished = Boolean(preview || dragging || invalidInputs || curveError || adapter.status(design).kind === 'unfinished');
   useLayoutEffect(() => {
@@ -146,8 +145,8 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
   useEffect(() => { setFitRequest(value => value + 1); }, [scaled, Boolean(currentCurves.curves), Boolean(generated.samples)]);
 
   presentation.current = {
-    curves: legacy ? undefined : previewCurves ?? currentCurves.curves, stale: legacy ? false : preview?.after ? !previewCurves : currentCurves.stale,
-    error: legacy ? undefined : preview?.validation.status === 'error' ? preview.validation.message : curveError,
+    curves: previewCurves ?? currentCurves.curves, stale: preview?.after ? !previewCurves : currentCurves.stale,
+    error: preview?.validation.status === 'error' ? preview.validation.message : curveError,
     before: preview?.after ? currentCurves.curves : undefined,
     generated: generated.samples, generatedScale: generated.scale, generatedStale: generated.stale || Boolean(anyDraft), showGenerated, plane, scaled,
   };
@@ -155,19 +154,19 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
   const anchor = selected && profilePoints(displayState, selected.plane)[selected.index];
   const count = selected ? profilePoints(displayState, selected.plane).length : 0;
   const validateCommand = (action: ProfileCommand) => { const result = adapter.apply(displayState, action); return 'error' in result ? result.error : undefined; };
-  const busy = Boolean(preview || dragging || !legacy && currentCurves.stale);
-  if (design.formula !== 'FREEFORM' && !legacy) return null;
+  const busy = Boolean(preview || dragging || currentCurves.stale);
+  if (design.formula !== 'FREEFORM') return null;
   const properties = selected && anchor ? <div className="profile-anchor-properties" key={`${selected.plane}:${selected.index}:${fieldVersion}`}>
       <strong>{selected.plane} {selected.index === 0 ? 'throat' : selected.index === count - 1 ? 'mouth' : `point ${selected.index}`}</strong>
       <div className="profile-anchor-fields">
-        <div><NumberField label="z (design mm)" value={anchor.t * (displayState.length ?? 120)} precision={15} displayPrecision={4} disabled={busy || selected.index === 0 || !legacy && selected.index === count - 1}
+        <div><NumberField label="z (design mm)" value={anchor.t * (displayState.length ?? 120)} precision={15} displayPrecision={4} disabled={busy || selected.index === 0 || selected.index === count - 1}
           validate={x => validateCommand({ kind: 'move', ...selected, at: { x, y: anchor.r } })}
           onCommit={x => command({ kind: 'move', ...selected, at: { x, y: anchor.r } })}/></div>
         <div><NumberField label="r (design mm)" value={anchor.r} precision={15} displayPrecision={4} disabled={busy}
           validate={y => validateCommand({ kind: 'move', ...selected, at: { x: anchor.t * (displayState.length ?? 120), y } })}
           onCommit={y => command({ kind: 'move', ...selected, at: { x: anchor.t * (displayState.length ?? 120), y } })}/></div>
-        <label>Join <select aria-label="Selected point join" disabled={busy || legacy} value={anchor.join ?? 'smooth'} onChange={event => command({ kind: 'join', ...selected, join: event.target.value as 'smooth' | 'corner' })}><option value="smooth">Smooth</option><option value="corner">Corner</option></select></label>
-        {!legacy && (['in', 'out'] as const).map(side => {
+        <label>Join <select aria-label="Selected point join" disabled={busy} value={anchor.join ?? 'smooth'} onChange={event => command({ kind: 'join', ...selected, join: event.target.value as 'smooth' | 'corner' })}><option value="smooth">Smooth</option><option value="corner">Corner</option></select></label>
+        {(['in', 'out'] as const).map(side => {
           const field = angleField(anchor, selected.index, count, side);
           if (!field || side === 'out' && selected.index > 0 && anchor.join !== 'corner') return null;
           return <div key={side}><NumberField label={`${side === 'in' ? 'Incoming' : 'Outgoing'} angle`} unit="°" value={anchor[field] ?? undefined} optional min={-90} max={90} precision={4} disabled={busy}
@@ -175,8 +174,8 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
             onCommit={value => command({ kind: 'angle', ...selected, side, value })} onClear={() => command({ kind: 'angle', ...selected, side })}/></div>;
         })}
       </div>
-      <button type="button" className="btn" disabled={busy || (legacy ? count <= 2 : selected.index === 0 || selected.index === count - 1)} onClick={() => command({ kind: 'delete', ...selected })}>Delete point</button>
-      <p className="profile-canvas-caption">{legacy ? 'Legacy LOOKUP keeps straight spans. Join and angle tools are disabled.' : 'Throat z and mouth z are fixed. Change Length in the table to move the mouth. Tangent handles are display only.'}</p>
+      <button type="button" className="btn" disabled={busy || (selected.index === 0 || selected.index === count - 1)} onClick={() => command({ kind: 'delete', ...selected })}>Delete point</button>
+      <p className="profile-canvas-caption">Throat z and mouth z are fixed. Change Length in the table to move the mouth. Tangent handles are display only.</p>
     </div> : null;
   presentation.current.properties = () => properties ? [{ id: 'profile-anchor', title: 'Selected profile point', render: () => properties }] : [];
   if (!visible) return null;
@@ -192,15 +191,15 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
         <option value="design">Design mm</option><option value="scaled">Scaled mm</option>
       </select></label>}
     </div>
-    <p className="profile-canvas-caption">{legacy ? 'Authored: exact legacy LOOKUP polyline (corners only)' : 'Authored: mesher curve'} · Generated: thin line{generated.samples && equalProfiles(generated.samples) ? ' · Generated H = V' : ''}{isSharedProfile(design) ? ' · Authored H = V (stored V inactive)' : legacy ? ' · Authored H = V' : ' · H blue / V amber'}{design.scale !== 1 ? ` · ${scaled ? 'Plot in scaled mm' : 'Design mm before Scale'} (Scale = ${design.scale}).` : ''}</p>
+    <p className="profile-canvas-caption">Authored: mesher curve · Generated: thin line{generated.samples && equalProfiles(generated.samples) ? ' · Generated H = V' : ''}{isSharedProfile(design) ? ' · Authored H = V (stored V inactive)' : ' · H blue / V amber'}{design.scale !== 1 ? ` · ${scaled ? 'Plot in scaled mm' : 'Design mm before Scale'} (Scale = ${design.scale}).` : ''}</p>
     <div className="source-editor-columns">
       <div className="source-workspace"><Workspace adapter={adapter} state={displayState} session={session} selection={selection} onSelectionChange={setSelection} fitRequest={fitRequest} slots={{ properties: propertiesHost }} onEscape={close}/></div>
       <aside aria-label="Profile properties and preview">
         <div ref={setPropertiesHost}/>
-        <div role="status" className="profile-canvas-freshness" data-stale={!legacy && currentCurves.stale || generated.stale || unfinished || undefined}>
-          {(!legacy ? currentCurves.error : undefined) ?? generated.error ?? (invalidInputs ? 'Fix the marked values. Showing the last valid profile.' : !legacy && currentCurves.stale || generated.stale ? 'Updating… — last valid profile' : '')}
+        <div role="status" className="profile-canvas-freshness" data-stale={currentCurves.stale || generated.stale || unfinished || undefined}>
+          {currentCurves.error ?? generated.error ?? (invalidInputs ? 'Fix the marked values. Showing the last valid profile.' : currentCurves.stale || generated.stale ? 'Updating… — last valid profile' : '')}
         </div>
-        {!legacy && currentCurves.error && !currentCurves.refused && <button type="button" className="btn" onClick={currentCurves.retry}>Retry</button>}
+        {currentCurves.error && !currentCurves.refused && <button type="button" className="btn" onClick={currentCurves.retry}>Retry</button>}
         {actionError && <p className="field-error" role="alert">{actionError}</p>}
         {anyDraft && !preview && !dragging && <div role="status">
           <p className="profile-canvas-caption">{invalidInputs || curveError ? 'Fix the marked values or revert to the last valid profile.' : 'Finish the profile or revert to the last valid profile.'} Solve is blocked.</p>

@@ -6,7 +6,7 @@ import type { CurveAnchor, CurveDeviation, InsertMode } from '../api/freeformPro
 import type { GeneratedPlaneChange } from '../api/profileSamples';
 import { Notice } from '../shell/Notice';
 import {
-  activePlanes, angleField, commitProfileEdit, currentEditOrigin, deleteAnchor, editLookupAnchor, formatAngle, formatMm, horizontalThroatForVertical, insertAnchorBuilder, lookupPositionError,
+  activePlanes, angleField, commitProfileEdit, currentEditOrigin, deleteAnchor, formatAngle, formatMm, horizontalThroatForVertical, insertAnchorBuilder,
   isSharedProfile, isUnseparatedVertical, MAX_FREEFORM_ANCHORS, moveMouthBuilder, previewAcceptable, separateVerticalBlocker, setAnchorAngle, setAnchorJoin,
   pasteBuilder, setAnchorValue, setSeparateVertical, spliceCrossSectionStations, stretchLengthBuilder, useCurrentProfileCurves, useProfileEdit, type Plane,
 } from './customProfileEdit';

@@ -263,19 +263,6 @@ describe('profile canvas UI', () => {
     expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
   });
 
-  it('opens legacy LOOKUP as a corner polyline with disabled join/angle tools and no freeform request', async () => {
-    const fetcher = profileServer();
-    useDesignStore.getState().replaceDocument(designForFamily('LOOKUP'));
-    await mount(); await tick();
-    expect(document.body.textContent).toContain('exact legacy LOOKUP polyline'); expect(document.querySelector('rect.sketch-point')).not.toBeNull();
-    expect(fetcher.mock.calls.some(([url]) => String(url).includes('/freeform/'))).toBe(false);
-    const square = document.querySelector<SVGRectElement>('rect.sketch-point')!;
-    const at = { x: Number(square.getAttribute('x')) + 4, y: Number(square.getAttribute('y')) + 4 };
-    await pointer(square, 'pointerdown', at); await pointer(svg(), 'pointerup', at);
-    expect(document.querySelector<HTMLSelectElement>('[aria-label="Selected point join"]')!.disabled).toBe(true);
-    expect(document.body.textContent).not.toContain('Incoming angle'); expect(button('Insert refit')).toBeUndefined();
-  });
-
   it('keeps a table preview in the same Solve gate and lets the canvas recovery action cancel it', async () => {
     await act(async () => root.render(<div className="param-panel"><CustomProfileTable plane="H" field={{ id: 'freeform.interiorH', legacyKey: 'profile_h.points', section: 'Profile', label: 'H', kind: 'table' }}/><ProfileCanvasLauncher/><ProfileCanvasDialog/></div>));
     await tick();

@@ -19,7 +19,7 @@ export function setProfileDraft(value: Omit<ProfileDraft, 'load'> | null, owner 
 }
 export function getProfileDraft() {
   const formula = useDesignStore.getState().design.formula;
-  if (formula !== 'FREEFORM' && formula !== 'LOOKUP') return null;
+  if (formula !== 'FREEFORM') return null;
   return [...drafts.values()].find(draft => draft.load === currentDocumentLoad()) ?? (parameterPanelValidity.getSnapshot() ? {
     load: currentDocumentLoad(), message: 'Custom profile has an invalid draft. Open sketch or Revert to last valid before Solve.',
     open: openProfileCanvas, revert: () => revertProfileFieldDrafts(),
