@@ -232,6 +232,11 @@ def user_error_message(exc: BaseException, *, fallback: str = PROGRAM_FAILURE, d
     return fallback
 
 
+def is_user_refusal(exc: BaseException) -> bool:
+    """Whether a domain owner refused the request, without importing the mesher."""
+    return _user_refusal(exc) is not None
+
+
 def user_error_detail(exc: BaseException) -> str | dict[str, str]:
     """Typed HTTP detail for clients that can mark the named control."""
     refusal = _user_refusal(exc)

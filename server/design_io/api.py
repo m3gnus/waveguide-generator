@@ -10,7 +10,6 @@ from typing import Any, Callable
 from fastapi import APIRouter, Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from hornlab_mesher.errors import UserRefusal
 
 from server.cadlink.identity import SaveIdentity, classify_open, design_hash
 from server.cadlink.store import CadLinkStore
@@ -19,7 +18,7 @@ from server.design.uid import validate_design_uid
 from server.design.schema import DesignConfig, Expr, OSSEConfig
 from server.jobs.design_reader import parse, read_design
 from server.design.textcfg import ParsedDesign, TextConfigError, serialize
-from server.preview.errors import user_error_detail
+from server.preview.errors import is_user_refusal, user_error_detail
 
 
 _SAFE_STEM = re.compile(r"[^A-Za-z0-9._-]+")
@@ -115,11 +114,13 @@ def _save_design(
             if "design" in payload and payload.get("identity") is not None
             else None
         )
-    except UserRefusal as exc:
-        # The Custom profile import refuses a saved table it cannot convert.
-        raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+    except ValueError as exc:
+        # The Custom profile import refuses a saved table it cannot convert.
+        if not is_user_refusal(exc):
+            raise
+        raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
     suggested_filename = _suggested_filename(filename)
     hashed = design_hash(design)
     try:
@@ -154,11 +155,13 @@ def _serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         design = read_design(design_payload)
         design_uid = validate_design_uid(payload.get("designUid") if "design" in payload else None)
-    except UserRefusal as exc:
-        # The Custom profile import refuses a saved table it cannot convert.
-        raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False, include_context=False)) from exc
+    except ValueError as exc:
+        # The Custom profile import refuses a saved table it cannot convert.
+        if not is_user_refusal(exc):
+            raise
+        raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
     suggested_filename = _suggested_filename(filename)
     return {
         "text": serialize(design, design_uid=design_uid),
