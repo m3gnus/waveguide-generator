@@ -1,15 +1,23 @@
 # Dependency compatibility
 
 The current mesher adds the measured ATH lip/Opus compositions, throat controls,
-R-OSSE truncation and sketched woofer/HF diaphragms. Geometry qualification at
-`7e0bdcc` passed 9,542 tests with five Windows-only skips and required ATH parity;
-the later target changes only two registered Custom profile labels. The WG
-consumer suite runs against a clean non-editable install of this exact pin.
+R-OSSE truncation and sketched woofer/HF diaphragms. It builds FREEFORM walls
+to the authored profile within 0.01 mm at every azimuth: corner walls were up
+to 0.55 mm off and smooth walls carried a 0.2-4.6 mm off-axis bias. Flared-mouth
+FREEFORM walls stay buildable and FREEFORM STEP export keeps its earlier speed.
+FREEFORM mesh and STEP bytes therefore change, and WG's frozen FREEFORM corpus was
+re-frozen on this pin; other families and ATH parity stay byte-identical.
+Geometry qualification at `b1c25e2` passed 9,644 tests with required ATH
+parity, apart from the two FREEFORM horn-only identity cases that compare
+against the pre-change dev and pass once dev contains the change. The WG consumer suite runs against a clean non-editable
+install of this exact pin.
 
-The mesher pin `1a53231aef363d91bb081eb16cb5e269a3644af5` declares version 0.2.9. It retains the released
-`983f5a39` geometry contracts while reusing existing sampling and preview owners.
+The mesher pin `b1c25e23aa94e67ca6441b0fe4790540116d229c` declares version 0.2.9. Apart from the FREEFORM
+wall correction it retains the released `983f5a39` geometry contracts while
+reusing existing sampling and preview owners.
 It includes version-gated ATH v3 controls and typed public refusals with
-a shipped, checked control-label catalog. Saved v1/v2 retain their prior geometry.
+a shipped, checked control-label catalog. Saved v1/v2 retain their prior geometry
+(FREEFORM walls now follow their profile, by design also for saved designs).
 It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
 in `general_horn.radii_at_z`.
 `mesh_sizing.py` is unchanged, so CAD Link retains its earlier vendoring provenance.
