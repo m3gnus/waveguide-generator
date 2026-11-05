@@ -2,9 +2,14 @@
 
 Status: frozen regression evidence for contributors changing profile handling.
 
-The reference is WG `47ce742d1178369ffcfa416af09232899163a9cb` with mesher
-`1702cfd5c3bf23060b864af824023710936d7861` (the 0.3.6 reference, including
-its round throat). `manifest.json` names every source and covered feature.
+Resolved configurations are frozen on WG `47ce742d1178369ffcfa416af09232899163a9cb`
+with mesher `1702cfd5c3bf23060b864af824023710936d7861` (the 0.3.6 reference,
+including its round throat). Mesh and STEP bytes were re-frozen on WG
+`f9734c928eeaa931182e6a127bd60748c3770bdc` with mesher
+`b1c25e23aa94e67ca6441b0fe4790540116d229c`, whose FREEFORM walls follow the
+authored profile within 0.01 mm at every azimuth; the earlier walls deviated
+by up to a few millimetres between the axes. `manifest.json` records the
+current reference and names every source and covered feature.
 Inputs are small saved text files or flat WG design JSON, including legacy
 millimetre-axis payloads. No external checkout, audit folder or network access
 is required at test time.
