@@ -5,15 +5,20 @@ R-OSSE truncation and sketched woofer/HF diaphragms. It builds FREEFORM walls
 to the authored profile within 0.01 mm at every azimuth: corner walls were up
 to 0.55 mm off and smooth walls carried a 0.2-4.6 mm off-axis bias. Flared-mouth
 FREEFORM walls stay buildable and FREEFORM STEP export keeps its earlier speed.
-FREEFORM mesh and STEP bytes therefore change, and WG's frozen FREEFORM corpus was
-re-frozen on this pin; other families and ATH parity stay byte-identical.
-Geometry qualification at `b1c25e2` passed 9,644 tests with required ATH
-parity, apart from the two FREEFORM horn-only identity cases that compare
-against the pre-change dev and pass once dev contains the change. The WG consumer suite runs against a clean non-editable
+Outer walls around tight mouth bends (the default R-OSSE rolled lip, its Custom
+profile conversion, corner FREEFORM walls) are built as an envelope instead of a
+folded normal offset, so such designs no longer carry a fold warning. Their fitted
+CAD faces (solve, STEP, WGLink) are certified against Wall thickness and rebuilt
+with more clearance when short; a default 5 mm R-OSSE solve build takes about
+3 s instead of about 0.9 s. Healthy walls rebuild byte-identically.
+FREEFORM mesh and STEP bytes therefore change, and WG's frozen fixtures were
+re-frozen where a wall used to fold; other designs and ATH parity stay byte-identical.
+Geometry qualification of the change passed 9,708 tests with required ATH
+parity at `3559cd1`; `322d4a9` adds only a cache lock, rechecked by its envelope tests. The WG consumer suite runs against a clean non-editable
 install of this exact pin.
 
-The mesher pin `b1c25e23aa94e67ca6441b0fe4790540116d229c` declares version 0.2.9. Apart from the FREEFORM
-wall correction it retains the released `983f5a39` geometry contracts while
+The mesher pin `322d4a95048af34f0866ecb2f5ee8c09c2817327` declares version 0.2.9. Apart from the FREEFORM
+wall correction and the outer-wall envelope it retains the released `983f5a39` geometry contracts while
 reusing existing sampling and preview owners.
 It includes version-gated ATH v3 controls and typed public refusals with
 a shipped, checked control-label catalog. Saved v1/v2 retain their prior geometry
