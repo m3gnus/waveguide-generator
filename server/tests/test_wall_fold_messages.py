@@ -109,7 +109,21 @@ def test_overlap_warning_does_not_turn_degeneracy_into_a_thickness_claim(diagnos
     assert "thicker" not in warnings[0] and "thin wall" not in warnings[0]
 
 
-def test_real_preview_failure_maps_to_plain_message(caplog):
+def test_preview_failure_maps_to_plain_message(caplog, monkeypatch):
+    import hornlab_mesher.preview.api as api
+    from hornlab_mesher.errors import control_refusal
+
+    # Since mesher 322d4a9 folding offsets become envelope walls, so the
+    # fixture no longer folds; inject the mesher's own fold refusal text
+    # (hornlab_mesher.freeform), raised the way the mesher raises it,
+    # through the production preview path.
+    def folded_preview(*args, **kwargs):
+        raise control_refusal(
+            DETAIL, "Wall thickness",
+            "Reduce Wall thickness, soften the profile bend, or choose Bare shell in Mounting.",
+            message="The outer wall folds over itself at a tight bend of the profile.")
+
+    monkeypatch.setattr(api, "build_preview_geometry", folded_preview)
     protocol = PreviewProtocol()
     request = _Request(kind="preview", seq=1, design_revision=1, lod="fine", design=design())
     try:

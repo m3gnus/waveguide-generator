@@ -27,12 +27,52 @@ def clear_caches():
     builder.clear_solver_mesh_cache()
 
 
-def test_real_folded_preview_warns_but_saved_solve_bytes_are_identical():
+def _coarse_design():
     data = deepcopy(DATA)
     # Coarse mm elements keep this byte-identity regression below two minutes;
     # the original profile, wall and preview sampling remain unchanged.
     data["mesh"].update(throat_resolution=35, mouth_resolution=40, rear_resolution=40, quadrants=1)
-    design = DesignConfig.model_validate(data)
+    return DesignConfig.model_validate(data)
+
+
+def test_clear_preview_keeps_saved_solve_bytes_identical():
+    # Since mesher 322d4a9 a folding outer offset is built as an envelope wall,
+    # so this once-folded design's dense preview is clear.
+    design = _coarse_design()
+    before = design.model_dump(mode="json")
+
+    async def scenario():
+        # The old construction path, which the advisory must not change.
+        old = await builder.run_mesh_build(builder._build_sync, before)
+        result = await builder.build_solver_mesh(design, {"mesh_validation_mode": "off"})
+        assert result["msh_text"] == old["msh_text"]
+        assert result["stats"]["preview_wall_check_status"] == "clear"
+        repeated = await builder.build_solver_mesh(design, {"mesh_validation_mode": "off"})
+        assert repeated["msh_text"] == old["msh_text"]
+        assert repeated["stats"]["preview_wall_check_cache_hit"] is True
+
+    asyncio.run(scenario())
+    assert design.model_dump(mode="json") == before
+
+
+def test_folded_preview_warns_but_saved_solve_bytes_are_identical(monkeypatch, in_process_mesher):
+    # In process, so the injected preview reaches the wall check; the solve
+    # bytes are still compared with the old construction path in that mode.
+    import hornlab_mesher.preview.api as api
+    from hornlab_mesher.errors import control_refusal
+
+    # Since mesher 322d4a9 folding offsets become envelope walls, and no real
+    # design folds the dense preview while its solve builds; inject the
+    # mesher's own fold refusal text (hornlab_mesher.freeform), raised the
+    # way the mesher raises it.
+    def folded_preview(*args, **kwargs):
+        raise control_refusal(
+            DETAIL, "Wall thickness",
+            "Reduce Wall thickness, soften the profile bend, or choose Bare shell in Mounting.",
+            message="The outer wall folds over itself at a tight bend of the profile.")
+
+    monkeypatch.setattr(api, "build_preview_geometry", folded_preview)
+    design = _coarse_design()
     before = design.model_dump(mode="json")
 
     async def scenario():
