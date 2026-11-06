@@ -8,7 +8,12 @@ including its round throat). Mesh and STEP bytes were re-frozen on WG
 `f9734c928eeaa931182e6a127bd60748c3770bdc` with mesher
 `b1c25e23aa94e67ca6441b0fe4790540116d229c`, whose FREEFORM walls follow the
 authored profile within 0.01 mm at every azimuth; the earlier walls deviated
-by up to a few millimetres between the axes. `manifest.json` records the
+by up to a few millimetres between the axes. On WG
+`bbaf705d88cae03b3f13f7cbcbe1c55bb10a45f5` with mesher
+`322d4a95048af34f0866ecb2f5ee8c09c2817327`, which builds outer walls around
+tight mouth bends as an envelope instead of a folded offset, every case kept its
+bytes except FF21, whose wall the earlier mesher refused as folding and which now
+builds; its mesh and STEP were re-frozen. `manifest.json` records the
 current reference and names every source and covered feature.
 Inputs are small saved text files or flat WG design JSON, including legacy
 millimetre-axis payloads. No external checkout, audit folder or network access
