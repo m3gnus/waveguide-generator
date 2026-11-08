@@ -5720,7 +5720,6 @@ STX,W.15.140.8.MCX,8,5,,151,870,5.1,5.1,0.25,,,8.3,,45,16,1.74,0.46,0.36,1.51,,4
 STX,W.15.160.8.FCX,8,5,,156,95,5.1,5.1,0.18,,,10.9,,37,21,6.30,0.37,0.35,1.65,,5.25,88,100,,,unreliable,"qes_inconsistent: stated=0.37 , computed=0.496864 , difference=34.29% (limit 20%)",
 STX,W.15.160.16.FCX,16,5,,156,95,8.1,11.3,0.28,,,9.5,,38,25,3.30,0.38,0.36,1.85,,5.25,89,100,,,reliable,,
 STX,M.11.100.8.MC,8,4,,116,57,2.7,5.5,0.15,,,2.7,,110,3.2,2.77,1.90,1.12,0.71,,1,88,50,,,unreliable,"qes_inconsistent: stated=1.9 , computed=1.4079 , difference=25.90% (limit 20%)",
-STX,T.9.100.4.MS,4,3.5,,91.5,,,2.8,,,,,,740,,,,,,,0.25,89,10,2400,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
 STX,W.16.50.4.MC,4,6.5,,,143,3.4,3.4,0.32,,,13.9,,66,11.8,3.41,1.42,1.01,0.41,,3,87,30,,,reliable,,
 STX,W.16.50.8.MC,8,6.5,,,143,3.1,5.3,0.37,,,13.2,,59,16.2,3.11,1.62,1.07,0.55,,3,87,30,,,unreliable,"qes_inconsistent: stated=1.62 , computed=2.69872 , difference=66.59% (limit 20%)",
 STX,W.18.140.4.MCX,4,6.5,,180,143,5.5,3.3,0.52,,,15.5,,40,29,2.64,0.42,0.36,1.01,,4,89,70,,,reliable,,
@@ -5768,31 +5767,12 @@ STX,W.38.800.4.MC,4,15,,388,850,17,3.0,2.45,,,140,,27,272,4.37,0.23,0.22,0.27,,8
 STX,W.38.800.8.MC,8,15,,388,850,23,5.7,3.68,,,136,,28,247,3.71,0.27,0.24,0.24,,8,96.5,500,,,reliable,,
 STX,W.46.1300.8.MC,8,18,,465,1260,31,5.1,5.91,,,268,,36,164,5.80,0.34,0.32,0.07,,11,98,700,,,reliable,,
 STX,W.38.1200.8.MC,8,15,,386,855,20.1,5.0,2.21,,,160,,28,207,4.17,0.35,0.32,0.20,,8,95,600,,,reliable,,
-STX,D.9.500.8.TI,8,,1,91,,,6.4,,,,,,1350,,,,,,,0.8,107,50,1900,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",
-STX,D.12.800.8.TI,8,,1,116,,,5.9,,,,,,900,,,,,,,0.95,109,60,1600,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",
-STX,D.14.1000.8.TI,8,,1,135,,,7.1,,,,,,900,,,,,,,1.05,108,80,1300,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",
 STX,W.20.300.2x2.MC,4,8,,210,214,9.2,3.3,2.01,,,57,,33,26,3.50,0.45,0.39,0.38,,9,86,200,,,reliable,,
 STX,W.20.300.2x4.MC,8,8,,210,214,11.9,5.3,2.49,,,54,,35,25,3.60,0.48,0.42,0.38,,9,86,200,,,reliable,,
 STX,W.25.400.2x2.MC,4,10,,256,315,14,3.6,2.11,,,96,,33,34,3.60,0.36,0.33,0.24,,7.5,88,300,,,reliable,,
 STX,W.25.400.2x4.MC,,10,,256,315,17,5.6,3.15,,,93,,32,35,3.00,0.37,0.33,0.25,,7.5,89,300,,,unreliable,"source_hold: source_impedance_conflict nominal_impedance_unresolved: Catalogue/title 2x4 ohm versus feature/parameter table 2x2 ohm, combined nominal Z not assigned.",
 STX,W.30.500.2x2.MC,4,12,,311,490,14.5,3.6,2.28,,,135,,29,76,3.40,0.43,0.38,0.23,,7,89,300,,,reliable,,
 STX,W.30.500.2x4.MC,8,12,,311,490,19,5.8,2.85,,,155,,29,62,3.20,0.45,0.39,0.19,,7,89,300,,,reliable,,
-STX,T.9.100.8.MS,8,3.5,,91.5,,,4.9,,,,,,640,,,,,,,0.25,89,10,2400,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.9.200.8.PC,8,4,,,,,5.1,,,,,,1050,,,,,,,0.5,92,20,2900,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.10.100.8.PC,8,3.5,,103.8,,,5.1,,,,,,690,,,,,,,0.25,91,12,2200,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.10.150.4.MS,4,4,,103.8,,,2.8,,,,,,1050,,,,,,,0.375,90,15,3000,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.10.150.8.MS,8,4,,103.8,,,4.9,,,,,,850,,,,,,,0.25,90,15,2800,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.10.150.8.MSX,8,4,,103.8,,,4.9,,,,,,650,,,,,,,0.25,90,15,2200,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.10.200.8.PC,8,4,,103.7,,,5.1,,,,,,1050,,,,,,,0.5,92,20,2900,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.10.200.8.PCX,8,4,,103.7,,,5.5,,,,,,750,,,,,,,0.3,91,25,2000,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.10.200.8.MSX,8,4,,103.8,,,4.9,,,,,,650,,,,,,,0.25,90,20,2200,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.10.250.8.PCX,8,4,,103.7,,,5.5,,,,,,740,,,,,,,0.4,92,25,2000,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.10.200.8.ALX,8,4,,103.7,,,5.5,,,,,,700,,,,,,,0.3,90,25,2000,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.10.250.8.PC,8,,,103.7,,,5.1,,,,,,1040,,,,,,,0.5,98,25,2800,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.10.800.8.AL,8,4,,115,,,5.8,,,,,,3200,,,,,,,0.75,106,30,4900,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.9.250.8.PH,8,,,,,,7.1,,,,,,1550,,,,,,,0.55,104,18,2500,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,T.18.250.8.PH,8,,,,,,7.1,,,,,,1550,,,,,,,0.55,104,18,2500,,unreliable,"driver_spec_invalid: sd_cm2: Field required, bl_t_m: Field required",lf
-STX,CS.18.140.4.FG,4,,,180,133,,3.7,,,,,,86,,3.41,1.16,0.89,,,3,87,70,,,unreliable,driver_spec_invalid: bl_t_m: Field required,
 18Sound,10CX650,8,10,,,346,14,5.1,0.9,,,39.5,,54,36.4,5.9,0.39,0.35,,,6,,,,,reliable,,
 18Sound,10NCX750,8,10,,,346,20,5.3,0.54,,,46,,64,23,7.9,0.26,0.25,,,5.5,,,,,reliable,,
 18Sound,10NCX750H,8,10,,,346,19.8,5.3,0.54,,,47,,65,21.7,8.4,0.26,0.25,,,5.5,,,,,reliable,,

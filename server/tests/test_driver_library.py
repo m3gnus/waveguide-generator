@@ -269,28 +269,6 @@ def test_driver_type_cell_overrides_the_kind_heuristic(tmp_path: Path) -> None:
     assert kind_of("TypoType") == "cd"
 
 
-def test_bundled_stx_tweeters_are_not_compression_drivers() -> None:
-    library = DriverLibrary(Path("/nonexistent-user-dir"), bundled=bundled_library_dir())
-    library.rescan()
-
-    def kind_of(model: str) -> str:
-        hits = library.search(q=f"STX {model}", kind="all", z=None, limit=50)
-        matching = [h for h in hits if h["model"] == model]
-        assert matching, model
-        return matching[0]["kind"]
-
-    for model in (
-        "T.9.100.4.MS",
-        "T.10.250.8.PC",
-        "T.10.800.8.AL",
-        "T.9.250.8.PH",
-        "T.18.250.8.PH",
-    ):
-        assert kind_of(model) == "lf", model
-    for model in ("D.9.500.8.TI", "D.12.800.8.TI", "D.14.1000.8.TI"):
-        assert kind_of(model) == "cd", model
-
-
 # --- completeness ------------------------------------------------------------
 
 
@@ -1110,10 +1088,9 @@ def test_the_shipped_library_reports_its_one_compression_driver(tmp_path: Path) 
     kinds = _kinds(library.rescan())
     assert kinds["cd"][0] >= 1
     assert kinds["lf"][0] > 900
-    # Every shipped driver has a complete parameter set except the 20 STX
-    # catalogue entries (tweeters, compression drivers, a ceiling assembly)
-    # whose manufacturer publishes no Sd, Bl or moving mass.
-    assert sum(total - complete for total, complete in kinds.values()) == 20
+    # Every shipped driver has a complete parameter set: a row without Sd, Bl,
+    # Re, a mass and a compliance cannot drive a channel, so none ships.
+    assert sum(total - complete for total, complete in kinds.values()) == 0
 
     # And the query that started this reports zero of its own type while the
     # library plainly holds another thousand.
@@ -1129,13 +1106,12 @@ def test_the_library_that_actually_ships_is_readable_and_carries_ratings() -> No
     assert folder is not None, "server/drivers/bundled is missing from this checkout"
     library = DriverLibrary(folder / "does-not-exist", bundled=folder)
     info = library.rescan()
-    assert info["total_drivers"] == 6431
-    assert info["files"] == [{"name": "hornlab-drivers.csv", "rows": 7107, "bundled": True}]
+    assert info["total_drivers"] == 6411
+    assert info["files"] == [{"name": "hornlab-drivers.csv", "rows": 7087, "bundled": True}]
     hits = library.search(q="", kind="all", z=None, limit=info["total_drivers"])
-    assert sum(len(hit["variants"]) for hit in hits) == 7107
-    # Everything shipped has a complete parameter set except the 20 STX
-    # catalogue entries, which publish no Sd, Bl or moving mass.
-    assert info["total_drivers"] - info["complete_drivers"] == 20
+    assert sum(len(hit["variants"]) for hit in hits) == 7087
+    # Everything shipped has a complete parameter set.
+    assert info["total_drivers"] == info["complete_drivers"]
     assert all(entry["bundled"] for entry in info["files"])
 
     # The compression driver whose AES rating this work was built around.

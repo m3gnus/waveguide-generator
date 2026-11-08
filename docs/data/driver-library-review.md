@@ -7,12 +7,14 @@ information for the person choosing a driver.
 
 ## Contents
 
-`driver-library-master.csv` is the physical-data master. It holds 7,112 rows: the
+`driver-library-master.csv` is the physical-data master. It holds 7,092 rows: the
 5,714 original imports, plus 80 STX manufacturer-catalogue rows added on
 2026-10-06, with 17 rows corrected by research batch 01, plus 1,318 windings read
-from manufacturer pages and datasheets on 2026-11-08. The bundled library
-holds those rows minus the 5 exact duplicates listed in
-`driver-library-duplicates.csv`: **7,107 windings, 6,795 marked reliable and 312
+from manufacturer pages and datasheets on 2026-11-08. On 2026-11-08 the 20 STX
+rows that publish no Sd, Bl or moving mass were removed: a driver without them
+cannot drive a channel, so every remaining row can be simulated. The bundled
+library holds the master rows minus the 5 exact duplicates listed in
+`driver-library-duplicates.csv`: **7,087 windings, 6,795 marked reliable and 292
 marked unreliable**. Conflicting measurements of the same model stay as separate
 rows.
 
@@ -26,49 +28,38 @@ rows with the same screen on that date; the app does not recompute them. A windi
 | `coupling_failed` | 144 | The estimated air mass, 2·(8/3)·ρ·a³ = 1.149·Sd^1.5, is more than 50% of the stated Mms, or Mms is missing or too small to subtract it. This matches Klippel's convention Mmd = Mms − 1.13·Sd^1.5 within 1.7%. hornlab-sim refuses such a driver when a solve runs. |
 | `qes_inconsistent` | 78 | Qes recomputed from Fs, Mms, Re and Bl differs from the stated value by more than 20%. |
 | `vas_inconsistent` | 51 | Vas recomputed from Cms and Sd differs by more than 20%. |
-| `driver_spec_invalid` | 20 | Sd, Bl or a moving mass is not published. These are STX tweeters, compression drivers and a ceiling assembly, kept as catalogue entries. |
 | `fs_inconsistent` | 26 | Fs recomputed from Mms and Cms differs by more than 20%. |
 | `source_hold` | 7 | The manufacturer's own page contradicts itself on impedance, revision, power or parameters. The reason names the conflict. |
 | `qts_inconsistent` | 5 | The stated Qts differs from Qms·Qes/(Qms+Qes) by more than 20%. |
 
-A row can have more than one reason. `driver-library-review.csv` lists the 312
+A row can have more than one reason. `driver-library-review.csv` lists the 292
 unreliable windings with their stated and recomputed values. Its `corrected_*`,
 `correction_source`, `notes` and `hold_resolution` columns are blank and kept
 for any later manual review.
 
-## STX tweeters and the `Driver_type` column
+## The `Driver_type` column
 
 The app decides a row's picker group from its fields. A throat size, a diameter
-without Sd, or a recommended crossover makes a row a compression driver. The 16
-STX tweeters below publish a panel or horn diameter and a recommended crossover,
-so those fields alone would list them as compression drivers. They are not bare
-compression drivers.
+without Sd, or a recommended crossover makes a row a compression driver.
 
-The library therefore carries an optional `Driver_type` column (`cd`, `lf` or
-`unknown`). When a row has a value the loader uses it instead of the field rule;
-a blank or unrecognised cell falls back to the field rule. The 16 rows below
-carry `lf`, which is the picker's non-compression ("Cone") group. Their published
-values are unchanged. The column is data only: it never blocks a driver.
-
-| Model | Product type |
-|---|---|
-| T.9.100.4.MS, T.9.100.8.MS, T.9.200.8.PC, T.10.100.8.PC, T.10.150.4.MS, T.10.150.8.MS, T.10.150.8.MSX, T.10.200.8.PC, T.10.200.8.PCX, T.10.200.8.MSX, T.10.250.8.PCX, T.10.200.8.ALX | dome tweeter |
-| T.10.250.8.PC | waveguide dome tweeter |
-| T.10.800.8.AL, T.9.250.8.PH, T.18.250.8.PH | tweeter with an integral horn |
-
-The bare STX compression drivers D.9.500.8.TI, D.12.800.8.TI and D.14.1000.8.TI
-carry no `Driver_type` and are correctly classified as compression drivers.
+The library carries an optional `Driver_type` column (`cd`, `lf` or `unknown`).
+When a row has a value the loader uses it instead of the field rule; a blank or
+unrecognised cell falls back to the field rule. 47 rows carry it: 11 compression
+drivers (`cd`) and 36 cone drivers and tweeters (`lf`, the picker's
+non-compression "Cone" group), all from the 2026-11-08 import. The column is
+data only: it never blocks a driver.
 
 ## Provenance and research
 
 `driver-library-provenance.csv` names the source of every measurement that has
 been checked against one. Each entry gives the row_id (a hash of the identity and
 every physical cell), the source type, the document, the manufacturer URL, the
-access date, and the evidence folder. It has 1,438 entries; rows not listed have no
+access date, and the evidence folder. It has 1,418 entries; rows not listed have no
 recorded source. The evidence is archived in `driver-research/`:
 
 - `stx-import/`: the report, sources and QA sheet for the 80 STX rows. Its
-  counts predate the final screen.
+  counts predate the final screen, and 20 of those rows (no Sd, Bl or moving
+  mass) were removed on 2026-11-08.
 - `batch-01/`: 40 consistency failures researched against manufacturer data.
   17 rows were corrected and are applied in the master. 20 were left unchanged
   because the source contradicts itself, 2 sources were not found, and for 1
