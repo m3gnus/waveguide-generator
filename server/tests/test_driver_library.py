@@ -1129,10 +1129,10 @@ def test_the_library_that_actually_ships_is_readable_and_carries_ratings() -> No
     assert folder is not None, "server/drivers/bundled is missing from this checkout"
     library = DriverLibrary(folder / "does-not-exist", bundled=folder)
     info = library.rescan()
-    assert info["total_drivers"] == 5269
-    assert info["files"] == [{"name": "hornlab-drivers.csv", "rows": 5789, "bundled": True}]
+    assert info["total_drivers"] == 5705
+    assert info["files"] == [{"name": "hornlab-drivers.csv", "rows": 6291, "bundled": True}]
     hits = library.search(q="", kind="all", z=None, limit=info["total_drivers"])
-    assert sum(len(hit["variants"]) for hit in hits) == 5789
+    assert sum(len(hit["variants"]) for hit in hits) == 6291
     # Everything shipped has a complete parameter set except the 20 STX
     # catalogue entries, which publish no Sd, Bl or moving mass.
     assert info["total_drivers"] - info["complete_drivers"] == 20
