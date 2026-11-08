@@ -38,9 +38,32 @@ def test_table_validation_matches_pin(table, reason):
 
 
 def test_only_z_is_monotonic_and_alias_is_supported():
-    table = [[-10, 0], [0, -2], [10, 1]]
+    # Radii must be positive since mesher c4afbb7 (MES-04); z may still start below 0.
+    table = [[-10, 1], [0, 2], [10, 3]]
     assert input_design(lookup_profile=table).lookup_profile == [tuple(row) for row in table]
     assert read_design({"formula": "LOOKUP", "lookupProfile": TABLE}).formula == "FREEFORM"
+
+
+@pytest.mark.parametrize("load", [input_design, design], ids=["input_design", "read_design"])
+@pytest.mark.parametrize("table,row", [
+    ([[-10, 0], [0, 2], [10, 3]], 1),
+    ([[0, 12.7], [20, -2], [80, 60]], 2),
+    ([[0, 12.7], [20, 25], [80, 0]], 3),
+])
+def test_radius_at_or_below_zero_is_refused_with_the_mesher_remedy(load, table, row):
+    from hornlab_mesher.errors import UserRefusal
+
+    from server.preview.errors import user_error_message
+
+    with pytest.raises(UserRefusal) as pinned:
+        lookup_profile_array({"lookupProfile": table})
+    with pytest.raises(ValidationError, match=re.escape(str(pinned.value))) as refused:
+        load(lookup_profile=table)
+    assert pinned.value.field == "Lookup profile points"
+    assert user_error_message(refused.value) == (
+        "A lookup profile radius is zero or negative, so the wall would reach or cross the axis. "
+        f"Enter a Radius above 0 mm in row {row} of Lookup profile points."
+    )
 
 
 @pytest.mark.parametrize("key", ["L", "R", "n", "s", "s1", "s2", "rotation", "tmax", "m", "r", "b", "a", "k", "q", "h", "throat_adapter"])
