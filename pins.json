@@ -14,15 +14,15 @@
     },
     "hornlab-plots": {
       "repo": "https://github.com/m3gnus/hornlab-plots.git",
-      "sha": "9462f4b8ee92ad87eb839173eac2aaacef5e8b55"
+      "sha": "f062e42319532ad14d60eed65542991c290f7f26"
     },
     "hornlab-sim": {
       "repo": "https://github.com/m3gnus/hornlab-sim.git",
-      "sha": "905b41d0ccd529551fac929002f4e0f9380c4616"
+      "sha": "6dfc02086d52e3f089981fc1432285dbe3f396d5"
     },
     "hornlab-waveguide-mesher": {
       "repo": "https://github.com/m3gnus/hornlab-waveguide-mesher.git",
-      "sha": "c4afbb71bd071a34bf76a4f0956b06e91f50f40b"
+      "sha": "e0b03d75e88f8fc518940a23968b4d76cd24995a"
     }
   }
 }

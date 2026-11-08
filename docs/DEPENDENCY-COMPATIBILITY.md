@@ -22,10 +22,12 @@ mouth; such designs move by at most 0.15 mm per solve-path point, and every save
 and corpus design (WG's 71 designs, the LOOKUP corpus, 271 mesher fixture builds)
 keeps its bytes. LOOKUP profiles with a radius at or below 0 mm are refused,
 naming the row. Geometry qualification passed 9,720 tests with required ATH parity
-at `3941048`; `c4afbb7` changes only that sampling path and its tests. The WG
-consumer suite runs against a clean non-editable install of this exact pin.
+at `3941048`; `c4afbb7` changes only that sampling path and its tests. `e0b03d7`
+removes only the unused `hornlab_mesher.experimental` package (no geometry or mesh
+code changes; WG never imported it). The WG consumer suite runs against a clean
+non-editable install of this exact pin.
 
-The mesher pin `c4afbb71bd071a34bf76a4f0956b06e91f50f40b` declares version 0.2.9. Apart from the FREEFORM
+The mesher pin `e0b03d75e88f8fc518940a23968b4d76cd24995a` declares version 0.2.9. Apart from the FREEFORM
 wall correction, the outer-wall envelope and the cross-section throat reference it retains the released `983f5a39` geometry contracts while
 reusing existing sampling and preview owners.
 It includes version-gated ATH v3 controls and typed public refusals with
@@ -173,7 +175,7 @@ is the ATH contour, and an actual Build with that default is qualified on
 the exact installed pin. Hosted platform and installed-candidate evidence
 remain separate from these source comparisons.
 
-The plots pin `9462f4b` preserves unavailable samples as chart gaps, keeps the signed phase grid and on-axis reference, and supports explicit directivity display ranges. Partial-cap plots state their coverage. These renderer contracts are available to WG export consumers.
+The plots pin `f062e42` preserves unavailable samples as chart gaps, keeps the signed phase grid and on-axis reference, and supports explicit directivity display ranges. Partial-cap plots state their coverage. These renderer contracts are available to WG export consumers. `f062e42` removes only the `complex_analysis` module, which WG never imported.
 
 The BEM++ pin `5d82a93` serializes overlapping BLAS limit scopes, refuses unsupported baffle combinations, releases streamed traces and retains unavailable directivity samples as unavailable. The existing opt-in compiled facade and native quadrature orders remain.
 
@@ -184,7 +186,7 @@ resolution reuses already prepared geometry. The retained tree excludes the
 unqualified session-ownership and STEP fitting changes. No new geometry
 construction, meshing tolerance or refusal relaxation is claimed.
 
-The sim pin `905b41d0` contains `bf50b3b5`, which combines Neumann traces with their pressures and reports
+The sim pin `6dfc0208` contains `bf50b3b5`, which combines Neumann traces with their pressures and reports
 unavailable combined radiated powers as unavailable. LEM-to-BEM path loading
 now honors mesh options; zero-drive impedance, zero-series termination and
 Hornresp export refusals follow their existing physical owners. These are
@@ -192,15 +194,20 @@ intentional numerical/output corrections, qualified by standard-install and
 native seam suites. The schema unit test uses a stand-in; its known P2 coverage
 limitation remains recorded rather than being treated as real-schema coverage.
 
-The sim pin `905b41d0` adds driver-mass and peak-rating corrections. A driver
+The sim pin `6dfc0208` contains `905b41d0`, which adds driver-mass and peak-rating corrections. A driver
 given Mmd (not Mms) gets its Cms and Rms from datasheet Fs and Qms with the
 free-air mass Mmd plus the air load, so Mmd and the equivalent Mms describe the
 same driver; library (Mms) drivers and drivers stating Cms and Rms are unchanged
 in WG's coupled solve. The Mms to Mmd rule with its 50% refusal has one owner,
-`bandpass.moving_mass_without_air_load`, which `driver_coupling._effective_mmd`
-(WG's mass preflight) now delegates to. Max SPL and bass-reflex screening compare
-peak excursion and peak port air velocity with their peak caps, and the Hornresp
-export writes Mmd for an Mms-only driver; WG calls none of those three.
+`driver.moving_mass_without_air_load`, which `driver_coupling._effective_mmd`
+(WG's mass preflight) now delegates to.
+
+`6dfc0208` keeps only what WG uses: the driver record and its mass rules (now
+`hornlab_sim.methods.driver`), `driver_coupling`, `radiation_impedance` and
+`lem_to_bem`. The box simulators, transfer-matrix, Helmholtz, port, acoustic-FEM
+and Hornresp tools, their console scripts and the `fem` extra are removed; WG
+called none of them. `bandpass` remains for one release as a re-export of
+`driver`, so WG's `bandpass.Driver` is the same class; no number changes.
 
 ## Metal stream ownership and field geometry
 
