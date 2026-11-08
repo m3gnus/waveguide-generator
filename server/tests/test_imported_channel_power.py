@@ -1,4 +1,4 @@
-"""Physical acoustic watts of RMS-driven imported channels (WGNUM-1).
+"""Reported acoustic watts are on the RMS basis of the reported SPL (WGNUM-1).
 
 Independent derivation, a pulsating sphere of radius ``a`` with uniform normal
 velocity. Under exp(-iwt) with outgoing exp(+ikr) the pressure is
@@ -16,10 +16,11 @@ surface velocity ``U`` this gives
 and, since the field is omnidirectional, ``W = 4*pi*r^2 * |p_rms(r)|^2 / (rho*c)``
 at any radius. The native solvers integrate power from peak phasors
 (``0.5*Re(p*conj(v))`` over the driven faces, ``|p|^2/(2*rho*c)`` over the
-sphere). WG's LEM is driven by an RMS generator voltage, its volume velocity is
-RMS, and WG reports SPL as ``20*log10(|p|/20 uPa)``, i.e. it treats the scaled
-fields as RMS phasors. The watts reported with those fields must therefore be
-the RMS formula above, twice the native peak-phasor number.
+sphere). WG reports SPL as ``20*log10(|p|/20 uPa)``, i.e. it reads every
+result's pressure phasors as RMS values: per unit RMS drive for a native or
+prescribed basis, or at the driver's RMS generator voltage for a driven
+channel. The watts reported beside that SPL must therefore follow the RMS
+formula above, twice the native peak-phasor number, for every result.
 """
 
 from __future__ import annotations
@@ -31,9 +32,11 @@ import pytest
 
 from hornlab_metal_bem.bie import integrate_driven_surface_power
 from hornlab_metal_bem.observation import integrate_sphere_radiated_power
-from server.jobs.models import SolveRequest
+from server.jobs.models import DesignConfig, SolveRequest
+from server.solver.context import SolverContext
 from server.solver.driver_lem import channel_drive_scaling
 from server.solver.imported_channels import apply_channel_driver, normalize_prescribed_result
+from server.solver.result_mapping import build_solver_response
 
 RHO = 1.205
 C = 343.0
@@ -69,6 +72,9 @@ def _native_unit_acceleration_sphere() -> SimpleNamespace:
     sphere = np.repeat(far[:, None], weights.size, axis=1)
     return SimpleNamespace(
         frequencies_hz=FREQUENCIES.copy(),
+        observation_angles_deg=np.asarray([0.0]),
+        observation_planes=["horizontal"],
+        directivity_db=np.zeros((FREQUENCIES.size, 1, 1)),
         pressure_complex=far[:, None, None].copy(),
         sphere_pressure_complex=sphere,
         impedance=surface.copy(),
@@ -97,12 +103,26 @@ def _record() -> dict:
     return {"sources": [{"id": "source-c", "observed": {"total_area_mm2": _area() * 1e6}}]}
 
 
+def _reported_power(result: SimpleNamespace) -> dict:
+    context = SolverContext(design=DesignConfig.model_validate({"formula": "OSSE"}),
+                            frequency_range=(float(FREQUENCIES[0]), float(FREQUENCIES[-1])),
+                            num_frequencies=FREQUENCIES.size)
+    config = SimpleNamespace(observation=SimpleNamespace(distance_m=OBSERVATION_M, origin="mouth",
+                                                         sphere_grid=None))
+    return build_solver_response(result=result, config=config, context=context, start_time=0.0,
+                                 metadata={}, sound_speed_m_per_s=C)["metadata"]["radiated_power"]
+
+
 def _assert_rms_watts(result: SimpleNamespace, u_rms: np.ndarray) -> None:
     expected = _analytic_rms_power(u_rms)
     from_spl = 4.0 * np.pi * OBSERVATION_M ** 2 * np.abs(result.pressure_complex[:, 0, 0]) ** 2 / (RHO * C)
     np.testing.assert_allclose(from_spl, expected, rtol=1e-9)
-    np.testing.assert_allclose(result.radiated_power_surface_w, expected, rtol=1e-9)
-    np.testing.assert_allclose(result.radiated_power_sphere_w, expected, rtol=1e-9)
+    power = _reported_power(result)
+    np.testing.assert_allclose(power["surface_w"], expected, rtol=1e-9)
+    np.testing.assert_allclose(power["sphere_w"], expected, rtol=1e-9)
+    np.testing.assert_allclose(power["agreement_db"], 0.0, atol=1e-9)
+    assert "RMS phasors" in power["definition"]
+    assert "one-half" not in power["definition"]
 
 
 def test_native_sphere_fixture_is_peak_phasor_power() -> None:
@@ -144,13 +164,17 @@ def test_rms_velocity_basis_reports_watts_for_one_metre_per_second_rms() -> None
     _assert_rms_watts(result, np.ones_like(FREQUENCIES))
 
 
-def test_legacy_unit_acceleration_basis_keeps_native_watts() -> None:
-    """No RMS drive is declared: the unit basis keeps the native numbers."""
+def test_native_unit_acceleration_result_reports_rms_watts() -> None:
+    """A WG-generated (non-imported) native result: per 1 m/s^2 RMS, like its SPL."""
+
+    _assert_rms_watts(_native_unit_acceleration_sphere(), 1.0 / (2.0 * np.pi * FREQUENCIES))
+
+
+def test_legacy_unit_acceleration_basis_reports_rms_watts() -> None:
+    """An imported acceleration basis without a driver: the same RMS basis."""
 
     request = _request(None)
     result = _native_unit_acceleration_sphere()
-    native = _native_unit_acceleration_sphere()
     normalize_prescribed_result(result, request.geometry)
 
-    np.testing.assert_array_equal(result.radiated_power_surface_w, native.radiated_power_surface_w)
-    np.testing.assert_array_equal(result.radiated_power_sphere_w, native.radiated_power_sphere_w)
+    _assert_rms_watts(result, 1.0 / (2.0 * np.pi * FREQUENCIES))

@@ -67,6 +67,27 @@ def _optional_frequency_series(
     return (values + [None] * count)[:count], int(array.size)
 
 
+def _rms_power_series(
+    result: Any, field: str, count: int
+) -> tuple[list[float | None] | None, int | None]:
+    """Read a native power series as watts on the RMS basis of the reported SPL.
+
+    Native solvers integrate power from peak phasors: ``0.5*Re(p*conj(v))``
+    over the driven faces and ``|p|**2/(2*rho*c)`` over the sphere. Every WG
+    result reports SPL as ``20*log10(|p|/20 uPa)``, which reads its pressure
+    phasors as RMS values -- per unit RMS drive, or at the driver's RMS
+    voltage. RMS phasors carry ``Re(p*conj(v))``, twice the native number.
+    This is the only place that conversion happens: result objects keep the
+    native numbers through every scaling, and only this packaging step,
+    which runs once per response, reports watts.
+    """
+
+    values, native_count = _optional_frequency_series(result, field, count)
+    if values is None:
+        return None, None
+    return [None if value is None else 2.0 * value for value in values], native_count
+
+
 def json_safe_native_value(value: Any) -> Any:
     """Convert native/NumPy values without permitting JSON NaN/Infinity."""
 
@@ -1025,10 +1046,10 @@ def build_solver_response(
     phase_patterns = directivity_phase(result)
     on_axis_angle_deg = _on_axis_reference_angle(result)
     balloon = _balloon_grid_from_result(result)
-    surface_power_w, surface_power_count = _optional_frequency_series(
+    surface_power_w, surface_power_count = _rms_power_series(
         result, "radiated_power_surface_w", len(frequency_values)
     )
-    sphere_power_w, sphere_power_count = _optional_frequency_series(
+    sphere_power_w, sphere_power_count = _rms_power_series(
         result, "radiated_power_sphere_w", len(frequency_values)
     )
     spherical_di_available = balloon is not None and (
@@ -1166,12 +1187,9 @@ def build_solver_response(
                 getattr(result, "radiated_power_sphere_coverage_sr", None)
             ),
             "definition": (
-                ("surface_w is the real pressure-normal-velocity flux of the RMS "
-                 "phasors over the driven faces; "
-                 if getattr(result, "radiated_power_amplitude", "peak") == "rms" else
-                 "surface_w is one-half real pressure-normal-velocity flux over "
-                 "the driven faces; ")
-                + "sphere_w is far-field acoustic power integrated "
+                "surface_w is the real pressure-normal-velocity flux of the RMS "
+                "phasors over the driven faces; sphere_w is far-field acoustic "
+                "power |p_rms|^2/(rho*c) integrated "
                 "over the sampled sphere with solid-angle weights; agreement_db = "
                 "10log10(sphere_w / surface_w)"
             ),

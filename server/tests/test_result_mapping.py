@@ -444,19 +444,14 @@ def test_optional_native_radiated_power_maps_agreement_and_round_trips_json() ->
     )
 
     power = response["metadata"]["radiated_power"]
-    assert power["surface_w"] == [1.0, 2.0]
-    assert power["sphere_w"] == pytest.approx([10.0**0.02, 2.0 * 10.0**-0.05])
+    # Native peak-phasor watts are reported on the RMS basis of the SPL: x2.
+    assert power["surface_w"] == [2.0, 4.0]
+    assert power["sphere_w"] == pytest.approx([2.0 * 10.0**0.02, 4.0 * 10.0**-0.05])
     assert power["sphere_coverage_sr"] == pytest.approx(4.0 * np.pi)
     assert power["agreement_db"] == pytest.approx([0.2, -0.5])
     assert "10log10(sphere_w / surface_w)" in power["definition"]
-    assert "one-half real pressure-normal-velocity flux" in power["definition"]
-    result.radiated_power_amplitude = "rms"
-    rms_definition = build_solver_response(
-        result=result, config=_config(), context=_context(), start_time=0.0,
-        metadata={}, sound_speed_m_per_s=343.0,
-    )["metadata"]["radiated_power"]["definition"]
-    assert "flux of the RMS phasors" in rms_definition
-    assert "one-half" not in rms_definition
+    assert "flux of the RMS phasors" in power["definition"]
+    assert "one-half" not in power["definition"]
     assert json.loads(json.dumps(response, allow_nan=False))["metadata"][
         "radiated_power"
     ] == power
@@ -483,7 +478,7 @@ def test_optional_native_radiated_power_is_absent_or_null_when_unavailable() -> 
         metadata={},
         sound_speed_m_per_s=343.0,
     )["metadata"]["radiated_power"]
-    assert mapped["surface_w"] == [1.0, 0.0]
+    assert mapped["surface_w"] == [2.0, 0.0]
     assert mapped["sphere_w"] == [None, None]
     assert mapped["agreement_db"] == [None, None]
     assert mapped["sphere_coverage_sr"] is None
