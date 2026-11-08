@@ -14,11 +14,19 @@ with more clearance when short; a default 5 mm R-OSSE solve build takes about
 FREEFORM mesh and STEP bytes therefore change, and WG's frozen fixtures were
 re-frozen where a wall used to fold; other designs and ATH parity stay byte-identical.
 Geometry qualification of the change passed 9,708 tests with required ATH
-parity at `3559cd1`; `322d4a9` adds only a cache lock, rechecked by its envelope tests. The WG consumer suite runs against a clean non-editable
-install of this exact pin.
+parity at `3559cd1`; `322d4a9` adds only a cache lock, rechecked by its envelope tests.
+Non-round (superellipse) OSSE and R-OSSE designs with a throat extension or slot
+take their cross-section throat radius from the meridian at the exact prefix end
+instead of interpolating between stations, so Surface sampling no longer moves the
+mouth; such designs move by at most 0.15 mm per solve-path point, and every saved
+and corpus design (WG's 71 designs, the LOOKUP corpus, 271 mesher fixture builds)
+keeps its bytes. LOOKUP profiles with a radius at or below 0 mm are refused,
+naming the row. Geometry qualification passed 9,720 tests with required ATH parity
+at `3941048`; `c4afbb7` changes only that sampling path and its tests. The WG
+consumer suite runs against a clean non-editable install of this exact pin.
 
-The mesher pin `322d4a95048af34f0866ecb2f5ee8c09c2817327` declares version 0.2.9. Apart from the FREEFORM
-wall correction and the outer-wall envelope it retains the released `983f5a39` geometry contracts while
+The mesher pin `c4afbb71bd071a34bf76a4f0956b06e91f50f40b` declares version 0.2.9. Apart from the FREEFORM
+wall correction, the outer-wall envelope and the cross-section throat reference it retains the released `983f5a39` geometry contracts while
 reusing existing sampling and preview owners.
 It includes version-gated ATH v3 controls and typed public refusals with
 a shipped, checked control-label catalog. Saved v1/v2 retain their prior geometry
@@ -176,13 +184,23 @@ resolution reuses already prepared geometry. The retained tree excludes the
 unqualified session-ownership and STEP fitting changes. No new geometry
 construction, meshing tolerance or refusal relaxation is claimed.
 
-The sim pin `bf50b3b5` combines Neumann traces with their pressures and reports
+The sim pin `905b41d0` contains `bf50b3b5`, which combines Neumann traces with their pressures and reports
 unavailable combined radiated powers as unavailable. LEM-to-BEM path loading
 now honors mesh options; zero-drive impedance, zero-series termination and
 Hornresp export refusals follow their existing physical owners. These are
 intentional numerical/output corrections, qualified by standard-install and
 native seam suites. The schema unit test uses a stand-in; its known P2 coverage
 limitation remains recorded rather than being treated as real-schema coverage.
+
+The sim pin `905b41d0` adds driver-mass and peak-rating corrections. A driver
+given Mmd (not Mms) gets its Cms and Rms from datasheet Fs and Qms with the
+free-air mass Mmd plus the air load, so Mmd and the equivalent Mms describe the
+same driver; library (Mms) drivers and drivers stating Cms and Rms are unchanged
+in WG's coupled solve. The Mms to Mmd rule with its 50% refusal has one owner,
+`bandpass.moving_mass_without_air_load`, which `driver_coupling._effective_mmd`
+(WG's mass preflight) now delegates to. Max SPL and bass-reflex screening compare
+peak excursion and peak port air velocity with their peak caps, and the Hornresp
+export writes Mmd for an Mms-only driver; WG calls none of those three.
 
 ## Metal stream ownership and field geometry
 

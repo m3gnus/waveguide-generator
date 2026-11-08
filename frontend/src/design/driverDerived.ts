@@ -54,9 +54,9 @@ function complianceFromVas(vasL: number, sdCm2: number): number {
  * Air mass a cone of area Sd carries in free air, both faces, in grams:
  * 2 * 8 rho a^3 / 3 with a = sqrt(Sd / pi), the low-frequency radiation mass
  * of a baffled piston per face (Beranek). Datasheet Mms includes it, Mmd does
- * not. Counterpart: the correction hornlab-sim's driver coupling applies
- * (`driver_coupling._effective_mmd`; `bandpass.free_air_radiation_mass` once
- * the SIM-3 fix is pinned, which `Driver.derive()` adds to Mmd for Fs and Qms).
+ * not. Counterpart: hornlab-sim's `bandpass.free_air_radiation_mass`, which
+ * `Driver.derive()` adds to Mmd for Fs and Qms and `driver_coupling._effective_mmd`
+ * subtracts from Mms.
  */
 function freeAirRadiationMassG(sdCm2: number): number {
   const radiusM = Math.sqrt(sdCm2 / 10_000 / Math.PI);
