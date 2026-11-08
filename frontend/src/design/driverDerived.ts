@@ -12,8 +12,9 @@ import type { DriverFieldKey } from '../stores/cadReturn';
  * something displays the consequence.
  */
 
-/** Air density and speed of sound, matching the solver's reference values. */
-const RHO_KG_PER_M3 = 1.2;
+/** Air density and speed of sound, matching hornlab-sim's `bandpass.RHO` and
+ * `bandpass.C_SOUND`, which `Driver.derive()` uses for these same conversions. */
+const RHO_KG_PER_M3 = 1.21;
 const C_M_PER_S = 343;
 const TWO_PI = 2 * Math.PI;
 
@@ -45,11 +46,33 @@ function complianceFromVas(vasL: number, sdCm2: number): number {
   return vasM3 / (RHO_KG_PER_M3 * C_M_PER_S * C_M_PER_S * sdM2 * sdM2);
 }
 
+/**
+ * Air mass a cone of area Sd carries in free air, both faces, in grams:
+ * 2 * 8 rho a^3 / 3 with a = sqrt(Sd / pi), the low-frequency radiation mass
+ * of a baffled piston per face (Beranek). Datasheet Mms includes it, Mmd does
+ * not. Counterpart: hornlab-sim `bandpass.free_air_radiation_mass`, which
+ * `Driver.derive()` adds to Mmd before converting Fs and Qms.
+ */
+function freeAirRadiationMassG(sdCm2: number): number {
+  const radiusM = Math.sqrt(sdCm2 / 10_000 / Math.PI);
+  return 2 * (8 / 3) * RHO_KG_PER_M3 * radiusM ** 3 * 1_000;
+}
+
+/** Free-air Mms in grams: as stated, or Mmd plus the free-air radiation mass.
+ * Without Sd that air mass is unknown, so an Mmd-only driver gets none. */
+function freeAirMmsG(values: Values, sdCm2: number | undefined): number | undefined {
+  const mms = positive(values.mms_g);
+  if (mms !== undefined) return mms;
+  const mmd = positive(values.mmd_g);
+  if (mmd === undefined || sdCm2 === undefined) return undefined;
+  return mmd + freeAirRadiationMassG(sdCm2);
+}
+
 export function driverDerivedValues(values: Values): DriverDerivedValues {
   const sd = positive(values.sd_cm2);
   const bl = positive(values.bl_t_m);
   const re = positive(values.re_ohm);
-  const mmsG = positive(values.mms_g) ?? positive(values.mmd_g);
+  const mmsG = freeAirMmsG(values, sd);
   const fs = positive(values.fs_hz);
   const vas = positive(values.vas_l);
   const qms = positive(values.qms);
