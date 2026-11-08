@@ -1,7 +1,7 @@
 # Passive-cardioid campaign — input contract
 
-Established by the F0 spike, 2026-08-13, against reference run
-`hornlab-research/runs/fusion360/260704-124242-260627_-_PartyMEH_v10`.
+Established by the F0 spike, 2026-08-13, against a private reference run
+(a Fusion-first three-way model).
 Every number below is measured, not quoted.
 
 ## What "agrees" means, quantitatively

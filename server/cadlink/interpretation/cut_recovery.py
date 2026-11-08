@@ -294,7 +294,7 @@ def assess_cut_recovery(
     if observations is None or not planes:
         return CutRecovery()
     # A source clear of the plane is allowed: one identity may own a mirrored
-    # pair of drivers (PartyMEH's MF pair), which a cut leaves one of. A pair
+    # pair of drivers (a three-way box's MF pair), which a cut leaves one of. A pair
     # identified as left and right is refused (SIDE_IDENTIFIED_SOURCE).
     del absent_sources
     axis_letter = str(radiation_axis or "+z")[-1:].casefold()

@@ -785,7 +785,8 @@ def _finite_number(value: Any) -> float | None:
 #: ladders in this workspace both put shape convergence far above it. An OSSE
 #: freestanding ladder held a 2611 Hz-limit mesh within 0.57 dB of the next
 #: level's normalised polar shape all the way to 16 kHz (6.1x its limit), with
-#: -6 dB beamwidth inside 2.0 deg; the CAFMEH-P3 ladder recovered a real
+#: -6 dB beamwidth inside 2.0 deg; the multi-entry validation ladder
+#: (docs/validation/CASES.md) recovered a real
 #: interference dip's frequency to 1.8% from a mesh solved 1.37x beyond its own
 #: limit, while that same solve got the dip's *depth* wrong by 12 dB. Two
 #: further ladders on ATH reference geometries agree: 260308tritonia within

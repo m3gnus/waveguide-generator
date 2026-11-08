@@ -122,7 +122,7 @@ describe('the primary run', () => {
     // first survivor into the accent slot would recolour the chart around a
     // run the user did not select, which is the positional failure this
     // module exists to prevent.
-    const survivors = ['#40 · asro68', '#39 · bigmeh'];
+    const survivors = ['#40 · asro68', '#39 · osse-box'];
     const filtered = seriesColorsByLabel(survivors, PALETTE, '#000', 'tritonia-q');
     expect(filtered).toEqual(seriesColorsByLabel(survivors, PALETTE, '#000'));
   });

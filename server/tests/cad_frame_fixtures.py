@@ -6,9 +6,8 @@ into the air (each face is checked against the solid with ``isInside``), and
 its source faces tagged by where they are and which way they face. Poses are
 then applied to the arrays, so the same triangles are surveyed in every pose.
 
-None of this is private CAD: the PartyMEH look-alike only borrows the rough
-proportions recorded in the M1 field notes (a box with a horn on the front
-baffle, an HF throat deep in the horn, two MF taps on its side walls facing
+None of this is private CAD: the box-horn fixture is a generic three-way
+layout (a box with a horn on the front baffle, an HF throat deep in the horn, two MF taps on its side walls facing
 each other and slightly forward, an LF cone on the baffle).
 """
 
@@ -203,8 +202,8 @@ def horn_box(scale: float = 1.0, *, mf_taps: bool = False, rear_lf: bool = False
     return rules
 
 
-def party_meh_like(scale: float = 1.0) -> list[SourceRule]:
-    """A PartyMEH look-alike: box, horn on the baffle, MF taps facing each other, LF cone."""
+def box_horn_like(scale: float = 1.0) -> list[SourceRule]:
+    """A three-way box horn: box, horn on the baffle, MF taps facing each other, LF cone."""
 
     s = scale
     body = [_box(-250 * s, -632 * s, -400 * s, 250 * s, 168 * s, 0)]

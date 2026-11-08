@@ -1,6 +1,6 @@
 """The scope gate counts bodies, and a surface body is one body.
 
-Reported against a Fusion-first half model (PartyMEH): the add-in's manifest
+Reported against a Fusion-first half model: the add-in's manifest
 declares one exterior body, WG refused the import with "STEP contains 26
 exterior bodies; manifest declares 1", and the file was correct.
 

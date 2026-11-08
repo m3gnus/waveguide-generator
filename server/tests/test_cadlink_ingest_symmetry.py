@@ -820,7 +820,7 @@ def _cut_step_open(path: Path, planes: tuple[str, ...]) -> None:
 
     The cut leaves the plane *open*: the boundary the solver mirrors is not a
     surface of the model, so the retained shell has a free rim there and no
-    face. That is what a usable half looks like -- the reported PartyMEH model
+    face. That is what a usable half looks like -- the reported half model
     is itself an open surface body -- and it is what the sibling CLI and WG's
     own cutter both produce. A solid boolean would leave a cap, which meshes as
     a rigid wall rather than a mirror; ``test_a_capped_declared_half...``
@@ -975,7 +975,7 @@ def _reduced_bundle(
     if unlinked:
         # A Fusion-first return: no WG design behind it, so the source is the
         # CAD body's own name and nothing checks it against a design's throat.
-        # This is the shape of the reported PartyMEH model, and the shape in
+        # This is the shape of the reported half model, and the shape in
         # which an undeclared half would otherwise be solved in silence.
         _name_throat_shell(assembly, "HF")
         step = assembly.read_bytes()

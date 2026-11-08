@@ -299,8 +299,8 @@ describe('CAD project history', () => {
           lineage_id: 'wgl_cad_first',
           design_id: null,
           document_native_id: 'urn:adsk:lineage:1',
-          document_name: '260627 - PartyMEH v10',
-          archive_stem: '260627 - PartyMEH v10',
+          document_name: '260627 - BoxHorn v10',
+          archive_stem: '260627 - BoxHorn v10',
         },
       } as never,
     });
@@ -308,7 +308,7 @@ describe('CAD project history', () => {
 
     await render(<CadProjectHeader/>);
 
-    expect(host.querySelector('.cad-project-name')?.textContent).toBe('260627 - PartyMEH v10');
+    expect(host.querySelector('.cad-project-name')?.textContent).toBe('260627 - BoxHorn v10');
   });
 
   it('shows the folder projects are archived in, and can change it', async () => {
@@ -475,10 +475,10 @@ describe('CAD project history', () => {
     // with advice to send from Fusion again although its returns were there.
     const bundle = (name: string, modifiedAt: string): CadReturnBundle => ({
       name, bundlePath: `wgreturn/${name}`, modifiedAt, readable: true,
-      documentName: '260627 - PartyMEH v10', requestId: null, sourceCount: 3, instanceCount: 1, designIds: [], sources: [],
+      documentName: '260627 - BoxHorn v10', requestId: null, sourceCount: 3, instanceCount: 1, designIds: [], sources: [],
     });
-    const older = bundle('260627 - PartyMEH v10-4.wgreturn', '2026-08-23T15:09:02Z');
-    const newest = bundle('260627 - PartyMEH v10-5.wgreturn', '2026-08-23T19:14:58Z');
+    const older = bundle('260627 - BoxHorn v10-4.wgreturn', '2026-08-23T15:09:02Z');
+    const newest = bundle('260627 - BoxHorn v10-5.wgreturn', '2026-08-23T19:14:58Z');
     const selectBundle = vi.fn();
     vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
       ...cadWorkspace.getSnapshot(), bundles: [], selectBundle,
@@ -488,8 +488,8 @@ describe('CAD project history', () => {
       if (String(input).includes('/documents')) return json(documents);
       if (String(input).includes('/api/cadlink/designs')) {
         return json({ items: [{
-          designId: null, lineageId: 'wgl_cad_first', filename: null, documentName: '260627 - PartyMEH v10',
-          archiveStem: '260627 - PartyMEH v10', exportCount: 0, createdAt: '2026-08-23T14:34:20Z', updatedAt: '2026-08-23T19:15:10Z',
+          designId: null, lineageId: 'wgl_cad_first', filename: null, documentName: '260627 - BoxHorn v10',
+          archiveStem: '260627 - BoxHorn v10', exportCount: 0, createdAt: '2026-08-23T14:34:20Z', updatedAt: '2026-08-23T19:15:10Z',
         }] });
       }
       return json({});
@@ -501,14 +501,14 @@ describe('CAD project history', () => {
     await act(async () => { toggle.click(); await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { await Promise.resolve(); });
     const item = host.querySelector<HTMLButtonElement>('.cad-project-menu [role="menuitem"]')!;
-    expect(item.textContent).toContain('PartyME');
+    expect(item.textContent).toContain('BoxHorn');
     expect(item.disabled).toBe(false);
     await act(async () => { item.click(); await Promise.resolve(); await Promise.resolve(); });
 
     // Named: the project being opened owns the settings from here on, not
     // whichever one the workspace happened to be showing.
     expect(selectBundle).toHaveBeenCalledWith(newest, 'wgl_cad_first');
-    expect(newestReturnForProject([older, newest], { documentName: '260627 - PartyMEH v10', archiveStem: null })).toBe(newest);
+    expect(newestReturnForProject([older, newest], { documentName: '260627 - BoxHorn v10', archiveStem: null })).toBe(newest);
     expect(newestReturnForProject([older, newest], { documentName: 'Other', archiveStem: null })).toBeNull();
   });
 
@@ -787,7 +787,7 @@ describe('what the history calls things', () => {
   it('names a project by its CAD document, then the folder, then its design file', () => {
     // The document name leads: in CAD mode the Fusion document owns the name,
     // and the archive stem is frozen against renames so it goes stale as a label.
-    expect(projectName({ documentName: 'PartyMEH v10', archiveStem: 'PartyMEH v9', filename: 'other.cfg' })).toBe('PartyMEH v10');
+    expect(projectName({ documentName: 'BoxHorn v10', archiveStem: 'BoxHorn v9', filename: 'other.cfg' })).toBe('BoxHorn v10');
     expect(projectName({ documentName: null, archiveStem: 'Tritonia', filename: 'other.cfg' })).toBe('Tritonia');
     expect(projectName({ documentName: null, archiveStem: null, filename: 'Big Horn.cfg' })).toBe('Big Horn');
     expect(projectName({ documentName: '  ', archiveStem: '   ', filename: 'Big Horn.cfg' })).toBe('Big Horn');

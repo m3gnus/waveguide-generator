@@ -141,7 +141,7 @@ IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
 # spends element size in proportion to curvature radius, over-refining small
 # fillets while under-refining large sweeps.
 #
-# MEASURED on the 260627 PartyMEH v10 return at rigid 30 / hf 4 / mf 15 / lf 30
+# MEASURED on a three-way box-horn return at rigid 30 / hf 4 / mf 15 / lf 30
 # mm, every facet of every mesh projected onto the OCC face it was meshed from,
 # by ``scripts/measure_imported_mesh_deviation.py`` -- which is committed, so
 # these rows can be reproduced rather than believed. Both rules are meshed and
@@ -197,8 +197,8 @@ IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
 # CONFIRMED ON FIVE GEOMETRIES from the bundle store, not one -- the earlier
 # rounds each rested on a single model. delta=0.15 against segments=24:
 #
-#   PartyMEH v10 (10,252 tris)  -1.6% tris   peak -25%   p95 -16%   rms -25%
-#   PartyMEH v10 b (10,238)     -1.5% tris   peak -18%   p95 -18%   rms -26%
+#   box-horn (10,252 tris)      -1.6% tris   peak -25%   p95 -16%   rms -25%
+#   box-horn b (10,238)         -1.5% tris   peak -18%   p95 -18%   rms -26%
 #   201x208x130 (7,160)        +11.4% tris   peak -73%   p95  -3%   rms -17%
 #   49x44 rigid=4 (6,502)        dial inert, see below
 #   27x27 (172)                +17.4% tris   peak -45%   p95 -37%   rms -32%

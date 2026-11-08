@@ -80,7 +80,7 @@ def test_source_area_warning_names_the_driver_count_a_patch_implies() -> None:
     """A patch holding two cones while count says one radiates half the volume
     velocity it should -- about 6 dB down, with the shape still looking right.
 
-    Numbers are the PartyMEH v10 MF channel as solved: the ingest record's
+    Numbers are a reported three-way MF channel as solved: the ingest record's
     source-mf carries both cones (482.4 cm2, two connected components) while
     the spec said count=1.
     """

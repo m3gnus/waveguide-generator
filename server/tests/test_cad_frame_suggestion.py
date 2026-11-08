@@ -38,9 +38,9 @@ _PARTY: list[fx.FixtureMesh] = []
 
 def _party() -> fx.FixtureMesh:
     if not _PARTY:
-        def party_meh_like() -> list:
-            return fx.party_meh_like(0.25)
-        _PARTY.append(_run_in_gmsh_session(fx.mesh_fixture, party_meh_like, size_mm=9.0))
+        def box_horn_like() -> list:
+            return fx.box_horn_like(0.25)
+        _PARTY.append(_run_in_gmsh_session(fx.mesh_fixture, box_horn_like, size_mm=9.0))
     return _PARTY[0]
 
 
@@ -63,7 +63,7 @@ def _record(
     lineage: str | None = "wgl_project",
     domain: bool = False,
 ) -> dict[str, Any]:
-    """An as-modelled (+z) record of the PartyMEH look-alike placed facing ``facing``."""
+    """An as-modelled (+z) record of the box-horn fixture placed facing ``facing``."""
 
     mesh = _party()
     points = mesh.points_mm @ fx.POSES[facing].T

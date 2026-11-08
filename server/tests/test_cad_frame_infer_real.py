@@ -43,7 +43,7 @@ pytest.importorskip("meshio")
 
 
 def _party() -> list:
-    return fx.party_meh_like(0.25)
+    return fx.box_horn_like(0.25)
 
 
 def _rear_horn() -> list:

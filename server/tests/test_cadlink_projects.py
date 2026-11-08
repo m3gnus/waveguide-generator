@@ -353,24 +353,24 @@ def test_a_document_authored_in_cad_becomes_a_project_of_its_own(
     store = app.state.cadlink_store
     urn = "urn:adsk.wipprod:dm.lineage:Jur0DxWKR12JPVdr3BLhEQ"
 
-    lineage_id = store.claim_cad_document_lineage(urn, "260627 - PartyMEH v10")
+    lineage_id = store.claim_cad_document_lineage(urn, "260627 - BoxHorn v10")
     assert lineage_id
     # The urn is the identity, so a second return from the same document is the
     # same project rather than a second one.
-    assert store.claim_cad_document_lineage(urn, "260627 - PartyMEH v11") == lineage_id
+    assert store.claim_cad_document_lineage(urn, "260627 - BoxHorn v11") == lineage_id
     # The stem is the server-normalised ASCII folder key, not the document name:
     # two documents whose names differ only in punctuation would otherwise share
     # one folder. The readable name lives in document_name.
-    assert store.claim_archive_stem(lineage_id, preferred="260627 - PartyMEH v10") == (
-        "260627_-_PartyMEH_v10"
+    assert store.claim_archive_stem(lineage_id, preferred="260627 - BoxHorn v10") == (
+        "260627_-_BoxHorn_v10"
     )
 
     # A rename moves the label but never the folder: the captured .f3d already
     # lives there.
-    assert store.claim_cad_document_lineage(urn, "PartyMEH final") == lineage_id
+    assert store.claim_cad_document_lineage(urn, "BoxHorn final") == lineage_id
     names = store.get_lineage_cad_names(lineage_id) or {}
-    assert names["document_name"] == "PartyMEH final"
-    assert names["archive_stem"] == "260627_-_PartyMEH_v10"
+    assert names["document_name"] == "BoxHorn final"
+    assert names["archive_stem"] == "260627_-_BoxHorn_v10"
 
 
 def test_a_cad_only_project_is_listed_and_its_folder_resolves(tmp_path: Path) -> None:
@@ -379,22 +379,22 @@ def test_a_cad_only_project_is_listed_and_its_folder_resolves(tmp_path: Path) ->
     app, runs = app_with_runs(tmp_path)
     store = app.state.cadlink_store
     lineage_id = store.claim_cad_document_lineage(
-        "urn:adsk.wipprod:dm.lineage:cad-only", "PartyMEH"
+        "urn:adsk.wipprod:dm.lineage:cad-only", "BoxHorn"
     )
-    store.claim_archive_stem(lineage_id, preferred="PartyMEH")
+    store.claim_archive_stem(lineage_id, preferred="BoxHorn")
 
     listing = asyncio.run(list_designs(SimpleNamespace(app=app)))
     entry = next(
         item for item in listing["items"] if item["lineageId"] == lineage_id
     )
     assert entry["designId"] is None
-    assert entry["documentName"] == "PartyMEH"
-    assert entry["archiveStem"] == "PartyMEH"
+    assert entry["documentName"] == "BoxHorn"
+    assert entry["archiveStem"] == "BoxHorn"
 
     # It has no design row, so the folder used to 404 rather than resolve.
-    capture(app, runs, tmp_path, "PartyMEH", "ccc", at="2026-08-23T09:00:00Z")
+    capture(app, runs, tmp_path, "BoxHorn", "ccc", at="2026-08-23T09:00:00Z")
     documents = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
-    assert documents["archiveStem"] == "PartyMEH"
+    assert documents["archiveStem"] == "BoxHorn"
     assert [item["returnStateHash"] for item in documents["items"]] == ["sha256:ccc"]
 
 
@@ -426,14 +426,14 @@ def test_ingestion_gives_a_cad_authored_return_a_project(tmp_path: Path) -> None
     store = CadLinkStore(tmp_path / "cadlink.db")
     urn = "urn:adsk.wipprod:dm.lineage:party"
 
-    resolved = _resolve_project(store, None, urn, "260627 - PartyMEH v10")
+    resolved = _resolve_project(store, None, urn, "260627 - BoxHorn v10")
 
     assert resolved is not None
     assert resolved["design_id"] is None
-    assert resolved["document_name"] == "260627 - PartyMEH v10"
-    assert resolved["archive_stem"] == "260627_-_PartyMEH_v10"
+    assert resolved["document_name"] == "260627 - BoxHorn v10"
+    assert resolved["archive_stem"] == "260627_-_BoxHorn_v10"
     # The same document is the same project on every later return.
-    again = _resolve_project(store, None, urn, "260627 - PartyMEH v10")
+    again = _resolve_project(store, None, urn, "260627 - BoxHorn v10")
     assert again is not None
     assert again["lineage_id"] == resolved["lineage_id"]
 
@@ -454,19 +454,19 @@ def test_a_cad_authored_run_joins_the_project_its_document_owns(
 
     store = CadLinkStore(tmp_path / "cadlink.db")
     urn = "urn:adsk.wipprod:dm.lineage:party"
-    lineage_id = store.claim_cad_document_lineage(urn, "PartyMEH")
-    store.claim_archive_stem(lineage_id, preferred="PartyMEH")
+    lineage_id = store.claim_cad_document_lineage(urn, "BoxHorn")
+    store.claim_archive_stem(lineage_id, preferred="BoxHorn")
 
     record = {
-        "project": {"lineage_id": lineage_id, "archive_stem": "PartyMEH"},
-        "document": {"native_id": urn, "name": "PartyMEH"},
+        "project": {"lineage_id": lineage_id, "archive_stem": "BoxHorn"},
+        "document": {"native_id": urn, "name": "BoxHorn"},
     }
-    assert asyncio.run(_cad_authored_project(store, record)) == (lineage_id, "PartyMEH")
+    assert asyncio.run(_cad_authored_project(store, record)) == (lineage_id, "BoxHorn")
 
     # A return ingested before projects existed carries no project block, but
     # the claim is keyed on the document, so the document still finds it.
-    legacy = {"document": {"native_id": urn, "name": "PartyMEH"}}
-    assert asyncio.run(_cad_authored_project(store, legacy)) == (lineage_id, "PartyMEH")
+    legacy = {"document": {"native_id": urn, "name": "BoxHorn"}}
+    assert asyncio.run(_cad_authored_project(store, legacy)) == (lineage_id, "BoxHorn")
 
     # A document nothing has claimed still belongs to no project.
     unknown = {"document": {"native_id": "urn:adsk:unknown", "name": "Other"}}

@@ -18,9 +18,8 @@ which makes each ceiling one division:
 
 and the honest answer the smallest of whichever of them are known. Everything
 here is small-signal: no thermal compression, no voice-coil heating, no
-inductance nonlinearity, no programme material. It is the same ceiling the
-``hornlab-research`` ``max_spl`` helper reports, evaluated against a solved
-field instead of a lumped bandpass.
+inductance nonlinearity, no programme material. It is the usual small-signal
+SPL ceiling, evaluated against a solved field instead of a lumped bandpass.
 
 The excursion and power arrays this module divides are per-frequency swept-sine
 values, so ``s(f)`` is a per-frequency ceiling; ``worst_case`` collapses it to

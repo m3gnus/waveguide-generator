@@ -91,7 +91,7 @@ def _cut(decision: dict[str, Any], plane: str) -> dict[str, Any]:
 
 
 def _centre_in_z(path: Path) -> None:
-    """Move the model so it straddles z = 0 (as PartyMEH does)."""
+    """Move the model so it straddles z = 0 (as a reported half model does)."""
 
     def move() -> None:
         gmsh.option.setNumber("General.Terminal", 0)
@@ -299,7 +299,7 @@ def test_a_port_through_the_plane_is_an_opening_solved_as_shown(tmp_path: Path) 
 
 
 def test_an_x_cut_recorded_as_z0_is_shown_as_a_conflict_never_obeyed(tmp_path: Path) -> None:
-    """PartyMEH's shape: an x cut whose recorded provenance names z0."""
+    """A reported shape: an x cut whose recorded provenance names z0."""
 
     record = _ingest(
         _bundle(
@@ -323,7 +323,7 @@ def test_an_x_cut_recorded_as_z0_is_shown_as_a_conflict_never_obeyed(tmp_path: P
     assert decision["refusal"] is None
 
 
-def test_a_negative_x_cut_recorded_as_z0_is_recovered_like_partymeh(tmp_path: Path) -> None:
+def test_a_negative_x_cut_recorded_as_z0_is_recovered_like_the_reported_half(tmp_path: Path) -> None:
     record = _ingest(
         _bundle(
             tmp_path, "mislabelled-negative", _negative_half_centred, HORN_THROAT,

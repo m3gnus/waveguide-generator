@@ -2792,7 +2792,7 @@ describe('CadLinkPanel', () => {
       freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
       findings: [],
     };
-    const notLinked: FusionCadStatus = { ...currentFusion, state: 'not_linked', link: null, documentName: 'PartyMEH v10', adapterVersion: '0.1.1' };
+    const notLinked: FusionCadStatus = { ...currentFusion, state: 'not_linked', link: null, documentName: 'BoxHorn v10', adapterVersion: '0.1.1' };
     const surface = async (ingested: CadReturnIngestRecord, designIds: string[] = []) => {
       vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
         const path = String(input);
@@ -2808,7 +2808,7 @@ describe('CadLinkPanel', () => {
 
     const card = await surface(unlinked as CadReturnIngestRecord);
     expect(card.querySelector('.cad-link-quiet > summary b')?.textContent).toBe('Fusion 360 · connected');
-    expect(card.querySelector('.cad-link-quiet > summary .cad-link-meta')?.textContent).toBe('PartyMEH v10');
+    expect(card.querySelector('.cad-link-quiet > summary .cad-link-meta')?.textContent).toBe('BoxHorn v10');
     expect(card.textContent).not.toContain('not linked in the active Fusion document');
     expect(buttons(card)).not.toContain('Open in Fusion 360');
     expect(buttons(card)).not.toContain('Send to Fusion');

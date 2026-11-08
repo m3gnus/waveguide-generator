@@ -302,8 +302,8 @@ CSV files from a per-user library folder and exposes a search API.
 
 `server/drivers/bundled/hornlab-drivers.csv` is indexed beside the user's
 folder, so a fresh install can pick a real driver instead of meeting an empty
-search box. It is generated from the private masters by
-`hornlab-research/MEH-Lab/data/export_wg_driver_library.py`, which publishes
+search box. It is generated from the private masters by a private export
+script, which publishes
 every column WG's own alias table names and withholds the commercial half —
 prices, retailer URLs, store lists, working notes, programme power. Provenance
 (`Source_URL`) travels with the data because it is how a number gets checked.

@@ -43,7 +43,7 @@ const operation = (reason: string, overrides: Partial<CadOperationSummary> = {})
   operationId: 'manual-solve:op-1', kind: 'prepare_and_solve', state: 'needs_user_input', stage: 'ready',
   reason, message: 'The backend’s message for this gate.', jobId: null, attemptGeneration: 1,
   setupRevisionId: 'wgs_1', preparationId: 'wgi_prep1',
-  snapshot: { manifestSha256: `sha256:${'a'.repeat(64)}`, documentName: 'PartyMEH', projectLineageId: 'wgl_1' },
+  snapshot: { manifestSha256: `sha256:${'a'.repeat(64)}`, documentName: 'BoxHorn', projectLineageId: 'wgl_1' },
   legacy: false, createdAt: 'now', updatedAt: 'now',
   ...overrides,
 });
@@ -151,12 +151,12 @@ describe('the needs_user_input ladder', () => {
     const ladder = await show(operation('findings_need_review', {
       attemptGeneration: 2, message: `Review the preparation's findings before solving: ${FINDING}`,
     }));
-    await vi.waitFor(() => expect(host.querySelector('button[aria-label="Approve and solve: PartyMEH"]')).not.toBeNull());
+    await vi.waitFor(() => expect(host.querySelector('button[aria-label="Approve and solve: BoxHorn"]')).not.toBeNull());
     expect(steps(ladder).map((step) => [step.gate, step.current])).toEqual([['findings', true]]);
     // In words, never by id.
     expect(host.textContent).toContain('Part of the model was left out when Fusion sent it (skipped bodies: Body11) — WG solves the model without it. Approve to go ahead, or include it in Fusion and send the model again.');
     expect(host.textContent).not.toContain(FINDING);
-    await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Approve and solve: PartyMEH"]')!.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Approve and solve: BoxHorn"]')!.click(); });
     // The approval continues the preparation it was given for, with its settings.
     expect(continueRun).toHaveBeenCalledExactlyOnceWith('job:manual-solve:op-1', { approvals: { preparation_id: 'wgi_prep1', finding_ids: [FINDING] } });
     expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();

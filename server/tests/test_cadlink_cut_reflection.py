@@ -898,7 +898,7 @@ def test_a_cut_on_an_oblique_plane_is_refused(tmp_path: Path) -> None:
 
 
 def test_one_source_owning_a_mirrored_pair_is_recovered_from_its_kept_driver(tmp_path: Path) -> None:
-    """PartyMEH's MF: one identity, two drivers, the cut keeps one clear of the plane."""
+    """A three-way MF pair: one identity, two drivers, the cut keeps one clear of the plane."""
 
     record = _ingest(
         _box_bundle(tmp_path, "pair-one-identity", sources=["mid", "pair"], discs=((0.0, 15.0, 10.0), (-30.0, -20.0, 6.0))),

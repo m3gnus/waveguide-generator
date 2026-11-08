@@ -42,7 +42,7 @@ const solve = (overrides: Partial<CadOperationSummary> = {}): CadOperationSummar
   operationId: 'op-screen', kind: 'prepare_and_solve', state: 'needs_user_input', stage: 'validating',
   reason: 'setup_required', message: 'Choose the solve settings … open it from File → CAD-linked designs, then press Solve now.',
   jobId: null, attemptGeneration: 1, setupRevisionId: null, preparationId: 'wgi_prep1',
-  snapshot: { manifestSha256: ON_SCREEN, documentName: 'PartyMEH v10', projectLineageId: 'wgl_1' },
+  snapshot: { manifestSha256: ON_SCREEN, documentName: 'BoxHorn v10', projectLineageId: 'wgl_1' },
   legacy: false, createdAt: '2026-09-22T05:52:34Z', updatedAt: '2026-09-22T05:52:34Z',
   ...overrides,
 });

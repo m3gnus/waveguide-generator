@@ -84,7 +84,7 @@ describe('the whole mirrored model of a reduced solve', () => {
 
   it('mirrors the display of a model cut in CAD and recovered, marking its plane', async () => {
     const cut = record('wgi_cut_display', RECOVERED_NEGATIVE_HALF, { cut_planes: [], domain_planes: ['x0'] });
-    await showIngestedMeshInViewport(cut, 'PartyMEH', undefined, fetcherFor(NEGATIVE_DISPLAY, POSITIVE_SOLVE));
+    await showIngestedMeshInViewport(cut, 'BoxHorn', undefined, fetcherFor(NEGATIVE_DISPLAY, POSITIVE_SOLVE));
     const scene = importedMeshStore.getSnapshot().cad!.scene;
     expect(scene.surfaces.reduce((count, surface) => count + surface.indices.length / 3, 0)).toBe(2);
     expect(extentX(scene)[0]).toBeCloseTo(-0.2);
@@ -96,7 +96,7 @@ describe('the whole mirrored model of a reduced solve', () => {
 
   it('mirrors the solve mesh of the same model across its CAD cut', async () => {
     const cut = record('wgi_cut_solve', RECOVERED_NEGATIVE_HALF, { cut_planes: [], domain_planes: ['x0'] });
-    expect(await showIngestedSolverMeshInViewport(cut, 'PartyMEH', fetcherFor(NEGATIVE_DISPLAY, POSITIVE_SOLVE))).toBeNull();
+    expect(await showIngestedSolverMeshInViewport(cut, 'BoxHorn', fetcherFor(NEGATIVE_DISPLAY, POSITIVE_SOLVE))).toBeNull();
     const scene = importedMeshStore.getSnapshot().cadSolver!.scene;
     expect(extentX(scene)[0]).toBeCloseTo(-0.2);
     expect(extentX(scene)[1]).toBeCloseTo(0.2);

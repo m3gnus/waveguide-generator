@@ -52,10 +52,10 @@ _PARTY_BUILDERS: dict[float, object] = {}
 
 def _party_builder(scale: float):
     if scale not in _PARTY_BUILDERS:
-        def party_meh_like() -> list:
-            return fx.party_meh_like(scale)
-        party_meh_like.__name__ = f"party_meh_like_{scale}"
-        _PARTY_BUILDERS[scale] = party_meh_like
+        def box_horn_like() -> list:
+            return fx.box_horn_like(scale)
+        box_horn_like.__name__ = f"box_horn_like_{scale}"
+        _PARTY_BUILDERS[scale] = box_horn_like
     return _PARTY_BUILDERS[scale]
 
 
@@ -127,7 +127,7 @@ def test_fixture_expectation(name: str) -> None:
 
 
 @pytest.mark.parametrize("axis", sorted(fx.POSES))
-def test_party_meh_like_is_found_in_every_orientation(axis: str) -> None:
+def test_box_horn_like_is_found_in_every_orientation(axis: str) -> None:
     result = infer_frame(_party().survey(fx.POSES[axis]))
     assert result.status == STATUS_AUTOMATIC, (axis, result.reason, result.evidence)
     assert result.axis == axis

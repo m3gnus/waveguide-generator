@@ -60,7 +60,7 @@ function record(overrides: Partial<CadReturnIngestRecord> = {}): CadReturnIngest
 
 /** The details as the Imported mesh tab shows them, for a prepared model unless said. */
 const Details = ({ value = record(), prepared = true, fetcher }: { value?: CadReturnIngestRecord; prepared?: boolean; fetcher?: typeof fetch }) =>
-  <CadModelDetails record={value} label="PartyMEH" prepared={prepared} fetcher={fetcher}/>;
+  <CadModelDetails record={value} label="BoxHorn" prepared={prepared} fetcher={fetcher}/>;
 
 const head = () => document.querySelector<HTMLButtonElement>('.cad-model-details .section-head')!;
 const body = () => document.querySelector<HTMLElement>('.cad-model-details .section-body')!;
@@ -77,7 +77,7 @@ function operation(overrides: Partial<CadOperationSummary> = {}): CadOperationSu
     operationId: 'op-run', kind: 'prepare_and_solve', state: 'accepted', stage: 'submitted',
     reason: null, message: null, jobId: 'job-run', attemptGeneration: 1,
     setupRevisionId: null, preparationId: null,
-    snapshot: { manifestSha256: MANIFEST, documentName: 'PartyMEH' },
+    snapshot: { manifestSha256: MANIFEST, documentName: 'BoxHorn' },
     legacy: false, createdAt: NOW, updatedAt: NOW,
     ...overrides,
   } as CadOperationSummary;
