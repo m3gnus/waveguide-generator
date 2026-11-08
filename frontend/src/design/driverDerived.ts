@@ -12,9 +12,13 @@ import type { DriverFieldKey } from '../stores/cadReturn';
  * something displays the consequence.
  */
 
-/** Air density and speed of sound, matching hornlab-sim's `bandpass.RHO` and
- * `bandpass.C_SOUND`, which `Driver.derive()` uses for these same conversions. */
-const RHO_KG_PER_M3 = 1.21;
+/** Air density and speed of sound of WG's driver solve: `server/solver/driver_lem.py`
+ * calls hornlab-sim's `driver_coupling.coupled_direct_radiator_response` without
+ * rho or c, so its defaults (`radiation_impedance.RHO_AIR`, `C_AIR`) are what
+ * `Driver.derive()` and the air-mass correction run with. Not hornlab-sim's
+ * `bandpass.RHO` (1.21), which the WG solve never uses.
+ * `server/tests/test_driver_lem.py` fails if these drift from those defaults. */
+const RHO_KG_PER_M3 = 1.2041;
 const C_M_PER_S = 343;
 const TWO_PI = 2 * Math.PI;
 
@@ -50,8 +54,9 @@ function complianceFromVas(vasL: number, sdCm2: number): number {
  * Air mass a cone of area Sd carries in free air, both faces, in grams:
  * 2 * 8 rho a^3 / 3 with a = sqrt(Sd / pi), the low-frequency radiation mass
  * of a baffled piston per face (Beranek). Datasheet Mms includes it, Mmd does
- * not. Counterpart: hornlab-sim `bandpass.free_air_radiation_mass`, which
- * `Driver.derive()` adds to Mmd before converting Fs and Qms.
+ * not. Counterpart: the correction hornlab-sim's driver coupling applies
+ * (`driver_coupling._effective_mmd`; `bandpass.free_air_radiation_mass` once
+ * the SIM-3 fix is pinned, which `Driver.derive()` adds to Mmd for Fs and Qms).
  */
 function freeAirRadiationMassG(sdCm2: number): number {
   const radiusM = Math.sqrt(sdCm2 / 10_000 / Math.PI);

@@ -325,3 +325,40 @@ def test_scaling_is_the_conjugated_engineering_acceleration() -> None:
     )
     expected_eng = 1j * 2.0 * np.pi * freqs * coupled.cone_volume_velocity / area
     assert np.allclose(scale_raw, np.conjugate(expected_eng))
+
+
+def test_driver_sheet_air_constants_are_the_driver_solves(monkeypatch) -> None:
+    """The T/S sheet's derived Cms/Qes/air mass must use the rho and c this solve runs at.
+
+    `frontend/src/design/driverDerived.ts` cannot ask the server for them on every
+    keystroke, so it types them; this binds the real call to see what the
+    coupled solve resolves rho and c to, and compares the typed values.
+    """
+    import inspect
+    import re
+    from pathlib import Path
+
+    from hornlab_sim.methods import driver_coupling
+
+    original = driver_coupling.coupled_direct_radiator_response
+    seen: dict[str, float] = {}
+
+    def spy(*args, **kwargs):
+        bound = inspect.signature(original).bind(*args, **kwargs)
+        bound.apply_defaults()
+        seen["rho"] = float(bound.arguments["rho"])
+        seen["c"] = float(bound.arguments["c"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(driver_coupling, "coupled_direct_radiator_response", spy)
+    freqs = np.geomspace(20.0, 2_000.0, 8)
+    channel_drive_scaling(
+        freqs, np.full(freqs.size, 0.1 + 0.05j), 0.021, _spec(),
+        drive_voltage_v=2.83, rg_ohm=0.0,
+    )
+
+    source = (Path(__file__).resolve().parents[2] / "frontend/src/design/driverDerived.ts").read_text(encoding="utf-8")
+    typed_rho = float(re.search(r"^const RHO_KG_PER_M3 = ([0-9.]+);", source, flags=re.M).group(1))
+    typed_c = float(re.search(r"^const C_M_PER_S = ([0-9.]+);", source, flags=re.M).group(1))
+    assert typed_rho == pytest.approx(seen["rho"], rel=1e-12)
+    assert typed_c == pytest.approx(seen["c"], rel=1e-12)

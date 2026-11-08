@@ -5,9 +5,9 @@ import { driverDerivedValues, driverValuesDisagree } from './driverDerived';
  * A consistent 8-inch woofer: Vas, Fs, Mms and Sd all describe the same
  * suspension, so the two compliance routes must agree and the mismatch must
  * be a rounding error rather than a warning. Vas = Cms rho c^2 Sd^2 with
- * Cms = 1/((2 pi 38)^2 0.032) and hornlab-sim's rho = 1.21, c = 343.
+ * Cms = 1/((2 pi 38)^2 0.032) and the WG driver solve's rho = 1.2041, c = 343.
  */
-const CONSISTENT = { sd_cm2: 220, bl_t_m: 9.2, re_ohm: 5.6, mms_g: 32, fs_hz: 38, vas_l: 37.7696, qms: 4.2 };
+const CONSISTENT = { sd_cm2: 220, bl_t_m: 9.2, re_ohm: 5.6, mms_g: 32, fs_hz: 38, vas_l: 37.5854, qms: 4.2 };
 
 describe('derived Thiele-Small values', () => {
   it('derives Cms from Fs and Mms, and the same number from Vas and Sd', () => {
@@ -56,20 +56,20 @@ describe('derived Thiele-Small values', () => {
     // radiation mass of a baffled piston on both faces (Beranek):
     // M_air = 2 * 8 rho a^3 / 3, a = sqrt(Sd / pi).
     // Sd = 220 cm^2: a = sqrt(0.022 / pi) = 0.0836828 m, a^3 = 5.860156e-4 m^3,
-    // M_air = (16 / 3) * 1.21 * 5.860156e-4 = 3.781754 g.
-    // So the CONSISTENT woofer stated as Mmd = 32 - 3.781754 = 28.218246 g is
+    // M_air = (16 / 3) * 1.2041 * 5.860156e-4 = 3.763314 g.
+    // So the CONSISTENT woofer stated as Mmd = 32 - 3.763314 = 28.236686 g is
     // the same driver, and must show the numbers of Mms = 32 g:
     // Cms = 1 / ((2 pi 38)^2 * 0.032)            = 5.481799e-4 m/N
     // Qes = 2 pi 38 * 0.032 * 5.6 / 9.2^2         = 0.5055054
     // Qts = 4.2 * Qes / (4.2 + Qes)               = 0.4511997
-    // eta0 = 4 pi^2 38^3 * 0.0377696 / (343^3 Qes), 112.2 + 10 log10(eta0) = 88.2324 dB
-    // Before the fix Mmd was used as Mms: Cms 6.2161e-4, Qes 0.44579, Qts 0.40302.
+    // eta0 = 4 pi^2 38^3 * 0.0375854 / (343^3 Qes), 112.2 + 10 log10(eta0) = 88.2112 dB
+    // Before the fix Mmd was used as Mms: Cms 6.2124e-4, Qes 0.44606, Qts 0.40323.
     const { mms_g: _mms, ...rest } = CONSISTENT;
-    const derived = driverDerivedValues({ ...rest, mmd_g: 28.218246 });
+    const derived = driverDerivedValues({ ...rest, mmd_g: 28.236686 });
     expect(derived.cmsMPerN! / 5.481799e-4).toBeCloseTo(1, 6);
     expect(derived.qes).toBeCloseTo(0.5055054, 6);
     expect(derived.qts).toBeCloseTo(0.4511997, 6);
-    expect(derived.sensitivityDb).toBeCloseTo(88.2324, 3);
+    expect(derived.sensitivityDb).toBeCloseTo(88.2112, 3);
     expect(driverValuesDisagree(derived)).toBe(false);
   });
 
