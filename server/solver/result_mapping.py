@@ -1166,8 +1166,12 @@ def build_solver_response(
                 getattr(result, "radiated_power_sphere_coverage_sr", None)
             ),
             "definition": (
-                "surface_w is one-half real pressure-normal-velocity flux over "
-                "the driven faces; sphere_w is far-field acoustic power integrated "
+                ("surface_w is the real pressure-normal-velocity flux of the RMS "
+                 "phasors over the driven faces; "
+                 if getattr(result, "radiated_power_amplitude", "peak") == "rms" else
+                 "surface_w is one-half real pressure-normal-velocity flux over "
+                 "the driven faces; ")
+                + "sphere_w is far-field acoustic power integrated "
                 "over the sampled sphere with solid-angle weights; agreement_db = "
                 "10log10(sphere_w / surface_w)"
             ),

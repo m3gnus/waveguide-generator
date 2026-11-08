@@ -2406,14 +2406,16 @@ def test_channel_driver_scaling_includes_retained_pressure_and_neumann_traces(
         result.surface_neumann_complex,
         np.full((2, 2), 4 - 2j, dtype=np.complex128) * scales[:, None],
     )
+    # Native peak-phasor watts become RMS watts: twice |scale|^2 (WGNUM-1).
     np.testing.assert_array_equal(
         result.radiated_power_surface_w,
-        np.asarray([1.0, 2.0]) * np.square(np.abs(scales)),
+        np.asarray([1.0, 2.0]) * 2.0 * np.square(np.abs(scales)),
     )
     np.testing.assert_array_equal(
         result.radiated_power_sphere_w,
-        np.asarray([3.0, 4.0]) * np.square(np.abs(scales)),
+        np.asarray([3.0, 4.0]) * 2.0 * np.square(np.abs(scales)),
     )
+    assert result.radiated_power_amplitude == "rms"
 
 
 def test_frequency_validity_estimates_are_not_exposed_as_result_caveats(

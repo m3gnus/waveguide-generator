@@ -449,6 +449,14 @@ def test_optional_native_radiated_power_maps_agreement_and_round_trips_json() ->
     assert power["sphere_coverage_sr"] == pytest.approx(4.0 * np.pi)
     assert power["agreement_db"] == pytest.approx([0.2, -0.5])
     assert "10log10(sphere_w / surface_w)" in power["definition"]
+    assert "one-half real pressure-normal-velocity flux" in power["definition"]
+    result.radiated_power_amplitude = "rms"
+    rms_definition = build_solver_response(
+        result=result, config=_config(), context=_context(), start_time=0.0,
+        metadata={}, sound_speed_m_per_s=343.0,
+    )["metadata"]["radiated_power"]["definition"]
+    assert "flux of the RMS phasors" in rms_definition
+    assert "one-half" not in rms_definition
     assert json.loads(json.dumps(response, allow_nan=False))["metadata"][
         "radiated_power"
     ] == power

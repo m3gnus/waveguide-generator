@@ -276,14 +276,23 @@ def apply_channel_driver(
         rg_ohm=rg_ohm,
         excitation_normalization=getattr(result, "excitation_normalization", "acceleration_legacy"),
     )
-    scale_channel_result(result, scale_raw)
+    # The LEM is driven by an RMS generator voltage: these are RMS fields.
+    scale_channel_result(result, scale_raw, rms=True)
     payload["source_id"] = source_id
     payload["source_area_m2"] = area_m2
     return payload
 
 
-def scale_channel_result(result: Any, scale: np.ndarray) -> None:
-    """Scale retained complex fields and physical power together, before packaging."""
+def scale_channel_result(result: Any, scale: np.ndarray, *, rms: bool = False) -> None:
+    """Scale retained complex fields and physical power together, before packaging.
+
+    Native solvers integrate power from peak phasors: ``0.5*Re(p*conj(v))`` over
+    the driven faces and ``|p|**2/(2*rho*c)`` over the sphere. ``rms=True``
+    states that the scaled fields are RMS phasors (the convention WG's SPL
+    already uses), whose time-average power is ``Re(p*conj(v))``: twice the
+    native number. That factor is applied once per result, however many RMS
+    scalings follow, and recorded as ``radiated_power_amplitude``.
+    """
 
     for name in ("pressure_complex", "sphere_pressure_complex", "surface_pressure_complex", "surface_neumann_complex"):
         value = getattr(result, name, None)
@@ -296,15 +305,14 @@ def scale_channel_result(result: Any, scale: np.ndarray) -> None:
             array = np.asarray(value, dtype=float)
             with np.errstate(divide="ignore"):
                 setattr(result, name, array + (20 * np.log10(np.abs(scale))).reshape((-1,) + (1,) * (array.ndim - 1)))
+    power_fields = [field for field in ("radiated_power_surface_w", "radiated_power_sphere_w")
+                    if getattr(result, field, None) is not None]
     power_scale = np.square(np.abs(scale))
-    for field in ("radiated_power_surface_w", "radiated_power_sphere_w"):
-        radiated_power = getattr(result, field, None)
-        if radiated_power is not None:
-            setattr(
-                result,
-                field,
-                np.asarray(radiated_power, dtype=np.float64) * power_scale,
-            )
+    if rms and power_fields and getattr(result, "radiated_power_amplitude", "peak") != "rms":
+        power_scale = 2.0 * power_scale
+        result.radiated_power_amplitude = "rms"
+    for field in power_fields:
+        setattr(result, field, np.asarray(getattr(result, field), dtype=np.float64) * power_scale)
 
 
 def normalize_prescribed_result(result: Any, geometry: ImportedGeometrySource, *, engine: str | None = None) -> None:
@@ -323,7 +331,7 @@ def normalize_prescribed_result(result: Any, geometry: ImportedGeometrySource, *
     if normalization != "rms_velocity":
         return
     scale = pressure_per_velocity_scale(result.frequencies_hz)
-    scale_channel_result(result, scale)
+    scale_channel_result(result, scale, rms=True)
     impedance = getattr(result, "impedance", None)
     if impedance is not None:
         result.impedance = np.asarray(impedance) * scale
