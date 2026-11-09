@@ -24,11 +24,19 @@ keeps its bytes. LOOKUP profiles with a radius at or below 0 mm are refused,
 naming the row. Geometry qualification passed 9,720 tests with required ATH parity
 at `3941048`; `c4afbb7` changes only that sampling path and its tests. `e0b03d7`
 removes only the unused `hornlab_mesher.experimental` package (no geometry or mesh
-code changes; WG never imported it). The WG consumer suite runs against a clean
-non-editable install of this exact pin.
+code changes; WG never imported it). `a04a6cd` builds the outer wall of a curled
+R-OSSE lip (truncation `tmax` above 1, whose meridian turns back in radius and z)
+as the meridian's constant-distance envelope with its self-crossing loop trimmed,
+and fills the rear and source caps on their own plane. The earlier folded offset
+crossed itself at the bend and the build was refused; such designs, slotted ones
+included, now build with a full wall at the bend. The acoustic surface is
+unchanged. Every other design keeps its mesh and STEP bytes (WG's FREEFORM and
+LOOKUP corpora, 25 saved-run designs and 27 test-fixture designs; a STEP export that already ran past 180 s was not compared). Geometry qualification
+passed 9,727 tests with required ATH parity at `a04a6cd`. The WG consumer suite
+runs against a clean non-editable install of this exact pin.
 
-The mesher pin `e0b03d75e88f8fc518940a23968b4d76cd24995a` declares version 0.2.9. Apart from the FREEFORM
-wall correction, the outer-wall envelope and the cross-section throat reference it retains the released `983f5a39` geometry contracts while
+The mesher pin `a04a6cdcb4b054f48d162fa13aada1fe00ab2d72` declares version 0.2.9. Apart from the FREEFORM
+wall correction, the outer-wall envelope (including curled R-OSSE lips) and the cross-section throat reference it retains the released `983f5a39` geometry contracts while
 reusing existing sampling and preview owners.
 It includes version-gated ATH v3 controls and typed public refusals with
 a shipped, checked control-label catalog. Saved v1/v2 retain their prior geometry
