@@ -16,7 +16,7 @@ import type { DriverFieldKey } from '../stores/cadReturn';
  * calls hornlab-sim's `driver_coupling.coupled_direct_radiator_response` without
  * rho or c, so its defaults (`radiation_impedance.RHO_AIR`, `C_AIR`) are what
  * `Driver.derive()` and the air-mass correction run with. Not hornlab-sim's
- * `bandpass.RHO` (1.21), which the WG solve never uses.
+ * `driver.RHO` (1.21), which the WG solve never uses.
  * `server/tests/test_driver_lem.py` fails if these drift from those defaults. */
 const RHO_KG_PER_M3 = 1.2041;
 const C_M_PER_S = 343;

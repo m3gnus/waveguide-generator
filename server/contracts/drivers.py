@@ -21,7 +21,7 @@ class DriverSpec(JobModel):
     le_mh: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     #: Semi-inductance (LR-2) branch: ``Le2 || Re2`` in series with Re+jwLe,
     #: which is what a measured voice coil actually does above a few hundred
-    #: hertz. Optional, and both or neither -- ``bandpass.Driver`` refuses a
+    #: hertz. Optional, and both or neither -- ``driver.Driver`` refuses a
     #: half-stated pair, and refusing it here names the field in a 422 instead
     #: of failing the solve after the mesh.
     le2_mh: float | None = Field(default=None, gt=0, allow_inf_nan=False)

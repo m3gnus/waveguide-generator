@@ -207,7 +207,8 @@ in WG's coupled solve. The Mms to Mmd rule with its 50% refusal has one owner,
 `lem_to_bem`. The box simulators, transfer-matrix, Helmholtz, port, acoustic-FEM
 and Hornresp tools, their console scripts and the `fem` extra are removed; WG
 called none of them. `bandpass` remains for one release as a re-export of
-`driver`, so WG's `bandpass.Driver` is the same class; no number changes.
+`driver`; WG imports `driver` directly (9 Nov), so the alias can go at the next
+sim release. No number changes.
 
 ## Metal stream ownership and field geometry
 

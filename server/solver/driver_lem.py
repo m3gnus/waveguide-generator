@@ -27,7 +27,7 @@ from typing import Any
 
 import numpy as np
 
-from hornlab_sim.methods import bandpass, driver_coupling, radiation_impedance
+from hornlab_sim.methods import driver, driver_coupling, radiation_impedance
 from hornlab_sim.methods.driver_coupling import MMD_CORRECTION_WARN
 
 from server.contracts.conventions import engineering_to_solver, solver_to_engineering
@@ -41,10 +41,10 @@ class DriverMassLimitError(ValueError):
     """The pinned coupling model refused the free-air mass correction."""
 
 
-def hornlab_driver(spec: DriverSpec) -> bandpass.Driver:
+def hornlab_driver(spec: DriverSpec) -> driver.Driver:
     """Convert the Hornresp-unit wire spec into hornlab-sim's SI ``Driver``."""
 
-    return bandpass.Driver(
+    return driver.Driver(
         Sd=spec.sd_cm2 * 1.0e-4,
         Bl=spec.bl_t_m,
         Re=spec.re_ohm,

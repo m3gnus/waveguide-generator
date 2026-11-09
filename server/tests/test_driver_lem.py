@@ -270,7 +270,7 @@ def test_mass_preflight_logs_and_skips_a_missing_private_helper(monkeypatch, cap
 
 @pytest.mark.parametrize("origin", ["derive", "helper"])
 def test_mass_preflight_preserves_unrelated_validation_errors(monkeypatch, origin) -> None:
-    from hornlab_sim.methods import bandpass, driver_coupling
+    from hornlab_sim.methods import driver, driver_coupling
 
     error = ValueError("driver.Sd must be positive finite")
 
@@ -278,7 +278,7 @@ def test_mass_preflight_preserves_unrelated_validation_errors(monkeypatch, origi
         raise error
 
     if origin == "derive":
-        monkeypatch.setattr(bandpass.Driver, "derive", fail)
+        monkeypatch.setattr(driver.Driver, "derive", fail)
     else:
         monkeypatch.setattr(driver_coupling, "_effective_mmd", fail)
     with pytest.raises(ValueError) as caught:

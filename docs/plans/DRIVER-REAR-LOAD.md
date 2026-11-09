@@ -8,7 +8,14 @@ chamber, and coupled CAD FEM supports meshed chambers; see
 The sealed chamber requires declared Sd and refuses a double rear load.
 
 The broader per-channel lossy/vented model and its hornlab-sim prerequisite
-remain proposals. The original one-port/passive-cardioid call-site analysis
+remain proposals.
+
+Update 2026-11-09: hornlab-sim `6dfc020` removed the lumped box simulator
+(`bandpass.Chamber`, `bandpass.Port`, `simulate`, `bass_reflex`, `cli/tmm`,
+`hornresp/`) because WG never called it; it now lives in the private research
+tools. §2 and §6 below describe the code as it was. If this plan proceeds, the
+lossy chamber and port model is written as new WG or hornlab-sim code on the
+BEM-terminated path, not reused from `bandpass`. The original one-port/passive-cardioid call-site analysis
 below describes its August baseline and must be rechecked before implementation.
 Written after the driver review that produced [PR #38](https://github.com/m3gnus/waveguide-generator/pull/38),
 whose first commit guards a bug class this plan would delete outright.
@@ -164,9 +171,8 @@ Land this first, in `hornlab-sim`, and bump the pin.
    `coupled_direct_radiator_response` a chamber admittance that can carry
    losses: `Y = s·C_eff + 1/R_fill + 1/Z_leak`, where `C_eff` is
    `Chamber.Cab_for`'s thermal-corrected compliance. The cleanest form is to
-   let both accept a `bandpass.Chamber` and reuse `_load_and_port_impedance`
-   with the port's lumped radiation replaced by the BEM termination — one
-   chamber implementation instead of two.
+   write that chamber model once on the BEM-terminated path (the former
+   `bandpass.Chamber` is no longer in hornlab-sim; see the 2026-11-09 update).
 2. Keep the BEM-termination rule from `terminated_chamber_port_branch`'s
    docstring intact: the terminated aperture must not also carry LEM-side
    external radiation loading, or the port radiates twice.
@@ -201,8 +207,8 @@ which is the part that changes numbers for the ordinary sealed case.
 - **Thermal and power compression.** `server/solver/driver_limits.py` is
   explicitly small-signal and says so in its docstring. Adding thermal makes it
   a different kind of tool.
-- **BP4/BP6 topologies.** Bandpass front chambers belong in `hornlab-sim`'s own
-  `bandpass` path. In WG the front side is geometry.
+- **BP4/BP6 topologies.** Bandpass front chambers are research tools, not WG.
+  In WG the front side is geometry.
 
 ## 9. Open questions for the maintainer
 
