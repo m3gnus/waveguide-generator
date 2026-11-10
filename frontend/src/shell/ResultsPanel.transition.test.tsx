@@ -142,12 +142,17 @@ describe('atomic results display transitions', () => {
     vi.stubGlobal('fetch', fetcher);
     await act(async () => root.render(<ResultsPanel/>));
     for (const row of rows.slice(1)) await act(async () => compareSelection.toggleOverlay(row.id));
+    // Count only result and port-data reads. The setup's settings changes
+    // schedule debounced /api/settings saves that may land mid-test on a slow
+    // run; they are not result fetches.
+    const payloadFetches = () => fetcher.mock.calls.filter(([url]) => /^\/api\/(results|radiation-impedance)\//.test(String(url)));
     expect(fetcher.mock.calls.filter(([url]) => String(url).startsWith('/api/results/'))).toHaveLength(18);
     expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/presentation'))).toHaveLength(18);
     expect(resultsCache.keys()).toHaveLength(15);
-    const count = fetcher.mock.calls.length;
+    const count = payloadFetches().length;
+    expect(count).toBe(36);
     await act(async () => compareSelection.toggleOverlay(rows[1].id));
-    expect(fetcher).toHaveBeenCalledTimes(count);
+    expect(payloadFetches()).toHaveLength(count);
     expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe(rows[0].id);
   });
 
