@@ -57,7 +57,8 @@ function seriesAt(
   return output;
 }
 
-function flatDi(result: ResultPayload): Array<number | null> {
+/** The DI series to show: a flat array as it is, else the horizontal plane, else the first plane. */
+export function flatDi(result: ResultPayload): Array<number | null> {
   const values = result.di?.di;
   if (Array.isArray(values)) return values;
   if (!values) return [];

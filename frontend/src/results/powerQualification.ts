@@ -2,7 +2,7 @@ import type { EChartsOption } from 'echarts';
 import type { ChartTokens } from './EChart';
 import type { NamedResult } from './mappers';
 import { combineMetadataOf, resultChannels, type ResultPayload } from './types';
-import { formatValidityFrequency, resultFrequencyValidity } from './validity';
+import { formatFrequencyHz, resultFrequencyValidity } from './validity';
 
 /**
  * Radiated-power qualification: which frequencies of a channel failed the
@@ -272,8 +272,8 @@ export function powerQualificationOf(result: ResultPayload | undefined, wrapper:
 /** "200 Hz–1.21 kHz, 1.81 kHz": the flagged samples, as solved. */
 export function formatUnqualifiedRanges(ranges: UnqualifiedRange[]): string {
   return ranges.map(({ start_hz: start, end_hz: end }) => start === end
-    ? formatValidityFrequency(start)
-    : `${formatValidityFrequency(start)}–${formatValidityFrequency(end)}`).join(', ');
+    ? formatFrequencyHz(start)
+    : `${formatFrequencyHz(start)}–${formatFrequencyHz(end)}`).join(', ');
 }
 
 export interface UnqualifiedBand {
@@ -406,12 +406,12 @@ export function powerQualificationDetail(flags: PowerQualification, channelLabel
   const lines: string[] = [];
   if (flags.status === 'unqualified') {
     lines.push(unqualifiedMessage(flags.formulation));
-    lines.push(`Affected: ${formatUnqualifiedRanges(flags.ranges)}${flags.validityMaxHz !== null ? `, inside the ${formatValidityFrequency(flags.validityMaxHz)} validity limit` : ''}.`);
+    lines.push(`Affected: ${formatUnqualifiedRanges(flags.ranges)}${flags.validityMaxHz !== null ? `, inside the ${formatFrequencyHz(flags.validityMaxHz)} validity limit` : ''}.`);
     const why = flags.reasons.map((reason) => REASON_TEXT[reason]).filter(Boolean);
     if (why.length) lines.push(`Why: ${why.join('; ')}.`);
     if (flags.unqualifiedChannels.length) lines.push(`Unqualified contributing channel${flags.unqualifiedChannels.length > 1 ? 's' : ''}: ${flags.unqualifiedChannels.map(channelLabel).join(', ')}.`);
   } else if (flags.status === 'qualified') {
-    lines.push(`Driven-face and far-field power agree within ${POWER_QUALIFICATION_THRESHOLD_DB} dB at every checked frequency${flags.validityMaxHz !== null ? ` up to the ${formatValidityFrequency(flags.validityMaxHz)} validity limit` : ''}.`);
+    lines.push(`Driven-face and far-field power agree within ${POWER_QUALIFICATION_THRESHOLD_DB} dB at every checked frequency${flags.validityMaxHz !== null ? ` up to the ${formatFrequencyHz(flags.validityMaxHz)} validity limit` : ''}.`);
   } else {
     lines.push(UNKNOWN_TEXT[flags.unknownReason ?? ''] ?? 'This result cannot be qualified from what it records.');
   }

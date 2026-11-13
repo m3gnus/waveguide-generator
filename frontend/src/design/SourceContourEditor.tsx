@@ -2,6 +2,7 @@ import { Notice } from '../shell/Notice';
 import { formatValue } from '../sketch/formatValue';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { downloadBlob } from '../api/designIo';
 import { sourceEditorApi, type SourceAttachment, type SourceDocument, type SourcePatch, type SourcePoint, type SourcePreset, type SourceValidation } from '../api/sourceEditor';
 import { durableSettings, namespaceStorage } from '../stores/durableSettings';
 import { useModalDialogFocus } from '../shell/dialogFocus';
@@ -576,7 +577,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
           {attachment.kind === 'baffle' && ([0, 1, 2] as const).map((axis) => <NumberField key={axis} label={`Source center ${['X', 'Y', 'Z'][axis]}`} value={(attachment.dimensions.center_mm as [number, number, number])[axis]} precision={6} displayPrecision={2} unit="mm" step={.1} onCommit={(v) => { const center = [...attachment.dimensions.center_mm as [number, number, number]] as [number, number, number]; center[axis] = v; setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, center_mm: center } }); }}/>) }
           <NumberField label="Mesh size" value={meshSize} min={.001} precision={6} displayPrecision={3} unit="mm" step={.1} onCommit={setMeshSize}/>
         </div><button className="btn" type="button" disabled={!valid} onClick={() => void run(async () => {
-          const blob = await sourceEditorApi.export(draft, attachment, meshSize); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'native-source.zip'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); setNotice('Exported native source bundle: STEP, mesh and hash-bound source recipe.');
+          downloadBlob(await sourceEditorApi.export(draft, attachment, meshSize), 'native-source.zip'); setNotice('Exported native source bundle: STEP, mesh and hash-bound source recipe.');
         })}>Export STEP + mesh bundle</button>
         <p>Source presets store the contour and drive. External references are kept as fixed construction. Attachment and mesh size apply to this export.</p></details>}
         </div>

@@ -3,6 +3,7 @@ import { chartPixelRatio } from './chartPixelRatio';
 import { colorOffset, colorTable } from './colorTable';
 import { useChartTokens, type ChartTokens } from './EChart';
 import type { ResultPayload } from './types';
+import { formatFrequencyHz } from './validity';
 
 const RANGE_DB = 30;
 /** The beam map is computed per pixel; above this it is drawn smaller and scaled up. */
@@ -122,11 +123,6 @@ function drawForwardMap(canvas: HTMLCanvasElement, result: ResultPayload, freque
   context.globalAlpha = 1;
 }
 
-function formatFrequency(value: number | undefined): string {
-  if (!Number.isFinite(value)) return '—';
-  return value! >= 1_000 ? `${(value! / 1_000).toFixed(value! >= 10_000 ? 1 : 2)} kHz` : `${Math.round(value!)} Hz`;
-}
-
 function FrequencyCanvas({ result, kind }: { result: ResultPayload; kind: 'balloon' | 'beam' }) {
   const frequencies = result.balloon?.frequencies ?? [];
   const [index, setIndex] = useState(() => closestFrequencyIndex(frequencies));
@@ -144,7 +140,7 @@ function FrequencyCanvas({ result, kind }: { result: ResultPayload; kind: 'ballo
     return () => observer?.disconnect();
   }, [result, index, kind, tokens]);
   const readout = useMemo(() => {
-    const parts = [formatFrequency(frequencies[index])];
+    const parts = [formatFrequencyHz(frequencies[index], '—')];
     if (kind === 'beam') {
       const horizontal = beam?.horizontal_beamwidth_deg?.[index];
       const vertical = beam?.vertical_beamwidth_deg?.[index];

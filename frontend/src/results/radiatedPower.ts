@@ -1,4 +1,4 @@
-import { formatValidityFrequency, resultFrequencyValidity } from './validity';
+import { formatFrequencyHz, resultFrequencyValidity } from './validity';
 import type { RadiatedPowerMetadata, ResultPayload } from './types';
 
 export const POWER_AGREEMENT_WARNING_DB = 0.5;
@@ -103,7 +103,7 @@ export function powerCheckMessage(
   health: PowerAgreementHealth,
 ): { label: string; title: string } {
   const worst = decibels(health.signedDifferenceDb);
-  const worstFrequency = formatValidityFrequency(health.frequencyHz);
+  const worstFrequency = formatFrequencyHz(health.frequencyHz);
   const direction = health.signedDifferenceDb >= 0
     ? 'the far-field sphere integral reads higher than the driven-surface flux'
     : 'the driven-surface flux reads higher than the far-field sphere integral';
@@ -111,7 +111,7 @@ export function powerCheckMessage(
   const where = 'Per-frequency surface and sphere power are available in the Derived acoustics export and the static run report.';
 
   const [low, high] = health.affectedSpanHz;
-  const span = `${formatValidityFrequency(low)}–${formatValidityFrequency(high)}`;
+  const span = `${formatFrequencyHz(low)}–${formatFrequencyHz(high)}`;
   return {
     label: `Power check: ${worst} at ${worstFrequency}`,
     title: `${opening} ${health.affectedCount} of ${health.checkedCount} checked frequencies exceed ${POWER_AGREEMENT_WARNING_DB} dB${health.affectedCount > 1 ? `, spanning ${span}` : ''}. The channel response near ${worstFrequency} may be unreliable. Re-solve and qualify solver stability before trusting it. ${where}`,

@@ -25,7 +25,7 @@ import { designWireWithSolveSettings } from '../stores/designWire';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import { EXPORT_FORMATS, resolveChartTheme, runDisplayName, type ExportFormat, type Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
-import { buildDerivedAcousticsCsv, buildDerivedAcousticsJson } from './derivedAcoustics';
+import { buildDerivedAcousticsCsv, buildDerivedAcousticsJson, flatDi } from './derivedAcoustics';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
 import { withNormalizationAngle } from './normalization';
 import { impedanceUnits } from './mappers';
@@ -118,13 +118,6 @@ function csvCell(value: unknown): string {
 
 function resultFrequencies(result: ResultPayload): number[] {
   return result.spl_on_axis?.frequencies?.length ? result.spl_on_axis.frequencies : result.frequencies;
-}
-
-function flatDi(result: ResultPayload): Array<number | null> {
-  const value = result.di?.di;
-  if (Array.isArray(value)) return value;
-  if (!value) return [];
-  return value.horizontal ?? Object.values(value)[0] ?? [];
 }
 
 function smoothedSeries(result: ResultPayload, preferences: Preferences) {

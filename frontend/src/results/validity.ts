@@ -94,8 +94,9 @@ export function resultCombineWarnings(result: ResultData): string[] {
   });
 }
 
-export function formatValidityFrequency(value: number): string {
-  if (!Number.isFinite(value)) return '';
+/** A frequency for reading: "n Hz" below 1 kHz, else kHz to two (below 10 kHz) or one decimal; `missing` when not finite. */
+export function formatFrequencyHz(value: number | undefined, missing = ''): string {
+  if (value === undefined || !Number.isFinite(value)) return missing;
   return Math.abs(value) >= 1_000
     ? `${(value / 1_000).toFixed(Math.abs(value) >= 10_000 ? 1 : 2)} kHz`
     : `${Math.round(value)} Hz`;

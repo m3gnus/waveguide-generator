@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
+import { middleEllipsis } from './middleEllipsis';
 import { describe, expect, it } from 'vitest';
 import { CHART_FONT_FAMILY } from '../results/chartAxes';
 import type { ChartTokens } from '../results/EChart';
 import { beamShapeSeries } from '../results/mappers';
 import type { NamedResult } from '../results/mappers';
 import type { ResultPayload } from '../results/types';
-import { chartDensity, clearingRail, withCompactLegend, directivityIndexOption, formatChartValue, heatmapOption, impedanceOption, lineOption, middleEllipsis, type ChartDensity } from './ResultsPanel';
+import { chartDensity, clearingRail, withCompactLegend, directivityIndexOption, formatChartValue, heatmapOption, impedanceOption, lineOption, type ChartDensity } from './ResultsPanel';
 
 /**
  * Layout locks for the result dock.

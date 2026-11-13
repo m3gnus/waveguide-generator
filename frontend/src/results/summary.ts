@@ -7,7 +7,7 @@ import { channelLabel } from './channelLabel';
 import { FILTER_FAMILY_SHORT, isFilterFamily } from './crossoverSpec';
 import { combineMetadataOf, type CombineFilterSection, type ResultPayload } from './types';
 import { excursionSeries } from './drivePower';
-import { formatValidityFrequency, resultCombineWarnings, resultFrequencyValidity } from './validity';
+import { formatFrequencyHz, resultCombineWarnings, resultFrequencyValidity } from './validity';
 
 /** One label/value line. `title` becomes the row's hover text when set. */
 export interface SummaryRow {
@@ -90,15 +90,15 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   const validity = resultFrequencyValidity(result, wrapper);
   if (validity) {
     const validityRows: SummaryRow[] = [];
-    row(validityRows, 'Governing ceiling', formatValidityFrequency(validity.governingMaxFrequencyHz));
+    row(validityRows, 'Governing ceiling', formatFrequencyHz(validity.governingMaxFrequencyHz));
     validity.sources.forEach(({ sourceId, effectiveMaxFrequencyHz }) => {
-      row(validityRows, `Source ${sourceId}`, formatValidityFrequency(effectiveMaxFrequencyHz));
+      row(validityRows, `Source ${sourceId}`, formatFrequencyHz(effectiveMaxFrequencyHz));
     });
     if (validity.exceedsCeiling && validity.solvedMaxFrequencyHz !== null) {
       row(
         validityRows,
         'Accuracy',
-        `Results might not be very accurate above ${formatValidityFrequency(validity.governingMaxFrequencyHz)}.`,
+        `Results might not be very accurate above ${formatFrequencyHz(validity.governingMaxFrequencyHz)}.`,
       );
     }
     group(groups, 'Validity', validityRows, validity.exceedsCeiling ? 'warning' : undefined);

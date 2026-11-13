@@ -4,6 +4,8 @@ import type { ResultsMessage } from './ResultsMessages';
 import { selectJob } from '../jobs/selectJob';
 import { listedRuns, railRuns, useRunFilters } from '../jobs/runFilters';
 import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
+import { formatFrequencyHz } from '../results/validity';
+import { middleEllipsis } from './middleEllipsis';
 import { samplingNotes } from '../results/sampling';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -112,22 +114,6 @@ export function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnaps
 function primaryRunOf(items: NamedResult[]): string | undefined {
   const entry = items.find(({ primary }) => primary);
   return entry === undefined ? undefined : runOfLabel(entry.label);
-}
-
-/**
- * Truncate from the middle, because run names differ at the end.
- *
- * Names in this product are `<design>_v<NN>` and are generated from a shared
- * base, so end-truncation removes the only part that identifies the run:
- * comparing `260308tritonia-q_v02` against `_v03` rendered both chips as
- * `260308trit…` and both chart legend entries as `260…`. The version suffix is
- * the identity; it is the last thing that may be dropped, not the first.
- */
-export function middleEllipsis(value: string, max = 20): string {
-  if (value.length <= max) return value;
-  const keepEnd = Math.max(5, Math.floor((max - 1) / 2));
-  const keepStart = Math.max(1, max - 1 - keepEnd);
-  return `${value.slice(0, keepStart)}…${value.slice(-keepEnd)}`;
 }
 
 /**
@@ -270,7 +256,7 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     grid: { ...inset, containLabel: false },
     // The tick labels already read as frequencies; the caption only earns its
     // 20px on a chart big enough to spare them.
-    xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 24, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), minorTick: { show: true }, ...axis, ...frequencyTicks, axisPointer: { label: { formatter: ({ value }: { value: unknown }) => formatPolarFrequency(Number(value)) } } },
+    xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 24, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), minorTick: { show: true }, ...axis, ...frequencyTicks, axisPointer: { label: { formatter: ({ value }: { value: unknown }) => formatFrequencyHz(Number(value), '—') } } },
     // In-grid cards carry the unit in their title chip, which occupies exactly
     // the top-left corner an axis name would be drawn into.
     // A second axis is for a companion quantity in different units (phase
@@ -1681,17 +1667,12 @@ function PolarResponseCard({ items, tokens, density, live }: { items: NamedResul
     <EChart option={option} label={`Interactive HornLab ${drawnPlane} polar response`} live={live}/>
     <label className="frequency-scrub">
       <input aria-label="Polar frequency" type="range" min={0} max={Math.max(0, frequencies.length - 1)} value={index} onChange={(event) => { chosen.current = true; setIndex(Number(event.target.value)); }}/>
-      <span>{formatPolarFrequency(frequencies[index])}</span>
+      <span>{formatFrequencyHz(frequencies[index], '—')}</span>
       {available.length > 1 && <select aria-label="Polar plane" value={drawnPlane} onChange={(event) => setPlane(event.target.value as PolarPlane)}>
         {available.map((candidate) => <option key={candidate} value={candidate}>{candidate === 'horizontal' ? 'H' : 'V'}</option>)}
       </select>}
     </label>
   </div>;
-}
-
-export function formatPolarFrequency(value: number | undefined): string {
-  if (!Number.isFinite(value)) return '—';
-  return value! >= 1_000 ? `${(value! / 1_000).toFixed(value! >= 10_000 ? 1 : 2)} kHz` : `${Math.round(value!)} Hz`;
 }
 
 /**

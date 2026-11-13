@@ -26,7 +26,7 @@ import { useDocumentStore } from '../stores/document';
 import { discardConfirmation, replacingWouldLose } from '../design/replacementCheck';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { Icon } from './icons';
-import { middleEllipsis } from './ResultsPanel';
+import { middleEllipsis } from './middleEllipsis';
 import { useWorkspaceFolder } from './WorkspaceFolderControls';
 import { failureWords } from '../api/httpError';
 

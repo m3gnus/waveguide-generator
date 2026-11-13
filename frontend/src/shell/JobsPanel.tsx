@@ -25,7 +25,7 @@ import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { navigationGeneration } from './workspaceNavigation';
 import { Icon } from './icons';
 import { LogDialog } from './LogDialog';
-import { middleEllipsis } from './ResultsPanel';
+import { middleEllipsis } from './middleEllipsis';
 import { cadJobOperationId } from '../jobs/cadSolve';
 import { CadSolveInputs } from './CadSolveInputs';
 import { runStatusWord, SolveProgressView, useSolveClock } from './solveProgress';
