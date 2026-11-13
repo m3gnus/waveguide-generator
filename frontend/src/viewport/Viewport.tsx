@@ -15,7 +15,7 @@ import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection, provisionalResults } from '../api/results';
 import { currentModel, currentModelScene, currentCadScenes, shownResult, showsRetainedMesh, spatialResult, useCurrentModel, type CurrentModel } from '../model/currentModel';
-import { postSymmetry, toSolveDesign } from '../jobs/actions';
+import { useAutoSymmetry } from '../design/autoSymmetry';
 import { planAdjustmentNotice } from '../jobs/planAdjustments';
 import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
 import { useOptionalSolveControl } from '../shell/JobsCoordinator';
@@ -101,7 +101,6 @@ export function nextDisplayMode(mode: DisplayMode): DisplayMode {
 
 /** How long the viewport may lag the design before it says so out loud. */
 const STALL_NOTICE_MS = 1_500;
-const SYMMETRY_TINT_DEBOUNCE_MS = 400;
 
 function formatPressurePa(value: number): string {
   const magnitude = Math.abs(value);
@@ -477,23 +476,15 @@ export function Viewport() {
     selectedRef.current = selected;
   }
   const previewScene = useMemo(() => selected ? frameToScene(selected) : null, [selected]);
-  const [autoQuadrants, setAutoQuadrants] = useState<DisplayQuadrants>(() => displayQuadrants(design.mesh.quadrants));
-  const symmetryBody = useMemo(() => JSON.stringify(toSolveDesign(design)), [design]);
-  useEffect(() => {
-    if (workspaceMode !== 'parametric' || solveSymmetry !== 'auto' || previewScene === null) return undefined;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      void postSymmetry(symmetryBody, fetch, controller.signal)
-        .then((resolution) => setAutoQuadrants(resolution.quadrants))
-        .catch(() => {
-          if (!controller.signal.aborted) setAutoQuadrants(displayQuadrants(design.mesh.quadrants));
-        });
-    }, SYMMETRY_TINT_DEBOUNCE_MS);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [design.mesh.quadrants, workspaceMode, previewScene, solveSymmetry, symmetryBody]);
+  // Shares the parameter panel's cached query: one request per settled edit,
+  // not one per preview frame.
+  const autoSymmetry = useAutoSymmetry(design, {
+    enabled: workspaceMode === 'parametric' && solveSymmetry === 'auto' && previewScene !== null,
+    keepPrevious: true,
+  });
+  const autoQuadrants: DisplayQuadrants = autoSymmetry.error || !autoSymmetry.data
+    ? displayQuadrants(design.mesh.quadrants)
+    : autoSymmetry.data.quadrants;
   const recordedQuadrants = resultRun?.symmetry?.resolved_quadrants;
   const resultQuadrants = recordedQuadrants === 1 || recordedQuadrants === 12
     || recordedQuadrants === 14 || recordedQuadrants === 1234 ? recordedQuadrants : null;

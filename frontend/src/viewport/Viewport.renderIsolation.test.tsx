@@ -72,6 +72,14 @@ vi.mock('../api/previewSocket', () => ({
 
 import { resetWebGLProbe } from './ViewportCanvas';
 import { Viewport } from './Viewport';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+/** Viewport resolves auto symmetry through React Query, as it does under the app's provider. */
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function ViewportUnderTest() {
+  return <QueryClientProvider client={queryClient}><Viewport /></QueryClientProvider>;
+}
+afterEach(() => queryClient.clear());
 
 describe('Viewport render isolation', () => {
   let host: HTMLDivElement;
@@ -90,7 +98,7 @@ describe('Viewport render isolation', () => {
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
-    act(() => root.render(<Viewport />));
+    act(() => root.render(<ViewportUnderTest />));
   });
 
   afterEach(() => {

@@ -19,11 +19,11 @@ import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOpt
 import { ExteriorMmdSuggestion } from './ExteriorMmdSuggestion';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { previewSocket } from '../api/previewSocket';
 import type { CadRealizedDimensions, CadRealizedParameter, CadReturnIngestRecord } from '../api/cadlink';
 import { importedSubmissionBlocker, importedSubmissionNotices, importedSweepRangeInvalid } from '../jobs/importedSubmission';
-import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
+import type { SymmetryResolution } from '../jobs/actions';
+import { useAutoSymmetry } from './autoSymmetry';
 import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
 import { cadMeshDetailContent, cadMeshIsEditable } from '../api/cadMesh';
 import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
@@ -599,52 +599,8 @@ export function symmetrySummary(resolution: SymmetryResolution): string {
   return rejected.join(' ');
 }
 
-/** Resolving samples the surface, so it must not run on every keystroke. */
-const SYMMETRY_DEBOUNCE_MS = 400;
-
-/**
- * Long enough that an editing session never re-resolves a shape it has already
- * seen, finite so a page that outlives a server restart eventually asks the new
- * process rather than trusting the old one's answer.
- */
-const SYMMETRY_STALE_MS = 5 * 60_000;
-
-/** How long a superseded payload's answer is kept in case the user comes back. */
-const SYMMETRY_GC_MS = 60_000;
-
-/** Hold a value back until it has stopped changing for `delay` milliseconds. */
-function useSettled<T>(value: T, delay: number): T {
-  const [settled, setSettled] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setSettled(value), delay);
-    return () => clearTimeout(timer);
-  }, [value, delay]);
-  return settled;
-}
-
 function AutoSymmetryReadout({ design }: { design: DesignDocument }) {
-  // Key on the wire payload, not the revision. Surface sampling costs 57-150 ms
-  // per call, and most revisions -- anything the solve design does not carry,
-  // plus every undo back to a shape already resolved -- produce bytes we have
-  // already answered. React Query then dedupes in flight and caches the rest.
-  //
-  // The debounce, not the signal, is what bounds server work: the resolver runs
-  // in `asyncio.to_thread`, so aborting a superseded request frees the
-  // connection and discards the answer but does not stop the thread.
-  const settledDesign = useSettled(design, SYMMETRY_DEBOUNCE_MS);
-  const body = useMemo(() => JSON.stringify(toSolveDesign(settledDesign)), [settledDesign]);
-  const { data: resolution, error: queryError, isPending } = useQuery({
-    queryKey: ['symmetry', body],
-    queryFn: ({ signal }) => postSymmetry(body, fetch, signal),
-    staleTime: SYMMETRY_STALE_MS,
-    // Only the settled key is ever active, so every superseded payload is
-    // inactive and collected a minute later. The cache is bounded by time, not
-    // by count: pausing on many distinct values inside one minute does keep
-    // them all. Each entry is a ~125-byte resolution, so that is affordable,
-    // and a short window is what keeps it so.
-    gcTime: SYMMETRY_GC_MS,
-    retry: false,
-  });
+  const { data: resolution, error: queryError, isPending } = useAutoSymmetry(design);
   const error = queryError ? failureWords(queryError) : null;
 
   if (error) return <div className="resolved-mode"><span>Auto resolves to</span><b>—</b><small>{error}</small></div>;

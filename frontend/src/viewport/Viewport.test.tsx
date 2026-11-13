@@ -36,6 +36,7 @@ import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import meshFixture from './test-fixtures/tagged_sources-small.msh?raw';
 import { femFieldFixture } from './test-fixtures/femField';
 import { FieldPlane } from './FieldPlane';
+import { ParamPanel } from '../design/ParamPanel';
 import { DemandRenderScheduler } from './demandRender';
 import * as canvasModule from './ViewportCanvas';
 import * as femSceneModule from './FemFieldScene';
@@ -140,6 +141,14 @@ vi.mock('../api/previewSocket', () => ({
 }));
 
 import { femFieldJob, fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+/** Viewport resolves auto symmetry through React Query, as it does under the app's provider. */
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function ViewportUnderTest() {
+  return <QueryClientProvider client={queryClient}><Viewport /></QueryClientProvider>;
+}
+afterEach(() => queryClient.clear());
 import { assemblyMeshScene } from './solverMeshScene';
 import type { CompiledAssembly } from '../api/assembly';
 import type { FrameScene } from './frameScene';
@@ -176,7 +185,7 @@ describe('Viewport preview errors', () => {
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
-    act(() => root.render(<Viewport />));
+    act(() => root.render(<ViewportUnderTest />));
   });
 
   afterEach(() => {
@@ -212,7 +221,7 @@ describe('Viewport preview errors', () => {
       Object.assign(previewSnapshot, { frame: { ...frame, documentLoad: currentDocumentLoad(), header: { ...frame.header, designRevision: revision,
         previewMetadata: { dimensions_mm: { mouth_opening: [411.7, 320], horn_overall: [411.7, 320, 176.5], enclosure_overall: [450, 360, 240] } } } },
         dimensionsFrame: null, displayedRevision: revision, stale: false, error: null });
-      act(() => root.render(<Viewport />));
+      act(() => root.render(<ViewportUnderTest />));
       const readout = host.querySelector('[data-testid="design-dimensions"]')!;
       expect(readout.closest('.wg2-viewport')).not.toBeNull();
       expect([...readout.querySelectorAll('.viewport-fact')].map((fact) => fact.textContent))
@@ -229,7 +238,7 @@ describe('Viewport preview errors', () => {
 
   it('names the family, and the design only to a screen reader: the File menu shows the name', () => {
     act(() => useDesignStore.getState().setFamily('OSSE-ARC'));
-    act(() => root.render(<Viewport />));
+    act(() => root.render(<ViewportUnderTest />));
     expect(host.querySelector('.viewport-kind')?.textContent).toBe('OSSE-ARC');
     expect(host.querySelector('.viewport-name')?.classList.contains('sr-only')).toBe(true);
   });
@@ -247,7 +256,7 @@ describe('Viewport preview errors', () => {
   it('offers a refresh beside the badge when the view lags without a notice', () => {
     const saved = previewSnapshot.error;
     previewSnapshot.error = null;
-    act(() => root.render(<Viewport />));
+    act(() => root.render(<ViewportUnderTest />));
     refreshCalls.length = 0;
     const refresh = host.querySelector<HTMLButtonElement>('.viewport-refresh');
     expect(refresh?.textContent).toContain('Refresh');
@@ -260,7 +269,7 @@ describe('Viewport preview errors', () => {
     expect(host.querySelector('.viewport-timing')).toBeNull();
     try {
       act(() => preferencesStore.update({ showDeveloperDetails: true }));
-      act(() => root.render(<Viewport />));
+      act(() => root.render(<ViewportUnderTest />));
       const timing = host.querySelector('.viewport-timing');
       // 'request→paint' was developer telemetry sitting in a user-facing readout.
       expect(timing?.textContent).toBe('Geometry 1388.0 msOn screen —');
@@ -1237,6 +1246,76 @@ describe('Viewport preview errors', () => {
   });
 });
 
+describe('Viewport auto symmetry', () => {
+  const resolution = {
+    quadrants: 14, xz: false, yz: true,
+    reasons: { xz: ['the profile is not mirrored about XZ'], yz: [] },
+    tolerance_mm: 1e-7, relative_tolerance: 2e-4,
+  };
+  let host: HTMLDivElement;
+  let root: Root;
+  let symmetryCalls: string[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    Object.assign(previewSnapshot, initialPreviewSnapshot);
+    resetDesignStore();
+    resetCadReturnStore();
+    publishJobs([]);
+    importedMeshStore.clear();
+    workspaceModeStore.setMode('parametric');
+    useSolveOptionsStore.getState().setSymmetry('auto');
+    symmetryCalls = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/api/design/symmetry')) {
+        symmetryCalls.push(String(init?.body));
+        return new Response(JSON.stringify(resolution), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ engines: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    resetSolveOptionsStore();
+    vi.unstubAllGlobals();
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  const advance = (milliseconds: number) => act(async () => {
+    await vi.advanceTimersByTimeAsync(milliseconds);
+  });
+  const mount = () => act(async () => {
+    root.render(<QueryClientProvider client={queryClient}><ParamPanel tab="simulation" /><Viewport /></QueryClientProvider>);
+  });
+
+  it('shares one request per settled edit with the parameter panel, not one per preview frame', async () => {
+    await mount();
+    await advance(0);
+    expect(symmetryCalls).toHaveLength(1);
+    expect(host.querySelector('[aria-label="Solved domain"]')?.textContent).toContain('Half model');
+
+    // Coarse then fine frames of the same design re-render the viewport with a new scene.
+    for (const [seq, lod] of [[10, 'coarse'], [11, 'fine']] as const) {
+      previewSnapshot.frame = { ...frame, header: { ...frame.header, seq, lod } };
+      await mount();
+      await advance(500);
+    }
+    expect(symmetryCalls).toHaveLength(1);
+
+    act(() => useDesignStore.getState().updateValue('mesh.wall_thickness', 9));
+    await advance(400);
+    await advance(0);
+    expect(symmetryCalls).toHaveLength(2);
+  });
+});
+
 describe('Viewport geometry warnings', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -1248,7 +1327,7 @@ describe('Viewport geometry warnings', () => {
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
-    act(() => root.render(<Viewport />));
+    act(() => root.render(<ViewportUnderTest />));
   };
 
   beforeEach(() => {
@@ -1409,7 +1488,7 @@ describe('BEMPP wall plan-adjustment note', () => {
   async function renderWithAdjustments(adjustments: NonNullable<SolvePlan['adjustments']>) {
     coordinator.plan = solvePlanWithAdjustments(adjustments);
     const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('not found', { status: 404 }));
-    await act(async () => root.render(<Viewport />));
+    await act(async () => root.render(<ViewportUnderTest />));
     expect(fetcher.mock.calls.filter(([url]) => String(url) === '/api/solve/plan')).toHaveLength(0);
   }
 
@@ -1447,15 +1526,15 @@ describe('BEMPP wall plan-adjustment note', () => {
       kind: 'bempp_wall_default', requested: 'omitted', effective_mm: 5,
       reason_code: 'bempp_wall_default', policy_version: 1,
     }]);
-    await act(async () => root.render(<Viewport />));
+    await act(async () => root.render(<ViewportUnderTest />));
     expect(host.querySelector('.solver-plan-adjustment-note')?.textContent).toContain('5 mm');
     coordinator.plan = null;
     coordinator.planPending = true;
-    await act(async () => root.render(<Viewport />));
+    await act(async () => root.render(<ViewportUnderTest />));
     expect(host.querySelector('.solver-plan-adjustment-note')?.textContent).toContain('5 mm');
     coordinator.plan = solvePlanWithAdjustments([]);
     coordinator.planPending = false;
-    await act(async () => root.render(<Viewport />));
+    await act(async () => root.render(<ViewportUnderTest />));
     expect(host.querySelector('.solver-plan-adjustment-note')).toBeNull();
     expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === '/api/solve/plan')).toHaveLength(0);
   });
@@ -1522,7 +1601,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
             ? new Response(JSON.stringify({ detail: wallFold }), { status: 422 })
             : new Response(JSON.stringify(solverMeshResponse('recovered')), { status: 200 });
         });
-        await act(async () => root.render(<Viewport />));
+        await act(async () => root.render(<ViewportUnderTest />));
         if (condition === 'dismissed preview error') {
           act(() => host.querySelector<HTMLButtonElement>('[aria-label="Dismiss preview error"]')!.click());
         }
@@ -1542,7 +1621,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
         expect(builds).toBe(2);
         expect(refreshCalls).toHaveLength(1);
         Object.assign(previewSnapshot, { error: null, stale: false, displayedRevision: useDesignStore.getState().designRevision, connection: 'connected' });
-        act(() => root.render(<Viewport />));
+        act(() => root.render(<ViewportUnderTest />));
         expect(host.querySelector('.viewport-connection-banner, .viewport-error-banner')).toBeNull();
       } finally {
         Object.assign(previewSnapshot, saved);
@@ -1560,7 +1639,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
     const compiled = deferred<Response>();
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => String(input).includes('/assembly/compile')
       ? compiled.promise : new Response('not found', { status: 404 }));
-    await act(async () => root.render(<Viewport />));
+    await act(async () => root.render(<ViewportUnderTest />));
     const urls = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url));
     expect(urls().filter(url => url.includes('/assembly/compile'))).toHaveLength(1);
     expect(urls()).not.toContain('/api/solver-mesh');
@@ -1597,7 +1676,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
         status: 200, headers: { 'Content-Type': 'application/json' },
       });
     });
-    await act(async () => root.render(<Viewport />));
+    await act(async () => root.render(<ViewportUnderTest />));
     expect(requests).toHaveLength(1);
     expect(requests[0].options.engine).toBe('auto');
     expect(requests[0].options.ground_plane.enabled).toBe(true);
@@ -1617,7 +1696,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
       modes.push(JSON.parse(String(init?.body)).options.mesh_validation_mode);
       return new Response(JSON.stringify(solverMeshResponse('same')), { status: 200 });
     });
-    await act(async () => root.render(<Viewport />));
+    await act(async () => root.render(<ViewportUnderTest />));
     const revision = useDesignStore.getState().designRevision;
     expect(modes).toEqual(['warn']);
     act(() => useSolveOptionsStore.getState().setMeshValidationMode('strict'));
@@ -1642,7 +1721,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
       }), { status: 200 });
       return new Response(JSON.stringify({ detail: 'build failed' }), { status: 422 });
     });
-    await act(async () => root.render(<Viewport />));
+    await act(async () => root.render(<ViewportUnderTest />));
     expect(host.textContent).toContain('Cannot solve this yet: Turn off the ground plane');
     act(() => useSolveOptionsStore.getState().setEngine('bempp'));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
@@ -1658,7 +1737,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
       if (guard === 'slow build') clock.mockReturnValue(2000);
       return new Response(JSON.stringify(solverMeshResponse('same')), { status: 200 });
     });
-    await act(async () => root.render(<Viewport />));
+    await act(async () => root.render(<ViewportUnderTest />));
     if (guard === 'running solve') act(() => publishJobs([{ ...completeJob('running', false), status: 'running' }]));
     act(() => {
       useSolveOptionsStore.getState().setFrequencySpacing('linear');
@@ -1687,7 +1766,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
       expect(JSON.parse(String(init?.body)).options.frequencies_hz).toBeUndefined();
       return new Response(JSON.stringify(solverMeshResponse('same')), { status: 200 });
     });
-    await act(async () => root.render(<Viewport />));
+    await act(async () => root.render(<ViewportUnderTest />));
     expect(importedMeshStore.getSnapshot().solver).not.toBeNull();
     act(() => useSolveOptionsStore.getState().setFrequencyListText('100 200 400'));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
@@ -1706,7 +1785,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
         plan: { refusal: 'Turn off the ground plane' },
       }), { status: 200 });
     });
-    await act(async () => root.render(<Viewport />));
+    await act(async () => root.render(<ViewportUnderTest />));
     expect(host.textContent).toContain('Mesh build failed');
     act(() => useSolveOptionsStore.getState().setEngine('bempp'));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
@@ -1730,7 +1809,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
       String(input) === '/api/solver-mesh' ? oldResponse : new Response('not found', { status: 404 })
     ));
 
-    act(() => root.render(<Viewport />));
+    act(() => root.render(<ViewportUnderTest />));
     expect(importedMeshStore.getSnapshot().solver).toBeNull();
 
     act(() => resetDesignStore());

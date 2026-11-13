@@ -70,6 +70,14 @@ vi.mock('./ViewportCanvas', () => ({
 }));
 
 import { Viewport } from './Viewport';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+/** Viewport resolves auto symmetry through React Query, as it does under the app's provider. */
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function ViewportUnderTest() {
+  return <QueryClientProvider client={queryClient}><Viewport /></QueryClientProvider>;
+}
+afterEach(() => queryClient.clear());
 
 describe('Viewport camera revision policy', () => {
   let host: HTMLDivElement;
@@ -88,7 +96,7 @@ describe('Viewport camera revision policy', () => {
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
-    act(() => root.render(<Viewport />));
+    act(() => root.render(<ViewportUnderTest />));
   });
 
   afterEach(() => {
@@ -145,7 +153,7 @@ describe('Viewport camera revision policy', () => {
     expect(latestNonce()).toBeGreaterThan(cadNonce);
     const parametricNonce = latestNonce();
 
-    act(() => root.render(<Viewport />));
+    act(() => root.render(<ViewportUnderTest />));
     expect(latestNonce()).toBe(parametricNonce);
 
     act(() => workspaceModeStore.setMode('cad'));
