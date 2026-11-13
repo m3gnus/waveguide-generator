@@ -258,43 +258,17 @@ def preview_options(lod: Literal["coarse", "fine"], *, curvature: bool = True):
     )
 
 
-#: Mesh fields the preview builder overwrites before it samples anything.
-#: ``hornlab_mesher.preview.api._lod_config`` assigns ``angular_segments`` and
-#: ``length_segments`` from the LOD preset and drops the camel-case aliases the
-#: translation emits, which is the same fact ``preview_options`` documents at
-#: length. Imported lips and Opus rears instead keep their authored grids.
-_PREVIEW_OVERWRITTEN_MESH_FIELDS = frozenset(
-    {"angular_segments", "angularSegments", "length_segments", "lengthSegments"}
-)
-
-
 def _cache_relevant_config(config: Mapping[str, Any]) -> Any:
-    """Drop config the builder discards, so it cannot invalidate the cache.
+    """Keep the full inputs to geometry, dimensions and validation.
 
-    Two designs that differ only in "Surface sampling" produce byte-identical
-    frames, and those controls sit next to the solve settings a user adjusts
-    while looking at the viewport. Keying on them charged a full rebuild --
-    tens to hundreds of milliseconds -- for a change the preview never sees.
+    Surface LOD overrides sampling budgets, but canonical dimensions (the mouth
+    size among them) and some enclosure checks still read the authored
+    "Surface sampling" values. Dropping them from the key served a frame whose
+    reported dimensions belonged to the previous sampling. Retain authored
+    construction through its existing owner without discarding any input.
     """
 
-    mesh = config.get("mesh")
-    if not isinstance(mesh, Mapping):
-        return config
-    if mesh.get("athRoundover") or mesh.get("athRearShape") == 3:
-        # Lip chord angles and Opus ring selection depend on the authored grid.
-        return config
-    if not _PREVIEW_OVERWRITTEN_MESH_FIELDS.intersection(mesh):
-        return config
-    # Native preview retains the authored no-shrink construction before LOD
-    # replacement. Key on that same construction before dropping the budgets.
-    config = retain_mesher_construction(config)
-    relevant = dict(config)
-    relevant["mesh"] = {
-        name: value
-        for name, value in config["mesh"].items()
-        if name not in _PREVIEW_OVERWRITTEN_MESH_FIELDS
-    }
-    return relevant
+    return retain_mesher_construction(config)
 
 
 def _recentred_preview_config(design: DesignConfig) -> dict[str, Any]:

@@ -977,13 +977,12 @@ def test_angular_segments_size_the_export_mesh_and_not_the_preview() -> None:
     assert translated[1]["mesh"]["angularSegments"] == 400
 
 
-def test_export_only_sampling_fields_do_not_invalidate_the_preview_cache() -> None:
-    """The other half of the contract above: identical output, one build.
+def test_sampling_fields_invalidate_the_preview_cache_but_exact_repeats_hit() -> None:
+    """Dimensions and validation consume the authored "Surface sampling".
 
-    The sampling controls sit beside the solve settings, so a user adjusting
-    them is usually looking straight at the viewport. Keying the geometry cache
-    on a field the builder overwrites charged a full rebuild for a frame that
-    was already going to come out byte-identical.
+    The preview surface uses the LOD's own density, but the reported mouth size
+    and enclosure checks read the authored sampling. A sampling change must
+    rebuild (40 -> 400), and returning to an earlier value must hit the cache.
     """
 
     async def scenario() -> int:
@@ -1007,11 +1006,11 @@ def test_export_only_sampling_fields_do_not_invalidate_the_preview_cache() -> No
         await task
         return builds
 
-    assert asyncio.run(scenario()) == 1
+    assert asyncio.run(scenario()) == 2
 
 
 def test_preview_relevant_config_keeps_every_field_the_builder_reads() -> None:
-    """Guard the exclusion list against growing into something load-bearing."""
+    """Sampling fields stay in the key: dimensions and validation read them."""
 
     config = {
         "formula": "OSSE",
@@ -1026,7 +1025,7 @@ def test_preview_relevant_config_keeps_every_field_the_builder_reads() -> None:
         },
     }
     relevant = _cache_relevant_config(config)
-    assert relevant["mesh"] == {"wallThickness": 3.0, "quadrants": 1234}
+    assert relevant["mesh"] == config["mesh"]
     assert relevant["profile"] == {"a": 45.0}
     # Never mutate the config handed to the builder.
     assert config["mesh"]["angularSegments"] == 40.0
