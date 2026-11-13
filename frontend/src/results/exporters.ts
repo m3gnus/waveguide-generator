@@ -35,7 +35,7 @@ import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type Resul
 import { buildRunReportHtml } from './runReport';
 import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './vituixcad';
 import { reportCaughtError } from '../shell/clientErrors';
-import { failureWords, isAbortError, ProgramFault } from '../api/httpError';
+import { failureWords, httpErrorMessage, isAbortError, ProgramFault } from '../api/httpError';
 
 export interface ExportContext {
   /** Shared by this bundle’s counted format builds and final publication. */
@@ -349,10 +349,9 @@ function filenameFromResponse(response: Response, fallback: string): string {
   return response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/i)?.[1] ?? fallback;
 }
 
-async function responseError(response: Response): Promise<Error> {
-  let detail = `${response.status} ${response.statusText}`.trim();
-  try { const body = await response.json() as { detail?: string }; if (body.detail) detail = body.detail; } catch { /* status remains */ }
-  return new Error(detail);
+/** A failed export request, worded through the shared refusal reader; `fallback` says what failed and what to do. */
+async function responseError(response: Response, fallback: string): Promise<Error> {
+  return new Error(await httpErrorMessage(response, fallback));
 }
 
 export interface WorkspaceFile {
@@ -431,7 +430,7 @@ export async function writeWorkspaceFiles(
     // bundle would re-render its charts and restamp its timestamps, so the
     // second request would not be the export the user was asked about.
     if (!response.ok) {
-      const error = await collisionFrom(response) ?? await responseError(response);
+      const error = await collisionFrom(response) ?? await responseError(response, 'WG could not save the export files. Check the export folder, then export again.');
       if (response.status === 409) Object.assign(error, { destinationConflict: true });
       throw error;
     }
@@ -454,7 +453,7 @@ async function postGeometry(context: ExportContext, kind: 'step' | 'stl'): Promi
   if (kind === 'step' && context.selectedRun && modelKindForRun(context.selectedRun) === 'cad') {
     output = await stagedActivity({ kind: 'export', label: 'Exporting STEP' }, fetcher, undefined, async (fetcher, signal) => {
       const response = await fetcher(`/api/export/runs/${encodeURIComponent(context.selectedRun!.id)}/step`, { method: 'POST', signal });
-      if (!response.ok) throw await responseError(response);
+      if (!response.ok) throw await responseError(response, 'WG could not export STEP for this run. Try the export again.');
       return { blob: await response.blob(), filename: filenameFromResponse(response, `${exportContextBaseName(context)}.step`),
         warning: response.headers.get('X-Export-Warning')?.trim() || undefined };
     });
@@ -500,7 +499,7 @@ async function radiationImpedanceNpz(context: ExportContext): Promise<string[]> 
   const response = await (context.fetcher ?? fetch)(
     `/api/radiation-impedance/${encodeURIComponent(jobId)}`,
   );
-  if (!response.ok) throw await responseError(response);
+  if (!response.ok) throw await responseError(response, 'WG could not export the radiation impedance for this run. Try the export again.');
   const filename = `${context.jobStem}_radiation_impedance.npz`;
   (context.saveBlob ?? downloadBlob)(await response.blob(), filename);
   return [filename];
@@ -515,6 +514,8 @@ function exportContextBaseName(context: ExportContext): string {
   return `${context.jobStem}${context.result ? resultChannelFileSuffix(context.result, context.channelId) : ''}`;
 }
 
+const CHART_EXPORT_FAILED = 'WG could not render the charts for this export. Try the export again.';
+
 async function chartPng(context: ExportContext): Promise<string[]> {
   const result = requireResult(context);
   const fetcher = context.fetcher ?? fetch;
@@ -525,7 +526,7 @@ async function chartPng(context: ExportContext): Promise<string[]> {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(buildDirectivityRenderPayload(result, context.preferences)),
   });
-  if (!directivityResponse.ok) throw await responseError(directivityResponse);
+  if (!directivityResponse.ok) throw await responseError(directivityResponse, CHART_EXPORT_FAILED);
   const directivityBody = await directivityResponse.json() as { image?: string };
   if (!directivityBody.image) throw new ProgramFault('HornLab plots returned no directivity image.');
   // The dedicated renderer owns the map settings. Keep the combined request
@@ -533,7 +534,7 @@ async function chartPng(context: ExportContext): Promise<string[]> {
   // in its response before filenames are staged by the bundle.
   const chartPayload = { ...buildChartRenderPayload(result, context.preferences), directivity: {} };
   const response = await fetcher('/api/render-charts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(chartPayload) });
-  if (!response.ok) throw await responseError(response);
+  if (!response.ok) throw await responseError(response, CHART_EXPORT_FAILED);
   const body = await response.json() as { charts?: Record<string, string> };
   const entries = Object.entries(body.charts ?? {}).filter(([chart]) => chart !== 'directivity_map');
   if (!entries.length) throw new ProgramFault('Chart renderer returned no images.');
@@ -666,11 +667,11 @@ async function writeManualPolarFrd(
 ): Promise<string[]> {
   const fetcher = context.fetcher ?? fetch;
   const pathResponse = await deadlineFetch(fetcher, '/api/workspace/path');
-  if (!pathResponse.ok) throw await responseError(pathResponse);
+  if (!pathResponse.ok) throw await responseError(pathResponse, 'WG could not read the export folder. Choose the folder again.');
   let workspace = await pathResponse.json() as { selected?: boolean };
   if (!workspace.selected) {
     const selectResponse = await fetcher('/api/folders/select', { method: 'POST' });
-    if (!selectResponse.ok) throw await responseError(selectResponse);
+    if (!selectResponse.ok) throw await responseError(selectResponse, 'WG could not open the folder picker. Try the export again.');
     workspace = await selectResponse.json() as { selected?: boolean };
     if (!workspace.selected) throw new Error('Export cancelled. No files were written.');
   }
@@ -728,7 +729,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
           filename: configName,
         }),
       });
-      if (!response.ok) throw await responseError(response);
+      if (!response.ok) throw await responseError(response, 'WG could not export the design file. Try the export again.');
       const body = await response.json() as { text: string; suggestedFilename?: string };
       const filename = body.suggestedFilename ?? configName;
       saveText(body.text, filename);
@@ -771,7 +772,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
       const response = await (context.fetcher ?? fetch)(
         `/api/pressure-basis/${encodeURIComponent(context.jobId)}${query}`,
       );
-      if (!response.ok) throw await responseError(response);
+      if (!response.ok) throw await responseError(response, 'WG could not export the pressure data for this run. Try the export again.');
       const filename = filenameFromResponse(
         response, `${baseName}_pressure_basis.npz`,
       );
@@ -1093,7 +1094,7 @@ export async function downloadMeshArtifact(
   const url = `/api/mesh-artifact/${encodeURIComponent(job.id)}`;
   return stagedActivity({ kind: 'export', label: 'Exporting MSH' }, fetcher, undefined, async (fetcher, signal) => {
     const response = await fetcher(url, { signal });
-    if (!response.ok) throw await responseError(response);
+    if (!response.ok) throw await responseError(response, 'WG could not export the mesh for this run. Try the export again.');
     const regenerated = response.headers.get('X-WG2-Mesh-Regenerated') === '1';
     const filename = `${exportStemForJob(job)}${regenerated ? '-regenerated' : ''}.msh`;
     saveBlob(await response.blob(), filename);

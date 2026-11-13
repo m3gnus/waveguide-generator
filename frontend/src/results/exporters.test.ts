@@ -997,6 +997,17 @@ describe('result exporters', () => {
     expect(await (saveBlob.mock.calls[0][0] as Blob).text()).toBe('stored mesh bytes');
   });
 
+  it('reads a structured refusal through the shared wording instead of "[object Object]"', async () => {
+    const refused = (detail: unknown) => vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ detail }), { status: 422 }));
+    const job = { id: 'refused', run_number: 7, label: 'refused', config_summary: {} };
+    await expect(downloadMeshArtifact(job, vi.fn(), refused({ message: 'This run kept no mesh.', next_step: 'Solve it again to export the mesh.' }), vi.fn()))
+      .rejects.toThrow('This run kept no mesh. Solve it again to export the mesh.');
+    await expect(downloadMeshArtifact(job, vi.fn(), refused([{ loc: ['body', 'x'], msg: 'Input should be a valid number', type: 'float_parsing' }]), vi.fn()))
+      .rejects.not.toThrow('[object Object]');
+    await expect(downloadMeshArtifact(job, vi.fn(), vi.fn<typeof fetch>().mockResolvedValue(new Response('', { status: 500 })), vi.fn()))
+      .rejects.toThrow('WG could not export the mesh for this run. Try the export again.');
+  });
+
   it('sends a chosen destination as a handle, and the files into that folder itself', async () => {
     const requests: Array<{ path: string; init?: RequestInit }> = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
