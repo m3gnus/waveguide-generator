@@ -1,7 +1,7 @@
 import type { SymmetryMode } from '../stores/solveOptions';
 import { plannedEngineNames, type EngineCapability, type EngineSelection } from '../jobs/actions';
 
-export { isBeatBackendEngine, LEGACY_BEAT_ENGINE } from '../jobs/engineIdentity';
+export { isBeatBackendEngine } from '../jobs/engineIdentity';
 
 export type BackendIdentity = string | EngineCapability | null;
 

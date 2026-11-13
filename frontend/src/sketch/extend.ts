@@ -1,1 +1,0 @@
-export { extendPreview } from './topology';

@@ -650,7 +650,6 @@ describe('solve invocation mutex', () => {
     act(() => { picker.value = 'beat-cpu'; picker.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(mocks.prewarmSelectedEngine.mock.calls.at(-1)).toEqual(['beat-cpu']);
     expect(host.querySelector('.solve-readiness')).toBeNull();
-    expect(host.querySelector('.beat-runtime-preparation')).toBeNull();
     client.clear();
   });
 
@@ -1494,7 +1493,6 @@ describe('solve invocation mutex', () => {
     expect(progress.textContent).toBe('BEAT Metal: Setting up… The solve starts when it is ready.Stop');
     expect(host.querySelectorAll('.solve-readiness')).toHaveLength(1);
     expect(host.querySelector('[data-toolbar-solve] .solve-button')?.textContent).not.toMatch(/warm|ready|waiting|refused/i);
-    expect(host.querySelector('.beat-runtime-preparation')).toBeNull();
     expect(host.querySelectorAll('.solve-notice')).toHaveLength(0);
     // Readiness temporarily disappears while the plan cache refreshes. The
     // waiting intention still has exactly one owner, even across dock panels.

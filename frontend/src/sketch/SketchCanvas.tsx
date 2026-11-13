@@ -9,5 +9,3 @@ export function SketchCanvas(props: SketchCanvasProps) {
     initialView: sourceInitialView,
   }}/>;
 }
-export type { SketchCanvasProps } from './kit/sketchKit';
-export type { WorkspaceSession } from './workspace/types';

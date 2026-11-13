@@ -11,7 +11,6 @@ import {
   nextLayoutAction,
   restoreDisposition,
   ReactPanelRenderer,
-  LEGACY_LAYOUT_KEY,
   seedSize,
   syncGeometryTitle,
   Workspace,
@@ -79,7 +78,7 @@ describe('Workspace', () => {
   });
 
   it('ignores a stored old-key parameter layout and falls back to the new default', async () => {
-    localStorage.setItem(LEGACY_LAYOUT_KEY, JSON.stringify({ panels: { parameters: { id: 'parameters', contentComponent: 'parameters', title: 'Parameters' } } }));
+    localStorage.setItem('wg2.dockview.layout.v1', JSON.stringify({ panels: { parameters: { id: 'parameters', contentComponent: 'parameters', title: 'Parameters' } } }));
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await act(async () => {
       root.render(<Workspace resetKey={0}/>);

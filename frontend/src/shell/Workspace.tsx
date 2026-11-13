@@ -21,7 +21,6 @@ import { namespaceStorage } from '../stores/durableSettings';
 import { bindWorkspaceNavigation, noteExplicitNavigation, publishVisiblePanels, type WorkspacePanel } from './workspaceNavigation';
 export { workspaceNavigation } from './workspaceNavigation';
 
-export const LEGACY_LAYOUT_KEY = 'wg2.dockview.layout.v1';
 export const LAYOUT_KEY = 'wg2.dockview.layout.v4';
 /** Which responsive arrangement LAYOUT_KEY was saved for. See restoreDisposition. */
 export const LAYOUT_MODE_KEY = 'wg2.dockview.mode.v4';

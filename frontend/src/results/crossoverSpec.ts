@@ -521,21 +521,6 @@ export function driverXoMinNote(label: string, xoMinHz: number, fcHz: number): s
   return `${label} minimum ${frequencyText(xoMinHz)} — current ${frequencyText(fcHz)}`;
 }
 
-/** A deep copy, so an editor can hold a spec without aliasing the store's. */
-export function cloneSpec(spec: CrossoverSpec): CrossoverSpec {
-  return {
-    members: [...spec.members],
-    reference: spec.reference,
-    channels: Object.fromEntries(Object.entries(spec.channels).map(([id, channel]) => [id, {
-      hp: channel.hp ? { ...channel.hp } : null,
-      lp: channel.lp ? { ...channel.lp } : null,
-      gain: { ...channel.gain },
-      delay: { ...channel.delay },
-      invert: channel.invert,
-    }])),
-  };
-}
-
 /** Whether two specs describe the same crossover. Used to decide whether the
  * strip's Apply is live and whether a stored override still says anything. */
 export function sameSpec(left: CrossoverSpec | null, right: CrossoverSpec | null): boolean {

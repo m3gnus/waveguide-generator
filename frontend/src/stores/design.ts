@@ -11,7 +11,7 @@ import { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
 import { OSSE_MERIDIAN_FIELDS, osseFeatures, osseFormula, type OsseFeatures } from '../design/osseFeatures';
 import type { DesignAssembly } from './assembly';
 
-export { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
+export { NATIVE_FAMILIES } from '../design/nativeFamilies';
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | NativeFamily;
 export const isNativeFamily = (family: DesignFamily): family is NativeFamily => (NATIVE_FAMILIES as readonly string[]).includes(family);
 // A new design stays Off until accuracy sizing is explicitly requested.

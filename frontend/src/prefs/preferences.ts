@@ -97,7 +97,6 @@ export const POLAR_PLANES = ['horizontal', 'vertical'] as const;
 export type PolarPlane = typeof POLAR_PLANES[number];
 export const MAP_REFERENCES: MapReference[] = [-3, -6, -9, -12];
 export const RESULT_PANEL_COUNTS = [1, 2, 3, 4, 6] as const;
-export type ResultPanelCount = typeof RESULT_PANEL_COUNTS[number];
 export const MAX_RESULT_PANELS = 6;
 export type JobSort = 'completed_desc' | 'created_desc' | 'rating_desc' | 'name_asc';
 export type CadApplication = 'fusion360' | 'onshape';

@@ -4,7 +4,6 @@ import { ProgramFault } from '../api/httpError';
 export type FieldPlanePreset = 'h' | 'v' | 'mouth';
 export type FieldPlaneRotationAxis = 'u' | 'v';
 export type FieldPlaneTranslationAxis = 'u' | 'v' | 'n';
-export type FieldPlaneResizeAxis = 'u' | 'v' | 'both';
 
 /** The request validator refuses extents outside (0, 100] metres, so the
  * interactive handles clamp to a slightly narrower band that always survives

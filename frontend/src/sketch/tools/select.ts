@@ -5,7 +5,7 @@ import { excludedGeometryPoints, geometryCandidates, rankedGeometryHits } from '
 import type { XY } from '../solver/types';
 
 export { combineSelection, startSelect, moveSelect, cycleHit, coalesceTargets, select } from '../workspace/selection';
-export type { Modifiers, SelectState, Cycle } from '../workspace/selection';
+export type { Modifiers, SelectState } from '../workspace/selection';
 import { combineSelection, finishWorkspaceSelection, type SelectState } from '../workspace/selection';
 /** Preserve a group while dragging a member; a plain click resolves to just that member. */
 export function finishSelect(state: SelectState, sketch: Sketch, start: XY, end: XY, hidden: string[] = [], dimensions: string[] = []): string[] {

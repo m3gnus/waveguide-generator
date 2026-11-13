@@ -96,7 +96,6 @@ describe('solve and directivity control help', () => {
         geometry_sources: ['parametric', 'imported'], fast_paths: [], version: null };
       queryClient.setQueryData(CAPABILITIES_QUERY_KEY, { engines: [engine], cpuPreparationInFlight: state === 'preparing' });
       render(<SolveOptionsControls mode={mode}/>);
-      expect(host.querySelector('.beat-runtime-preparation')).toBeNull();
       expect(host.querySelector('[role="status"]')?.textContent ?? '').not.toContain(engine.reason);
       const option = host.querySelector<HTMLOptionElement>('option[value="beat-cpu"]');
       if (mode === 'cad' && state === 'unavailable') expect(option).toBeNull();
@@ -588,7 +587,6 @@ describe('solve and directivity control help', () => {
     expect(options.filter((option) => option.disabled).map((option) => option.value))
       .toEqual(['beat-cuda']);
     expect(options[2].textContent).toContain('unavailable');
-    expect(host.querySelector('.beat-runtime-preparation')?.textContent ?? '').not.toContain('Needs an NVIDIA GPU');
   });
 
   // CAD Link is a geometry source, not a solve mode: imported geometry is

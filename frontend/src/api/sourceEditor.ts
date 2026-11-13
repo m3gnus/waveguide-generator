@@ -27,7 +27,6 @@ export interface SourceAssemblyDocument {
     woofer_xy_mm: [number, number]; aperture_radius_mm: number };
   phase_plugs: PhasePlug[]; mesh_size_mm: number; passage_refinement: 1 | 2 | 4;
 }
-export interface HornWall { wall_mm: [number, number][]; throat_radius_mm: number; horn_length_mm: number; mouth_radius_mm: number }
 
 async function response(path: string, method = 'GET', body?: unknown): Promise<Response> {
   const result = await deadlineFetch(fetch, `/api/source-editor${path}`, {

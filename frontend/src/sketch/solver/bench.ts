@@ -1,4 +1,4 @@
-import { branchCases, contourChain, contourChainConstrained, diagnosticCases } from './corpus';
+import { branchCases, contourChain, contourChainConstrained } from './corpus';
 import { SweepTracker } from './common';
 import { compareTrajectory, dragScenarioNames, measureDragScenario, residuals, maximum, type DragMeasurement } from './drag-scenarios';
 import { createSolver, solverNames, type SolverName } from './types';
@@ -221,5 +221,3 @@ export async function runBench(update: (state: BenchState) => void, workerFactor
   });
   return state;
 }
-// Keep a tiny plain-line fixture exported for automation that needs a cheap load.
-export const lifecycleSketch = diagnosticCases[0].sketch;
