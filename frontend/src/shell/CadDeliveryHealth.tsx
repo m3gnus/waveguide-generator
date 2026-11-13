@@ -4,7 +4,6 @@ import { connectCadDeliveryHealth, refreshCadDeliveryHealth, useCadDeliveryHealt
 import { useDeveloperDetails } from '../prefs/preferences';
 import { usePanelVisible } from './panelVisibility';
 
-export { WAITING_READ_MS } from '../stores/cadDeliveryHealth';
 
 /** A pass that started this long ago and has not finished is reported as stuck. */
 export const HUNG_PASS_MS = 15_000;

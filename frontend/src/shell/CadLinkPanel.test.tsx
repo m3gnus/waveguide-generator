@@ -24,7 +24,10 @@ import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
-import { buildImportedSubmission, CadLinkPanel, declaredDomainPhrase, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
+import { CadLinkPanel, declaredDomainPhrase, fusionWorkflowView, onshapeWorkflowView } from './CadLinkPanel';
+import { buildImportedSubmission } from '../jobs/importedSubmission';
+import { newestReturnArrival } from './cadlink/arrivals';
+import { showIngestedMeshInViewport } from './cadlink/artifactLoader';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { CadWorkspaceOwners } from './CadWorkspaceOwners';
 import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';

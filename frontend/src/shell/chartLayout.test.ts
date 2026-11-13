@@ -6,7 +6,8 @@ import type { ChartTokens } from '../results/EChart';
 import { beamShapeSeries } from '../results/mappers';
 import type { NamedResult } from '../results/mappers';
 import type { ResultPayload } from '../results/types';
-import { chartDensity, clearingRail, withCompactLegend, directivityIndexOption, formatChartValue, heatmapOption, impedanceOption, lineOption, type ChartDensity } from './ResultsPanel';
+import { chartDensity, clearingRail, withCompactLegend, directivityIndexOption, formatChartValue, heatmapOption, impedanceOption, lineOption } from './ResultsPanel';
+import type { ChartDensity } from '../results/chartAxes';
 
 /**
  * Layout locks for the result dock.

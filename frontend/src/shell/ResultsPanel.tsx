@@ -14,7 +14,6 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, type JobResults, type RadiationImpedancePresentation, type ResultData } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { axes, CHART_FONT_FAMILY, LABEL_FONT, type ChartDensity } from '../results/chartAxes';
-export type { ChartDensity } from '../results/chartAxes';
 import { compareResultChannels, beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, hasZeroRadiationRear, impedanceComparable, impedanceSeries, impedanceSubtitle, isOutsideHalfSpace, nearestFrequencyIndex, OUTSIDE_HALF_SPACE_LABEL, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
 import { RunExportControl } from '../jobs/RunExportControl';
@@ -23,7 +22,6 @@ import {
   askToReplaceExports,
 } from './exportDestinationPrompt';
 import { ExportCancelledError } from '../api/exportDestination';
-export { resultExportSnapshot } from '../results/exportContext';
 import { composeChartCanvases, copyChartPng, saveChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { latestCombine } from '../results/latestCombine';

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { normalizedImportedPoints, parsePointPaste, withStationShape } from './FreeformEditors';
+import { parsePointPaste, withStationShape } from './FreeformEditors';
+import { normalizedImportedPoints } from './customProfileEdit';
 
 describe('FREEFORM editor workflows', () => {
   it('keeps a station parameter the new shape still takes and drops one it does not', () => {

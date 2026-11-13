@@ -43,9 +43,6 @@ import './cadLinkPanel.css';
 // to the two solve entry points so the global command can share it.
 import { importedSubmissionNotices } from '../jobs/importedSubmission';
 import { failureWords } from '../api/httpError';
-export { buildImportedSubmission } from '../jobs/importedSubmission';
-export { newestReturnArrival } from './cadlink/arrivals';
-export { showIngestedMeshInViewport } from './cadlink/artifactLoader';
 
 /** The Fusion link states that describe the active document against the
  * parametric WG design: meaningless while a model authored in Fusion is on

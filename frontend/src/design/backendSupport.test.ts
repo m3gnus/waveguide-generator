@@ -4,10 +4,10 @@ import {
   symmetryDomainLimitation,
   backendLimitation,
   backendSupports,
-  isBeatBackendEngine,
   plannedBackendCapabilities,
   type BackendIdentity,
 } from './backendSupport';
+import { isBeatBackendEngine } from '../jobs/engineIdentity';
 import type { EngineCapability, EngineSelection } from '../jobs/actions';
 import {
   PARAMETER_REGISTRY,

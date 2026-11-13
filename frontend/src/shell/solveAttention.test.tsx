@@ -8,7 +8,8 @@ import type { FusionCadStatus } from '../api/cadlink';
 import { resetCadReturnStore } from '../stores/cadReturn';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { AttentionNotices, cadSourceLine } from './TopBar';
-import { operationNeedsUser, resetSolveAttentionForTests, solveAttention, useJobAttention } from './solveAttention';
+import { operationNeedsUser } from '../api/cadOperations';
+import { resetSolveAttentionForTests, solveAttention, useJobAttention } from './solveAttention';
 import {
   bindWorkspaceNavigation,
   navigationGeneration,

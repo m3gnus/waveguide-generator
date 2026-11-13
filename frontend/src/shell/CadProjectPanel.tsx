@@ -30,7 +30,6 @@ import { middleEllipsis } from './middleEllipsis';
 import { useWorkspaceFolder } from './WorkspaceFolderControls';
 import { failureWords } from '../api/httpError';
 
-export { newestReturnForProject } from '../api/cadProjects';
 
 /**
  * What a project is called: what CAD calls it, else the folder it owns, else

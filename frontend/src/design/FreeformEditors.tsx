@@ -87,7 +87,6 @@ export function parsePointPaste(text: string): ParsedPointPaste {
   };
 }
 
-export { normalizedImportedPoints } from './customProfileEdit';
 
 export const FREEFORM_POSITION_NOTE = 'Anchor and station positions are measured from the throat along Length, in mm before Scale. Changing Length asks whether to stretch the profile or move only the mouth.';
 export const CUSTOM_PROFILE_TABLE_HELP = 'The table includes every anchor, including the throat and mouth. z is distance from the throat in mm before Scale. At a smooth anchor, both sides share one direction. This adjusts automatically unless an angle or handle fixes it. A corner can have different incoming and outgoing angles. Two neighbouring corners without facing angles join with a straight line. Review the curve and exported-profile changes before accepting each edit.';

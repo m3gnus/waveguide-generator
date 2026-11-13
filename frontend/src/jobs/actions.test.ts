@@ -3,7 +3,8 @@ import { formatApiDetail as ownedFormatApiDetail } from '../api/httpError';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { createImportedSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
-import { fetchSymmetry, formatApiDetail, getCapabilities, planSolveDesign, postSolvePlan, postImportedSolvePlan, postSymmetry, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
+import { formatApiDetail } from '../api/httpError';
+import { fetchSymmetry, getCapabilities, planSolveDesign, postSolvePlan, postImportedSolvePlan, postSymmetry, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('retains the compatibility export from the single HTTP formatter owner', () => {

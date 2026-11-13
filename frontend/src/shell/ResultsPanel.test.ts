@@ -13,7 +13,8 @@ import { resultFrequencyValidity } from '../results/validity';
 import { provideExportDestinationPrompt } from './exportDestinationPrompt';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { newRunBadgeLabel } from './ResultsPanel';
-import { beamShapeMissingReason, ChartDetailDialog, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, measurementAngleEntries, phaseOption, polarOption, powerResponseOption, resolveMeasurementSelection, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption, splSubtitle } from './ResultsPanel';
+import { resultExportSnapshot } from '../results/exportContext';
+import { beamShapeMissingReason, ChartDetailDialog, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, measurementAngleEntries, phaseOption, polarOption, powerResponseOption, resolveMeasurementSelection, ResultsChartGrid, resolvedPolarStepNotice, resultLayoutClass, splOption, splSubtitle } from './ResultsPanel';
 
 const chartImageMocks = vi.hoisted(() => ({
   copy: vi.fn<() => Promise<void>>(),

@@ -178,7 +178,6 @@ export function useFailedAction(): string | null {
   return useSyncExternalStore(solveAttention.subscribe, solveAttention.getFailedAction, solveAttention.getFailedAction);
 }
 
-export { operationNeedsUser } from '../api/cadOperations';
 
 /** What about an operation needs the user, so a new gate is a new event. */
 function attentionKey(operation: CadOperationSummary): string | null {
