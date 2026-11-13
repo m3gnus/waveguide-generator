@@ -3,6 +3,7 @@ import { viewerPreferences } from '../viewerprefs/viewerPreferences';
 import { fieldSentence, validationSentence, failureWords, PLAIN_VALIDATION_FAILURE, readsPlain } from './httpError';
 import { decodeFrame, type DecodedFrame, type FrameHeader } from './frame';
 import { selectPreferredFrame } from '../viewport/lodPolicy';
+import { activityStore, type ActivityHandle } from '../shell/activity';
 import {
   currentDocumentLoad,
   registerRevisionTimer,
@@ -139,6 +140,12 @@ export class PreviewSocketManager {
   private readonly listeners = new Set<() => void>();
   private unsubscribeRevision: (() => void) | null = null;
   private unregisterTimer: (() => void) | null = null;
+  /** The status-bar wait for the current revision, from its first request
+   * until its fine frame arrives (shown only once it has run a second). */
+  private previewActivity: {
+    handle: ActivityHandle; revision: number; documentLoad: number;
+    firstSeq: number; coarseSeq: number | null; fineSeq: number | null;
+  } | null = null;
   private snapshot: PreviewSnapshot = {
     connection: 'idle', epoch: null, frame: null, displayedRevision: null,
     lastValidRevision: null, stale: true, dropped: 0, error: null, errorDetail: null, errorFields: null, errorRevision: null,
@@ -211,6 +218,7 @@ export class PreviewSocketManager {
       // it does, and the reconnect sends the current design on `hello`.
       return;
     }
+    this.endPreviewActivity(false);
     this.sendCurrent('fine');
   }
 
@@ -233,6 +241,7 @@ export class PreviewSocketManager {
 
   stop(): void {
     this.stopped = true;
+    this.endPreviewActivity(false);
     this.cancelPreviewTimers();
     this.clearTimer('reconnect');
     this.clearTimer('heartbeat');
@@ -264,6 +273,7 @@ export class PreviewSocketManager {
     socket.onerror = () => undefined;
     socket.onclose = () => {
       if (this.socket !== socket) return;
+      this.endPreviewActivity(false);
       this.socket = null;
       this.clearTimer('heartbeat');
       if (!this.stopped) this.scheduleReconnect();
@@ -282,10 +292,12 @@ export class PreviewSocketManager {
     try {
       message = JSON.parse(data) as HelloMessage | DroppedMessage | ErrorMessage;
     } catch {
+      this.endPreviewActivity(false);
       this.update({ error: 'Malformed preview control message', errorFields: null, errorRevision: null });
       return;
     }
     if ((message as { v?: unknown }).v !== 1) {
+      this.endPreviewActivity(false);
       this.update({ error: 'Unsupported preview protocol message', errorFields: null, errorRevision: null });
       return;
     }
@@ -302,6 +314,8 @@ export class PreviewSocketManager {
     }
     if ('epoch' in message && message.epoch !== undefined && message.epoch !== this.snapshot.epoch) return;
     if (message.kind === 'dropped') {
+      // A dropped fine request ends the wait; a newer one will start its own.
+      if (this.activityFor(null, message.seq ?? null)?.fineSeq === message.seq) this.endPreviewActivity(false);
       this.update({ dropped: this.snapshot.dropped + 1 });
       return;
     }
@@ -320,6 +334,7 @@ export class PreviewSocketManager {
       if ((!supported || this.snapshot.frame?.documentLoad === this.documentLoad) && errorRevision !== null && errorRevision < (this.snapshot.lastValidRevision ?? 0)) return;
       if ((!supported || this.errorDocumentLoad === this.documentLoad) && errorRevision !== null && errorRevision < (this.snapshot.errorRevision ?? 0)) return;
       if (errorSeq !== null && errorSeq < this.latestOutcomeSeq) return;
+      this.previewFailed(errorRevision, errorSeq);
       const firstField = Object.entries(fields ?? {})[0];
       const original = (typeof message.message === 'string' && message.message.trim())
         || Object.values(fields ?? {})[0]
@@ -366,6 +381,7 @@ export class PreviewSocketManager {
     try {
       frame = decodeFrame(buffer, this.maxFrameBytes);
     } catch (error) {
+      this.endPreviewActivity(false);
       this.update({ error: failureWords(error), errorFields: null, errorRevision: null });
       return;
     }
@@ -414,9 +430,14 @@ export class PreviewSocketManager {
       stale: frameRevision !== revision,
       ...(clearsError ? { error: null, errorDetail: null, errorFields: null, errorRevision: null } : {}),
     });
+    const pending = this.activityFor(frameRevision, frameSeq);
+    if (pending?.fineSeq === frameSeq) this.endPreviewActivity(true);
+    else if (pending?.coarseSeq === frameSeq) pending.handle.label('Refining the preview');
   }
 
   private onRevision(event: RevisionEvent): void {
+    // Each revision is its own wait: a drag never accumulates one long one.
+    this.endPreviewActivity(false);
     // Paused observation exists only to hide dimensions from replaced documents.
     // Older meshers retain the shared state and notifications of the base path.
     const supported = this.hasDimensions();
@@ -507,6 +528,15 @@ export class PreviewSocketManager {
     if (!socket || socket.readyState !== OPEN || !this.helloSeen || this.snapshot.epoch === null) return;
     const { design, designRevision } = useDesignStore.getState();
     this.seq += 1;
+    if (this.previewActivity?.revision !== designRevision || this.previewActivity.documentLoad !== this.documentLoad) {
+      this.endPreviewActivity(false);
+      this.previewActivity = {
+        handle: activityStore.start({ kind: 'preview', label: lod === 'fine' ? 'Refining the preview' : 'Drawing the preview', background: true }),
+        revision: designRevision, documentLoad: this.documentLoad, firstSeq: this.seq, coarseSeq: null, fineSeq: null,
+      };
+    }
+    if (lod === 'coarse') this.previewActivity.coarseSeq = this.seq;
+    else this.previewActivity.fineSeq = this.seq;
     socket.send(JSON.stringify({
       v: 1,
       kind: 'preview',
@@ -517,6 +547,33 @@ export class PreviewSocketManager {
       lod,
       curvature: this.curvatureWanted,
     }));
+  }
+
+  /** Activity ownership follows the same document, revision and request
+   * boundaries as accepted frames. Old replies may still paint during a drag,
+   * but cannot finish the newer revision's wait or record its duration. */
+  private activityFor(revision: number | null, seq: number | null) {
+    const pending = this.previewActivity;
+    if (!pending || pending.documentLoad !== this.documentLoad
+      || pending.revision !== useDesignStore.getState().designRevision
+      || (revision !== null && revision !== pending.revision)
+      || (seq !== null && (seq < pending.firstSeq || seq > this.seq))) return null;
+    return pending;
+  }
+
+  /** A failed coarse request leaves the wait running while its fine request is
+   * still scheduled or in flight: that answer can still draw the design. */
+  private previewFailed(revision: number | null, seq: number | null): void {
+    const pending = this.activityFor(revision, seq);
+    if (!pending) return;
+    const fineOutstanding = pending.fineSeq === null ? this.fineTimer !== null : seq !== null && pending.fineSeq > seq;
+    if (seq !== null && seq === pending.coarseSeq && fineOutstanding) return;
+    this.endPreviewActivity(false);
+  }
+
+  private endPreviewActivity(completed: boolean): void {
+    this.previewActivity?.handle.end(completed);
+    this.previewActivity = null;
   }
 
   private toApiDesign(design: DesignDocument): Record<string, unknown> {

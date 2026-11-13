@@ -30,7 +30,8 @@ export type ActivityKind =
   | 'onshape-check'
   | 'diagnostics-bundle'
   | 'diagnostics-summary'
-  | 'result-load';
+  | 'result-load'
+  | 'preview';
 
 export interface ActivityProgress {
   done: number;

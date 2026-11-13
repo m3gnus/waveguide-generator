@@ -6,10 +6,13 @@ import { createRoot } from 'react-dom/client';
 import { LiveDimensions } from '../design/LiveDimensions';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTOSAVE_KEY, restoreAutosaveWithLateRetry, writeAutosave } from '../stores/autosave';
-import { resetDesignStore, useDesignStore } from '../stores/design';
+import { resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
 import { PreviewSocketManager, previewSocket, observeLivePreview, type WebSocketLike } from './previewSocket';
 import { PLAIN_VALIDATION_FAILURE } from './httpError';
+import { activityStore } from '../shell/activity';
+import { ActivityStatus } from '../shell/ActivityStatus';
+import { decodeFrame } from './frame';
 
 class MockSocket implements WebSocketLike {
   binaryType = '';
@@ -68,6 +71,123 @@ function fixtureWithHeader(overrides: Record<string, unknown>): ArrayBuffer {
   bytes.set(payload, newPayloadBase);
   return out;
 }
+
+describe('preview status-bar activity', () => {
+  let manager: PreviewSocketManager;
+  let socket: MockSocket;
+  let host: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+  const requests = () => socket.sent.map(text => JSON.parse(text) as Record<string, unknown>);
+  const receive = (request: Record<string, unknown>) => {
+    const buffer = fixtureWithHeader(request);
+    const expected = decodeFrame(buffer);
+    act(() => socket.message(buffer));
+    // Activity tracking cannot alter the accepted geometry or numerical arrays.
+    expect(manager.getSnapshot().frame!.sections).toEqual(expected.sections);
+  };
+  const fail = (request: Record<string, unknown>) => act(() => socket.message(JSON.stringify({ ...request, kind: 'error', code: 'internal' })));
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetDesignStore();
+    activityStore.reset();
+    socket = new MockSocket();
+    manager = new PreviewSocketManager(() => socket);
+    host = document.createElement('div');
+    root = createRoot(host);
+    act(() => { root.render(createElement(ActivityStatus)); manager.start();
+      socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 })); });
+  });
+  afterEach(() => {
+    act(() => { manager.stop(); root.unmount(); });
+    activityStore.reset();
+    vi.useRealTimers();
+  });
+
+  it('shows one revision-owned wait, refines after coarse, and completes only on its fine frame', () => {
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(host.textContent).toContain('Drawing the preview');
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'preview', background: true }]);
+    const [coarse, fine] = requests();
+    expect(requests()).toEqual([
+      { v: 1, kind: 'preview', epoch: 3, seq: 1, designRevision: 1, design: serializeDesign(useDesignStore.getState().design), lod: 'coarse', curvature: false },
+      { ...coarse, seq: 2, lod: 'fine' },
+    ]);
+    receive(coarse);
+    expect(host.textContent).toContain('Refining the preview');
+    receive(fine);
+    expect(activityStore.getSnapshot()).toEqual([]);
+    expect(host.textContent).toBe('');
+    expect(activityStore.typicalMs('preview')).toBe(1_000);
+  });
+
+  it('stays out of the status bar when the preview arrives within a second', () => {
+    act(() => vi.advanceTimersByTime(140));
+    const [coarse, fine] = requests();
+    receive(coarse);
+    receive(fine);
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(activityStore.getSnapshot()).toEqual([]);
+    expect(host.textContent).toBe('');
+  });
+
+  it('does not let old revisions or replaced documents finish the newer wait', () => {
+    act(() => vi.advanceTimersByTime(140));
+    const old = requests().at(-1)!;
+    act(() => useDesignStore.getState().updateField('L', 145));
+    act(() => vi.advanceTimersByTime(140));
+    receive(old);
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    const replaced = requests().at(-1)!;
+    act(() => resetDesignStore());
+    act(() => vi.advanceTimersByTime(1_000));
+    act(() => socket.message(fixtureWithHeader(replaced)));
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    receive(requests().at(-1)!);
+    expect(activityStore.getSnapshot()).toEqual([]);
+  });
+
+  it.each(['error', 'disconnect', 'pause', 'malformed', 'dropped'] as const)('cleans an outstanding preview on %s', outcome => {
+    act(() => vi.advanceTimersByTime(1_000));
+    const fine = requests().at(-1)!;
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    expect(host.textContent).toContain('Drawing the preview');
+    act(() => {
+      if (outcome === 'disconnect') socket.close();
+      else if (outcome === 'pause') manager.stop();
+      else if (outcome === 'malformed') socket.message(new ArrayBuffer(0));
+      else socket.message(JSON.stringify({ ...fine, kind: outcome === 'error' ? 'error' : 'dropped', code: 'internal' }));
+    });
+    expect(activityStore.getSnapshot()).toEqual([]);
+    expect(host.textContent).toBe('');
+    expect(activityStore.typicalMs('preview')).toBeNull();
+  });
+
+  it.each(['before', 'after'] as const)('keeps waiting for the fine preview when only coarse fails %s the fine request', when => {
+    const [coarse] = requests();
+    if (when === 'after') act(() => vi.advanceTimersByTime(140));
+    fail(coarse);
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(host.textContent).toContain('Drawing the preview');
+    const fine = requests().at(-1)!;
+    expect(fine).toMatchObject({ seq: 2, lod: 'fine' });
+    receive(fine);
+    expect(activityStore.getSnapshot()).toEqual([]);
+    expect(activityStore.typicalMs('preview')).not.toBeNull();
+  });
+
+  it('ignores old failures and a late coarse frame after the current fine response', () => {
+    const coarse = requests()[0];
+    act(() => vi.advanceTimersByTime(140));
+    act(() => manager.refresh());
+    const current = requests().at(-1)!;
+    fail(coarse);
+    expect(activityStore.getSnapshot()).toHaveLength(1);
+    receive(current);
+    receive(coarse);
+    expect(activityStore.getSnapshot()).toEqual([]);
+  });
+});
 
 describe('preview socket state machine', () => {
   beforeEach(() => { vi.useFakeTimers(); resetDesignStore(); });
