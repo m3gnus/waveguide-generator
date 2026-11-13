@@ -43,13 +43,9 @@
 .field-row.expression-row .number-control textarea { box-sizing: border-box; display: block; width: 100%; min-width: 0; min-height: 1lh; padding: 0; border: 0; background: transparent; color: var(--fg); text-align: left; font: var(--text-base)/1.4 var(--mono); resize: none; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
 .field-row.expression-row .number-control.editing textarea { color: var(--acc); }
 .field-row.expression-row .number-control.invalid textarea { color: var(--red); }
-.readonly-parameter-table { margin: 4px 0 8px; overflow: hidden; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
 .readonly-table-head { display: flex; justify-content: space-between; padding: 4px 6px; border-bottom: 1px solid var(--hair-soft); color: var(--fg2); font-size: var(--text-micro); }
 .readonly-table-head b { color: var(--fg1); font-weight: 560; }
-.readonly-parameter-table table { width: 100%; border-collapse: collapse; color: var(--fg2); font: var(--text-micro) var(--mono); }
-.readonly-parameter-table th, .readonly-parameter-table td { padding: 2px 4px; border-bottom: 1px solid var(--hair-soft); text-align: left; }
-.readonly-parameter-table th { color: var(--fg4); font-weight: 500; text-transform: uppercase; }
-.readonly-parameter-table p, .filter-note { margin: 4px 6px; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
+.filter-note { margin: 4px 6px; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
 .schema-gap { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; padding: 4px 0; opacity: .68; }
 .schema-gap > span { color: var(--fg1); font-size: var(--text-base); }
 .schema-gap button { min-width: 78px; padding: 2px 6px; font-size: var(--text-micro); }
@@ -177,11 +173,7 @@
 .axis-toggles { gap: 6px 12px; padding: 8px; border-radius: var(--r3); font-size: var(--text-base); }
 .section-note,
 .paste-meta,
-.readonly-parameter-table p,
 .filter-note { font-size: var(--text-micro); line-height: 1.45; }
-.readonly-parameter-table table { font-size: var(--text-micro); }
-.readonly-parameter-table th,
-.readonly-parameter-table td { padding: 4px 6px; }
 .schema-gap > span { font-size: var(--text-base); }
 .schema-gap button,
 .family-switch-choice button,
@@ -211,7 +203,6 @@
   }
   /* Anything that is not a single labelled control keeps the full width. */
   .section-body > .param-section,
-  .section-body > .readonly-parameter-table,
   .section-body > .editable-parameter-table,
   .section-body > .axis-toggles,
   .section-body > .point-paste,

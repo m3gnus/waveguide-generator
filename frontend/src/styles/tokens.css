@@ -2,13 +2,11 @@
   color-scheme: dark;
   --acc-rgb: 224, 103, 63;
   --blue-rgb: 111, 157, 255;
-  --violet-rgb: 185, 139, 246;
   --amber-rgb: 224, 176, 98;
   --green-rgb: 134, 184, 114;
   --red-rgb: 226, 112, 90;
   --acc: rgb(var(--acc-rgb));
   --blue: rgb(var(--blue-rgb));
-  --violet: rgb(var(--violet-rgb));
   --amber: rgb(var(--amber-rgb));
   --green: rgb(var(--green-rgb));
   --source-moving: #69d4ce;
@@ -41,7 +39,6 @@
   --ov2: rgba(255,255,255,.038);
   --ov3: rgba(255,255,255,.055);
   --ov4: rgba(255,255,255,.075);
-  --ov5: rgba(255,255,255,.11);
   --edge-hi: transparent;
   --card-sh: none;
   --float-sh: 0 10px 26px -18px rgba(0,0,0,.7);
@@ -72,18 +69,12 @@
      gives it a machined edge without turning the cyan indicator into a glow. */
   --solve-sh: none;
   --track: var(--border-default);
-  --thumb: var(--fg);
-  --thumb-sh: none;
   --vp-grad: var(--surface-panel);
   --vp-vig: none;
   --glass-bg: var(--surface-floating);
   --glass-bd: var(--border-strong);
   --glass-sh: var(--float-sh);
   --float-bg: var(--surface-floating);
-  --lgd-bg: var(--surface-floating);
-  --lgd-bd: var(--border-default);
-  --gz-ring: var(--border-strong);
-  --gz-fill: var(--surface-panel);
   --scale-bd: rgba(236,232,224,.24);
   /* The chart ground is the panel, so the ECharts canvas and the card it
      sits in are one surface. A darker plot well is what made every chart
@@ -94,27 +85,7 @@
   --chart-fg: var(--fg);
   --chart-muted: var(--fg3);
   --chart-spine: var(--border-strong);
-  --h3-glow0: rgba(120,110,96,.18);
-  --h3-glow1: rgba(70,64,56,.10);
-  --h3-floor: #3a3730;
-  --h3-floor-a: .22;
-  --h3-enc: #7a7367;
-  --h3-wire: 236, 232, 224;
-  --h3-throat: rgba(236,232,224,.42);
-  --h3-rim0: #ded9d1;
-  --h3-rim1: #8b847a;
-  --h3-rim2: #3a3730;
-  --h3-rim3: #24211f;
-  --h3-edge: #f4f1ea;
-  --h3-mouth-o: rgba(236,232,224,.22);
   --h3-shadow: rgba(0,0,0,.6);
-  --h3-in-a: #1c1a18;
-  --h3-in-b: #b8b1a6;
-  --h3-out-a: #232120;
-  --h3-out-b: #9d968c;
-  --h3-spec: #fffaf0;
-  --h3-warm: 224, 176, 98;
-  --h3-warm-k: .12;
   --vp-horn-material: #b8b1a6;
   --vp-source-material: #c07a4e;
   --vp-enclosure-material: #7a7367;
@@ -178,7 +149,6 @@
   --space-8: 8px;
   --space-12: 12px;
   --space-16: 16px;
-  --space-24: 24px;
   /* Type scale. Four ranks, and 11px is the floor: no functional text in the
      interface is set smaller, because the readouts a user is here to read must
      not be smaller than the labels around them, and this audience often works
@@ -215,7 +185,6 @@
   color-scheme: light;
   --acc-rgb: 165, 57, 27;
   --blue-rgb: 56, 93, 184;
-  --violet-rgb: 124, 52, 167;
   /* Amber is a state color -- the STALE preview badge, geometry
      warnings -- so it is text a user must not miss. At 180,98,32 it
      measured 4.08:1 on the canvas and 3.66:1 on the status rail, below AA.
@@ -244,7 +213,6 @@
   --ov2: rgba(29,31,32,.050);
   --ov3: rgba(29,31,32,.070);
   --ov4: rgba(29,31,32,.090);
-  --ov5: rgba(29,31,32,.130);
   --edge-hi: transparent;
   --card-sh: none;
   --float-sh: 0 10px 24px -16px rgba(80,78,66,.45);
@@ -275,18 +243,12 @@
   --solve-kbd-fg: var(--inv-fg);
   --solve-sh: none;
   --track: var(--border-default);
-  --thumb: var(--fg);
-  --thumb-sh: none;
   --vp-grad: var(--surface-panel);
   --vp-vig: none;
   --glass-bg: var(--surface-floating);
   --glass-bd: var(--border-strong);
   --glass-sh: var(--float-sh);
   --float-bg: rgba(255, 253, 248, .96);
-  --lgd-bg: var(--surface-floating);
-  --lgd-bd: var(--border-default);
-  --gz-ring: var(--border-strong);
-  --gz-fill: var(--surface-panel);
   --scale-bd: rgba(29,31,32,.30);
   --chart-bg: var(--surface-panel);
   --chart-page: var(--surface-panel);
@@ -302,27 +264,7 @@
   --border-strong: #a5a89f;
   --focus-ring: rgba(165,57,27,.85);
   --focus-halo: rgba(165,57,27,.18);
-  --h3-glow0: rgba(200,196,182,.16);
-  --h3-glow1: rgba(220,216,204,.06);
-  --h3-floor: #c5c7c0;
-  --h3-floor-a: .8;
-  --h3-enc: #8a8d85;
-  --h3-wire: 47, 50, 52;
-  --h3-throat: rgba(47,50,52,.5);
-  --h3-rim0: #6e7275;
-  --h3-rim1: #9a9d96;
-  --h3-rim2: #b7bab3;
-  --h3-rim3: #c9cbc4;
-  --h3-edge: #1d1f20;
-  --h3-mouth-o: rgba(29,31,32,.30);
   --h3-shadow: rgba(90,88,74,.30);
-  --h3-in-a: #e4e6df;
-  --h3-in-b: #4a4e50;
-  --h3-out-a: #eceee7;
-  --h3-out-b: #666b6d;
-  --h3-spec: #ffffff;
-  --h3-warm: 128, 80, 16;
-  --h3-warm-k: 0;
   --vp-horn-material: #9fa39b;
   --vp-source-material: #a5674a;
   --vp-enclosure-material: #8a8d85;

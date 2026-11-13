@@ -12,7 +12,6 @@
 .wg2-viewport .viewport-tools { pointer-events: auto; }
 .wg2-viewport .viewport-tools button:disabled { color: var(--fg4); cursor: not-allowed; opacity: .48; }
 .wg2-text-glyph { font: 700 var(--text-micro) var(--mono); letter-spacing: -.04em; }
-.wg2-settings-glyph { font-size: 14px; line-height: 1; }
 .wg2-viewport .paused-badge { border: 1px solid rgba(var(--amber-rgb), .34); background: rgba(var(--amber-rgb), .13); color: var(--amber); }
 .wg2-viewport .error-badge { border: 1px solid rgba(var(--red-rgb), .38); background: rgba(var(--red-rgb), .13); color: var(--red); }
 
@@ -48,7 +47,6 @@
 .wg2-viewport .wg2-stats { top: calc(var(--viewport-header-height, 34px) + 18px); left: 12px; width: min(390px, calc(100% - 24px)); transform: none; }
 .wg2-viewport .wg2-stats .surface-list { max-height: min(240px, 38vh); }
 .wg2-tool-divider { width: 1px; height: 19px; margin: 2px 2px; background: var(--hair-hi); }
-.wg2-stats-glyph { font: 600 12px var(--mono); }
 .field-plane-legend { position: absolute; right: 12px; bottom: 54px; display: flex; flex-direction: column; width: min(286px, calc(100% - 24px)); padding: 8px 10px; border: 1px solid var(--glass-bd); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--fg2); pointer-events: auto; backdrop-filter: blur(12px) saturate(1.2); }
 .field-plane-legend-title,
 .field-plane-mode-row,
