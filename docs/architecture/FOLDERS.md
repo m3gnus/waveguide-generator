@@ -116,7 +116,9 @@ Every current UI chooser uses `/api/folders/select`. The compatibility
 `/api/cad-workspace/select` endpoint also chooses the WG folder and returns the
 effective WGLink folder; it never creates an override in an assembled app.
 The wg CLI and WGLink do not call this endpoint. The installed qualification
-script uses `/api/folders/select` directly.
+script (`scripts/qualify_installed_cpu.py`) first isolates its Runs folder through
+the compatibility `/api/workspace/select` route, then chooses the WG folder and
+retires that Runs override through `/api/folders/select`.
 
 An explicit `{ "useRoot": "cadlink" }` or `{ "useRoot": "runs" }` request to
 `/api/folders/select` clears that override and creates the respective child.

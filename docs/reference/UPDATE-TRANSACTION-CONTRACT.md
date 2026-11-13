@@ -68,8 +68,9 @@ three rows that describe them name files and functions, not line numbers.
 The legacy update service then became the record's reader (§2.2, §2.3). It explains
 the last outcome, holds back a build that rolled back, and lifts one suppression on an
 explicit retry: `last_outcome`, `held_back_entry` and `UpdateService.lift_suppression` in
-`server/updates/service.py`, `POST /api/updates/retry` in `server/updates/api.py`,
-`lift_suppressed_build` in `launchers/apply_update.py`, and the original update dialog.
+`server/updates/service.py`, the `POST /api/updates/retry` route, `lift_suppressed_build`
+in `launchers/apply_update.py`, and the original update dialog. All of these, the retry
+route included, were removed with the layer updater in 0.3.6.
 The current full-installer dialog in `frontend/src/shell/UpdateControl.tsx` follows
 the separate schema-2 status described in §2.2.
 
@@ -244,9 +245,8 @@ completion record only remembers what the journal decided.
     version mismatch). Install starts a fresh download and clears the previous error
     and progress, so no reset control is needed. `POST /api/updates/reset` remains
     available to clear stopped download state without installing anything.
-  - `POST /api/updates/retry` is legacy-only: the installer service always refuses it
-    with 409 because it has no held layer transaction. The dialog offers no held-build
-    retry.
+  - There is no held-build retry. `POST /api/updates/retry` was removed with the layer
+    updater in 0.3.6, and the dialog offers no such action.
 
 To give the record its build identities, the helper adds `fromVersion`, `fromCommit` and
 `fromRuntimeId`, and the matching `to` keys, to the journal. `begin_update_transaction`
@@ -274,8 +274,8 @@ full-installer dialog and its download recovery are described in §2.2 above.
     Its `availability` stays `available`, because the release exists. The original
     legacy dialog showed "update held back"; the current full-installer status carries
     no suppression. Nothing installs an update except through the install route.
-  - The retry is `POST /api/updates/retry`, with the header `X-WG-Update: retry` and the
-    entry's identity as its body. It removes the one equal entry and installs nothing.
+  - The retry was `POST /api/updates/retry` (removed in 0.3.6), with the header
+    `X-WG-Update: retry` and the entry's identity as its body. It removes the one equal entry and installs nothing.
     It answers 409 when the record holds no such entry. The record is rewritten by
     `lift_suppressed_build`, beside the writer in `launchers/apply_update.py`.
   - The retry rewrites the record while the app runs, as healthy-start cleanup does when
