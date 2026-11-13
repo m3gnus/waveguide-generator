@@ -381,7 +381,9 @@ export function downloadBlob(blob: Blob, filename: string): void {
   anchor.href = url;
   anchor.download = filename;
   anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  // The desktop shell's WebKit view may still be reading a large blob after the
+  // click returns; revoking at once can cut the download short.
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 /** Save server bytes under the attachment name supplied by their owner. */
