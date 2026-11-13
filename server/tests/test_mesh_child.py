@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
+from multiprocessing.connection import Connection
 import json
 import os
 from pathlib import Path
@@ -61,9 +63,17 @@ def hang_build(*_args: Any) -> None:
     time.sleep(120)
 
 
-def marked_hang_build(marker: str) -> None:
+def marked_hang_build(marker: str, startup_delay: float = 0) -> None:
+    time.sleep(startup_delay)
     Path(marker).write_text("building", encoding="utf-8")
     hang_build()
+
+
+async def _wait_for_child_marker(marker: Path) -> None:
+    deadline = time.monotonic() + 30
+    while not marker.exists() and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert marker.exists(), "the child never reached the tested state"
 
 
 def raising_build(*_args: Any) -> None:
@@ -593,13 +603,14 @@ def root_build(*_args: Any) -> str | None:
     return spawned_directory_root()
 
 
-def partial_frame_target(connection, _session_root) -> None:
+def partial_frame_target(connection, _session_root, *, marker: str) -> None:
     """A real child that promises a 1 MB frame, sends 10 bytes, and stalls."""
 
     import struct
 
     connection.recv()  # the build request
     os.write(connection.fileno(), struct.pack("!i", 1_000_000) + b"x" * 10)
+    Path(marker).write_text("partial frame sent", encoding="utf-8")
     time.sleep(120)
 
 
@@ -615,43 +626,79 @@ def failing_warmup_target(connection, session_root) -> None:
     child_module._child_main(connection, session_root)
 
 
-def test_close_does_not_wait_for_a_running_build(host) -> None:
+@pytest.mark.parametrize("startup_delay", [0, 2])
+def test_close_does_not_wait_for_a_running_build(host, tmp_path, startup_delay) -> None:
     async def scenario() -> None:
-        task = asyncio.create_task(host.run(hang_build))
-        await asyncio.sleep(1.5)  # the build is in the child
-        began = time.monotonic()
-        await asyncio.to_thread(host.close)
-        assert time.monotonic() - began < 3
-        with pytest.raises(MesherShuttingDownError, match="shutting down"):
-            await asyncio.wait_for(task, 5)
+        marker = tmp_path / "building"
+        task = asyncio.create_task(host.run(marked_hang_build, str(marker), startup_delay))
+        try:
+            await _wait_for_child_marker(marker)
+            assert marker.exists(), "shutdown must exercise an active child build"
+            began = time.monotonic()
+            await asyncio.to_thread(host.close)
+            assert time.monotonic() - began < 3
+            with pytest.raises(MesherShuttingDownError, match="shutting down"):
+                await asyncio.wait_for(task, 5)
+        finally:
+            host.close()
 
     asyncio.run(scenario())
 
 
-def test_shutdown_returns_promptly_during_a_viewport_build(shared_child) -> None:
+@pytest.mark.parametrize("startup_delay", [0, 2])
+def test_shutdown_returns_promptly_during_a_viewport_build(shared_child, tmp_path, startup_delay) -> None:
     from server.mesh.gmsh_worker import shutdown_gmsh_worker
 
     async def scenario() -> None:
-        task = asyncio.create_task(run_mesh_build(hang_build))
-        await asyncio.sleep(1.5)
-        began = time.monotonic()
-        await shutdown_gmsh_worker()
-        assert time.monotonic() - began < 5
-        with pytest.raises(RuntimeError):
-            await asyncio.wait_for(task, 5)
+        marker = tmp_path / "building"
+        task = asyncio.create_task(run_mesh_build(marked_hang_build, str(marker), startup_delay))
+        try:
+            await _wait_for_child_marker(marker)
+            assert marker.exists(), "shutdown must exercise an active child build"
+            began = time.monotonic()
+            await shutdown_gmsh_worker()
+            assert time.monotonic() - began < 5
+            with pytest.raises(RuntimeError):
+                await asyncio.wait_for(task, 5)
+        finally:
+            close_mesher_child()
 
     asyncio.run(scenario())
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="raw POSIX pipe write")
 @pytest.mark.parametrize("how", ["deadline", "cancel", "close"])
-def test_a_stalled_partial_result_cannot_outlast_the_deadline_cancel_or_close(how) -> None:
-    host = MesherChildHost(target=partial_frame_target)
+def test_a_stalled_partial_result_cannot_outlast_the_deadline_cancel_or_close(how, tmp_path, monkeypatch) -> None:
+    marker = tmp_path / "partial-frame"
+    host = MesherChildHost(target=partial(partial_frame_target, marker=str(marker)))
+    partial_read = threading.Event()
+    original_recv = Connection._recv
+
+    def observed_recv(connection, size, *args, **kwargs):
+        if size != 1_000_000:
+            return original_recv(connection, size, *args, **kwargs)
+
+        def read(handle, remaining):
+            data = os.read(handle, remaining)
+            if data and len(data) < remaining:
+                partial_read.set()
+            return data
+
+        # Observe the real reader consuming an incomplete payload before it
+        # waits inside the same _recv for the rest of the promised bytes.
+        return original_recv(connection, size, read)
+
+    monkeypatch.setattr(Connection, "_recv", observed_recv)
 
     class Cancelled(Exception):
         pass
 
     async def scenario() -> None:
+        # Start the reader and observe the incomplete frame before starting the
+        # shutdown/deadline budget. Import/startup time has its own budget.
+        host.prewarm()
+        await _wait_for_child_marker(marker)
+        assert await asyncio.to_thread(partial_read.wait, 30), "the reader never consumed the partial frame"
         began = time.monotonic()
         if how == "deadline":
             with pytest.raises(MesherCrashError, match="did not finish"):
@@ -665,7 +712,7 @@ def test_a_stalled_partial_result_cannot_outlast_the_deadline_cancel_or_close(ho
                 await host.run(ok_build, cancel_cb=cancel_cb)
         else:
             task = asyncio.create_task(host.run(ok_build))
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0)  # let run() submit its request
             host.close()
             with pytest.raises(RuntimeError):
                 await asyncio.wait_for(task, 5)
@@ -899,10 +946,7 @@ def test_app_shutdown_does_not_respawn_the_mesh_child(
                 await asyncio.wait_for(runtime.wait_idle(), 30)
                 assert runtime.store.get_job_row(job_id)["status"] == "complete"
             else:
-                deadline = time.monotonic() + 30
-                while not marker.exists() and time.monotonic() < deadline:
-                    await asyncio.sleep(0.05)
-                assert marker.exists(), "the build never entered the child"
+                await _wait_for_child_marker(marker)
             channel = host._channel
             assert channel is not None and len(processes) == 1
             began = time.monotonic()

@@ -3504,32 +3504,51 @@ def test_installed_backend_check_requires_one_json_line_and_same_owner(tmp_path,
 
 
 HUNG_SERVE = """\
+import os
+from pathlib import Path
 import threading
 
 
 def hang_here_at_startup():
+    Path(os.environ["WG_TEST_STARTUP_MARKER"]).write_text("entered hang")
     threading.Event().wait()
 
 
-threading.Thread(target=hang_here_at_startup, name="fake-startup", daemon=True).start()
 print("fake server starting", flush=True)
+threading.Thread(target=hang_here_at_startup, name="fake-startup", daemon=True).start()
 hang_here_at_startup()
 """
 
 
-def test_a_hung_start_fails_with_the_servers_thread_stacks(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("startup_delay", [0, 1.5])
+def test_a_hung_start_fails_with_the_servers_thread_stacks(tmp_path, monkeypatch, startup_delay) -> None:
     """A start that never answers still fails; the failure now carries the stacks."""
 
     app = tmp_path / "app"
     (app / "launch").mkdir(parents=True)
-    (app / "launch" / "serve.py").write_text(HUNG_SERVE, encoding="utf-8")
+    (app / "launch" / "serve.py").write_text(
+        f"import time\ntime.sleep({startup_delay})\n" + HUNG_SERVE, encoding="utf-8"
+    )
     monkeypatch.setattr(gate, "STARTUP_TIMEOUT_S", 1.0)
     monkeypatch.setattr(gate, "POLL_INTERVAL_S", 0.1)
+    # This stub never serves HTTP; avoid reserving a socket just to poll it.
+    monkeypatch.setattr(gate, "free_port", lambda: 1)
+    monkeypatch.setattr(gate, "http", lambda *args, **kwargs: None)
+    marker = tmp_path / "entered-hang"
     server = gate.Server(
-        Path(sys.executable), app, dict(os.environ), None, tmp_path / "stop", tmp_path / "server.log"
+        Path(sys.executable), app, {**os.environ, "WG_TEST_STARTUP_MARKER": str(marker)},
+        None, tmp_path / "stop", tmp_path / "server.log"
     )
-    with pytest.raises(gate.QualificationError, match="timed out") as raised:
-        server.__enter__()
+    try:
+        gate.wait_for(marker.exists, 30, "the stub to enter its startup hang")
+        with pytest.raises(gate.QualificationError, match="timed out") as raised:
+            server.__enter__()
+    finally:
+        # __enter__ cannot clean up an acknowledgment failure before it runs.
+        if server._process.poll() is None:
+            server._process.kill()
+            server._process.wait(timeout=10)
+        server._log.close()
     notes = "\n".join(getattr(raised.value, "__notes__", []))
     assert "--- server thread stacks ---" in notes
     if os.name == "posix":
