@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from hornlab_mesher.config_builder import resolve_geometry
 from hornlab_mesher.preview import build_preview_geometry, PreviewOptionsV1
@@ -55,6 +56,27 @@ def test_invalid_boolean_body_is_still_refused(field):
     payload[field] = True
     with pytest.raises(ValueError):
         DesignConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize(("formula", "field", "value", "message"), [
+    ("OSSE-AXIAL", "L", -5, "Input should be greater than 0"),
+    ("OSSE-ROUNDOVER", "a", 85, "Input should be less than 80"),
+    ("OSSE-ARC", "k", 0, "Input should be greater than 0"),
+])
+def test_out_of_range_plain_body_number_is_refused_at_its_field(formula, field, value, message):
+    payload = design_payload(formula)
+    payload[field] = value
+    with pytest.raises(ValidationError) as caught:
+        DesignConfig.model_validate(payload)
+    assert [(error["loc"], error["msg"]) for error in caught.value.errors()] == [((formula, field), message)]
+
+
+def test_expression_text_still_carries_beside_bounded_plain_numbers():
+    payload = design_payload("OSSE-AXIAL")
+    payload["L"] = {"raw": "120 + sin(p)"}
+    assert DesignConfig.model_validate(payload).root.L.raw == "120 + sin(p)"
+    payload["L"] = 130
+    assert DesignConfig.model_validate(payload).root.L == 130
 
 
 def test_expression_failure_explains_remedy():

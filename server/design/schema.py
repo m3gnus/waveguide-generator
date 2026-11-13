@@ -28,11 +28,15 @@ from pydantic import (
     RootModel,
     StrictFloat,
     StrictInt,
+    TypeAdapter,
+    ValidationError,
     ValidationInfo,
     field_validator,
     model_serializer,
     model_validator,
 )
+
+from pydantic_core import PydanticKnownError
 
 from .native import OSSE_BODY_KEYS
 
@@ -1627,24 +1631,41 @@ class NativeDesignCommon(DesignCommon):
         return self
 
 
+_NativeBodyL = Annotated[NativeNumber, Field(gt=0, le=10000)]
+_NativeBodyR0 = Annotated[NativeNumber, Field(gt=0, le=10000)]
+_NativeBodyA = Annotated[NativeNumber, Field(ge=1, lt=80)]
+_NativeBodyA0 = Annotated[NativeNumber, Field(ge=0, lt=80)]
+_NativeBodyK = Annotated[NativeNumber, Field(gt=0, le=100)]
+_NATIVE_BODY_NUMBERS = {name: TypeAdapter(number) for name, number in (
+    ("L", _NativeBodyL), ("r0", _NativeBodyR0), ("a", _NativeBodyA), ("a0", _NativeBodyA0), ("k", _NativeBodyK))}
+
+
 class NativeOSSEConfig(NativeDesignCommon):
     formula: Literal["OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC", "OSSE-NATIVE"]
-    L: Annotated[NativeNumber, Field(gt=0, le=10000)] | Expr = Field(default=120, description="Intrinsic OSSE body length in mm, evaluated per azimuth")
-    r0: Annotated[NativeNumber, Field(gt=0, le=10000)] | Expr = Field(default=12.7, description="Intrinsic body throat radius in mm, evaluated per azimuth")
-    a: Annotated[NativeNumber, Field(ge=1, lt=80)] | Expr = Field(default=40, description="Body coverage half-angle in degrees, evaluated per azimuth")
-    a0: Annotated[NativeNumber, Field(ge=0, lt=80)] | Expr = Field(default=15.5, description="Body throat half-angle in degrees, evaluated per azimuth")
-    k: Annotated[NativeNumber, Field(gt=0, le=100)] | Expr = 1
+    L: _NativeBodyL | Expr = Field(default=120, description="Intrinsic OSSE body length in mm, evaluated per azimuth")
+    r0: _NativeBodyR0 | Expr = Field(default=12.7, description="Intrinsic body throat radius in mm, evaluated per azimuth")
+    a: _NativeBodyA | Expr = Field(default=40, description="Body coverage half-angle in degrees, evaluated per azimuth")
+    a0: _NativeBodyA0 | Expr = Field(default=15.5, description="Body throat half-angle in degrees, evaluated per azimuth")
+    k: _NativeBodyK | Expr = 1
     s: NativeNumber = Field(default=0, ge=0, le=0, description="Native bodies require zero termination")
     throat_adapter: Annotated[AuthoredThroatAdapter | ControlThroatAdapter, Field(discriminator="mode")] | None = Field(default=None, exclude_if=lambda v: v is None)
     axial_scale: NativeNumber | None = Field(default=None, ge=0.01, le=10, exclude_if=lambda v: v is None, description="Absolute axial factor; scale controls X/Y")
     terminating_arc: TerminatingArc | None = Field(default=None, exclude_if=lambda v: v is None)
 
-    @field_validator(*OSSE_BODY_KEYS, mode="before")
+    @field_validator(*OSSE_BODY_KEYS, mode="wrap")
     @classmethod
-    def _body_number_or_expression(cls, value: Any) -> Any:
+    def _body_number_or_expression(cls, value: Any, handler: Any, info: ValidationInfo) -> Any:
         if type(value) is bool:
             raise ValueError("Native body dimensions require finite numbers or numeric expressions, not booleans")
-        return value
+        if isinstance(value, (int, float)):
+            # A plain number is never an expression: it must meet the field's
+            # own bounds and report them at the field, not fall through to Expr.
+            try:
+                return _NATIVE_BODY_NUMBERS[info.field_name].validate_python(value)
+            except ValidationError as exc:
+                error = exc.errors()[0]
+                raise PydanticKnownError(error["type"], error.get("ctx")) from None
+        return handler(value)
 
 
 class SourceDiskConfig(NativeDesignCommon):
