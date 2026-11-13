@@ -687,6 +687,50 @@ def test_the_windows_entry_point_stages_the_installer_outside_the_repository():
     assert "--root" in source, "the staged copy needs the repository root passed explicitly"
 
 
+def test_the_windows_entry_point_transfers_its_own_frame_before_running_the_installer():
+    source = batch_code(read(BATCH_ENTRY_POINT))
+    stage = source.index('copy /y "%~f0" "%WG_TMP_WRAPPER%"')
+    transfer = source.index('\n"%WG_TMP_WRAPPER%" %*')
+    run = source.index('call :run_installer')
+    assert stage < transfer < run
+    assert 'call "%WG_TMP_WRAPPER%"' not in source, "CALL leaves a replaceable batch frame suspended"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises cmd.exe and Windows PowerShell")
+def test_windows_update_can_replace_the_coordinating_wrapper(tmp_path):
+    root = tmp_path / "checkout with spaces"
+    entry = root / "installers/windows" / BATCH_ENTRY_POINT.name
+    entry.parent.mkdir(parents=True)
+    entry.write_bytes(BATCH_ENTRY_POINT.read_bytes())
+    scripts = root / "scripts"
+    scripts.mkdir()
+    # The first child simulates Git replacing both repository batch files.
+    # A short replacement makes any suspended byte offset invalid.
+    (scripts / "install.bat").write_text(
+        '@echo off\n'
+        'copy /y "%~2\\replacement-wrapper.bat" "%~2\\installers\\windows\\install-and-update.bat" >nul\n'
+        'copy /y "%~2\\replacement-installer.bat" "%~2\\scripts\\install.bat" >nul\n'
+        'exit /b 10\n', newline="\r\n",
+    )
+    (root / "replacement-wrapper.bat").write_text('@echo off\nexit /b 97\n', newline="\r\n")
+    (root / "replacement-installer.bat").write_text(
+        '@echo off\n'
+        'if not "%~4"=="--after-pull" exit /b 98\n'
+        'break > "%~2\\prepared-after-update"\n'
+        'exit /b 0\n', newline="\r\n",
+    )
+    environment = {**os.environ, "TEMP": str(tmp_path / "temporary"), "APPDATA": str(tmp_path / "data")}
+    Path(environment["TEMP"]).mkdir()
+    Path(environment["APPDATA"]).mkdir()
+    completed = run_installer_subprocess(
+        [environment.get("COMSPEC", "cmd.exe"), "/d", "/c", str(entry), "--no-launch"],
+        cwd=root, env=environment, input="\n", capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert (root / "prepared-after-update").exists()
+    assert not list(Path(environment["TEMP"]).glob("wg2-wrapper-*"))
+
+
 def test_the_windows_entry_point_preserves_unicode_paths_through_the_powershell_tee():
     source = batch_code(read(BATCH_ENTRY_POINT))
     command = re.search(
