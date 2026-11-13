@@ -70,6 +70,8 @@ export interface StartActivity {
   label: string;
   cancel?: () => void;
   background?: boolean;
+  /** When the wait really began, if before this registration (epoch ms). */
+  startedAt?: number;
 }
 
 /** Shown once it has run this long, or at once when it usually takes longer. */
@@ -119,9 +121,9 @@ class ActivityStore {
     return sorted[Math.floor(sorted.length / 2)];
   }
 
-  start({ kind, label, cancel, background = false }: StartActivity): ActivityHandle {
+  start({ kind, label, cancel, background = false, startedAt = Date.now() }: StartActivity): ActivityHandle {
     const activity: Activity = {
-      id: this.nextId++, kind, label, startedAt: Date.now(),
+      id: this.nextId++, kind, label, startedAt,
       progress: null, progressAt: null, cancel: cancel ?? null, background,
     };
     this.set([...this.activities, activity]);
@@ -131,7 +133,7 @@ class ActivityStore {
     this.visibilityTimers.set(activity.id, setTimeout(() => {
       this.visibilityTimers.delete(activity.id);
       this.set([...this.activities]);
-    }, ACTIVITY_SHOW_AFTER_MS));
+    }, Math.max(0, ACTIVITY_SHOW_AFTER_MS - (Date.now() - startedAt))));
     let ended = false;
     const patch = (change: Partial<Activity>) => {
       if (ended) return;

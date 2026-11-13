@@ -130,6 +130,34 @@ describe('preview status-bar activity', () => {
     expect(host.textContent).toBe('');
   });
 
+  it('leaves the activity store alone during a burst of revisions under a second', () => {
+    act(() => vi.advanceTimersByTime(140));
+    const [coarse, fine] = requests();
+    receive(coarse);
+    receive(fine);
+    expect(activityStore.getSnapshot()).toEqual([]);
+    const notified = vi.fn();
+    const unsubscribe = activityStore.subscribe(notified);
+    try {
+      const before = socket.sent.length;
+      for (let step = 1; step <= 25; step += 1) {
+        act(() => useDesignStore.getState().updateField('L', 140 + step));
+        act(() => vi.advanceTimersByTime(33));
+      }
+      // The drag reached the server as coarse requests only, with no store traffic.
+      expect(requests().slice(before).every(request => request.lod === 'coarse')).toBe(true);
+      expect(socket.sent.length - before).toBeGreaterThan(10);
+      expect(notified).not.toHaveBeenCalled();
+      expect(activityStore.getSnapshot()).toEqual([]);
+      // Once the drag rests, the fine request registers its single wait.
+      act(() => vi.advanceTimersByTime(140));
+      expect(activityStore.getSnapshot()).toHaveLength(1);
+      expect(notified).toHaveBeenCalledOnce();
+      receive(requests().at(-1)!);
+      expect(activityStore.getSnapshot()).toEqual([]);
+    } finally { unsubscribe(); }
+  });
+
   it('does not let old revisions or replaced documents finish the newer wait', () => {
     act(() => vi.advanceTimersByTime(140));
     const old = requests().at(-1)!;
@@ -166,7 +194,8 @@ describe('preview status-bar activity', () => {
     const [coarse] = requests();
     if (when === 'after') act(() => vi.advanceTimersByTime(140));
     fail(coarse);
-    expect(activityStore.getSnapshot()).toHaveLength(1);
+    // Before the fine request the wait is still local; afterwards it is registered.
+    expect(activityStore.getSnapshot()).toHaveLength(when === 'before' ? 0 : 1);
     act(() => vi.advanceTimersByTime(1_000));
     expect(host.textContent).toContain('Drawing the preview');
     const fine = requests().at(-1)!;

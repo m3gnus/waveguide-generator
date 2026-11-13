@@ -140,11 +140,13 @@ export class PreviewSocketManager {
   private readonly listeners = new Set<() => void>();
   private unsubscribeRevision: (() => void) | null = null;
   private unregisterTimer: (() => void) | null = null;
-  /** The status-bar wait for the current revision, from its first request
-   * until its fine frame arrives (shown only once it has run a second). */
+  /** The wait for the current revision, from its first request until its
+   * fine frame arrives. It is kept here and enters the status bar (dated from
+   * that first request) only once the fine request is sent: a drag sends
+   * coarse requests only, so it never touches the activity store. */
   private previewActivity: {
-    handle: ActivityHandle; revision: number; documentLoad: number;
-    firstSeq: number; coarseSeq: number | null; fineSeq: number | null;
+    handle: ActivityHandle | null; revision: number; documentLoad: number; startedAt: number;
+    firstSeq: number; coarseSeq: number | null; fineSeq: number | null; refining: boolean;
   } | null = null;
   private snapshot: PreviewSnapshot = {
     connection: 'idle', epoch: null, frame: null, displayedRevision: null,
@@ -432,7 +434,10 @@ export class PreviewSocketManager {
     });
     const pending = this.activityFor(frameRevision, frameSeq);
     if (pending?.fineSeq === frameSeq) this.endPreviewActivity(true);
-    else if (pending?.coarseSeq === frameSeq) pending.handle.label('Refining the preview');
+    else if (pending?.coarseSeq === frameSeq) {
+      pending.refining = true;
+      pending.handle?.label('Refining the preview');
+    }
   }
 
   private onRevision(event: RevisionEvent): void {
@@ -531,12 +536,17 @@ export class PreviewSocketManager {
     if (this.previewActivity?.revision !== designRevision || this.previewActivity.documentLoad !== this.documentLoad) {
       this.endPreviewActivity(false);
       this.previewActivity = {
-        handle: activityStore.start({ kind: 'preview', label: lod === 'fine' ? 'Refining the preview' : 'Drawing the preview', background: true }),
-        revision: designRevision, documentLoad: this.documentLoad, firstSeq: this.seq, coarseSeq: null, fineSeq: null,
+        handle: null, revision: designRevision, documentLoad: this.documentLoad, startedAt: Date.now(),
+        firstSeq: this.seq, coarseSeq: null, fineSeq: null, refining: false,
       };
     }
-    if (lod === 'coarse') this.previewActivity.coarseSeq = this.seq;
-    else this.previewActivity.fineSeq = this.seq;
+    const pending = this.previewActivity;
+    if (lod === 'coarse') pending.coarseSeq = this.seq;
+    else {
+      pending.fineSeq = this.seq;
+      pending.handle ??= activityStore.start({ kind: 'preview', label: pending.refining ? 'Refining the preview' : 'Drawing the preview',
+        background: true, startedAt: pending.startedAt });
+    }
     socket.send(JSON.stringify({
       v: 1,
       kind: 'preview',
@@ -572,7 +582,7 @@ export class PreviewSocketManager {
   }
 
   private endPreviewActivity(completed: boolean): void {
-    this.previewActivity?.handle.end(completed);
+    this.previewActivity?.handle?.end(completed);
     this.previewActivity = null;
   }
 

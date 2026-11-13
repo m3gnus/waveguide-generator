@@ -171,8 +171,8 @@ async def solver_mesh_response(
             cancellation.close()
 
     if operation is not None:
-        # A cache hit never reports mesh_validate; the stage is complete here.
-        operation.progress("mesh")
+        # The builder reported mesh_validate (cache hit or not) before its
+        # per-request checks; its return completes them.
         operation.progress("check")
 
     stats = result["stats"]
