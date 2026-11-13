@@ -380,8 +380,9 @@ def _sweep_and_prune(lower: np.ndarray, upper: np.ndarray) -> np.ndarray | None:
     Sweep-and-prune rather than a uniform grid: a solver mesh is deliberately
     graded, so mouth facets are an order of magnitude larger than throat
     facets and no single cell size serves both. Sorting on the longest axis and
-    keeping an active set costs no tuning constant and degrades gracefully when
-    one surface is much coarser than its neighbour.
+    pairing each box with the boxes that start before it ends costs no tuning
+    constant and degrades gracefully when one surface is much coarser than its
+    neighbour.
 
     Returns ``None`` when the candidate budget is exceeded, which the caller
     reports as "not checked" rather than as "no intersections".
@@ -393,35 +394,50 @@ def _sweep_and_prune(lower: np.ndarray, upper: np.ndarray) -> np.ndarray | None:
     lo = lower[order]
     hi = upper[order]
 
-    active = np.empty(len(order), dtype=np.int64)
-    active_count = 0
+    # Sorted on the sweep axis, the boxes after position q that reach back to
+    # it are one contiguous run: those starting no later than q's box ends.
+    # Enumerating each run is the sweep's active set read from the other side,
+    # without a Python step per triangle.
+    count = len(order)
+    positions = np.arange(count, dtype=np.int64)
+    run_end = np.searchsorted(lo[:, axis], hi[:, axis], side="right")
+    run_length = np.maximum(run_end - positions - 1, 0)
+    run_total = np.cumsum(run_length)
     first: list[np.ndarray] = []
     second: list[np.ndarray] = []
     total = 0
-    for position in range(len(order)):
-        if active_count:
-            live = active[:active_count]
-            keep = hi[live, axis] >= lo[position, axis]
-            live = live[keep]
-            active_count = len(live)
-            active[:active_count] = live
-            if active_count:
-                overlap = np.all(
-                    (lo[live] <= hi[position]) & (hi[live] >= lo[position]), axis=1
-                )
-                hits = live[overlap]
-                if len(hits):
-                    total += len(hits)
-                    if total > SELF_INTERSECTION_MAX_CANDIDATE_PAIRS:
-                        return None
-                    first.append(np.full(len(hits), position, dtype=np.int64))
-                    second.append(hits)
-        active[active_count] = position
-        active_count += 1
+    begin = 0
+    while begin < count:
+        # Bounded batches of slab candidates, at least one box per batch.
+        done = int(run_total[begin - 1]) if begin else 0
+        end = int(np.searchsorted(run_total, done + _SELF_INTERSECTION_CHUNK, side="right"))
+        end = min(count, max(end, begin + 1))
+        lengths = run_length[begin:end]
+        size = int(lengths.sum())
+        if size:
+            earlier = np.repeat(positions[begin:end], lengths)
+            offset = np.arange(size, dtype=np.int64) - np.repeat(np.cumsum(lengths) - lengths, lengths)
+            later = earlier + 1 + offset
+            overlap = np.ones(size, dtype=bool)
+            for dimension in range(3):
+                overlap &= lo[earlier, dimension] <= hi[later, dimension]
+                overlap &= hi[earlier, dimension] >= lo[later, dimension]
+            hits = int(np.count_nonzero(overlap))
+            if hits:
+                total += hits
+                if total > SELF_INTERSECTION_MAX_CANDIDATE_PAIRS:
+                    return None
+                first.append(later[overlap])
+                second.append(earlier[overlap])
+        begin = end
 
     if not first:
         return np.empty((0, 2), dtype=np.int64)
-    pairs = np.stack((np.concatenate(first), np.concatenate(second)), axis=1)
+    later = np.concatenate(first)
+    earlier = np.concatenate(second)
+    # The sweep's order: by the later box, then the earlier one.
+    sequence = np.lexsort((earlier, later))
+    pairs = np.stack((later[sequence], earlier[sequence]), axis=1)
     # Back to caller indices; the sweep worked in sorted positions.
     return order[pairs]
 

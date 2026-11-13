@@ -605,3 +605,110 @@ def test_batched_coplanar_clip_preserves_area_contacts_and_winding(axis, scale):
     for a in (first3, first3[:, ::-1]):
         for b in (second3, second3[:, ::-1]):
             assert _coplanar_overlaps(a, b, np.full(4, axis)) == pytest.approx(expected)
+
+
+def _looped_sweep_and_prune(lower: np.ndarray, upper: np.ndarray, limit: int) -> np.ndarray | None:
+    """The per-box active-set sweep the vectorised broadphase replaced."""
+
+    extent = upper.max(axis=0) - lower.min(axis=0)
+    axis = int(np.argmax(extent))
+    order = np.argsort(lower[:, axis], kind="stable")
+    lo = lower[order]
+    hi = upper[order]
+    active = np.empty(len(order), dtype=np.int64)
+    active_count = 0
+    first: list[np.ndarray] = []
+    second: list[np.ndarray] = []
+    total = 0
+    for position in range(len(order)):
+        if active_count:
+            live = active[:active_count]
+            live = live[hi[live, axis] >= lo[position, axis]]
+            active_count = len(live)
+            active[:active_count] = live
+            if active_count:
+                overlap = np.all((lo[live] <= hi[position]) & (hi[live] >= lo[position]), axis=1)
+                hits = live[overlap]
+                if len(hits):
+                    total += len(hits)
+                    if total > limit:
+                        return None
+                    first.append(np.full(len(hits), position, dtype=np.int64))
+                    second.append(hits)
+        active[active_count] = position
+        active_count += 1
+    if not first:
+        return np.empty((0, 2), dtype=np.int64)
+    return order[np.stack((np.concatenate(first), np.concatenate(second)), axis=1)]
+
+
+def _graded_horn(rings: int, around: int) -> tuple[np.ndarray, np.ndarray]:
+    """A flaring, axially graded horn wall: small throat facets, large mouth facets."""
+
+    z = 300.0 * np.linspace(0.0, 1.0, rings) ** 1.6
+    radius = 12.7 + 0.002 * z**2
+    phi = np.linspace(0.0, 2.0 * math.pi, around, endpoint=False)
+    points = np.stack(
+        (np.outer(radius, np.cos(phi)), np.outer(radius, np.sin(phi)), np.repeat(z[:, None], around, axis=1)),
+        axis=-1,
+    ).reshape(-1, 3)
+    index = np.arange(rings * around).reshape(rings, around)
+    a, b = index[:-1], np.roll(index[:-1], -1, axis=1)
+    c, d = index[1:], np.roll(index[1:], -1, axis=1)
+    triangles = np.concatenate(
+        (np.stack((a, b, d), axis=-1).reshape(-1, 3), np.stack((a, d, c), axis=-1).reshape(-1, 3))
+    )
+    return points, triangles
+
+
+def _boxes(points: np.ndarray, triangles: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    corners = points[triangles]
+    return corners.min(axis=1), corners.max(axis=1)
+
+
+def _broadphase_cases() -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    rng = np.random.default_rng(261113)
+    horn_points, horn_triangles = _graded_horn(151, 100)  # 30,000 triangles
+    sphere_points, sphere_triangles = _uv_sphere(40)
+    soup = rng.normal(size=(2_000, 3, 3)) * np.array([5.0, 1.0, 1.0])
+    # Snapped to a coarse grid, many boxes share their sweep-axis start, which
+    # is where the order of equal keys decides the pair order.
+    ties = np.round(rng.uniform(0.0, 4.0, size=(1_500, 3, 3)))
+    return {
+        "graded-horn-30k": _boxes(horn_points, horn_triangles),
+        "pole-collapsed-sphere": _boxes(sphere_points, sphere_triangles),
+        "random-soup": (soup.min(axis=1), soup.max(axis=1)),
+        "tied-starts": (ties.min(axis=1), ties.max(axis=1)),
+        "single-box": (np.zeros((1, 3)), np.ones((1, 3))),
+        "disjoint": (np.arange(30.0)[:, None] * np.ones(3), np.arange(30.0)[:, None] * np.ones(3) + 0.5),
+    }
+
+
+@pytest.mark.parametrize("name", list(_broadphase_cases()))
+def test_vectorised_broadphase_returns_the_looped_sweeps_pairs_in_its_order(name, monkeypatch) -> None:
+    from server.mesh import integrity
+
+    lower, upper = _broadphase_cases()[name]
+    expected = _looped_sweep_and_prune(lower, upper, integrity.SELF_INTERSECTION_MAX_CANDIDATE_PAIRS)
+    actual = integrity._sweep_and_prune(lower, upper)
+    assert expected is not None and actual is not None
+    assert actual.dtype == expected.dtype
+    np.testing.assert_array_equal(actual, expected)
+    # Small batches exercise the batch seams; the result must not depend on them.
+    monkeypatch.setattr(integrity, "_SELF_INTERSECTION_CHUNK", 7)
+    np.testing.assert_array_equal(integrity._sweep_and_prune(lower, upper), expected)
+
+
+def test_vectorised_broadphase_gives_up_exactly_where_the_looped_sweep_did(monkeypatch) -> None:
+    from server.mesh import integrity
+
+    lower, upper = _broadphase_cases()["random-soup"]
+    pairs = _looped_sweep_and_prune(lower, upper, integrity.SELF_INTERSECTION_MAX_CANDIDATE_PAIRS)
+    assert pairs is not None and len(pairs) > 1
+    for limit in (len(pairs) - 1, len(pairs)):
+        monkeypatch.setattr(integrity, "SELF_INTERSECTION_MAX_CANDIDATE_PAIRS", limit)
+        expected = _looped_sweep_and_prune(lower, upper, limit)
+        actual = integrity._sweep_and_prune(lower, upper)
+        assert (actual is None) == (expected is None) == (limit < len(pairs))
+        if expected is not None:
+            np.testing.assert_array_equal(actual, expected)
