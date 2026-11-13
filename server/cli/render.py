@@ -5,6 +5,18 @@ from __future__ import annotations
 import json
 from typing import Any, TextIO
 
+from pydantic import ValidationError
+
+
+def validation_messages(exc: ValidationError) -> list[str]:
+    """One ``location: message`` line per pydantic error."""
+    messages: list[str] = []
+    for error in exc.errors(include_url=False):
+        location = ".".join(str(part) for part in error["loc"])
+        prefix = f"{location}: " if location else ""
+        messages.append(prefix + str(error["msg"]))
+    return messages
+
 
 def _line(stream: TextIO, label: str, value: object) -> None:
     print(f"{label:<13} {value}", file=stream)

@@ -29,7 +29,7 @@ from server.mesh.builder import build_solver_mesh
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.solver.context import SolverContext
 
-from .render import render_validation
+from .render import render_validation, validation_messages
 from .request import build_request, load_request_document
 
 
@@ -87,15 +87,6 @@ def _refuse(
             "client_request_id": payload["clientRequestId"],
         }
     )
-
-
-def _validation_messages(exc: ValidationError) -> list[str]:
-    messages: list[str] = []
-    for error in exc.errors(include_url=False):
-        location = ".".join(str(part) for part in error["loc"])
-        prefix = f"{location}: " if location else ""
-        messages.append(prefix + str(error["msg"]))
-    return messages
 
 
 def _frequency_summary(request: SolveRequest) -> dict[str, Any]:
@@ -240,7 +231,7 @@ async def validate_path(
         payload["settingsSource"] = built.settings_source
         payload["clientRequestId"] = request.client_request_id
     except ValidationError as exc:
-        for message in _validation_messages(exc):
+        for message in validation_messages(exc):
             _refuse(payload, message)
         return payload, 1
     except (TypeError, ValueError) as exc:

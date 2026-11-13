@@ -54,6 +54,7 @@ from server.platform.backend_owner import (
 from .backend_client import BackendClient, BackendClientError
 from .request import build_request
 from .outcome import write_outcome
+from .render import validation_messages
 from .request import load_request_document
 
 
@@ -207,15 +208,6 @@ def _capture_sigint(interrupted: asyncio.Event):
         yield restore
     finally:
         restore()
-
-
-def _validation_messages(exc: ValidationError) -> list[str]:
-    messages: list[str] = []
-    for error in exc.errors(include_url=False):
-        location = ".".join(str(part) for part in error["loc"])
-        prefix = f"{location}: " if location else ""
-        messages.append(prefix + str(error["msg"]))
-    return messages
 
 
 def _read_request(args: argparse.Namespace):
@@ -460,7 +452,7 @@ async def solve_path(
     try:
         request = _read_request(args)
     except ValidationError as exc:
-        messages = _validation_messages(exc)
+        messages = validation_messages(exc)
         for message in messages:
             print(f"Solve refused: {message}", file=stderr)
         if ndjson:
