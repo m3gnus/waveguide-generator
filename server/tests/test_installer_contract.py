@@ -690,10 +690,28 @@ def test_the_windows_entry_point_stages_the_installer_outside_the_repository():
 def test_the_windows_entry_point_transfers_its_own_frame_before_running_the_installer():
     source = batch_code(read(BATCH_ENTRY_POINT))
     stage = source.index('copy /y "%~f0" "%WG_TMP_WRAPPER%"')
-    transfer = source.index('\n"%WG_TMP_WRAPPER%" %*')
+    transfer = source.index('\n"%WG_TMP_WRAPPER%" --wg-staged %*')
     run = source.index('call :run_installer')
     assert stage < transfer < run
     assert 'call "%WG_TMP_WRAPPER%"' not in source, "CALL leaves a replaceable batch frame suspended"
+
+
+def test_the_staged_windows_coordinator_recognises_itself_by_a_sentinel_argument():
+    """The staged copy must never stage itself again, even without its inherited variable."""
+
+    source = batch_code(read(BATCH_ENTRY_POINT))
+    sentinel_guard = source.index('if "%~1"=="--wg-staged" goto coordinator_ready')
+    first_stage = source.index('mkdir "%WG_TMP_WRAPPER_DIR%"')
+    assert sentinel_guard < first_stage, "the sentinel check must run before any staging"
+    ready = source.index("\n:coordinator_ready\n")
+    collected = source.index('set "WG_ARGS=%*"', ready)
+    stripped = source.index(
+        'if "%~1"=="--wg-staged" set "WG_ARGS=%WG_ARGS:*--wg-staged=%"', collected
+    )
+    first_use = source.index("%WG_ARGS:--no-launch=%")
+    assert collected < stripped < first_use, "the sentinel must be removed before the arguments are used"
+    # A staged copy without the project root stops with an explanation.
+    assert source.index("if not defined WG_ROOT goto staged_root_missing", ready) < collected
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="exercises cmd.exe and Windows PowerShell")

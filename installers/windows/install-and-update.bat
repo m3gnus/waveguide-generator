@@ -22,7 +22,10 @@ rem early. See the header of install.bat.
 setlocal EnableExtensions DisableDelayedExpansion
 
 rem Batch chaining (without CALL) replaces this frame before any Git update.
-rem The staged copy inherits the original root and double-click name.
+rem The staged copy inherits the original root and double-click name. It is
+rem also told so by a leading --wg-staged argument, so it can never stage
+rem itself again even if the inherited WG_TMP_WRAPPER were not visible.
+if "%~1"=="--wg-staged" goto coordinator_ready
 if defined WG_TMP_WRAPPER if /i "%~f0"=="%WG_TMP_WRAPPER%" goto coordinator_ready
 set "WG_WRAPPER_NAME=%~nx0"
 set "WG_ROOT=%~dp0..\.."
@@ -33,7 +36,7 @@ if errorlevel 1 goto wrapper_directory_failed
 set "WG_TMP_WRAPPER=%WG_TMP_WRAPPER_DIR%\coordinate.bat"
 copy /y "%~f0" "%WG_TMP_WRAPPER%" >nul
 if errorlevel 1 goto wrapper_stage_failed
-"%WG_TMP_WRAPPER%" %*
+"%WG_TMP_WRAPPER%" --wg-staged %*
 exit /b 1
 
 :wrapper_stage_failed
@@ -45,7 +48,13 @@ echo        Check that the temporary folder exists and is writable, then try aga
 exit /b 1
 
 :coordinator_ready
+if not defined WG_ROOT goto staged_root_missing
 set "WG_ARGS=%*"
+rem Drop the leading --wg-staged sentinel. %* is the raw argument text, which
+rem SHIFT does not change, so strip through the sentinel's first occurrence
+rem (it is always the first token) and keep the rest, quoting included,
+rem byte for byte. With no other arguments WG_ARGS ends up undefined.
+if "%~1"=="--wg-staged" set "WG_ARGS=%WG_ARGS:*--wg-staged=%"
 
 rem Did the caller ask us not to start the app? Detected by substring
 rem replacement rather than `echo %WG_ARGS% | find`, because the piped form
@@ -129,6 +138,12 @@ rem Read cleanup and exit as one block before deleting the staged batch file.
     rd "%WG_TMP_WRAPPER_DIR%" >nul 2>&1
     exit /b %RESULT%
 )
+
+:staged_root_missing
+echo ERROR: The staged update coordinator did not receive the project folder.
+echo        Run installers\windows\install-and-update.bat from the project checkout again.
+set "RESULT=1"
+goto coordinator_exit
 
 :missing_installer
 echo ERROR: Could not find scripts\install.bat in the project checkout.
