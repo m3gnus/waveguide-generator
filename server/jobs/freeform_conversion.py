@@ -11,8 +11,6 @@ import re
 from typing import Literal
 
 import numpy as np
-from scipy.optimize import minimize_scalar
-from scipy.interpolate import PchipInterpolator
 
 from server.design.schema import DesignCommon, DesignConfig, Expr, LookupConfig, StrictModel
 from server.design.native import NATIVE_FORMULAS, has_native_roundover
@@ -544,6 +542,7 @@ def _polyline_fit(rows: np.ndarray, scale: float, check: Callable) -> tuple[dict
     The cubic-minus-polyline maximum checks every original interval's ends and
     derivative roots. The reported curve error is independent of the wall grid.
     """
+    from scipy.interpolate import PchipInterpolator
     from hornlab_mesher.freeform import MIN_INTERIOR_CORNER_SPACING_MM
     original = rows
     rows = _merge_straight_rows(rows)
@@ -634,6 +633,7 @@ def _polyline_fit(rows: np.ndarray, scale: float, check: Callable) -> tuple[dict
 
 def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Callable,
                *, anchor_z: Sequence[float] = (), explicit: bool = False) -> dict:
+    from scipy.interpolate import PchipInterpolator
     from hornlab_mesher import freeform_evaluate_profile
     from hornlab_mesher.freeform import MIN_INTERIOR_CORNER_SPACING_MM
     from server.preview.freeform_profile import _params
@@ -717,6 +717,7 @@ def _fit_plane(samples: np.ndarray, seed_z: list[float], scale: float, check: Ca
 def _refine_generated(candidate: DesignConfig, wall: Sequence[np.ndarray], scale: float, seeds: Callable,
                       check: Callable) -> tuple[DesignConfig, np.ndarray]:
     """Spend the remaining anchors where the generated grid actually differs."""
+    from scipy.optimize import minimize_scalar
     length = _number(candidate.root.length)*scale
     payload = candidate.model_dump(mode='json')
     shared = candidate.root.shared_profile
@@ -796,6 +797,7 @@ def _refine_generated(candidate: DesignConfig, wall: Sequence[np.ndarray], scale
 
 def _fit_stations(wall: Sequence[np.ndarray], length: float, scale: float, check: Callable) -> list[dict]:
     """Fit each selected ring with the mesher's own station-outline evaluator."""
+    from scipy.optimize import minimize_scalar
     from hornlab_mesher.freeform import _station_radius, _resolve_active_station_blend
     phi = np.radians(AZIMUTHS)
     z = np.unique(np.r_[wall[0][:, 0], wall[ANGULAR//4][:, 0], np.linspace(0, length, 129)])
