@@ -22,7 +22,7 @@ it.each([false, true])('an explicit operation GET reports stages and keeps its l
     async (fetcher, signal) => {
       await fetcher('/ordinary-read', { signal });
       return (await fetcher('/build-bearing-read', { signal })).text();
-    }, { method: 'GET', url: '/build-bearing-read' });
+    }, { operationGet: { method: 'GET', url: '/build-bearing-read' } });
   const outcome = pending.catch(error => error);
   await vi.advanceTimersByTimeAsync(31_000);
   expect(new Headers(fetcher.mock.calls[0][1]?.headers).has('X-WG-Operation-Id')).toBe(false);

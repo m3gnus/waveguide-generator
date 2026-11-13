@@ -1,4 +1,4 @@
-import { abortableActivity } from '../shell/activityOperation';
+import { stagedActivity } from '../shell/stagedActivity';
 import { httpErrorMessage, isAbortError, ProgramFault } from './httpError';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import type { SolveOptionsStore } from '../stores/solveOptions';
@@ -47,6 +47,13 @@ export function solverMeshDesignKey(design: DesignDocument): string {
   });
 }
 
+// The server counts resolve, mesh (built and validated), check (per-request
+// checks done) and publish; each label names the step then underway.
+const solverMeshSteps = {
+  start: 'Resolving solve settings', resolve: 'Building and checking the mesh',
+  mesh: 'Checking the mesh', check: 'Receiving the mesh', publish: 'Receiving the mesh',
+};
+
 /**
  * Build (or fetch from the server's shared artifact cache) the authoritative
  * solver mesh for an already-serialised solve design.
@@ -66,7 +73,7 @@ export async function postSolverMesh(
   signal?: AbortSignal,
   representation: 'full' | 'summary' = 'full',
 ): Promise<SolverMeshResult | SolverMeshSummary> {
-  return abortableActivity({ kind: 'solver-mesh', label: 'Building the solver mesh' }, fetcher, signal, async (fetcher, signal) => {
+  return stagedActivity({ kind: 'solver-mesh', label: 'Building the solver mesh' }, fetcher, signal, async (fetcher, signal) => {
     const response = await fetcher(representation === 'summary' ? '/api/solver-mesh?representation=summary' : '/api/solver-mesh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -99,7 +106,7 @@ export async function postSolverMesh(
       throw new ProgramFault('Solver mesh response is invalid');
     }
     return result as SolverMeshResult | SolverMeshSummary;
-  });
+  }, { steps: solverMeshSteps });
 }
 
 /** The store token a solver-mesh artifact would carry, derived from the cache

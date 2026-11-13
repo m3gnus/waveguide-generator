@@ -1102,7 +1102,7 @@ export async function downloadMeshArtifact(
       reportNotice(`${runDisplayName(job)}: the original mesh is gone, so WG rebuilt it with the current version${version ? ` (${version})` : ''} and may differ from the mesh that was solved.`);
     }
     return filename;
-  }, { method: 'GET', url });
+  }, { operationGet: { method: 'GET', url } });
 }
 
 export async function saveMeshArtifactToWorkspace(

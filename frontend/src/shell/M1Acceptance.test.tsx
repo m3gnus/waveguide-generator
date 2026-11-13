@@ -535,12 +535,17 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     await act(async () => { button.click(); await flush(8); });
     expect(mocks.submitDesign).toHaveBeenCalledOnce();
     const [design, options] = mocks.submitDesign.mock.calls[0];
-    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).startsWith('/api/solver-mesh'))).toEqual([
+    const meshCalls = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).startsWith('/api/solver-mesh'));
+    expect(meshCalls).toEqual([
       ['/api/solver-mesh?representation=summary', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: expect.any(Headers),
         body: JSON.stringify({ design: serializeSolveDesign(design), options }), signal: expect.any(AbortSignal),
       }],
     ]);
+    // The solver mesh reports its stages to the status bar under an operation id.
+    const meshHeaders = meshCalls[0][1]!.headers as Headers;
+    expect(meshHeaders.get('Content-Type')).toBe('application/json');
+    expect(meshHeaders.get('X-WG-Operation-Id')).toMatch(/^[0-9a-f-]{36}$/);
     const parametric = { ...cadJob('job-p', 'wgi_first'), config_summary: {}, cad_source: null } as JobItem;
     await jobs([parametric]);
     expect(compareSelection.getSnapshot().primary).toBe('job-p');

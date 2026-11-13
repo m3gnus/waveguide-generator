@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -13,6 +15,7 @@ from server.design.schema import DesignConfig
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.mesh_preview import mount_solver_mesh, solver_mesh_response
 from server.jobs.models import SolveOptions, SolveRequest
+from server.jobs.operation_progress import mount_operation_progress
 from server.jobs.runtime.core import (
     EngineUnavailableError,
     SymmetryValidationError,
@@ -27,6 +30,129 @@ async def _preview_response(*args, **kwargs):
     return await solver_mesh_response(
         *args, engine_registry=EngineRegistry(detector=lambda: []), **kwargs
     )
+
+
+def test_request_stages_wait_for_validation_and_finish_on_cache_hits(monkeypatch):
+    import httpx2 as httpx
+
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+        checking, checked = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def worker(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await _stub_worker(calls)(*args, **kwargs)
+
+        async def advisory(*_args):
+            checking.set()
+            await checked.wait()
+
+        monkeypatch.setattr(mesh_builder, "run_mesh_build", worker)
+        monkeypatch.setattr(mesh_builder, "_preview_wall_advisory", advisory)
+        app = FastAPI()
+        mount_solver_mesh(app, EngineRegistry(detector=lambda: []))
+        mount_operation_progress(app)
+        key = str(uuid4())
+        body = {"design": _rosse().model_dump(mode="json")}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            pending = asyncio.create_task(client.post("/api/solver-mesh", json=body, headers={"X-WG-Operation-Id": key}))
+            await asyncio.wait_for(entered.wait(), 2)
+            path = f"/api/operation-progress/{key}"
+            assert (await client.get(path)).json() == {"stages": ["resolve"], "total": 4}
+            release.set()
+            await asyncio.wait_for(checking.wait(), 2)
+            assert (await client.get(path)).json() == {"stages": ["resolve", "mesh"], "total": 4}
+            checked.set()
+            first = await pending
+            final = {"stages": ["resolve", "mesh", "check", "publish"], "total": 4}
+            assert json.loads(first.headers["X-WG-Operation-Stages"]) == final
+            assert (await client.get(path)).json() == final
+            cached = await client.post("/api/solver-mesh", json=body, headers={"X-WG-Operation-Id": str(uuid4())})
+            ordinary = await client.post("/api/solver-mesh", json=body)
+            assert json.loads(cached.headers["X-WG-Operation-Stages"]) == final
+            assert cached.json() == ordinary.json()
+            cold = first.json()
+            cold["stats"]["mesh_cache_hit"] = True
+            assert cold == cached.json()
+            assert calls == [1]
+
+    clear_solver_mesh_cache()
+    try:
+        asyncio.run(scenario())
+    finally:
+        clear_solver_mesh_cache()
+
+
+@pytest.mark.parametrize("outcome", ["refusal", "Stop", "disconnect"])
+def test_request_stage_cleanup_keeps_queued_build_cancellation_independent(monkeypatch, outcome):
+    import httpx2 as httpx
+    from server.jobs.request_cancellation import RequestCancellation
+
+    watchers = []
+    original = RequestCancellation.__init__
+
+    def capture(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        watchers.append(self)
+
+    monkeypatch.setattr(RequestCancellation, "__init__", capture)
+
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def worker(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            kwargs["cancel_cb"]()
+            if outcome == "refusal":
+                raise ValueError("The mouth needs more space. Increase the mouth size.")
+            return await _stub_worker([])(*args, **kwargs)
+
+        monkeypatch.setattr(mesh_builder, "run_mesh_build", worker)
+        monkeypatch.setattr(mesh_builder, "_preview_wall_advisory", _no_advisory)
+        app = FastAPI()
+        mount_solver_mesh(app, EngineRegistry(detector=lambda: []))
+        mount_operation_progress(app)
+        body = {"design": _rosse().model_dump(mode="json")}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            first = asyncio.create_task(client.post("/api/solver-mesh", json=body, headers={"X-WG-Operation-Id": str(uuid4())}))
+            await asyncio.wait_for(entered.wait(), 2)
+            if outcome == "refusal":
+                release.set()
+                assert (await first).status_code == 422
+            else:
+                key = str(uuid4())
+                second = asyncio.create_task(client.post("/api/solver-mesh", json=body, headers={"X-WG-Operation-Id": key}))
+                for _ in range(100):
+                    if len(watchers) == 2:
+                        break
+                    await asyncio.sleep(0.001)
+                assert len(watchers) == 2
+                if outcome == "Stop":
+                    assert (await client.delete(f"/api/operation-progress/{key}")).status_code == 204
+                else:
+                    # The request watcher raises the same checkpoint exception
+                    # on disconnect; exercise it while queued behind another build.
+                    watchers[-1].disconnected.set()
+                assert (await asyncio.wait_for(second, 2)).status_code == 499
+                assert not first.done()
+                release.set()
+                assert (await first).status_code == 200
+            await asyncio.wait_for(asyncio.gather(*(w.watcher for w in watchers), return_exceptions=True), 1)
+            assert all(w.watcher.done() for w in watchers)
+            assert mesh_builder._solver_mesh_cache._builds == {}
+
+    clear_solver_mesh_cache()
+    try:
+        asyncio.run(scenario())
+    finally:
+        clear_solver_mesh_cache()
+
+
+async def _no_advisory(*_args):
+    pass
 
 
 def test_strict_crossing_refusal_keeps_guidance_in_http_and_job_failures(monkeypatch):

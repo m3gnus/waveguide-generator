@@ -12,14 +12,24 @@ const nextStep: Record<string, string> = {
   compare: 'Preparing the report', ready: 'Preview ready',
 };
 
-/** The same request-owned stage channel for Build, geometry exports and Send.
- * Fetch bodies inside work so Stop also covers response body consumption. */
+export interface StagedActivityOptions {
+  /** A build-bearing GET; otherwise the operation is the POST. */
+  operationGet?: { method: 'GET'; url: string };
+  /** Step names for an operation whose stages mean something else; `start`
+   * names the step underway before the server has counted any. */
+  steps?: Readonly<Record<string, string>>;
+}
+
+/** The same request-owned stage channel for Build, solver mesh, geometry
+ * exports and Send. Fetch bodies inside work so Stop also covers response
+ * body consumption. */
 export function stagedActivity<T>(
   start: StartActivity, fetcher: typeof fetch, signal: AbortSignal | undefined,
   work: (fetcher: typeof fetch, signal: AbortSignal) => Promise<T>,
-  operationGet?: { method: 'GET'; url: string },
+  { operationGet, steps = nextStep }: StagedActivityOptions = {},
 ): Promise<T> {
   return abortableActivity(start, fetcher, signal, async (scoped, signal, activity, abort) => {
+    if (steps.start) activity.label(`${start.label} · ${steps.start}`);
     const id = crypto.randomUUID();
     const polling = new AbortController();
     let done = 0;
@@ -49,7 +59,7 @@ export function stagedActivity<T>(
       if (polling.signal.aborted || !Array.isArray(count.stages) || !Number.isInteger(count.total) || Number(count.total) <= 0) return;
       while (done < count.stages.length && done < Number(count.total)) {
         const stage = count.stages[done];
-        if (typeof stage === 'string' && nextStep[stage]) activity.label(`${start.label} · ${nextStep[stage]}`);
+        if (typeof stage === 'string' && steps[stage]) activity.label(`${start.label} · ${steps[stage]}`);
         activity.progress(++done, Number(count.total));
       }
     };

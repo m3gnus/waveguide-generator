@@ -15,7 +15,7 @@ from server.preview.errors import user_error_detail
 
 from typing import Any, Awaitable, Callable, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,7 @@ from server.design.schema import DesignConfig
 from server.engines.registry import EngineRegistry
 from server.jobs.request_cancellation import ClientDisconnected, RequestCancellation
 from server.jobs.models import SolveOptions, SolveRequest
+from server.jobs.operation_progress import RequestOperation, request_operation
 from server.jobs.plans import SolvePlanResponse, solve_plan_response
 from server.jobs.runtime.core import _execution_request, resolve_submission
 from server.mesh.child import MesherShuttingDownError
@@ -97,6 +98,7 @@ async def solver_mesh_response(
     options: SolveOptions | None = None,
     engine_registry: EngineRegistry,
     representation: Literal["full", "summary"] = "full",
+    operation: RequestOperation | None = None,
 ) -> dict[str, Any]:
     """Resolve the solve request, build its artifact, and return mesh plus plan.
 
@@ -104,7 +106,9 @@ async def solver_mesh_response(
     fabricating a ``Request``. ``is_disconnected`` is polled on a side task;
     the builder's cooperative cancel checkpoints observe the resulting flag
     from the gmsh worker thread and abandon the build via
-    ``ClientDisconnected``.
+    ``ClientDisconnected``. A request ``operation`` replaces that watcher
+    with its own (Stop and disconnect) and records the resolve and mesh stages
+    for the status bar; its owner closes it and records the later stages.
     """
 
     # Deferred like the other builder consumers: the mesher import graph is
@@ -126,13 +130,22 @@ async def solver_mesh_response(
     except (ValueError, MesherError) as exc:
         raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
 
-    cancellation = RequestCancellation(is_disconnected)
+    if operation is not None:
+        operation.progress("resolve")
+    cancellation = operation.cancellation if operation is not None else RequestCancellation(is_disconnected)
+
+    def progress(stage: str, _fraction: float, _message: str) -> None:
+        # The builder reports validation before the strict per-request checks
+        # and the wall advisory; only its return completes the checking stage.
+        if operation is not None and stage == "mesh_validate":
+            operation.progress("mesh")
 
     try:
         result = await build_solver_mesh(
             execution.design,
             execution.options,
             cancel_cb=cancellation.check,
+            progress_cb=progress,
         )
     except ClientDisconnected as exc:
         # Nobody is listening; 499 mirrors the conventional client-closed
@@ -154,7 +167,13 @@ async def solver_mesh_response(
     except (RuntimeError, ValueError, MesherError) as exc:
         raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
     finally:
-        cancellation.close()
+        if operation is None:
+            cancellation.close()
+
+    if operation is not None:
+        # A cache hit never reports mesh_validate; the stage is complete here.
+        operation.progress("mesh")
+        operation.progress("check")
 
     stats = result["stats"]
     response = {
@@ -195,16 +214,22 @@ def mount_solver_mesh(application: FastAPI, engine_registry: EngineRegistry) -> 
 
     @application.post("/api/solver-mesh", response_model=SolverMeshResponse | SolverMeshSummary)
     async def solver_mesh(
-        request: Request, body: SolverMeshRequest, representation: Literal["full", "summary"] = "full",
+        request: Request, body: SolverMeshRequest, response: Response,
+        representation: Literal["full", "summary"] = "full",
     ) -> dict[str, Any]:
-        return await solver_mesh_response(
-            body.design,
-            body.symmetry if "symmetry" in body.model_fields_set else None,
-            request.is_disconnected,
-            options=body.options,
-            engine_registry=engine_registry,
-            representation=representation,
-        )
+        with request_operation(request, ("resolve", "mesh", "check", "publish")) as operation:
+            result = await solver_mesh_response(
+                body.design,
+                body.symmetry if "symmetry" in body.model_fields_set else None,
+                options=body.options,
+                engine_registry=engine_registry,
+                representation=representation,
+                operation=operation,
+            )
+            operation.check()
+            operation.progress("publish")
+            operation.attach(response)
+            return result
 
 
 __all__ = [

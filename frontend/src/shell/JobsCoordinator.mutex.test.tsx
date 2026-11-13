@@ -2631,7 +2631,7 @@ describe('solve invocation mutex', () => {
         if (init?.signal?.aborted) reject(init.signal.reason);
         else init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
       });
-      return { ok: false, status, json: decode, clone: () => ({ json: decode }) } as unknown as Response;
+      return { ok: false, status, headers: new Headers(), json: decode, clone: () => ({ json: decode }) } as unknown as Response;
     });
     vi.stubGlobal('fetch', fetcher);
     await act(async () => {

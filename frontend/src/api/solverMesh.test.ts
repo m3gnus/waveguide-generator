@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { activityStore } from '../shell/activity';
+import { deferred } from '../shell/cadlink/selection.fixtures';
 import { designForFamily } from '../stores/design';
 import { readsPlain } from './httpError';
 import { postSolverMesh, SolverMeshTooLarge, solverMeshDesignKey, type SolverMeshResult } from './solverMesh';
@@ -18,12 +19,87 @@ const result: SolverMeshResult = {
   quadrants: 1,
 };
 
-afterEach(() => activityStore.reset());
+afterEach(() => { expect(activityStore.getSnapshot()).toEqual([]); activityStore.reset(); vi.useRealTimers(); });
+
+describe('solver mesh stages in the status bar', () => {
+  it.each([false, true])('uses complete stages on a fast response without polling (cache hit=%s)', async cacheHit => {
+    const payload = { ...result, stats: { ...result.stats, mesh_cache_hit: cacheHit } };
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json(payload, { headers: {
+      'X-WG-Operation-Stages': JSON.stringify({ stages: ['resolve', 'mesh', 'check', 'publish'], total: 4 }),
+    } }));
+    const counts: number[] = [];
+    const unsubscribe = activityStore.subscribe(() => {
+      const done = activityStore.getSnapshot()[0]?.progress?.done;
+      if (done !== undefined && counts.at(-1) !== done) counts.push(done);
+    });
+    try {
+      expect(await postSolverMesh('original request', fetcher)).toEqual(payload);
+      expect(counts).toEqual([0, 1, 2, 3, 4]);
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(fetcher.mock.calls[0][1]?.body).toBe('original request');
+      expect(new Headers(fetcher.mock.calls[0][1]?.headers).has('X-WG-Operation-Id')).toBe(true);
+    } finally { unsubscribe(); }
+  });
+
+  it('replays real mesh stages while waiting and finishes from the final header', async () => {
+    vi.useFakeTimers();
+    const build = deferred<Response>();
+    const body = deferred<SolverMeshResult>();
+    const labels: string[] = [];
+    const unsubscribe = activityStore.subscribe(() => {
+      const label = activityStore.getSnapshot()[0]?.label;
+      if (label && labels.at(-1) !== label) labels.push(label);
+    });
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => init?.method === 'POST'
+      ? build.promise : Response.json({ stages: ['resolve'], total: 4 }));
+    const pending = postSolverMesh('{}', fetcher);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(activityStore.getSnapshot()[0].label).toBe('Building the solver mesh · Building and checking the mesh');
+    const response = Response.json(result, { headers: {
+      'X-WG-Operation-Stages': JSON.stringify({ stages: ['resolve', 'mesh', 'check', 'publish'], total: 4 }),
+    } });
+    response.json = () => body.promise;
+    build.resolve(response);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(activityStore.getSnapshot()[0].label).toBe('Building the solver mesh · Receiving the mesh');
+    expect(activityStore.getSnapshot()[0].progress).toEqual({ done: 4, total: 4 });
+    body.resolve(result);
+    expect(await pending).toEqual(result);
+    expect(labels).toEqual(['Building the solver mesh', 'Building the solver mesh · Resolving solve settings', 'Building the solver mesh · Building and checking the mesh',
+      'Building the solver mesh · Checking the mesh', 'Building the solver mesh · Receiving the mesh']);
+    const calls = fetcher.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetcher).toHaveBeenCalledTimes(calls);
+    expect(vi.getTimerCount()).toBe(0);
+    unsubscribe();
+  });
+
+  it.each(['Stop', 'supersession'] as const)('cleans the solver activity and polls on %s', async via => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const signals: AbortSignal[] = [];
+    const fetcher: typeof fetch = (_url, init) => new Promise((_resolve, reject) => {
+      const signal = init!.signal!;
+      signals.push(signal);
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+    const pending = postSolverMesh('{}', fetcher, controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.advanceTimersByTimeAsync(200);
+    if (via === 'Stop') activityStore.getSnapshot()[0].cancel!();
+    else controller.abort();
+    await rejected;
+    expect(signals).toHaveLength(2);
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
 
 function fetcherReturning(body: unknown, ok = true, status = 200): typeof fetch {
   return async () => ({
     ok,
     status,
+    headers: new Headers(),
     statusText: ok ? 'OK' : 'Unprocessable Entity',
     json: async () => body,
   }) as Response;
@@ -51,7 +127,7 @@ describe('postSolverMesh', () => {
         if (init?.signal?.aborted) reject(init.signal.reason);
         else init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
       });
-      return { ok: false, status, json: decode, clone: () => ({ json: decode }) } as unknown as Response;
+      return { ok: false, status, headers: new Headers(), json: decode, clone: () => ({ json: decode }) } as unknown as Response;
     };
     const pending = postSolverMesh('{}', fetcher).catch(error => error);
     await bodyStarted;
@@ -67,7 +143,7 @@ describe('postSolverMesh', () => {
     const fetcher: typeof fetch = async (_input, init) => {
       sent = init;
       return {
-        ok: true, status: 200, statusText: 'OK', json: async () => result,
+        ok: true, status: 200, headers: new Headers(), statusText: 'OK', json: async () => result,
       } as Response;
     };
     const controller = new AbortController();

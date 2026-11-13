@@ -39,5 +39,5 @@ export async function fetchMeshReplay(jobId: string, fetcher: typeof fetch = fet
   return stagedActivity({ kind: 'export', label: 'Exporting mesh replay' }, fetcher, undefined, async (fetcher, signal) => {
     const response = await checked(await fetcher(url, { signal }));
     return response.blob();
-  }, { method: 'GET', url });
+  }, { operationGet: { method: 'GET', url } });
 }
