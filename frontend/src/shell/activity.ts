@@ -29,7 +29,8 @@ export type ActivityKind =
   | 'settings-write'
   | 'onshape-check'
   | 'diagnostics-bundle'
-  | 'diagnostics-summary';
+  | 'diagnostics-summary'
+  | 'result-load';
 
 export interface ActivityProgress {
   done: number;

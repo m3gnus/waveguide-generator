@@ -1,5 +1,6 @@
 import { keepRefusalOriginals } from '../api/httpError';
-import { activityStore } from '../shell/activity';
+import { activityStore, activityVisible } from '../shell/activity';
+import { deferred } from '../shell/cadlink/selection.fixtures';
 import { describe, expect, it, vi } from 'vitest';
 import { CompareStore, fetchJobArchiveSnapshot, fetchJobResults, fetchRadiationImpedancePresentation, invalidateJobResults, mergeProvisionalResults, parseFinalResultEnvelope, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults, type ResultData } from '../api/results';
 
@@ -131,6 +132,47 @@ describe('results LRU', () => {
     ]);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(first).toBe(second);
+  });
+
+  it.each(['success', 'failure'] as const)('tracks one shared cold result load through %s and skips cache hits', async outcome => {
+    vi.useFakeTimers();
+    activityStore.reset();
+    const response = deferred<Response>();
+    const body = deferred<JobResults>();
+    const fetcher = vi.fn<typeof fetch>(() => response.promise);
+    const id = `activity-${outcome}`;
+    invalidateJobResults(id);
+    try {
+      const first = fetchJobResults(id, fetcher);
+      const second = fetchJobResults(id, fetcher);
+      const settled = Promise.allSettled([first, second]);
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(activityStore.getSnapshot()).toHaveLength(1);
+      const loading = activityStore.getSnapshot()[0];
+      expect(loading).toMatchObject({ kind: 'result-load', label: 'Loading run results' });
+      vi.advanceTimersByTime(1_000);
+      expect(activityVisible(loading, Date.now(), null)).toBe(true);
+      const reply = Response.json(result());
+      reply.json = () => body.promise;
+      response.resolve(reply);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(activityStore.getSnapshot()[0].label).toBe('Loading run results · Checking the results');
+      if (outcome === 'failure') body.reject(new Error('unreadable results'));
+      else body.resolve(result());
+      const values = await settled;
+      expect(activityStore.getSnapshot()).toEqual([]);
+      if (outcome === 'success') {
+        expect(values).toEqual([{ status: 'fulfilled', value: result() }, { status: 'fulfilled', value: result() }]);
+        const changed = vi.fn();
+        const unsubscribe = activityStore.subscribe(changed);
+        try {
+          expect(await fetchJobResults(id, fetcher)).toEqual(result());
+          expect(changed).not.toHaveBeenCalled();
+        } finally { unsubscribe(); }
+        expect(fetcher).toHaveBeenCalledOnce();
+        expect(activityStore.typicalMs('result-load')).not.toBeNull();
+      } else expect(activityStore.typicalMs('result-load')).toBeNull();
+    } finally { invalidateJobResults(id); activityStore.reset(); vi.useRealTimers(); }
   });
 
   it('shares and caches radiation presentations, and discards invalidated replies', async () => {

@@ -376,7 +376,7 @@ export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fet
   if (cached) return cached;
   const existing = inFlightResults.get(jobId);
   if (existing) return existing;
-  const request = (async () => {
+  const request = activityOperation({ kind: 'result-load', label: 'Loading run results' }, fetcher, async (fetcher, activity) => {
     const revision = issueResultsRequest(jobId, 'read');
     let result: JobResults | null = null;
     try {
@@ -384,12 +384,13 @@ export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fet
       if (!response.ok) {
         throw new Error(await httpErrorMessage(response, 'WG could not load this run’s results. Select the run again.'));
       }
+      activity.label('Loading run results · Checking the results');
       result = parseFinalResultEnvelope(await response.json());
       return result;
     } finally {
       settleResultsRequest(jobId, revision, result);
     }
-  })();
+  });
   inFlightResults.set(jobId, request);
   try {
     return await request;
