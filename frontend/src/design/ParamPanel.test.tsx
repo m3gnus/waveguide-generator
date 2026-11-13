@@ -1104,7 +1104,7 @@ describe('ParamPanel inventory UX', () => {
     await act(async () => { select.value = 'roundover'; select.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(validate).not.toHaveBeenCalled();
     expect(useDesignStore.getState().design).toEqual(original);
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('(scale) uses the expression “1 + .1*sin(p)”');
+    expect(host.querySelector('.osse-features [role="alert"]')?.textContent).toContain('Scale (scale) uses the expression “1 + .1*sin(p)”');
   });
 
   it('keeps an imported separate axial scale when native feature conversion is refused', async () => {
