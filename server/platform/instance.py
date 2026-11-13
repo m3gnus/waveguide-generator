@@ -741,45 +741,6 @@ def _configure_port_bind(sock: socket.socket) -> None:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
 
-def port_is_available(port: int, host: str = "127.0.0.1") -> bool:
-    """Probe whether a local TCP port can currently be bound."""
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        _configure_port_bind(probe)
-        try:
-            probe.bind((host, port))
-        except OSError:
-            return False
-    return True
-
-
-def select_port(
-    preferred: int,
-    *,
-    host: str = "127.0.0.1",
-    scan_count: int = PORT_SCAN_COUNT,
-) -> int:
-    """Choose ``preferred`` or one of its next nine ports."""
-
-    last = min(65535, preferred + scan_count)
-    for candidate in range(preferred, last + 1):
-        if port_is_available(candidate, host):
-            if candidate != preferred:
-                log.warning(
-                    "Port %d is busy; using port %d instead. Open http://%s:%d/ "
-                    "or pass --port to choose another port.",
-                    preferred,
-                    candidate,
-                    host,
-                    candidate,
-                )
-            return candidate
-    raise OSError(
-        f"Ports {preferred} through {last} are all busy on {host}. Stop an existing "
-        "server or start with --port PORT using an available port."
-    )
-
-
 def reserve_port(
     preferred: int,
     *,

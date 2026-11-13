@@ -1164,11 +1164,6 @@ class EngineRegistry:
             item.name == requested and item.available for item in capabilities
         ) else None
 
-    async def supports_symmetry(self, name: str, resolved_quadrants: int) -> bool:
-        capabilities = await self.capabilities()
-        item = next((item for item in capabilities if item.name == name), None)
-        return item is not None and engine_supports_symmetry(item, resolved_quadrants)
-
     async def get_engine(self, name: str) -> Any | None:
         capabilities = await (self.wait_for_bempp() if name == "bempp" else self.capabilities())
         if not any(item.name == name and item.available for item in capabilities):

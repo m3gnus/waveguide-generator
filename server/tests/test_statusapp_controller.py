@@ -672,11 +672,6 @@ def test_busy_preferred_port_is_left_for_the_child_instance_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     port = 43123
-    monkeypatch.setattr(
-        instance,
-        "port_is_available",
-        lambda candidate, _host: candidate == port + 1,
-    )
     data, owner_body = _owner_health(tmp_path)
     checkout = _checkout(tmp_path)
     existing = tmp_path / "existing.py"

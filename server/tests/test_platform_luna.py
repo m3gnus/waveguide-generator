@@ -645,13 +645,11 @@ def test_windows_port_checks_require_exclusive_address_use(
     )
     monkeypatch.setattr(instance.socket, "socket", lambda *_args: FakeSocket())
 
-    assert instance.port_is_available(3100) is True
     listener, port = instance.reserve_port(3100)
 
     assert port == 3100
-    assert listener is created[1]
+    assert listener is created[0]
     assert [item.options for item in created] == [
-        [(instance.socket.SOL_SOCKET, exclusive, 1)],
         [(instance.socket.SOL_SOCKET, exclusive, 1)],
     ]
 

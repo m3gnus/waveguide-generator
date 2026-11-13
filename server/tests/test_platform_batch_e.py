@@ -144,24 +144,6 @@ def test_requested_port_precedence_and_validation() -> None:
         instance.requested_port(environ={"WG2_PORT": "not-a-port"})
 
 
-def test_port_fallback_scans_next_nine(monkeypatch: pytest.MonkeyPatch) -> None:
-    probed: list[int] = []
-
-    def available(port: int, _host: str) -> bool:
-        probed.append(port)
-        return port == 3103
-
-    monkeypatch.setattr(instance, "port_is_available", available)
-    assert instance.select_port(3100) == 3103
-    assert probed == [3100, 3101, 3102, 3103]
-
-
-def test_port_fallback_fails_after_nine(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(instance, "port_is_available", lambda _port, _host: False)
-    with pytest.raises(OSError, match="3100 through 3109"):
-        instance.select_port(3100)
-
-
 def test_logging_rotates_five_megabyte_file(tmp_path: Path) -> None:
     paths = ensure_data_layout(tmp_path)
     log_path = paths.logs / "server.log"

@@ -504,10 +504,6 @@ def retained_registration(store: Any, model_id: str, body: FilePreparation) -> M
         return MeshRegistration(filename=filename, msh_text=text, **body.model_dump())
 
 
-def prepare_model(store: Any, data_dir: Path, model_id: str, body: FilePreparation) -> dict[str, Any]:
-    return register_mesh(store, data_dir, retained_registration(store, model_id, body))
-
-
 def _model_summary(model: dict[str, Any]) -> dict[str, Any]:
     return {
         "model_id": model["model_id"],
@@ -1143,7 +1139,6 @@ __all__ = [
     "ModelSetupWrite",
     "model_of_prepared",
     "mount_models_api",
-    "prepare_model",
     "public_record",
     "register_mesh",
 ]

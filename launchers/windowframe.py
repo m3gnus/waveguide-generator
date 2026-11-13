@@ -284,17 +284,6 @@ def install_custom_frame(hwnd: int) -> CustomFrame | None:
     return frame
 
 
-def note_frame_problem(message: str) -> None:
-    """Record a frame problem on this module's logger.
-
-    ``launchers.desktop`` has no logger of its own, and giving it one would mean
-    adding an import to a file two sessions are editing. The frame's problems
-    belong on the frame's logger anyway.
-    """
-
-    log.warning(message)
-
-
 def enable_non_client_regions(core_webview2: Any) -> bool:
     """Let CSS ``app-region`` reach Windows, so dragging is the real thing.
 

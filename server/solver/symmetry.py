@@ -141,13 +141,6 @@ _resolution_cache: "OrderedDict[str, SymmetryResolution]" = OrderedDict()
 _resolution_cache_lock = threading.Lock()
 
 
-def clear_symmetry_cache() -> None:
-    """Forget every memoized resolution. For tests and cache maintenance."""
-
-    with _resolution_cache_lock:
-        _resolution_cache.clear()
-
-
 def _resolution_cache_key(design: DesignConfig | Mapping[str, Any]) -> str | None:
     """Hash the geometry this resolution depends on, or None if it cannot be."""
 
@@ -397,7 +390,6 @@ __all__ = [
     "SYMMETRY_MODE_QUADRANTS",
     "SYMMETRY_RELATIVE_TOLERANCE",
     "SymmetryResolution",
-    "clear_symmetry_cache",
     "resolve_symmetry",
     "restrict_for_ground_plane",
     "validate_symmetry_mode",

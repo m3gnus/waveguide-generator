@@ -385,13 +385,6 @@ def store_frame_decision(
     return stored
 
 
-def record_automatic_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
-    """The axis this record solves along by WG's own decision, or None."""
-
-    decision = record_frame_decision(store, record)
-    return str(decision["axis"]) if decision is not None else None
-
-
 def record_solved_frame_provenance(
     store: CadLinkStore, record: Mapping[str, Any]
 ) -> str | None:
@@ -1124,7 +1117,6 @@ __all__ = [
     "reading_key",
     "decide_record_frame",
     "legacy_automatic_axis",
-    "record_automatic_axis",
     "record_frame_decision",
     "record_frame_refusal",
     "record_preparation_diagnostic",

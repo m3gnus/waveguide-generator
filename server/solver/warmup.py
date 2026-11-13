@@ -617,12 +617,6 @@ def prewarm_bempp_worker_for_engine(engine: str | None) -> bool:
     return True
 
 
-def solver_warmup_thread() -> threading.Thread | None:
-    """The live warmup thread, for tests and diagnostics."""
-
-    return _thread
-
-
 __all__ = [
     "BEAT_WARMUP_STAGE_MESSAGE",
     "WARMUP_FREQUENCY_HZ",
@@ -632,7 +626,6 @@ __all__ = [
     "persisted_engine_preference",
     "prewarm_beat_worker_for_engine",
     "prewarm_bempp_worker_for_engine",
-    "solver_warmup_thread",
     "start_solver_warmup",
     "warm_bempp_in_this_process",
 ]
