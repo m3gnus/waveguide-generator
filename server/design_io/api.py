@@ -1,4 +1,4 @@
-"""Open, save, and classify ATH/MWG text design documents."""
+"""Open, serialize, and classify ATH/MWG text design documents."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from fastapi import APIRouter, Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from server.cadlink.identity import SaveIdentity, classify_open, design_hash
+from server.cadlink.identity import classify_open, design_hash
 from server.cadlink.store import CadLinkStore
 from server.workspace.api import select_workspace_path
 from server.design.uid import validate_design_uid
@@ -98,55 +98,6 @@ def _open_cadlink(parsed: ParsedDesign, store: CadLinkStore) -> dict[str, Any]:
     }
 
 
-def _save_design(
-    payload: dict[str, Any], *, store: CadLinkStore | None = None
-) -> dict[str, Any]:
-    """Serialize and atomically commit a typed design identity."""
-
-    registry = store or _DIRECT_STORE
-    design_payload: object = payload.get("design", payload)
-    filename = payload.get("filename") if "design" in payload else None
-    try:
-        design = read_design(design_payload)
-        design_uid = validate_design_uid(payload.get("designUid") if "design" in payload else None)
-        requested = (
-            SaveIdentity.model_validate(payload["identity"])
-            if "design" in payload and payload.get("identity") is not None
-            else None
-        )
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
-    except ValueError as exc:
-        # The Custom profile import refuses a saved table it cannot convert.
-        if not is_user_refusal(exc):
-            raise
-        raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
-    suggested_filename = _suggested_filename(filename)
-    hashed = design_hash(design)
-    try:
-        committed = registry.save(
-            requested=requested,
-            design_hash=hashed,
-            filename=suggested_filename,
-            snapshot_builder=lambda identity: serialize(design, cadlink=identity, design_uid=design_uid),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    identity = committed["identity"]
-    response_identity = {
-        "designId": identity.design_id,
-        "lineageId": identity.lineage_id,
-        "baseEditVersion": identity.edit_version,
-    }
-    return {
-        "text": committed["text"],
-        "suggestedFilename": suggested_filename,
-        "identity": response_identity,
-        "forked": committed["forked"],
-        "from": committed["from"],
-    }
-
-
 def _serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
     """Serialize a typed design without creating or advancing CadLink identity."""
 
@@ -195,10 +146,6 @@ def _import_report(
     }
 
 
-async def save_design(payload: dict[str, Any], *, store: CadLinkStore | None = None) -> dict[str, Any]:
-    return await asyncio.to_thread(_save_design, payload, store=store)
-
-
 async def serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
     return await asyncio.to_thread(_serialize_design, payload)
 
@@ -245,10 +192,6 @@ def create_design_io_router(store: CadLinkStore) -> APIRouter:
         if selected.outcome != "chosen":
             return JSONResponse({"selected": False, "outcome": selected.outcome})
         return await asyncio.to_thread(_json_response, _read_selected_design, selected.path)
-
-    @router.post("/save", response_model=dict[str, Any])
-    async def save_endpoint(payload: dict[str, Any] = Body(...)) -> JSONResponse:
-        return await asyncio.to_thread(_json_response, _save_design, payload, store=store)
 
     @router.post("/serialize", response_model=dict[str, Any])
     async def serialize_endpoint(payload: dict[str, Any] = Body(...)) -> JSONResponse:
@@ -382,6 +325,5 @@ __all__ = [
     "mount_design_io",
     "open_design",
     "router",
-    "save_design",
     "serialize_design",
 ]

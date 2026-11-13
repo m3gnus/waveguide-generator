@@ -10,11 +10,12 @@ import subprocess
 
 import pytest
 
-from server.cadlink.identity import CadLink, mint_id
+from server.cadlink.identity import CadLink, SaveIdentity, design_hash, mint_id
 from server.cadlink.store import CadLinkStore
 from server.design.schema import Expr
 from server.design.textcfg import TextConfigError, parse, serialize
-from server.design_io.api import create_design_io_router, open_design, save_design
+from server.design_io.api import create_design_io_router, open_design
+from server.jobs.design_reader import read_design
 
 
 SOURCE = """; Parameter config
@@ -28,6 +29,34 @@ first row
 Value = one
 }
 """
+
+
+def register_design(
+    store: CadLinkStore,
+    design_payload: object,
+    *,
+    identity: dict[str, object] | None = None,
+    filename: str = "design.cfg",
+    design_uid: str | None = None,
+) -> dict[str, object]:
+    """Commit a design to the CAD-link registry the way a WGLink export does."""
+
+    design = read_design(design_payload)
+    committed = store.save(
+        requested=SaveIdentity.model_validate(identity) if identity is not None else None,
+        design_hash=design_hash(design),
+        filename=filename,
+        snapshot_builder=lambda linked: serialize(design, cadlink=linked, design_uid=design_uid),
+    )
+    linked = committed["identity"]
+    return {
+        "text": committed["text"],
+        "identity": {
+            "designId": linked.design_id,
+            "lineageId": linked.lineage_id,
+            "baseEditVersion": linked.edit_version,
+        },
+    }
 
 
 def _identity(*, version: int = 3, saved_hash: str = "sha256:0123456789abcdef") -> CadLink:
@@ -90,9 +119,7 @@ def test_invalid_cadlink_blocks_fail_as_typed_parse_errors(bad_row: str) -> None
 def test_open_classification_matrix_and_open_is_read_only(tmp_path: Path) -> None:
     store = CadLinkStore(tmp_path / "cadlink.db")
     design = parse(SOURCE).semantic_data()
-    first = asyncio.run(
-        save_design({"design": design, "filename": "matrix.cfg"}, store=store)
-    )
+    first = register_design(store, design, filename="matrix.cfg")
     current_text = first["text"]
     first_identity = first["identity"]
 
@@ -104,12 +131,7 @@ def test_open_classification_matrix_and_open_is_read_only(tmp_path: Path) -> Non
 
     changed = parse(current_text).design
     changed.root.L = Expr(value=121)  # type: ignore[union-attr]
-    second = asyncio.run(
-        save_design(
-            {"design": changed.model_dump(mode="json"), "identity": first_identity},
-            store=store,
-        )
-    )
+    second = register_design(store, changed.model_dump(mode="json"), identity=first_identity)
     assert (
         asyncio.run(open_design(current_text, store=store))["cadlink"]["classification"]
         == "stale_copy"
@@ -130,16 +152,11 @@ def test_open_classification_matrix_and_open_is_read_only(tmp_path: Path) -> Non
 def test_stale_copy_with_externally_edited_body_is_not_misclassified(tmp_path: Path) -> None:
     store = CadLinkStore(tmp_path / "cadlink.db")
     design = parse(SOURCE).semantic_data()
-    first = asyncio.run(save_design({"design": design, "filename": "stale.cfg"}, store=store))
+    first = register_design(store, design, filename="stale.cfg")
 
     changed = parse(first["text"]).design
     changed.root.L = Expr(value=121)  # type: ignore[union-attr]
-    asyncio.run(
-        save_design(
-            {"design": changed.model_dump(mode="json"), "identity": first["identity"]},
-            store=store,
-        )
-    )
+    register_design(store, changed.model_dump(mode="json"), identity=first["identity"])
 
     edited_stale = first["text"].replace("Length = 120", "Length = 122")
     opened = asyncio.run(open_design(edited_stale, store=store))
@@ -147,23 +164,10 @@ def test_stale_copy_with_externally_edited_body_is_not_misclassified(tmp_path: P
     assert opened["cadlink"]["classification"] == "externally_edited"
 
 
-def test_no_block_first_save_mints_identity_at_version_one(tmp_path: Path) -> None:
-    store = CadLinkStore(tmp_path / "cadlink.db")
-    result = asyncio.run(save_design({"design": parse(SOURCE).semantic_data()}, store=store))
-
-    assert result["identity"]["baseEditVersion"] == 1
-    assert result["forked"] is False
-    parsed = parse(result["text"])
-    assert parsed.cadlink is not None
-    assert parsed.cadlink.design_id == result["identity"]["designId"]
-
-
 def test_serialize_endpoint_never_adds_or_advances_registry_rows(tmp_path: Path) -> None:
     store = CadLinkStore(tmp_path / "cadlink.db")
     design = parse(SOURCE).semantic_data()
-    saved = asyncio.run(
-        save_design({"design": design, "filename": "registered.cfg"}, store=store)
-    )
+    saved = register_design(store, design, filename="registered.cfg")
     before = store._read_one(
         "SELECT COUNT(*) AS design_count, SUM(edit_version) AS version_total FROM designs",
         (),

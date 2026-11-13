@@ -137,13 +137,12 @@ def test_cadlink_freshness_reads_a_stored_lookup_snapshot():
     assert result["verdict"] == "current", result
 
 
-# P1-4: design save/serialize map an import refusal to the keyed 422 detail.
+# P1-4: design serialize maps an import refusal to the keyed 422 detail.
 
-@pytest.mark.parametrize("operation", ["save", "serialize"])
-def test_design_io_maps_an_import_refusal_to_a_keyed_422(operation):
+def test_design_io_maps_an_import_refusal_to_a_keyed_422():
     from server.design_io import api
 
-    function = api._save_design if operation == "save" else api._serialize_design
+    function = api._serialize_design
     with pytest.raises(HTTPException) as raised:
         function({"design": {**deepcopy(WIRE), "scale": 0}})
     assert raised.value.status_code == 422

@@ -18036,51 +18036,6 @@
         ]
       }
     },
-    "/api/design/save": {
-      "post": {
-        "operationId": "save_endpoint_api_design_save_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "title": "Payload",
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Save Endpoint Api Design Save Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Save Endpoint",
-        "tags": [
-          "design-io"
-        ]
-      }
-    },
     "/api/design/serialize": {
       "post": {
         "operationId": "serialize_endpoint_api_design_serialize_post",
@@ -22360,59 +22315,6 @@
           }
         },
         "summary": "Stop Job"
-      }
-    },
-    "/api/theme-preview": {
-      "get": {
-        "operationId": "theme_preview_api_theme_preview_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "theme",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Theme"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Theme Preview Api Theme Preview Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Theme Preview",
-        "tags": [
-          "chart-export"
-        ]
       }
     },
     "/api/themes": {

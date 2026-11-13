@@ -94,11 +94,11 @@ def test_invalid_uid_is_refused(stamp):
 @pytest.mark.parametrize("extra", ["", STAMP, f"; Waveguide Generator design-id: {OTHER}\n"])
 def test_stamp_preserves_saved_design_hash_and_current_classification(tmp_path, extra):
     from server.cadlink.store import CadLinkStore
-    from server.design_io.api import save_design
+    from server.tests.test_cadlink_identity import register_design
 
     store = CadLinkStore(tmp_path / 'cadlink.db')
     try:
-        saved = asyncio.run(save_design({"design": parse(SOURCE).semantic_data(), "designUid": UID}, store=store))
+        saved = register_design(store, parse(SOURCE).semantic_data(), design_uid=UID)
         parsed = parse(extra + saved["text"])
         assert parsed.design_uid == (None if OTHER in extra else UID)
         assert parsed.cadlink is not None
@@ -162,13 +162,13 @@ def test_native_open_picker_returns_a_path_and_distinct_outcomes(picker_client, 
 
 def test_explicit_export_writes_the_new_uid_and_detached_cadlink(picker_client, tmp_path):
     from server.cadlink.store import CadLinkStore
-    from server.design_io.api import save_design
+    from server.tests.test_cadlink_identity import register_design
     from server.tests.test_workspace_write_export import destination_router, selected_state
 
     client, copy = picker_client
     store = CadLinkStore(":memory:")
     try:
-        linked = asyncio.run(save_design({"design": parse(SOURCE).semantic_data(), "designUid": UID}, store=store))
+        linked = register_design(store, parse(SOURCE).semantic_data(), design_uid=UID)
     finally:
         store.close()
     original = copy.with_name("original.cfg")

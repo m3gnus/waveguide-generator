@@ -501,11 +501,6 @@ def test_chart_routes_expose_every_theme_and_use_hornlab_plots(monkeypatch) -> N
         )
         or "Yg==",
     )
-    monkeypatch.setattr(
-        charts_api,
-        "_preview",
-        lambda theme: calls.append(("preview", theme)) or "Yw==",
-    )
     charts_api._cache.clear()
 
     async def scenario() -> None:
@@ -516,11 +511,6 @@ def test_chart_routes_expose_every_theme_and_use_hornlab_plots(monkeypatch) -> N
         # reaches here, so an export lands on the window's own surfaces.
         assert listed["default"] == "console"
         assert charts_api.ChartsRenderRequest().theme == "console"
-        preview = await charts_api.theme_preview("console")
-        assert preview == {
-            "theme": "console",
-            "image": "data:image/png;base64,Yw==",
-        }
         charts = await charts_api.render_charts(
             charts_api.ChartsRenderRequest(
                 frequencies=[100], spl=[90], theme="blueprint"
@@ -540,7 +530,6 @@ def test_chart_routes_expose_every_theme_and_use_hornlab_plots(monkeypatch) -> N
 
     asyncio.run(scenario())
     assert calls == [
-        ("preview", "console"),
         ("charts", "blueprint"),
         ("directivity", "sepia"),
     ]

@@ -18,7 +18,7 @@ from server.contracts.geometry import normalise_quadrants
 from server.design.native import NATIVE_FORMULAS
 from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import TextConfigError, parse, serialize
-from server.design_io.api import open_design, save_design
+from server.design_io.api import open_design, serialize_design
 from server.exports.wglink_service import WgLinkExportRequest, export_wglink_sync
 from server.cadlink.store import CadLinkStore
 from server.exports.core import _build_step_solid_sync, _build_stl_mesh_sync, build_profiles
@@ -148,7 +148,7 @@ def test_native_file_and_endpoint_round_trip(formula: str) -> None:
     payload["extra_blocks"] = {"Report": {"items": {"Title": "Native example"}, "entries": ["Title = Native example"]},
                                "WG.Solve": {"items": {"FrequencySpacing": "log"}, "entries": ["FrequencySpacing = log"]}}
     design = DesignConfig.model_validate(payload)
-    saved = asyncio.run(save_design({"design": design.model_dump(mode="json")}))
+    saved = asyncio.run(serialize_design({"design": design.model_dump(mode="json")}))
     parsed = parse(saved["text"])
     assert parsed.design == design
     assert serialize(parsed) == saved["text"]

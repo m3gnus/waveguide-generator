@@ -11,7 +11,7 @@ from hornlab_mesher.profile_sampling import build_point_grid_arrays
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
 from server.design.textcfg import TextConfigError, parse, serialize
-from server.design_io.api import open_design, save_design
+from server.design_io.api import open_design, serialize_design
 from server.mesh.builder import _solver_mesher_config
 from server.preview.translate import design_to_mesher_config
 
@@ -28,7 +28,7 @@ def test_import_save_reopen_and_solve_preparation_keep_the_cut(name, tmp_path):
                          for block in (FIXTURES / f'{name}.csv').read_text().strip().split('\n\n')])
     store = CadLinkStore(tmp_path / 'cadlink.db')
     opened = asyncio.run(open_design(text, store=store))
-    saved = asyncio.run(save_design(opened['design'], store=store))
+    saved = asyncio.run(serialize_design(opened['design']))
     reopened = asyncio.run(open_design(saved['text'], store=store))
     variants = [design, DesignConfig.model_validate_json(design.model_dump_json()),
                 parse(serialize(design)).design, DesignConfig.model_validate(reopened['design'])]

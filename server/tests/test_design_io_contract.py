@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import threading
@@ -18,7 +17,7 @@ from server.cadlink.store import CadLinkStore
 from server.design.textcfg import parse, serialize
 from server.jobs.design_reader import read_design
 from server.design_io import api
-from server.design_io.api import import_report, open_design, save_design, serialize_design
+from server.design_io.api import import_report, open_design, serialize_design
 from server.tests._asgi import _post
 
 
@@ -29,7 +28,7 @@ CORPUS = sorted((V1 / "output").glob("*/script.snapshot.mwg")) + sorted(
 )
 
 
-@pytest.mark.parametrize("route", ["choose", "save", "serialize", "open", "import-report"])
+@pytest.mark.parametrize("route", ["choose", "serialize", "open", "import-report"])
 def test_worker_responses_keep_the_committed_object_schema(route):
     store = CadLinkStore(":memory:")
     try:
@@ -70,9 +69,9 @@ def test_open_reuses_batch_a_round_trip_law_on_the_real_corpus(path: Path) -> No
     assert parse(emitted).semantic_data() == parsed.semantic_data()
 
 
-def test_save_bare_design_json_uses_cfg_and_v1_header() -> None:
+def test_serialize_bare_design_json_uses_cfg_and_v1_header() -> None:
     design = parse("OSSE = {\nL = 120\na = 45\n}\n").semantic_data()
-    result = asyncio.run(save_design(design))
+    result = asyncio.run(serialize_design(design))
     assert result["suggestedFilename"] == "untitled.cfg"
     assert result["text"].startswith("; Parameter config\n")
     assert "Waveguide Generator design-format: 2" in result["text"]
@@ -87,8 +86,8 @@ def test_save_bare_design_json_uses_cfg_and_v1_header() -> None:
     ],
     ids=("OSSE", "R-OSSE", "ICW"),
 )
-def test_save_sparse_design_can_be_opened_again(design: dict[str, object]) -> None:
-    saved = asyncio.run(save_design({"design": design, "filename": "sparse.cfg"}))
+def test_serialized_sparse_design_can_be_opened_again(design: dict[str, object]) -> None:
+    saved = asyncio.run(serialize_design({"design": design, "filename": "sparse.cfg"}))
     reopened = asyncio.run(open_design(saved["text"]))
 
     assert reopened["design"]["formula"] == design["formula"]
@@ -164,8 +163,7 @@ def test_open_report_names_the_machine_solver_mode_it_refused_to_honour() -> Non
 
 @pytest.mark.parametrize("stage,route", [
     ("parse", "open"), ("parse", "import-report"),
-    ("serialize", "serialize"), ("serialize", "save"),
-    ("registry", "save"), ("read", "choose"), ("encode", "open"),
+    ("serialize", "serialize"), ("read", "choose"), ("encode", "open"),
 ])
 def test_design_work_allows_a_concurrent_heartbeat(monkeypatch, tmp_path, stage, route):
     source = "OSSE = {\nL = 120\na = 45\n}\n"
@@ -186,7 +184,7 @@ def test_design_work_allows_a_concurrent_heartbeat(monkeypatch, tmp_path, stage,
     store = CadLinkStore(tmp_path / "registry.db")
     owner, name = {
         "parse": (api, "parse"), "serialize": (api, "serialize"),
-        "registry": (store, "save"), "read": (Path, "open"),
+        "read": (Path, "open"),
         "encode": (JSONResponse, "render"),
     }[stage]
     monkeypatch.setattr(owner, name, delayed(getattr(owner, name)))
@@ -215,26 +213,6 @@ def test_design_work_allows_a_concurrent_heartbeat(monkeypatch, tmp_path, stage,
         store.close()
 
 
-def test_worker_saves_share_the_in_memory_registry():
-    store = CadLinkStore(":memory:")
-
-    async def scenario():
-        first = await save_design({"design": {"formula": "OSSE"}}, store=store)
-        # A second worker and the caller must see the first worker's commit.
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            head = await asyncio.get_running_loop().run_in_executor(executor, store.get_design, first["identity"]["designId"])
-        assert head is not None
-        opened = await open_design(first["text"], store=store)
-        assert opened["cadlink"]["classification"] == "current"
-        return first
-
-    try:
-        saved = asyncio.run(scenario())
-        assert store.get_design(saved["identity"]["designId"]) is not None
-    finally:
-        store.close()
-
-
 @pytest.mark.parametrize("kind", ["legacy", "lookup", "cadlink"])
 def test_worker_round_trips_preserve_document_bytes_and_semantic_values(tmp_path, kind):
     source = "; MWG config\nLength = 120\nCoverage.Angle = 45\nTerm.n = 4\n"
@@ -258,10 +236,7 @@ def test_worker_round_trips_preserve_document_bytes_and_semantic_values(tmp_path
         payload = {"design": opened["design"]}
         portable = await serialize_design(payload)
         assert portable["text"].encode() == serialize(parsed.design).encode()
-        saved = await save_design(payload, store=store)
-        saved_parse = parse(saved["text"])
-        assert saved["text"].encode() == serialize(parsed.design, cadlink=saved_parse.cadlink).encode()
-        assert (await open_design(saved["text"], store=store))["design"] == parse(portable["text"]).semantic_data()
+        assert (await open_design(portable["text"], store=store))["design"] == parse(portable["text"]).semantic_data()
         app = FastAPI()
         app.include_router(api.create_design_io_router(store))
         status, raw = await _post(app, "/api/design/open", source)

@@ -8,7 +8,7 @@ import pytest
 from hornlab_mesher.config_builder import build_geometry_params
 from hornlab_mesher.profile_sampling import build_point_grid_arrays
 from server.cadlink.store import CadLinkStore
-from server.design_io.api import open_design, save_design
+from server.design_io.api import open_design, serialize_design
 from server.design.schema import DesignConfig
 from server.design.textcfg import TextConfigError, parse, serialize
 from server.preview.translate import design_to_mesher_config
@@ -35,7 +35,7 @@ def test_edited_panel_values_stay_exact_through_save_cfg_preview_and_solve(name,
     edited = DesignConfig.model_validate(payload)
     expected = build_point_grid_arrays(build_geometry_params(design_to_mesher_config(edited))[0])['inner_grid']
     store = CadLinkStore(tmp_path / 'cadlink.db')
-    saved = asyncio.run(save_design(payload, store=store))
+    saved = asyncio.run(serialize_design(payload))
     assert line in saved['text'].splitlines()
     reopened = asyncio.run(open_design(saved['text'], store=store))
     for copy in (edited, DesignConfig.model_validate_json(edited.model_dump_json()),
@@ -57,7 +57,7 @@ def test_fresh_control_matches_ath_after_save_reopen_and_cfg(name, tmp_path):
                          for block in (ROOT / f'{name}.csv').read_text().strip().split('\n\n')])
     store = CadLinkStore(tmp_path / 'cadlink.db')
     opened = asyncio.run(open_design(text, store=store))
-    saved = asyncio.run(save_design(opened['design'], store=store))
+    saved = asyncio.run(serialize_design(opened['design']))
     reopened = asyncio.run(open_design(saved['text'], store=store))
     variants = [design, DesignConfig.model_validate_json(design.model_dump_json()),
                 parse(serialize(design)).design, DesignConfig.model_validate(reopened['design'])]
