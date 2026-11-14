@@ -10,7 +10,7 @@ import { trimGeometry, extendGeometry, type Cut } from './topology';
 import { equivalent } from './coincidence';
 import { modifyContext } from './tools/modifyContext';
 import { applyFillet } from './virtualSharpFillet';
-import { isVirtualSharpHelper, pruneVirtualSharps, virtualSharpAliases, virtualSharpConstraintIds } from './virtualSharp';
+import { isVirtualSharpHelper, pruneVirtualSharps, virtualSharpAliases, virtualSharpConstraintIds, virtualSharpData } from './virtualSharp';
 
 /** Low-level removal shared by user deletion and reference lifecycle cleanup. */
 export function removeEntity(sketch: Sketch, id: string): { sketch: Sketch; removedConstraints: string[] } {
@@ -306,7 +306,8 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         s.entities = s.entities.map(v => v.id === e.id ? converted : v);
         cleanConstraints(c => constraintRefs(c).includes(e.id) && !!constraintProblem(s, c));
         // The centre belongs to the arc: like deleting a point, it takes its relations with it.
-        if (e.kind === 'arc' && !s.entities.some(v => entityPoints(v).includes(e.center))) {
+        // A virtual sharp helper on this arc does not keep it; pruning drops that helper below.
+        if (e.kind === 'arc' && !s.entities.some(v => virtualSharpData(v)?.support !== e.id && entityPoints(v).includes(e.center))) {
           cleanConstraints(c => constraintRefs(c).includes(e.center)); s.points = s.points.filter(p => p.id !== e.center);
         }
         break;

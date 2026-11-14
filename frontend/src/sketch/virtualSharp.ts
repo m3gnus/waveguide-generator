@@ -50,8 +50,9 @@ export function pruneVirtualSharps(s: Sketch, addConstraint?: (c: NewConstraint)
     }
     const ids = new Set(helpers.map(e => e.id));
     s.entities = s.entities.filter(e => !ids.has(e.id));
+    // A sharp whose support was deleted or changed kind cannot hold its corner: its relations go with it.
     s.constraints = s.constraints.filter(c => {
-      const drop = owned.has(c.id) || !user && c.kind === 'coincident' && points.has(c.a) && points.has(c.b);
+      const drop = owned.has(c.id) || (user ? constraintRefs(c).some(id => points.has(id)) : c.kind === 'coincident' && points.has(c.a) && points.has(c.b));
       if (drop) removed.push(c.id); return !drop;
     });
     const used = new Set([...s.entities.flatMap(entityPoints), ...s.constraints.flatMap(constraintRefs)]);

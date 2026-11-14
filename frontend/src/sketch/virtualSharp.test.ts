@@ -173,6 +173,19 @@ describe('virtual sharp fillets', () => {
     expect(removed.entities.some(isVirtualSharpHelper)).toBe(false); expect(removed.points.some(p => p.id === 'corner')).toBe(false);
     expect(removed.entities).toEqual(after.entities.filter(e => !isVirtualSharpHelper(e)));
   });
+
+  it('Make line on an arc supporting a sharp drops the sharp, its relations and the old centre in one step', () => {
+    const before = fixture('line–arc'), fix = before.constraints[0].id;
+    const after = edit(before, { kind: 'fillet', point: 'corner', radius: 2 }).sketch;
+    expect(after.entities.some(e => virtualSharpData(e)?.support === 'second' && e.kind === 'arc')).toBe(true);
+    const line = edit(after, { kind: 'convertEntity', id: 'second', to: 'line' });
+    expect(line.sketch.entities.some(isVirtualSharpHelper)).toBe(false);
+    const used = new Set([...line.sketch.entities.flatMap(entityPoints), ...line.sketch.constraints.flatMap(constraintRefs)]);
+    expect(line.sketch.points.filter(p => !used.has(p.id) && p.id !== 'centerA').map(p => p.id)).toEqual([]); // centerA is unused in the line fixture
+    expect(line.sketch.points.some(p => ['corner', 'centerB'].includes(p.id))).toBe(false);
+    expect(line.removedConstraints).toContain(fix);
+    expect(line.notice).toContain('Fix');
+  });
 });
 
 describe('Cone-and-dust-cap virtual sharp', () => {
