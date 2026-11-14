@@ -149,6 +149,61 @@ def test_a_semicolon_file_with_decimal_commas_is_read(tmp_path: Path) -> None:
     assert "problems" not in _only_file(library)
 
 
+def test_a_comma_file_with_semicolons_in_its_header_stays_a_comma_file(tmp_path: Path) -> None:
+    _write_raw(
+        tmp_path,
+        "notes.csv",
+        'Brand,Model,Z_ohm,"a;b;c;d;e"\nAcme,Semi1,8,"x;y"\nAcme,Semi2,4,z\n',
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+    hits = library.search(q="", kind="all", z=None, limit=5)
+    assert sorted(hit["model"] for hit in hits) == ["Semi1", "Semi2"]
+    assert "problems" not in _only_file(library)
+
+
+def test_an_unreadable_note_outside_the_simulation_is_left_out_not_the_driver(
+    tmp_path: Path,
+) -> None:
+    _write_raw(
+        tmp_path,
+        "notes.csv",
+        "Brand,Model,Re_ohm,Power_W,Sensitivity_dB,Xmax_mm\n"
+        "Acme,Noted,5.6,350 (RMS),92*,~8\n",
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+    hits = library.search(q="", kind="all", z=None, limit=5)
+    assert [hit["model"] for hit in hits] == ["Noted"]
+    detail = library.get(hits[0]["id"])
+    assert detail is not None
+    assert detail["fields"]["re_ohm"] == 5.6
+    assert detail["fields"]["power_w"] is None
+    assert detail["fields"]["sensitivity_db"] is None
+    assert detail["fields"]["xmax_mm"] is None
+    problems = _only_file(library)["problems"]
+    assert len(problems) == 3
+    assert "row 2, column Power_W" in problems[0] and "350 (RMS)" in problems[0]
+    assert all("was ignored" in problem and "listed without this value" in problem for problem in problems)
+
+
+@pytest.mark.parametrize("value", ["40-45", "4+4", "8*"])
+def test_an_unreadable_value_the_simulation_needs_skips_the_row(tmp_path: Path, value: str) -> None:
+    _write_raw(tmp_path, "sim.csv", f"Brand,Model,Fs_Hz\nAcme,Bad,{value}\nAcme,Good,40\n")
+    library = DriverLibrary(tmp_path, bundled=None)
+    assert [hit["model"] for hit in library.search(q="", limit=5)] == ["Good"]
+    (problem,) = _only_file(library)["problems"]
+    assert "column Fs_Hz" in problem and "row was skipped" in problem
+
+
+def test_an_unopenable_file_is_named_without_its_full_path(tmp_path: Path) -> None:
+    from server.drivers.library import _build_index
+
+    missing = tmp_path / "gone.csv"
+    _, stats = _build_index([missing])
+    (problem,) = stats[0]["problems"]  # type: ignore[misc]
+    assert problem.startswith("gone.csv could not be opened")
+    assert str(tmp_path) not in problem
+
+
 def test_a_tab_separated_file_is_read(tmp_path: Path) -> None:
     _write_raw(tmp_path, "tabs.csv", "Brand\tModel\tSd_cm2\nAcme\tTab1\t300\n")
     library = DriverLibrary(tmp_path, bundled=None)
@@ -172,7 +227,7 @@ def test_many_refused_rows_are_summarised_not_listed_one_by_one(tmp_path: Path) 
     assert [hit["model"] for hit in library.search(q="", limit=100)] == ["Fine"]
     problems = _only_file(library)["problems"]
     assert len(problems) <= 6
-    assert "15 more rows" in problems[-1]
+    assert "15 more values or rows" in problems[-1]
 
 
 def _legacy_parse_numeric(raw: str | None) -> float | None:
@@ -186,7 +241,7 @@ def _legacy_parse_numeric(raw: str | None) -> float | None:
     return None if match is None else float(match.group(0))
 
 
-def test_the_shipped_library_parses_exactly_as_before() -> None:
+def test_the_shipped_library_parses_exactly_as_before(tmp_path: Path) -> None:
     """Every number in the shipped file reads to the same value it always has."""
 
     import csv
@@ -199,7 +254,7 @@ def test_the_shipped_library_parses_exactly_as_before() -> None:
         alias.lower(): name for name, aliases in ALIASES.items() if name not in TEXT_FIELDS
         for alias in aliases
     }
-    library = DriverLibrary(folder / "does-not-exist", bundled=folder)
+    library = DriverLibrary(tmp_path / "user", bundled=folder)
     info = library.rescan()
     assert "problems" not in info["files"][0]
     by_key: dict[tuple[str, str, float | None], list[dict[str, object]]] = {}
@@ -1313,12 +1368,12 @@ def test_the_shipped_library_reports_its_one_compression_driver(tmp_path: Path) 
     assert page["matches_by_kind"]["cd"] == 0
 
 
-def test_the_library_that_actually_ships_is_readable_and_carries_ratings() -> None:
+def test_the_library_that_actually_ships_is_readable_and_carries_ratings(tmp_path: Path) -> None:
     """The real file in this repo, not a fixture: it is a shipped artifact."""
 
     folder = bundled_library_dir()
     assert folder is not None, "server/drivers/bundled is missing from this checkout"
-    library = DriverLibrary(folder / "does-not-exist", bundled=folder)
+    library = DriverLibrary(tmp_path / "user", bundled=folder)
     info = library.rescan()
     assert info["total_drivers"] == 6411
     assert info["files"] == [{"name": "hornlab-drivers.csv", "rows": 7087, "bundled": True}]

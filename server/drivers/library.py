@@ -233,18 +233,23 @@ _LISTED_ROW_PROBLEMS = 5
 
 
 def _delimiter(header_line: str) -> str:
-    """The separator that splits the header into the most columns.
+    """The separator this file's header row is written with.
 
-    A tie goes to the comma, so every file this library read before semicolons
-    and tabs were understood still reads the same way.
+    Comma first, and kept whenever it yields the Brand and Model columns, so a
+    comma file whose header happens to hold semicolons or tabs inside a column
+    name still reads exactly as it always has. Only then semicolon, then tab;
+    a header none of them makes sense of stays comma, and is reported for its
+    missing columns.
     """
 
-    best, best_columns = ",", 0
     for candidate in _DELIMITERS:
-        columns = len(next(csv.reader([header_line], delimiter=candidate), []))
-        if columns > best_columns:
-            best, best_columns = candidate, columns
-    return best
+        headers = {
+            name.strip().lower()
+            for name in next(csv.reader([header_line], delimiter=candidate), [])
+        }
+        if headers & _BRAND_HEADERS and headers & _MODEL_HEADERS:
+            return candidate
+    return ","
 
 
 def _build_index(
@@ -280,12 +285,12 @@ def _build_index(
                 for raw_row in reader:
                     rows += 1
                     try:
-                        fields, extras = parse_row(raw_row, decimal_comma=decimal_comma)
+                        fields, extras, ignored = parse_row(raw_row, decimal_comma=decimal_comma)
                     except CellProblem as exc:
                         refused.append(
                             f"{path.name}, row {reader.line_num}, column {exc.column}: "
                             f"\u201c{exc.value}\u201d was not read because {exc.reason} "
-                            "The row was skipped."
+                            "The row was skipped, because the simulation needs this value."
                         )
                         continue
                     except RowShapeProblem as exc:
@@ -298,13 +303,19 @@ def _build_index(
                     model = fields.get("model")
                     if not isinstance(brand, str) or not isinstance(model, str):
                         continue
+                    refused.extend(
+                        f"{path.name}, row {reader.line_num}, column {cell.column}: "
+                        f"\u201c{cell.value}\u201d was ignored because {cell.reason} "
+                        "The driver is listed without this value."
+                        for cell in ignored
+                    )
                     key = (brand.casefold(), model.casefold())
                     read.append((key, _Row(path.name, is_bundled, fields, extras), (brand, model)))
             problems.extend(refused[:_LISTED_ROW_PROBLEMS])
             if len(refused) > _LISTED_ROW_PROBLEMS:
                 problems.append(
-                    f"{path.name}: {len(refused) - _LISTED_ROW_PROBLEMS} more rows were skipped "
-                    "for reasons like the ones above."
+                    f"{path.name}: {len(refused) - _LISTED_ROW_PROBLEMS} more values or rows were "
+                    "ignored or skipped for reasons like the ones above."
                 )
         except UnicodeDecodeError as exc:
             rows, read = 0, []
@@ -323,7 +334,7 @@ def _build_index(
         except OSError as exc:
             rows, read = 0, []
             problems.append(
-                f"{path.name} could not be opened ({exc.strerror or exc}). Check that the file "
+                f"{path.name} could not be opened ({exc.strerror or type(exc).__name__}). Check that the file "
                 "is not open in another program and that you can read it, then press Rescan."
             )
         for key, row, names in read:

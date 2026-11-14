@@ -227,14 +227,27 @@ class RowShapeProblem(ValueError):
     """The row has a different number of cells from the header."""
 
 
+#: Fields that drive the simulation itself. A value in one of these that
+#: cannot be read skips the row: leaving it out would solve a different driver
+#: without saying so. Anywhere else (ratings, size, sensitivity, price) the
+#: unreadable value is left out and the driver is still listed.
+SIMULATION_FIELDS = frozenset({
+    "sd_cm2", "bl_t_m", "re_ohm", "le_mh", "le2_mh", "re2_ohm", "mms_g", "mmd_g",
+    "fs_hz", "vas_l", "qms", "cms_mm_per_n", "rms_kg_per_s",
+})
+
+
 def parse_row(
     row: dict[str | None, str | None], *, decimal_comma: bool = False
-) -> tuple[dict[str, float | str | None], dict[str, str]]:
-    """Map cells to fields and extras.
+) -> tuple[dict[str, float | str | None], dict[str, str], list[CellProblem]]:
+    """Map cells to fields and extras, and list the values left out.
 
-    Raises ``RowShapeProblem`` for a row with too many or too few cells and
-    ``CellProblem`` for a value that cannot be read without guessing, so the
-    caller skips the row, not the library, and can say why.
+    A value that cannot be read without guessing -- ``350 (RMS)``, ``8*``,
+    ``~8``, ``40-45`` -- is left out (missing) and returned as a
+    ``CellProblem``, unless its field is in ``SIMULATION_FIELDS``. There, and
+    for a number too large to use, ``CellProblem`` is raised so the caller
+    skips the row. ``RowShapeProblem`` is raised for a row with too many or
+    too few cells.
     """
 
     # DictReader uses a None key for excess cells and None values for missing
@@ -246,6 +259,7 @@ def parse_row(
 
     fields: dict[str, float | str | None] = {}
     extras: dict[str, str] = {}
+    ignored: list[CellProblem] = []
     for raw_header, raw_value in row.items():
         if raw_header is None:
             continue
@@ -266,11 +280,15 @@ def parse_row(
             try:
                 number = parse_numeric(value, decimal_comma=decimal_comma)
             except NumberFormatProblem as exc:
-                raise CellProblem(header, value, str(exc)) from None
+                problem = CellProblem(header, value, str(exc))
+                if canonical in SIMULATION_FIELDS:
+                    raise problem from None
+                ignored.append(problem)
+                number = None
             if number is not None and not math.isfinite(number):
                 raise CellProblem(header, value, "the number is too large to use.")
             fields[canonical] = number
-    return fields, extras
+    return fields, extras, ignored
 
 
 def classify_kind(fields: dict[str, float | str | None]) -> str:
@@ -386,6 +404,7 @@ __all__ = [
     "CellProblem",
     "NumberFormatProblem",
     "RowShapeProblem",
+    "SIMULATION_FIELDS",
     "DRIVER_TYPES",
     "SPEC_FIELD_MAP",
     "TEXT_FIELDS",
