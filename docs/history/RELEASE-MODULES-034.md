@@ -1,3 +1,5 @@
+> Archived 2026-11-14. Superseded by [`pins.json`](../../pins.json) and [dependency compatibility](../DEPENDENCY-COMPATIBILITY.md); this records the 0.3.4 candidate only.
+
 # Dependency inputs for the 0.3.4 candidate
 
 The candidate uses the exact commits in `pins.json`. Each Python module below

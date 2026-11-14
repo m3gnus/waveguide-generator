@@ -1,3 +1,5 @@
+> Archived 2026-11-14. Superseded by the published 0.3.7 release (tag `v0.3.7`); kept as the pre-release draft.
+
 # 0.3.7 — unreleased draft
 
 Draft notes for the changes planned for 0.3.7.

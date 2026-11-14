@@ -1,3 +1,5 @@
+> Archived 2026-11-14. A dated review of 2026-08-24 to 2026-09-07; not a current audit. Recheck the named code before acting on a finding.
+
 # HornLab suite review — 2026-09-07
 
 Last verified: 2026-09-08. Review window: **2026-08-24 through 2026-09-07**, inclusive, against the immutable snapshots below. Later release commits are outside this review; do not treat these findings as an audit of a newer trunk without rechecking the named code.
