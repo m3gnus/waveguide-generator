@@ -400,7 +400,9 @@ export function Viewport() {
   const preferences = useViewerPreferences();
   // The viewport shows runs, never a solve's progress.
   const jobs = useJobsApartFromProgress();
-  const jobsEpoch = useJobsEpoch();
+  // Only the epoch: the freshness check below is the one reader, in the shape
+  // solvePipeline.contract.test.ts expects of the freshness candidate.
+  const jobsSnapshot = { epoch: useJobsEpoch() };
   const solveRunningOrQueued = jobs.some((job) => isActiveJobStatus(job.status));
   const cadEmpty = cadViewportEmptyCopy(cad);
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
@@ -413,8 +415,8 @@ export function Viewport() {
   const recordedFreshness = useMeshFreshnessStore(state => shownJob ? state.jobs[shownJob.id] : undefined);
   const meshFreshness = hasMeshProvenance(shownJob) ? recordedFreshness : undefined;
   useEffect(() => {
-    if (shownJob) useMeshFreshnessStore.getState().check(shownJob, false, jobsEpoch);
-  }, [shownJob, jobsEpoch]);
+    if (shownJob) useMeshFreshnessStore.getState().check(shownJob, false, jobsSnapshot.epoch);
+  }, [shownJob, jobsSnapshot.epoch]);
   const availableFieldJob = useMemo(
     () => fieldPlaneJob(jobs, resultSelection.primary, coherenceContext, provisional.entries),
     [coherenceContext.key, coherenceContext.lineage, coherenceContext.kind, coherenceContext.viewportShowing, jobs, resultSelection.primary, provisional.entries, meshFreshness],
