@@ -133,7 +133,7 @@ describe('immutable sketch commands', () => {
     expect(line.removedConstraints).toEqual(withRadius.created);
     expect(JSON.stringify(s)).toBe(before);
   });
-  it('keeps a converted arc centre another entity uses, and removes one only relations held', () => {
+  it('keeps a converted arc centre another entity uses, and removes one held only by relations', () => {
     const converted = run(base(), { kind: 'convertEntity', id: 'l4', to: 'arc' }).sketch;
     const arc = converted.entities[0]; if (arc.kind !== 'arc') throw new Error('Expected arc');
     const shared = run(converted, { kind: 'addLine', from: arc.center, to: { x: 0, y: -20 } }).sketch;
