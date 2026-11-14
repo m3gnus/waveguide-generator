@@ -74,6 +74,11 @@ export interface DriverLibraryFile {
   name: string;
   rows: number;
   bundled?: boolean;
+  /**
+   * What went wrong reading this file, each naming the file, what is wrong and
+   * how to fix it. Absent or empty for a file that read cleanly.
+   */
+  problems?: string[];
 }
 
 export interface DriverKindCount {

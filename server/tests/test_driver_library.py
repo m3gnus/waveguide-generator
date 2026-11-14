@@ -170,6 +170,56 @@ def test_malformed_rows_are_skipped_without_losing_valid_rows(tmp_path: Path) ->
     assert {hit["model"] for hit in hits} == {"Before", "After"}
 
 
+def test_a_file_not_saved_as_utf8_is_skipped_reported_and_not_rescanned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One ANSI-encoded CSV must not take the rest of the library down with it.
+
+    Excel on Windows saves "CSV (Comma delimited)" in the ANSI code page, so a
+    single (R) sign in a brand name is byte 0xAE, which is not UTF-8.
+    """
+
+    import server.drivers.library as library_module
+
+    user = tmp_path / "user"
+    shipped = tmp_path / "shipped"
+    user.mkdir()
+    shipped.mkdir()
+    _write_csv(user, "good.csv", ["Brand", "Model", "Sd_cm2"], [["Acme", "Good1", "300"]])
+    (user / "ansi.csv").write_bytes(
+        b"Brand,Model,Sd_cm2\nAcme,Fine,300\nBeyma\xae,Broken,300\n"
+    )
+    _write_csv(shipped, "shipped.csv", ["Brand", "Model", "Sd_cm2"], [["Ship", "S1", "300"]])
+
+    builds = 0
+    real_build = library_module._build_index
+
+    def counting_build(*args, **kwargs):
+        nonlocal builds
+        builds += 1
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(library_module, "_build_index", counting_build)
+    library = DriverLibrary(user, bundled=shipped)
+    hits = library.search(q="", kind="all", z=None, limit=100)
+    # The rest of the library, shipped rows included, still loads; the bad
+    # file contributes nothing rather than half of itself.
+    assert {hit["model"] for hit in hits} == {"Good1", "S1"}
+
+    files = {entry["name"]: entry for entry in library.info()["files"]}
+    assert "problems" not in files["good.csv"]
+    problems = files["ansi.csv"]["problems"]
+    assert len(problems) == 1
+    assert "ansi.csv" in problems[0]
+    assert "UTF-8" in problems[0]
+
+    # The failed file is part of the cached result: asking again does not
+    # read every file again.
+    library.search(q="acme", kind="all", z=None, limit=100)
+    library.get("Acme::Good1::unk")
+    assert builds == 1
+
+
 def test_reliability_columns_are_ignored(tmp_path: Path) -> None:
     _write_csv(
         tmp_path,

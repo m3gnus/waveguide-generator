@@ -557,6 +557,32 @@ describe('SettingsDialog', () => {
     expect(section.querySelector('.driver-library-counts')!.textContent)
       .toBe('1 file \u00b7 2 drivers indexed \u00b7 2 with Thiele-Small data');
     expect(section.textContent).not.toContain('catalogue entries');
+    expect(section.querySelector('.notice-warning')).toBeNull();
+  });
+
+  it('names a driver file it could not read and how to fix it', async () => {
+    const problem = 'ansi.csv was not read: it is not saved as UTF-8 text. Save it again as “CSV UTF-8”, then press Rescan.';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/drivers/library')) {
+        return new Response(JSON.stringify({
+          folder: '/library/driver-databases',
+          files: [
+            { name: 'hornlab-drivers.csv', rows: 2, bundled: true, problems: [] },
+            { name: 'ansi.csv', rows: 0, bundled: false, problems: [problem] },
+          ],
+          total_drivers: 2,
+          complete_drivers: 2,
+          last_scan: null,
+        }), { status: 200 });
+      }
+      throw new Error('offline');
+    }));
+    act(() => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    const notice = host.querySelector<HTMLElement>('#settings-drivers .notice-warning')!;
+    expect(notice).not.toBeNull();
+    expect([...notice.querySelectorAll('li')].map((item) => item.textContent)).toEqual([problem]);
   });
 
   it('points at the update dialog for the channel it used to hold', async () => {

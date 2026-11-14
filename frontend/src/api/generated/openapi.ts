@@ -4327,6 +4327,11 @@ export interface components {
             bundled?: boolean;
             /** Name */
             name: string;
+            /**
+             * Problems
+             * @default []
+             */
+            problems?: string[];
             /** Rows */
             rows: number;
         };

@@ -230,6 +230,10 @@ def _build_index(
     for path in paths:
         is_bundled = bundled is not None and path.parent == bundled
         rows = 0
+        # A file contributes all of its rows or none: one that fails halfway
+        # must not leave its first half in the index looking like the whole.
+        read: list[tuple[tuple[str, str], _Row, tuple[str, str]]] = []
+        problems: list[str] = []
         try:
             with path.open("r", encoding="utf-8-sig", newline="") as handle:
                 reader = csv.DictReader(handle)
@@ -241,11 +245,37 @@ def _build_index(
                     if not isinstance(brand, str) or not isinstance(model, str):
                         continue
                     key = (brand.casefold(), model.casefold())
-                    groups.setdefault(key, []).append(_Row(path.name, is_bundled, fields, extras))
-                    display_names.setdefault(key, (brand, model))
+                    read.append((key, _Row(path.name, is_bundled, fields, extras), (brand, model)))
+        except UnicodeDecodeError as exc:
+            rows, read = 0, []
+            problems.append(
+                f"{path.name} was not read: it is not saved as UTF-8 text (byte "
+                f"0x{exc.object[exc.start]:02X} at position {exc.start}), which is what Excel "
+                "writes for “CSV (Comma delimited)” on Windows. Open it and save it again "
+                "as “CSV UTF-8”, then press Rescan."
+            )
+        except csv.Error as exc:
+            rows, read = 0, []
+            problems.append(
+                f"{path.name} was not read: it is not a readable CSV file ({exc}). "
+                "Open it in a spreadsheet, save it again as “CSV UTF-8”, then press Rescan."
+            )
         except OSError as exc:
-            logger.warning("Could not read driver library file %s: %s", path, exc)
-        file_stats.append({"name": path.name, "rows": rows, "bundled": is_bundled})
+            rows, read = 0, []
+            problems.append(
+                f"{path.name} could not be opened ({exc.strerror or exc}). Check that the file "
+                "is not open in another program and that you can read it, then press Rescan."
+            )
+        for key, row, names in read:
+            groups.setdefault(key, []).append(row)
+            display_names.setdefault(key, names)
+        for problem in problems:
+            # Logged once per scan, and a scan happens only when a file changes.
+            logger.warning("Driver library: %s", problem)
+        stats: dict[str, object] = {"name": path.name, "rows": rows, "bundled": is_bundled}
+        if problems:
+            stats["problems"] = problems
+        file_stats.append(stats)
 
     records: list[DriverRecord] = []
     used_ids: set[str] = set()

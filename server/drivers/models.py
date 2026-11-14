@@ -99,6 +99,9 @@ class DriverLibraryFile(BaseModel):
     name: str
     rows: int
     bundled: bool = False
+    #: What went wrong reading this file, each saying which file, what is
+    #: wrong and how to fix it. Empty for a file that read cleanly.
+    problems: list[str] = []
 
 
 class DriverKindCount(BaseModel):

@@ -4722,6 +4722,14 @@
             "title": "Name",
             "type": "string"
           },
+          "problems": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
           "rows": {
             "title": "Rows",
             "type": "integer"

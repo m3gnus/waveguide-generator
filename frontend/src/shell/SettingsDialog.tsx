@@ -50,6 +50,7 @@ function DriverLibrarySettings() {
   // too is what makes "it holds cone drivers almost exclusively" below a
   // measurement rather than a claim the user has to take on trust.
   const counts = driverKindCounts(info);
+  const problems = info?.files.flatMap((file) => file.problems ?? []) ?? [];
   return <section id="settings-drivers" className="settings-theme driver-library-settings" aria-labelledby="settings-drivers-title" tabIndex={-1}>
     <h3 id="settings-drivers-title">Driver library</h3>
     <p className={`workspace-settings-path ${info?.folder ? '' : 'not-selected'}`} title={info?.folder ?? undefined}>{info?.folder ?? 'Not resolved yet'}</p>
@@ -61,6 +62,11 @@ function DriverLibrarySettings() {
       <span>{files.toLocaleString()} file{files === 1 ? '' : 's'}{shipped > 0 && <> ({shipped === files ? 'shipped' : `${shipped.toLocaleString()} shipped`})</>} · {indexed.toLocaleString()} driver{indexed === 1 ? '' : 's'} indexed · {drivable.toLocaleString()} with Thiele-Small data</span>
       {counts.known && <span className="driver-library-kinds">{driverCountText(counts.lf, 'lf')} · {driverCountText(counts.cd, 'cd')}{counts.unknown > 0 && <> · {driverCountText(counts.unknown, 'unknown')}</>}</span>}
     </div>
+    {/* A file that could not be read, or rows in it that were refused, would
+        otherwise only show up as drivers that are missing from the search. */}
+    {problems.length > 0 && <Notice tone="warning" role="status" title="Some of your driver files were not read in full">
+      <ul>{problems.map((problem, index) => <li key={index}>{problem}</li>)}</ul>
+    </Notice>}
     {indexed > drivable && <p className="cad-settings-note">The other {(indexed - drivable).toLocaleString()} are catalogue entries: without Sd, Bl, Re, a mass and a compliance they cannot drive a channel, so <b>Drivers</b> does not offer them. Type such a driver&rsquo;s values in by hand there instead.</p>}
     <div className="settings-theme-options">
       <button className="btn" disabled={status === 'loading'} onClick={() => void rescan()}>{status === 'loading' ? 'Rescanning…' : 'Rescan'}</button>
