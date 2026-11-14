@@ -19,22 +19,22 @@ describe('user-facing edit notices', () => {
     const s = seedPreset(expandedPreset('cone'), 'cone', presetDefaults.cone);
     const result = applySourceCommand(s.sketch, s.meta, { kind: 'convertEntity', id: 'dust-cap', to: 'line' });
     if ('error' in result) throw new Error(result.error);
-    expect(result.notice).toBe('Make line removed 2 dimensions and 1 relation: Point on line, Dust-cap radius, Dust-cap height.');
+    expect(result.notice).toBe('Make line removed 2 dimensions and 1 relation: Dust-cap radius, Dust-cap height, Point on line (Dust cap centre, Axis of revolution). Undo to keep them.');
   });
   it.each([['fillet', 'Fillet'], ['trim', 'Trim'], ['extend', 'Extend'], ['splitAt', 'Split'], ['deleteEntity', 'Delete'], ['deletePoint', 'Delete'], ['removeConstraint', 'Delete']])('uses the action name for %s without ids or geometry lists', (kind, name) => {
     const s = before();
-    expect(commandNotice(s, { ...s, constraints: s.constraints.slice(2) }, kind)).toBe(`${name} removed 2 dimensions: Radius, Cone depth.`);
-    expect(commandNotice(s, { ...s, constraints: s.constraints.slice(1, 2) }, kind)).toBe(`${name} removed 1 dimension and 2 relations: Radius, Horizontal, Fix.`);
-    expect(commandNotice(s, { ...s, constraints: s.constraints.slice(0, 3) }, kind)).toBe(`${name} removed 1 relation: Fix.`);
+    expect(commandNotice(s, { ...s, constraints: s.constraints.slice(2) }, kind)).toBe(`${name} removed 2 dimensions: Radius, Cone depth. Undo to keep them.`);
+    expect(commandNotice(s, { ...s, constraints: s.constraints.slice(1, 2) }, kind)).toBe(`${name} removed 1 dimension and 2 relations: Radius, Horizontal (Arc 1 centre, Point 2), Fix (Arc 1 centre). Undo to keep them.`);
+    expect(commandNotice(s, { ...s, constraints: s.constraints.slice(0, 3) }, kind)).toBe(`${name} removed 1 relation: Fix (Arc 1 centre). Undo to keep it.`);
   });
   it('names Make arc and preserves custom dimension names containing parentheses', () => {
     const s = before(); s.entities = [{ id: 'arc', kind: 'line', p1: 'b', p2: 'c' }];
     s.constraints[0].label = 'Size (outer)';
-    expect(commandNotice(s, { ...s, entities: before().entities, constraints: s.constraints.slice(1) }, 'convertEntity')).toBe('Make arc removed 1 dimension: Size (outer).');
+    expect(commandNotice(s, { ...s, entities: before().entities, constraints: s.constraints.slice(1) }, 'convertEntity')).toBe('Make arc removed 1 dimension: Size (outer). Undo to keep it.');
   });
   it('explains frozen expressions in terms of the user action and dimension names', () => {
     const s = before(); s.constraints[1].expression = 'c1';
     const next = { ...s, constraints: s.constraints.slice(1).map(c => ({ ...c, expression: undefined })) };
-    expect(commandNotice(s, next, 'deleteEntity')).toBe('Delete removed 1 dimension: Radius. Delete kept Cone depth at its last value because Radius was removed; its expression was cleared.');
+    expect(commandNotice(s, next, 'deleteEntity')).toBe('Delete removed 1 dimension: Radius. Delete kept Cone depth at its last value because Radius was removed; its expression was cleared. Undo to keep it.');
   });
 });

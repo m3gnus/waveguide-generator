@@ -218,7 +218,7 @@ describe('Trim', () => {
     const s = lines(false); s.constraints.push({ id: 'c20', kind: 'fix', point: 'p1' }); s.nextId = 21;
     await mount(s); await key('t'); await click(9, 4); expect(host.querySelector('.sketch-status')!.textContent).not.toContain('removed'); expect(controller.notice).toContain('Fix');
     expect(host.textContent!.split(controller.notice!).length - 1).toBe(1);
-    expect(host.querySelector('.test-notice')!.textContent).toBe('Trim removed 1 relation: Fix.');
+    expect(host.querySelector('.test-notice')!.textContent).toBe('Trim removed 1 relation: Fix (Point 1). Undo to keep it.');
   });
 });
 

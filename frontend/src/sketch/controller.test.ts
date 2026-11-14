@@ -23,7 +23,7 @@ describe('authoring session transactions', () => {
       await controller.constraint({ kind: 'horizontal', line: 'piston' });
       const before = controller.current;
       await controller.command({ kind: 'convertEntity', id: 'piston', to: 'arc' });
-      expect(controller.notice).toBe('Make arc removed 1 relation: Horizontal.');
+      expect(controller.notice).toBe('Make arc removed 1 relation: Horizontal (Piston). Undo to keep it.');
       expect(controller.current.meta.weights).toEqual({ piston: -.5 });
       const arcState = controller.current, arc = arcState.sketch.entities.find(e => e.id === 'piston')!;
       expect(arc.kind).toBe('arc');
@@ -34,7 +34,7 @@ describe('authoring session transactions', () => {
       await controller.constraint({ kind: 'radius', arc: arc.id, value: Math.hypot(a.x - c.x, a.y - c.y), driving: true });
       const withRadius = controller.current;
       await controller.command({ kind: 'convertEntity', id: arc.id, to: 'line' });
-      expect(controller.notice).toBe('Make line removed 1 dimension: Radius.');
+      expect(controller.notice).toBe('Make line removed 1 dimension: Radius. Undo to keep it.');
       expect(controller.current.sketch.entities[0]).toEqual(initial.sketch.entities[0]);
       expect(controller.current.meta.weights).toEqual({ piston: -.5 });
       expect(controller.current.sketch.points.some(p => p.id === arc.center)).toBe(false);
@@ -126,7 +126,7 @@ describe('authoring session transactions', () => {
       await controller.constraint({ kind: 'fix', point: join });
       await controller.command({ kind: 'deletePoint', id: join });
       expect(controller.current.sketch.entities.filter(e => !e.construction)).toEqual([initial.sketch.entities[0]]);
-      expect(controller.notice).toBe('Delete removed 1 relation: Fix.');
+      expect(controller.notice).toBe('Delete removed 1 relation: Fix (Point 3). Undo to keep it.');
       expect(controller.current.meta.weights).toEqual({ piston: 1 });
       await controller.undo(); expect(controller.current.sketch.points.some(p => p.id === join)).toBe(true);
     } finally { controller.destroy(); }
