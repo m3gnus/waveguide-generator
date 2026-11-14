@@ -16,7 +16,6 @@ import sqlite3
 import sys
 from typing import Any
 
-from server.cadlink.intake.ingest import retained_snapshot_path
 from server.cadlink.wgreturn import identifying_names
 from server.integration.installed import measure_installed_stack
 from server.integration.provenance import pinned_dependency_shas
@@ -152,6 +151,11 @@ class IncidentNames:
         return {**record, "manifest_sha256": row[1]} if record is not None and row else None
 
     def _manifest(self, digest: str) -> Mapping[str, Any] | None:
+        # Imported here, not at module level: the ingest module pulls in the
+        # imported-mesh pipeline, which ``import server.app`` otherwise pays for
+        # at every start although only a problem report naming a bundle reads it.
+        from server.cadlink.intake.ingest import retained_snapshot_path
+
         try:
             path = retained_snapshot_path(self.data_dir, digest) / "wgreturn.json"
             manifest = json.loads(path.read_text(encoding="utf-8"))
