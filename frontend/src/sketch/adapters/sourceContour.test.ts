@@ -5,8 +5,9 @@ import { INITIAL_SOURCE } from '../../design/sourceContourEditing';
 import { editorFixtures } from './sourceContourTestSupport';
 import { applyCommand } from '../ops';
 import { uniqueProblems } from '../adapter';
-import { validateSketch } from '../model';
-import { applySourceCommand, lower, rules, seed, sourceProgress, withSourceLimit } from './sourceContour';
+import { validateSketch, type Arc, type Sketch } from '../model';
+import { applySourceCommand, lower, rules, seed, sourceContourAdapter, sourceProgress, withSourceLimit, type SourceMeta } from './sourceContour';
+import type { Command } from '../commands';
 
 function document(points: SourcePoint[], segments: SourcePatch[]): SourceDocument {
   return { contour: { version: 1, physical_source_id: 'diaphragm', rim_id: 'horn.throat', points, segments },
@@ -43,6 +44,19 @@ describe('source contour exact import and lowering', () => {
     if ('error' in restored) throw new Error(restored.error);
     expect(restored.sketch.points).toEqual(initial.sketch.points);
     expect(lower(restored.sketch, restored.meta)).toEqual({ ok: true, document: doc });
+  });
+  it.each(['fix', 'distanceX', 'pointOnLine'] as const)('Make line removes an arc centre held by %s, leaving a finished contour', relation => {
+    const initial = seed(copy()), run = (state: { sketch: Sketch; meta: SourceMeta }, command: Command) => {
+      const result = applySourceCommand(state.sketch, state.meta, command); if ('error' in result) throw new Error(result.error); return result;
+    };
+    const arc = run(initial, { kind: 'convertEntity', id: 'piston', to: 'arc' }), centre = (arc.sketch.entities[0] as Arc).center;
+    const held = run(arc, { kind: 'addConstraint', constraint: relation === 'fix' ? { kind: 'fix', point: centre }
+      : relation === 'distanceX' ? { kind: 'distanceX', a: 'pole', b: centre, value: 0, driving: true } : { kind: 'pointOnLine', point: centre, line: 'axis' } });
+    const line = run(held, { kind: 'convertEntity', id: 'piston', to: 'line' });
+    expect(line.sketch.points.some(p => p.id === centre)).toBe(false);
+    expect(line.removedConstraints).toEqual(held.created);
+    expect(sourceContourAdapter.status(line).kind).toBe('valid');
+    expect(lower(line.sketch, line.meta)).toEqual(lower(initial.sketch, initial.meta));
   });
   it.each([-100, -10, 10, 100])('reduces the default bulge on a steep chord at height %s to avoid radial folds', height => {
     const doc = copy(); doc.contour.points[0].z_mm = height;

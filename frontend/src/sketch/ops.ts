@@ -305,8 +305,10 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
         }
         s.entities = s.entities.map(v => v.id === e.id ? converted : v);
         cleanConstraints(c => constraintRefs(c).includes(e.id) && !!constraintProblem(s, c));
-        if (e.kind === 'arc' && !s.entities.some(v => entityPoints(v).includes(e.center))
-          && !s.constraints.some(c => constraintRefs(c).includes(e.center))) s.points = s.points.filter(p => p.id !== e.center);
+        // The centre belongs to the arc: like deleting a point, it takes its relations with it.
+        if (e.kind === 'arc' && !s.entities.some(v => entityPoints(v).includes(e.center))) {
+          cleanConstraints(c => constraintRefs(c).includes(e.center)); s.points = s.points.filter(p => p.id !== e.center);
+        }
         break;
       }
       case 'splitAt': splitCurve(command.entity, { x: command.x, y: command.y }); break;

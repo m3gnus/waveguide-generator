@@ -4,7 +4,7 @@ import { expandedPreset, optionalPresetCorpus, presetCorpus } from './presetTest
 import { applySourceCommand, lower, rules, sourceProgress } from './sourceContour';
 import { createSession } from '../session';
 import { applyCommand } from '../ops';
-import { parseSketch, toJSON, entityPoints } from '../model';
+import { parseSketch, toJSON, entityPoints, constraintRefs } from '../model';
 import { contextData, materialiseContext } from '../context';
 import { hornAssemblyContext, standaloneContext } from './sourceContext';
 import { INITIAL_ASSEMBLY } from '../../design/sourceContextTestSupport';
@@ -184,16 +184,14 @@ describe('portable preset context', () => {
 });
 
 
-it('preserves the pre-existing conversion topology and retained centre (dev 1ade1eec7)', () => {
-  // Compared with the baseline ops + source adapter: the geometry and progress
-  // are identical. This round deliberately leaves that existing behavior alone.
+it('removes the axis-held centre when Make line converts the dust cap, leaving a finished contour', () => {
   const before = seedPreset(expandedPreset('cone'), 'cone', presetDefaults.cone);
   const arc = before.sketch.entities.find(e => e.id === 'dust-cap')!;
   if (arc.kind !== 'arc') throw new Error('Expected dust-cap arc');
   expect(sourceProgress(before.sketch, before.meta).state).toBe('valid');
   const after = applySourceCommand(before.sketch, before.meta, { kind: 'convertEntity', id: arc.id, to: 'line' });
   if ('error' in after) throw new Error(after.error);
-  expect(sourceProgress(after.sketch, after.meta)).toEqual({ state: 'unfinished', hint: 'Continue toward the rim' });
-  expect(after.sketch.points.find(p => p.id === arc.center)).toEqual(before.sketch.points.find(p => p.id === arc.center));
-  expect(after.sketch.constraints).toContainEqual(expect.objectContaining({ kind: 'pointOnLine', point: arc.center, line: 'axis' }));
+  expect(sourceProgress(after.sketch, after.meta)).toEqual({ state: 'valid', hint: 'Contour complete' });
+  expect(after.sketch.points.some(p => p.id === arc.center)).toBe(false);
+  expect(after.sketch.constraints.some(c => constraintRefs(c).includes(arc.center))).toBe(false);
 });

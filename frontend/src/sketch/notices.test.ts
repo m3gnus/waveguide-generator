@@ -19,7 +19,7 @@ describe('user-facing edit notices', () => {
     const s = seedPreset(expandedPreset('cone'), 'cone', presetDefaults.cone);
     const result = applySourceCommand(s.sketch, s.meta, { kind: 'convertEntity', id: 'dust-cap', to: 'line' });
     if ('error' in result) throw new Error(result.error);
-    expect(result.notice).toBe('Make line removed 2 dimensions: Dust-cap radius, Dust-cap height.');
+    expect(result.notice).toBe('Make line removed 2 dimensions and 1 relation: Point on line, Dust-cap radius, Dust-cap height.');
   });
   it.each([['fillet', 'Fillet'], ['trim', 'Trim'], ['extend', 'Extend'], ['splitAt', 'Split'], ['deleteEntity', 'Delete'], ['deletePoint', 'Delete'], ['removeConstraint', 'Delete']])('uses the action name for %s without ids or geometry lists', (kind, name) => {
     const s = before();
