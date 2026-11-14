@@ -1120,6 +1120,22 @@ describe('source editor interactions', () => {
     await act(async () => field.dispatchEvent(new KeyboardEvent('keydown', { key: cancel ? 'Escape' : 'Enter', bubbles: true, cancelable: true })));
     await settle();
   }
+  it.each(['value', 'typed value', 'name', 'parameter'])('opens the canvas dimension editor on double-click while the %s panel field has focus', async which => {
+    vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
+    await mount(); await act(async () => button('Apply shape').click()); await settle();
+    const id = readSourceAuthoring(readSourceDraft()).meta.preset!.dimensions.depth_mm;
+    host.querySelector<HTMLDetailsElement>('.source-dimensions')!.open = true;
+    if (which === 'parameter') { await act(async () => button('Add parameter').click()); await settle(); }
+    const field = which === 'name' ? [...host.querySelectorAll('button')].find(b => b.getAttribute('aria-label')?.startsWith(`Dimension ${id} name:`))!
+      : which === 'parameter' ? input('Expression: p1') : input(`Dimension ${id} value`);
+    await act(async () => field.focus()); expect(document.activeElement).toBe(field);
+    if (which === 'typed value') await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, '4.5'); field.dispatchEvent(new Event('input', { bubbles: true })); });
+    const label = host.querySelector(`.sketch-label-hit[data-id="${id}"]`)!, canvas = host.querySelector('[aria-label="Sketch drawing"]')!;
+    for (let i = 0; i < 2; i++) { await pointer(label); await pointer(canvas, 'pointerup'); }
+    await settle();
+    expect(document.activeElement).toBe(host.querySelector('form[aria-label="Edit dimension"] input[aria-label="Dimension value"]'));
+    if (which === 'typed value') expect(readSourceAuthoring(readSourceDraft()).sketch.constraints.find(c => c.id === id)).toMatchObject({ value: 4.5 });
+  });
   it('renames patches and dimensions with F2/double-click, undoes/redoes, and restores the local envelope', async () => {
     vi.mocked(sourceEditorApi.expand).mockImplementation(async (shape, dimensions) => validation(expandedPreset(shape, dimensions)));
     await mount(); await act(async () => button('Apply shape').click()); await settle();
