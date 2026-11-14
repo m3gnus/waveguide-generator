@@ -9,6 +9,15 @@
  *    subtree, and the time React spent rendering it;
  *  - a devtools-hook fiber walk counts how often each named component's own
  *    body ran, so a panel's body is told apart from a small child in it.
+ *
+ * The benchmark case prints its table and runs only with WG_BENCH set:
+ *   WG_BENCH=1 npx vitest run src/shell/jobsProgressRenders.test.tsx --silent=false --reporter=verbose
+ *
+ * The body count relies on React internals, not public API: a stand-in
+ * `__REACT_DEVTOOLS_GLOBAL_HOOK__` (inject/onCommitFiberRoot), the fiber
+ * fields tag/type/flags/alternate/child/sibling, the function fiber tags
+ * (0 function, 11 forwardRef, 15 simple memo; 14 memo wrapper skipped) and
+ * the PerformedWork flag (1). A React major upgrade may need it adjusted.
  */
 import { act, Profiler, type ProfilerOnRenderCallback, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -103,6 +112,8 @@ import { JobsPanel } from './JobsPanel';
 import { StatusBar } from './StatusBar';
 import { ParamPanel } from '../design/ParamPanel';
 
+/** Set WG_BENCH to run the benchmark case (the frontend is typed without Node's globals). */
+const BENCH = Boolean((globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.WG_BENCH);
 const FINISHED = 40;
 const EVENTS = 200;
 const FREQUENCIES = EVENTS / 2;
@@ -234,7 +245,7 @@ describe('a running solve\'s job events', () => {
     vi.unstubAllGlobals();
   });
 
-  it(`benchmark: ${EVENTS} events for one running job`, () => {
+  it.skipIf(!BENCH)(`benchmark: ${EVENTS} events for one running job`, () => {
     const started = performance.now();
     for (let index = 0; index < EVENTS; index += 1) act(() => fireSolveEvent(index));
     const wall = performance.now() - started;
