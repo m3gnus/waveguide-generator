@@ -118,7 +118,12 @@ the VituixCAD project. It removes the common propagation delay only when distanc
 speed, and a supported spatial-phase convention are all present. Without a supported
 convention tag it emits raw phase unconverted and says so in the file header. Charts receive the same
 reference metadata. Smoothing applies to magnitude/DI/impedance series, never to raw
-phase.
+phase. Levels in dB (SPL, polar level, DI, power response) are averaged as power,
+10^(L/10); Psychoacoustic takes the cubic mean of that power (REW's definition).
+Impedance real and imaginary parts are averaged as themselves, so Psychoacoustic only
+changes their bandwidth. FRD files are always written unsmoothed, so their magnitude and
+phase stay one complex response; CSV, text summary and chart PNGs carry the viewer's
+smoothing and say so.
 
 The interactive phase chart de-embeds the declared propagation term before unwrapping,
 then removes the residual output-weighted linear slope for display. Group delay is

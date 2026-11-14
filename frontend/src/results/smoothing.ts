@@ -26,137 +26,127 @@ function log2Frequency(value: unknown): number {
   return Number.isFinite(numeric) && numeric > 0 ? Math.log2(numeric) : Number.NaN;
 }
 
-function fixedFraction(
-  frequencies: number[], values: SmoothingValue[], fractionOctave: number,
+/**
+ * What a smoothed series is, which decides what its kernel averages.
+ *
+ * - `level_db`: a level in dB (SPL, relative polar level, DI, power response).
+ *   Averaged as power, 10^(L/10), and converted back: smoothing averages
+ *   energy, so a dip does not pull the curve down as hard as a peak lifts it
+ *   (REW smooths squared magnitudes the same way). Psychoacoustic mode takes
+ *   the cubic mean of that power, REW's "cube root of the average of the cubed
+ *   values", which weights peaks further.
+ * - `linear`: a quantity averaged as itself, here impedance real and imaginary
+ *   parts, which together is complex smoothing of Z. A cubic mean of a signed
+ *   component means nothing, so psychoacoustic mode keeps its bandwidth and
+ *   averages plainly.
+ */
+export type SmoothingQuantity = 'level_db' | 'linear';
+
+interface Band {
+  /** Half-width of the window and the Gaussian sigma, on the kernel's own axis. */
+  halfBandwidth: number;
+  sigma: number;
+}
+
+type Mean = 'arithmetic' | 'power' | 'cubic_power';
+
+function fractionBand(fractionOctave: number): Band {
+  const halfBandwidth = 1 / (2 * fractionOctave);
+  return { halfBandwidth, sigma: halfBandwidth / 2 };
+}
+
+/**
+ * The one Gaussian kernel every mode shares. `axis` places samples (log2 Hz
+ * for octave modes, Hz for ERB); `band` gives the window at a centre.
+ */
+function gaussianSmoothing(
+  frequencies: number[], values: SmoothingValue[],
+  axis: (frequency: unknown) => number, band: (centerHz: number) => Band, mean: Mean,
 ): SmoothingValue[] {
   if (frequencies.length !== values.length) return values;
-  const halfBandwidth = 1 / (2 * fractionOctave);
-  const logSigma = halfBandwidth / 2;
-  const twoSigmaSquared = 2 * logSigma * logSigma;
-  const logFrequencies = frequencies.map(log2Frequency);
+  const positions = frequencies.map(axis);
+  const numeric = values.map(finiteValue);
   return values.map((original, index) => {
-    const center = logFrequencies[index];
+    const center = positions[index];
     if (!Number.isFinite(center)) return original;
+    const { halfBandwidth, sigma } = band(frequencies[index]);
+    const twoSigmaSquared = 2 * sigma * sigma;
+    // Levels are averaged relative to the centre (or first) level so the
+    // power of a large dB value cannot overflow; the offset cancels exactly.
+    const reference = numeric[index] ?? numeric.find((value) => value !== null) ?? 0;
     let weightedSum = 0;
     let weightSum = 0;
-    logFrequencies.forEach((frequency, sampleIndex) => {
-      if (!Number.isFinite(frequency) || frequency < center - halfBandwidth || frequency > center + halfBandwidth) return;
-      const value = finiteValue(values[sampleIndex]);
+    positions.forEach((position, sampleIndex) => {
+      if (!Number.isFinite(position) || position < center - halfBandwidth || position > center + halfBandwidth) return;
+      const value = numeric[sampleIndex];
       if (value === null) return;
-      const distance = frequency - center;
+      const distance = position - center;
       const weight = Math.exp(-(distance * distance) / twoSigmaSquared);
-      weightedSum += value * weight;
+      const term = mean === 'arithmetic' ? value
+        : 10 ** (((mean === 'cubic_power' ? 3 : 1) * (value - reference)) / 10);
+      weightedSum += term * weight;
       weightSum += weight;
     });
-    return weightSum > 0 ? weightedSum / weightSum : original;
+    if (!(weightSum > 0)) return original;
+    const average = weightedSum / weightSum;
+    if (mean === 'arithmetic') return average;
+    return reference + (10 * Math.log10(average)) / (mean === 'cubic_power' ? 3 : 1);
   });
+}
+
+function levelMean(quantity: SmoothingQuantity): Mean {
+  return quantity === 'level_db' ? 'power' : 'arithmetic';
 }
 
 export function fractionalOctaveSmoothing(
-  frequencies: number[], values: SmoothingValue[], fractionOctave: number,
+  frequencies: number[], values: SmoothingValue[], fractionOctave: number, quantity: SmoothingQuantity,
 ): SmoothingValue[] {
-  return fixedFraction(frequencies, values, fractionOctave);
+  return gaussianSmoothing(frequencies, values, log2Frequency, () => fractionBand(fractionOctave), levelMean(quantity));
 }
 
-export function variableSmoothing(frequencies: number[], values: SmoothingValue[]): SmoothingValue[] {
-  if (frequencies.length !== values.length) return values;
-  const logFrequencies = frequencies.map(log2Frequency);
+/** REW's variable smoothing: 1/48 octave below 100 Hz to 1/3 octave above 10 kHz. */
+export function variableSmoothing(frequencies: number[], values: SmoothingValue[], quantity: SmoothingQuantity): SmoothingValue[] {
   const lowReference = Math.log10(100);
   const highReference = Math.log10(10_000);
-  return values.map((original, index) => {
-    const centerFrequency = frequencies[index];
-    const center = logFrequencies[index];
-    if (!Number.isFinite(center)) return original;
-    let fractionOctave: number;
-    if (centerFrequency < 100) fractionOctave = 48;
-    else if (centerFrequency > 10_000) fractionOctave = 3;
-    else {
-      const interpolation = (Math.log10(centerFrequency) - lowReference) / (highReference - lowReference);
-      fractionOctave = 48 * Math.pow(3 / 48, interpolation);
-    }
-    const halfBandwidth = 1 / (2 * fractionOctave);
-    const logSigma = halfBandwidth / 2;
-    const twoSigmaSquared = 2 * logSigma * logSigma;
-    let weightedSum = 0;
-    let weightSum = 0;
-    logFrequencies.forEach((frequency, sampleIndex) => {
-      if (!Number.isFinite(frequency) || frequency < center - halfBandwidth || frequency > center + halfBandwidth) return;
-      const value = finiteValue(values[sampleIndex]);
-      if (value === null) return;
-      const distance = frequency - center;
-      const weight = Math.exp(-(distance * distance) / twoSigmaSquared);
-      weightedSum += value * weight;
-      weightSum += weight;
-    });
-    return weightSum > 0 ? weightedSum / weightSum : original;
-  });
+  return gaussianSmoothing(frequencies, values, log2Frequency, (centerFrequency) => {
+    if (centerFrequency < 100) return fractionBand(48);
+    if (centerFrequency > 10_000) return fractionBand(3);
+    const interpolation = (Math.log10(centerFrequency) - lowReference) / (highReference - lowReference);
+    return fractionBand(48 * Math.pow(3 / 48, interpolation));
+  }, levelMean(quantity));
 }
 
-export function psychoacousticSmoothing(frequencies: number[], values: SmoothingValue[]): SmoothingValue[] {
-  if (frequencies.length !== values.length) return values;
-  const logFrequencies = frequencies.map(log2Frequency);
+/** REW's psychoacoustic smoothing: 1/3 octave below 100 Hz to 1/6 above 1 kHz, cubic mean of power. */
+export function psychoacousticSmoothing(frequencies: number[], values: SmoothingValue[], quantity: SmoothingQuantity): SmoothingValue[] {
   const lowReference = Math.log10(100);
   const highReference = Math.log10(1_000);
-  return values.map((original, index) => {
-    const centerFrequency = frequencies[index];
-    const center = logFrequencies[index];
-    if (!Number.isFinite(center)) return original;
-    let fractionOctave: number;
-    if (centerFrequency < 100) fractionOctave = 3;
-    else if (centerFrequency > 1_000) fractionOctave = 6;
-    else fractionOctave = 3 + ((Math.log10(centerFrequency) - lowReference) / (highReference - lowReference)) * 3;
-    const halfBandwidth = 1 / (2 * fractionOctave);
-    const logSigma = halfBandwidth / 2;
-    const twoSigmaSquared = 2 * logSigma * logSigma;
-    let weightedSum = 0;
-    let weightSum = 0;
-    logFrequencies.forEach((frequency, sampleIndex) => {
-      if (!Number.isFinite(frequency) || frequency < center - halfBandwidth || frequency > center + halfBandwidth) return;
-      const value = finiteValue(values[sampleIndex]);
-      if (value === null) return;
-      const distance = frequency - center;
-      const weight = Math.exp(-(distance * distance) / twoSigmaSquared);
-      weightedSum += Math.pow(Math.abs(value), 3) * Math.sign(value) * weight;
-      weightSum += weight;
-    });
-    if (weightSum === 0) return original;
-    const averageCubed = weightedSum / weightSum;
-    return Math.pow(Math.abs(averageCubed), 1 / 3) * Math.sign(averageCubed);
-  });
+  return gaussianSmoothing(frequencies, values, log2Frequency, (centerFrequency) => {
+    if (centerFrequency < 100) return fractionBand(3);
+    if (centerFrequency > 1_000) return fractionBand(6);
+    return fractionBand(3 + ((Math.log10(centerFrequency) - lowReference) / (highReference - lowReference)) * 3);
+  }, quantity === 'level_db' ? 'cubic_power' : 'arithmetic');
 }
 
-export function erbSmoothing(frequencies: number[], values: SmoothingValue[]): SmoothingValue[] {
-  if (frequencies.length !== values.length) return values;
-  const numericFrequencies = frequencies.map((value) => Number.isFinite(value) && value > 0 ? value : Number.NaN);
-  return values.map((original, index) => {
-    const center = numericFrequencies[index];
-    if (!Number.isFinite(center)) return original;
-    const erbHz = 107.77 * (center / 1_000) + 24.673;
-    const halfBandwidth = erbHz / 2;
-    const sigma = erbHz / 4;
-    const twoSigmaSquared = 2 * sigma * sigma;
-    let weightedSum = 0;
-    let weightSum = 0;
-    numericFrequencies.forEach((frequency, sampleIndex) => {
-      if (!Number.isFinite(frequency) || frequency < center - halfBandwidth || frequency > center + halfBandwidth) return;
-      const value = finiteValue(values[sampleIndex]);
-      if (value === null) return;
-      const distance = frequency - center;
-      const weight = Math.exp(-(distance * distance) / twoSigmaSquared);
-      weightedSum += value * weight;
-      weightSum += weight;
-    });
-    return weightSum > 0 ? weightedSum / weightSum : original;
-  });
+/** Equivalent rectangular bandwidth, (107.77 f/kHz + 24.673) Hz, as REW states it. */
+export function erbSmoothing(frequencies: number[], values: SmoothingValue[], quantity: SmoothingQuantity): SmoothingValue[] {
+  return gaussianSmoothing(
+    frequencies, values,
+    (value) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : Number.NaN),
+    (center) => {
+      const erbHz = 107.77 * (center / 1_000) + 24.673;
+      return { halfBandwidth: erbHz / 2, sigma: erbHz / 4 };
+    },
+    levelMean(quantity),
+  );
 }
 
 export function applySmoothing(
-  frequencies: number[], values: SmoothingValue[], mode: SmoothingMode,
+  frequencies: number[], values: SmoothingValue[], mode: SmoothingMode, quantity: SmoothingQuantity,
 ): SmoothingValue[] {
   if (mode === 'none') return values;
-  if (mode === 'variable') return variableSmoothing(frequencies, values);
-  if (mode === 'psychoacoustic') return psychoacousticSmoothing(frequencies, values);
-  if (mode === 'erb') return erbSmoothing(frequencies, values);
+  if (mode === 'variable') return variableSmoothing(frequencies, values, quantity);
+  if (mode === 'psychoacoustic') return psychoacousticSmoothing(frequencies, values, quantity);
+  if (mode === 'erb') return erbSmoothing(frequencies, values, quantity);
   const fraction = Number(mode.slice(2));
-  return fractionalOctaveSmoothing(frequencies, values, fraction);
+  return fractionalOctaveSmoothing(frequencies, values, fraction, quantity);
 }

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { applySmoothing, type SmoothingMode } from './smoothing';
 import type { ResultPayload } from './types';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
 
@@ -25,10 +24,6 @@ const fixture: ResultPayload = {
     ]),
   },
 };
-
-function preferences(smoothing: SmoothingMode = 'none') {
-  return { smoothing, outputName: 'test_horn', counter: 7 };
-}
 
 function withPolarPhase(result: ResultPayload = fixture): ResultPayload {
   return {
@@ -66,8 +61,8 @@ describe('FRD builders', () => {
       directivity: { horizontal: levels.map((level) => [[0, level]]) },
     };
     expect({
-      onAxis: buildOnAxisFrd(result, preferences()),
-      polar: buildPolarFrdSet(result, preferences(), 'decimals'),
+      onAxis: buildOnAxisFrd(result),
+      polar: buildPolarFrdSet(result, 'decimals'),
     }).toMatchSnapshot();
   });
 
@@ -77,13 +72,13 @@ describe('FRD builders', () => {
       channels: { first: fixture, second: { ...fixture, spl_on_axis: { frequencies, spl: [70, 71, 72, 73, 74], phase_degrees: [0, 0, 0, 0, 0] } } },
       channel_order: ['first', 'second'],
     };
-    expect(() => buildOnAxisFrd(wrapped, preferences())).toThrow('Choose a drive channel');
-    const rows = dataRows(buildOnAxisFrd(wrapped, preferences(), 'second'));
+    expect(() => buildOnAxisFrd(wrapped)).toThrow('Choose a drive channel');
+    const rows = dataRows(buildOnAxisFrd(wrapped, 'second'));
     expect(rows.map((row) => Number(row[1]))).toEqual([70, 71, 72, 73, 74]);
   });
 
   it('writes on-axis frequency, smoothed SPL, and the real varying phase', () => {
-    const text = buildOnAxisFrd(fixture, preferences());
+    const text = buildOnAxisFrd(fixture);
     const rows = dataRows(text);
 
     expect(rows).toHaveLength(frequencies.length);
@@ -106,8 +101,8 @@ describe('FRD builders', () => {
         directivity: { normalization_angle_degrees: 5 },
       },
     };
-    const onAxis = buildOnAxisFrd(documented, preferences());
-    const polar = buildPolarFrdSet(documented, preferences(), 'test_horn_7')[0].text;
+    const onAxis = buildOnAxisFrd(documented);
+    const polar = buildPolarFrdSet(documented, 'test_horn_7')[0].text;
 
     expect(onAxis).toContain("* Phasor convention: engineering exp(+j omega t); converted from the solver's exp(-i omega t)");
     expect(onAxis).toContain('* Phase sign: a later arrival is a phase lag (falling phase), as REW and VituixCAD expect');
@@ -132,7 +127,7 @@ describe('FRD builders', () => {
     ]);
   });
 
-  it('applies the smoothing preference to on-axis and polar SPL only', () => {
+  it('writes unsmoothed magnitude beside raw phase, whatever the charts smooth', () => {
     const smoothingFrequencies = [100, 119, 141, 168, 200];
     const spiky: ResultPayload = {
       ...fixture,
@@ -146,18 +141,16 @@ describe('FRD builders', () => {
         horizontal: smoothingFrequencies.map((_, index) => [[0, [0, 0, 12, 0, 0][index]]]),
       },
     };
-    const expected = applySmoothing(smoothingFrequencies, [0, 0, 12, 0, 0], '1/1');
-    const onAxisRows = dataRows(buildOnAxisFrd(spiky, preferences('1/1')));
-    const polarRows = dataRows(buildPolarFrdSet(spiky, preferences('1/1'), 'test_horn_7')[0].text);
+    const onAxis = buildOnAxisFrd(spiky);
+    const polar = buildPolarFrdSet(spiky, 'test_horn_7')[0].text;
 
-    expect(Number(onAxisRows[2][1])).toBeCloseTo(Number(expected[2]), 3);
-    expect(Number(onAxisRows[2][1])).not.toBe(12);
-    expect(Number(onAxisRows[2][2])).toBe(0);
-    expect(Number(polarRows[2][1])).toBeCloseTo(Number(expected[2]), 3);
+    expect(dataRows(onAxis).map((row) => Number(row[1]))).toEqual([0, 0, 12, 0, 0]);
+    expect(dataRows(polar).map((row) => Number(row[1]))).toEqual([0, 0, 12, 0, 0]);
+    expect(onAxis).toContain('* Smoothing: none (FRD files are always unsmoothed; smooth in the receiving tool)');
   });
 
   it('writes every polar as explicitly magnitude-only two-column data', () => {
-    const files = buildPolarFrdSet(fixture, preferences(), 'test_horn_7');
+    const files = buildPolarFrdSet(fixture, 'test_horn_7');
 
     expect(files).toHaveLength(6);
     files.forEach(({ text }) => {
@@ -168,7 +161,7 @@ describe('FRD builders', () => {
   });
 
   it('writes three-column polar files without a magnitude-only header when phase is present', () => {
-    const files = buildPolarFrdSet(withPolarPhase(), preferences(), 'test_horn_7');
+    const files = buildPolarFrdSet(withPolarPhase(), 'test_horn_7');
 
     expect(files).toHaveLength(6);
     files.forEach(({ text }) => {
@@ -190,7 +183,7 @@ describe('FRD builders', () => {
         observation: { effective_distance_m: 1, sound_speed_m_per_s: 4 },
       },
     };
-    const text = buildPolarFrdSet(result, preferences(), 'test_horn_7')[0].text;
+    const text = buildPolarFrdSet(result, 'test_horn_7')[0].text;
 
     // Raw: -100 - 360 * 1 Hz * 1 m / 4 m/s = -190 deg; engineering +190 deg, wrapped to -170 deg.
     expect(dataRows(text)).toEqual([['1.000000', '0.0000', '-170.0000']]);
@@ -207,7 +200,7 @@ describe('FRD builders', () => {
       directivity_phase: { horizontal: [[[0, -100]]] },
       metadata: { observation },
     };
-    const text = buildPolarFrdSet(result, preferences(), 'test_horn_7')[0].text;
+    const text = buildPolarFrdSet(result, 'test_horn_7')[0].text;
 
     expect(dataRows(text)).toEqual([['1.000000', '0.0000', '-100.0000']]);
     expect(text).toContain('Common time-of-flight not removed');
@@ -224,7 +217,7 @@ describe('FRD builders', () => {
       },
     };
 
-    expect(dataRows(buildOnAxisFrd(result, preferences()))).toEqual([
+    expect(dataRows(buildOnAxisFrd(result))).toEqual([
       ['1.000000', '90.0000', '-170.0000'],
     ]);
   });
@@ -240,7 +233,7 @@ describe('FRD builders', () => {
       },
     };
 
-    expect(dataRows(buildPolarFrdSet(result, preferences(), 'test_horn_7')[0].text)).toEqual([
+    expect(dataRows(buildPolarFrdSet(result, 'test_horn_7')[0].text)).toEqual([
       ['1.000000', '0.0000', '-10.0000'],
     ]);
   });
@@ -261,7 +254,7 @@ describe('FRD builders', () => {
       metadata: { phase_time_convention: 'exp(+ikr)' },
     };
 
-    expect(dataRows(buildOnAxisFrd(result, preferences())).map((row) => Number(row[2])))
+    expect(dataRows(buildOnAxisFrd(result)).map((row) => Number(row[2])))
       .toEqual([-9, -45, -90]);
   });
 
@@ -273,14 +266,14 @@ describe('FRD builders', () => {
         observation: { effective_distance_m: 1, sound_speed_m_per_s: 4 },
       },
     };
-    const text = buildOnAxisFrd(result, preferences());
+    const text = buildOnAxisFrd(result);
 
     expect(dataRows(text)).toEqual([['1.000000', '90.0000', '-100.0000']]);
     expect(text).toContain('phase convention metadata is unavailable');
   });
 
   it('names polar files the way the Fusion addin already does for VituixCAD', () => {
-    expect(buildPolarFrdSet(fixture, preferences(), 'test_horn_7').map(({ filename }) => filename)).toEqual([
+    expect(buildPolarFrdSet(fixture, 'test_horn_7').map(({ filename }) => filename)).toEqual([
       'hor/test_horn_7 -30.frd',
       'hor/test_horn_7 0.frd',
       'hor/test_horn_7 30.frd',
@@ -301,7 +294,7 @@ describe('FRD builders', () => {
       },
     };
 
-    const text = buildOnAxisFrd(decimalFixture, preferences());
+    const text = buildOnAxisFrd(decimalFixture);
     expect(text).toContain('100.500000\t90.2500\t-12.7500');
     expect(text).not.toContain('100,500');
     expect(text).not.toMatch(/\d[eE][+-]?\d/);
@@ -310,8 +303,8 @@ describe('FRD builders', () => {
   });
 
   it('returns an empty set when there is no directivity', () => {
-    expect(buildPolarFrdSet({ frequencies }, preferences(), 'test_horn_7')).toEqual([]);
-    expect(buildPolarFrdSet({ ...fixture, directivity: {} }, preferences(), 'test_horn_7')).toEqual([]);
+    expect(buildPolarFrdSet({ frequencies }, 'test_horn_7')).toEqual([]);
+    expect(buildPolarFrdSet({ ...fixture, directivity: {} }, 'test_horn_7')).toEqual([]);
   });
 
   it('omits incomplete rows instead of inventing or blanking numeric cells', () => {
@@ -332,10 +325,10 @@ describe('FRD builders', () => {
       },
     };
 
-    expect(dataRows(buildOnAxisFrd(incomplete, preferences()))).toEqual([
+    expect(dataRows(buildOnAxisFrd(incomplete))).toEqual([
       ['100.000000', '90.0000', '-10.0000'],
     ]);
-    expect(dataRows(buildPolarFrdSet(incomplete, preferences(), 'test_horn_7')[0].text)).toEqual([
+    expect(dataRows(buildPolarFrdSet(incomplete, 'test_horn_7')[0].text)).toEqual([
       ['100.000000', '0.0000'],
     ]);
   });

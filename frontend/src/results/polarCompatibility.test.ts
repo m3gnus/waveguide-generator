@@ -47,7 +47,7 @@ describe('polar value compatibility across charts and exports', () => {
       .toEqual([strictDb === null ? null : 90 + strictDb]);
     expect(renormalizeRows([row], 0)[0][1][1]).toEqual(strictDb === null ? value : strictDb - 0);
     expect(buildPolarCsv(payload).split('\n').at(-2)).toBe(`100,horizontal,30,${csvDb ?? ''}`);
-    const frd = buildPolarFrdSet(payload, { smoothing: 'none' }, 'compat')[1].text;
+    const frd = buildPolarFrdSet(payload, 'compat')[1].text;
     const data = frd.split('\n').filter((line) => line && !line.startsWith('*'));
     expect(data).toEqual(strictDb === null ? [] : [`100.000000\t${strictDb.toFixed(4)}`]);
   });
@@ -59,7 +59,7 @@ describe('polar value compatibility across charts and exports', () => {
     } as ResultPayload;
     expect({
       csv: buildPolarCsv(payload),
-      frd: buildPolarFrdSet(payload, { smoothing: 'none' }, 'compat'),
+      frd: buildPolarFrdSet(payload, 'compat'),
     }).toMatchSnapshot();
   });
 });

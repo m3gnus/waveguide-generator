@@ -8,7 +8,7 @@ exports[`FRD builders > keeps exact decimal bytes for large levels, rounding bou
 * Observation distance: unavailable
 * Observation origin: unavailable
 * Normalization: absolute SPL re 20 µPa; level normalization none
-* Smoothing: none
+* Smoothing: none (FRD files are always unsmoothed; smooth in the receiving tool)
 * Common time-of-flight not removed: directivity distance and/or speed-of-sound metadata is unavailable; raw phase emitted
 * Freq(Hz)	SPL(dB)	Phase(degrees)
 1.000000	1000000000000000000000.0000	0.0000
@@ -27,7 +27,7 @@ exports[`FRD builders > keeps exact decimal bytes for large levels, rounding bou
 * Observation distance: unavailable
 * Observation origin: unavailable
 * Normalization: per-frequency polar level; reference angle unavailable
-* Smoothing: none
+* Smoothing: none (FRD files are always unsmoothed; smooth in the receiving tool)
 * HornLab polar frequency response — magnitude-only; phase is not available and is intentionally omitted
 * Freq(Hz)	SPL_rel(dB)
 1.000000	1000000000000000000000.0000

@@ -30,7 +30,7 @@ exports[`polar value compatibility across charts and exports > retains exact CSV
 * Observation distance: unavailable
 * Observation origin: unavailable
 * Normalization: per-frequency polar level; reference angle unavailable
-* Smoothing: none
+* Smoothing: none (FRD files are always unsmoothed; smooth in the receiving tool)
 * HornLab polar frequency response — magnitude-only; phase is not available and is intentionally omitted
 * Freq(Hz)	SPL_rel(dB)
 100.000000	-6.0000

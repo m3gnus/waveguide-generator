@@ -1,6 +1,5 @@
 import { fixedDecimal as fixed } from './exportNumbers';
 import { samplingNotes } from './sampling';
-import type { Preferences } from '../prefs/preferences';
 import { familyOrders, isFilterFamily, type FilterFamily } from './crossoverSpec';
 import { buildOnAxisFrd } from './frd';
 import { engineeringPhaseFactor, normalizePhaseConvention, phaseSpatialSign, wrapPhaseDegrees } from './phaseConvention';
@@ -522,7 +521,6 @@ export function buildVxp(drivers: ProjectDriver[], activeSpec: ActiveProjectSpec
 /** Build one self-contained project bundle: VXP plus every referenced FRD/ZMA. */
 export function buildVituixCadProjectFiles(
   result: ResultPayload,
-  preferences: Pick<Preferences, 'smoothing'>,
   jobStem: string,
 ): VituixCadTextFile[] {
   const wrappedChannels = resultChannels(result);
@@ -552,7 +550,7 @@ export function buildVituixCadProjectFiles(
     const driver = drivers[index];
     files.push({
       filename: driver.frdFilename,
-      text: buildOnAxisFrd(result, preferences, channelId),
+      text: buildOnAxisFrd(result, channelId),
       type: 'text/plain;charset=utf-8',
     }, {
       filename: driver.zmaFilename,

@@ -2,8 +2,7 @@ import { fixedDecimal as fixed } from './exportNumbers';
 import { polarValueDb as patternDb } from './values';
 import { samplingNotes } from './sampling';
 import { ARTIFACT_CONVENTIONS, ENGINEERING_NPZ_PHASOR } from '../api/conventions';
-import type { Preferences } from '../prefs/preferences';
-import { applySmoothing, type SmoothingValue } from './smoothing';
+import type { SmoothingValue } from './smoothing';
 import {
   engineeringPhaseDegrees, phaseSpatialSign, propagationReference, type PropagationReference,
 } from './phaseConvention';
@@ -42,12 +41,11 @@ function onAxisFrequencies(result: ResultPayload): number[] {
     : result.frequencies;
 }
 
-// REW states the smoothing it applied in its own header. These files are
-// smoothed too, so they have to say so -- an unlabelled smoothed curve read as
-// raw is a quietly wrong measurement.
-function smoothingNote(smoothing: Preferences['smoothing']): string {
-  return `Smoothing: ${smoothing === 'none' ? 'none' : smoothing}`;
-}
+// FRD files feed crossover and alignment tools, which read magnitude and
+// phase as one complex response. Smoothing the magnitude beside raw phase is
+// not a response any filter could produce, so FRDs are always written
+// unsmoothed, whatever the charts show, and say so; smooth in the receiving tool.
+const SMOOTHING_NOTE = 'Smoothing: none (FRD files are always unsmoothed; smooth in the receiving tool)';
 
 /**
  * FRD phase is written in the engineering exp(+jωt) convention that REW,
@@ -141,16 +139,11 @@ function propagationNote(reference: PropagationReference | null, result: ResultP
  */
 export function buildOnAxisFrd(
   result: ResultPayload,
-  preferences: Pick<Preferences, 'smoothing'>,
   channelId?: string,
 ): string {
   result = scopeResultChannel(result, channelId);
   const frequencies = onAxisFrequencies(result);
-  const spl = applySmoothing(
-    frequencies,
-    result.spl_on_axis?.spl ?? [],
-    preferences.smoothing,
-  );
+  const spl = result.spl_on_axis?.spl ?? [];
   const phase = result.spl_on_axis?.phase_degrees ?? [];
   // spl_on_axis is selected from the same directivity pressure field (first
   // plane, nearest zero-degree sample), so it has the same propagation reference.
@@ -175,7 +168,7 @@ export function buildOnAxisFrd(
     ...phaseConventionNotes(spatialSign),
     ...observationNotes(result),
     normalizationNote(result, false),
-    smoothingNote(preferences.smoothing),
+    SMOOTHING_NOTE,
     propagationNote(reference, result),
     ['Freq(Hz)', 'SPL(dB)', 'Phase(degrees)'].join(DELIMITER),
   ], rows);
@@ -238,7 +231,6 @@ function polarFilename(baseName: string, plane: PolarPlane, angle: number): stri
 /** Build one FRD file for every measured plane/angle, retaining legacy two-column output. */
 export function buildPolarFrdSet(
   result: ResultPayload,
-  preferences: Pick<Preferences, 'smoothing'>,
   jobStem: string,
   channelId?: string,
 ): PolarFrdFile[] {
@@ -257,11 +249,7 @@ export function buildPolarFrdSet(
     const phasePatterns = result.directivity_phase?.[plane];
     measuredAngles(patterns).forEach((angle) => {
       const includesPhase = hasAngle(phasePatterns, angle);
-      const magnitudes = applySmoothing(
-        frequencies,
-        valuesAtAngle(patterns, angle, frequencies.length),
-        preferences.smoothing,
-      );
+      const magnitudes = valuesAtAngle(patterns, angle, frequencies.length);
       const phases = includesPhase
         ? phaseValuesAtAngle(phasePatterns, angle, frequencies.length)
         : [];
@@ -300,7 +288,7 @@ export function buildPolarFrdSet(
           ...(includesPhase ? phaseConventionNotes(spatialSign) : []),
           ...observationNotes(result),
           normalizationNote(result, true),
-          smoothingNote(preferences.smoothing),
+          SMOOTHING_NOTE,
           ...phaseHeader,
         ], rows),
       });

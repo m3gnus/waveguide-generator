@@ -33,13 +33,13 @@ function outputs(result: ResultPayload, preferences: Preferences) {
     txt: buildSummaryText(result, preferences, now),
     polar_csv: buildPolarCsv(result),
     impedance_csv: buildImpedanceCsv(result),
-    on_axis_frd: buildOnAxisFrd(result, preferences),
-    polar_frd: buildPolarFrdSet(result, preferences, 'legacy').map(({ text }) => text).join('\n'),
+    on_axis_frd: buildOnAxisFrd(result),
+    polar_frd: buildPolarFrdSet(result, 'legacy').map(({ text }) => text).join('\n'),
     zma: buildZma(result),
     derived_csv: buildDerivedAcousticsCsv(result),
     derived_json: buildDerivedAcousticsJson(result),
     html: buildRunReportHtml(result, { title: 'Legacy', generatedAt: now }),
-    vxp: buildVituixCadProjectFiles(result, preferences, 'legacy').map(({ text }) => text).join('\n'),
+    vxp: buildVituixCadProjectFiles(result, 'legacy').map(({ text }) => text).join('\n'),
   };
 }
 

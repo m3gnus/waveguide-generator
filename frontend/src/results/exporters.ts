@@ -126,13 +126,13 @@ function smoothedSeries(result: ResultPayload, preferences: Preferences) {
   const diFrequencies = result.di?.frequencies?.length ? result.di.frequencies : frequencies;
   return {
     frequencies,
-    spl: applySmoothing(frequencies, result.spl_on_axis?.spl ?? [], preferences.smoothing),
+    spl: applySmoothing(frequencies, result.spl_on_axis?.spl ?? [], preferences.smoothing, 'level_db'),
     phase: result.spl_on_axis?.phase_degrees ?? [],
     diFrequencies,
-    di: applySmoothing(diFrequencies, flatDi(result), preferences.smoothing),
+    di: applySmoothing(diFrequencies, flatDi(result), preferences.smoothing, 'level_db'),
     impedanceFrequencies,
-    impedanceReal: applySmoothing(impedanceFrequencies, result.impedance?.real ?? [], preferences.smoothing),
-    impedanceImaginary: applySmoothing(impedanceFrequencies, result.impedance?.imaginary ?? [], preferences.smoothing),
+    impedanceReal: applySmoothing(impedanceFrequencies, result.impedance?.real ?? [], preferences.smoothing, 'linear'),
+    impedanceImaginary: applySmoothing(impedanceFrequencies, result.impedance?.imaginary ?? [], preferences.smoothing, 'linear'),
   };
 }
 
@@ -812,7 +812,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     if (format === 'on_axis_frd') {
       const result = requireResult(context);
       const filename = `${baseName}.frd`;
-      saveText(buildOnAxisFrd(result, context.preferences), filename, 'text/plain;charset=utf-8');
+      saveText(buildOnAxisFrd(result), filename, 'text/plain;charset=utf-8');
       return [filename];
     }
     if (format === 'polar_frd') {
@@ -822,7 +822,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
         ? [context.channelId]
         : channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
       const files = channelIds.flatMap((channelId) => (
-        buildPolarFrdSet(context.result!, context.preferences, context.jobStem, channelId)
+        buildPolarFrdSet(context.result!, context.jobStem, channelId)
       ));
       if (!files.length) throw new Error('This run has no directivity data for a polar FRD set.');
       if (context.destination !== 'workspace') return writeManualPolarFrd(context, files);
@@ -833,7 +833,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
       if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
       // Build every member before saving the first. A malformed project must not
       // leave orphaned support files in Downloads or in the automatic staging set.
-      const files = buildVituixCadProjectFiles(context.result, context.preferences, context.jobStem);
+      const files = buildVituixCadProjectFiles(context.result, context.jobStem);
       files.forEach(({ text, filename, type }) => saveText(text, filename, type));
       return files.map(({ filename }) => filename);
     }

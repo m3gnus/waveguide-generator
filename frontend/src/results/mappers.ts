@@ -95,7 +95,7 @@ function frequencyAxis(result: ResultData, nested?: number[]): number[] {
 export function splSeries(items: NamedResult[], smoothing: SmoothingMode = 'none') {
   return items.map(({ label, result }) => {
     const frequencies = frequencyAxis(result, result.spl_on_axis?.frequencies);
-    const spl = applySmoothing(frequencies, result.spl_on_axis?.spl ?? [], smoothing);
+    const spl = applySmoothing(frequencies, result.spl_on_axis?.spl ?? [], smoothing, 'level_db');
     return {
       name: label + (result.frequency_status?.includes('interpolated') ? ' · ○ interpolated' : ''),
       type: 'line' as const,
@@ -177,8 +177,8 @@ export function polarSeries(result: ResultData, frequencyIndex: number, plane: '
 
 export function impedanceSeries(result: ResultData, mode: 'cartesian' | 'polar', smoothing: SmoothingMode = 'none') {
   const frequencies = frequencyAxis(result, result.impedance?.frequencies);
-  const real = applySmoothing(frequencies, result.impedance?.real ?? [], smoothing);
-  const imaginary = applySmoothing(frequencies, result.impedance?.imaginary ?? [], smoothing);
+  const real = applySmoothing(frequencies, result.impedance?.real ?? [], smoothing, 'linear');
+  const imaginary = applySmoothing(frequencies, result.impedance?.imaginary ?? [], smoothing, 'linear');
   if (mode === 'cartesian') {
     return [
       { name: 'Re', type: 'line' as const, showSymbol: false, data: frequencies.map((f, i) => [f, real[i] ?? null]) },
@@ -196,7 +196,7 @@ export function directivityIndexSeries(result: ResultPayload, smoothing: Smoothi
   const raw = result.di?.di;
   const entries = Array.isArray(raw) ? [['DI', raw] as const] : Object.entries(raw ?? {});
   return entries.filter(([, values]) => values.some(finite)).map(([name, values]) => {
-    const smoothed = applySmoothing(frequencies, values, smoothing);
+    const smoothed = applySmoothing(frequencies, values, smoothing, 'level_db');
     return {
       name,
       type: 'line' as const,
@@ -250,7 +250,7 @@ export function powerResponseSeries(result: ResultPayload, smoothing: SmoothingM
     return finite(onAxis) && finite(directivityIndex) ? onAxis - directivityIndex : null;
   });
   if (!raw.some(finite)) return [];
-  const values = applySmoothing(frequencies, raw, smoothing);
+  const values = applySmoothing(frequencies, raw, smoothing, 'level_db');
   return [{
     name: powerResponseMethodCaption(result),
     type: 'line' as const,
