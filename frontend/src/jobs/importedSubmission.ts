@@ -263,8 +263,15 @@ export function importedSubmissionNotices(
   // ordinary prescribed-source solve; saying "no power or current" about every channel would be
   // noise on the majority of runs, and noise is what gets a notice ignored on
   // the run where it matters.
-  if (!undriven.length || !driven) return [];
-  const notices: string[] = [];
+  // hornlab-sim assumes Qms = 5 for a driver with neither Qms nor Rms. The
+  // solve is still worth running, but its damping is invented, so say so.
+  const notices: string[] = state.driveChannels.flatMap((channel) => {
+    const wire = channelAcceptsDriver(channel) ? channelDriverWire(state.channelDrivers[channel.id]) : undefined;
+    if (!wire || wire.qms !== undefined || wire.rms_kg_per_s !== undefined) return [];
+    const name = typeof wire.label === 'string' && wire.label ? wire.label : `The driver on ${label(channel.id)}`;
+    return [`${name} gives no Qms or Rms; Qms = 5 was assumed. Add Qms from the datasheet for accurate damping.`];
+  });
+  if (!undriven.length || !driven) return notices;
   const undrivenLabels = [...new Set(undriven.map(label))];
   notices.push(
     `${list(undrivenLabels)} ${undrivenLabels.length === 1 ? 'solves' : 'solve'} unit-driven: `

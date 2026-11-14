@@ -292,7 +292,7 @@ describe('an unfinished driver is refused, not dropped', () => {
 describe('an undriven channel is announced, not refused', () => {
   beforeEach(() => { resetCadReturnStore(); resetSolveOptionsStore(); });
 
-  const COMPLETE = { sd_cm2: 552, bl_t_m: 18, re_ohm: 6.8, mms_g: 91.3, fs_hz: 30 };
+  const COMPLETE = { sd_cm2: 552, bl_t_m: 18, re_ohm: 6.8, mms_g: 91.3, fs_hz: 30, qms: 4.2 };
 
   const ready = (drivers: unknown, combineEnabled: boolean | null = null) => useCadReturnStore.setState({
     selectedBundle: bundle,
@@ -351,6 +351,21 @@ describe('an undriven channel is announced, not refused', () => {
       'drive-hf': { fields: COMPLETE, preset: null },
     }, true);
     expect(importedSubmissionNotices()).toEqual([]);
+  });
+
+  it('says when a driver with no Qms or Rms is solved with Qms = 5', () => {
+    const { qms: _qms, ...noDamping } = COMPLETE;
+    ready({
+      'drive-lf': { fields: noDamping, preset: { label: '18DS100', values: noDamping } },
+      'drive-mf': { fields: noDamping, preset: null },
+      'drive-hf': { fields: { ...noDamping, rms_kg_per_s: 2.1 }, preset: null },
+    });
+
+    expect(importedSubmissionBlocker()).toBeNull();
+    expect(importedSubmissionNotices(undefined, (id) => `Channel ${id}`)).toEqual([
+      'The driver on Channel drive-mf gives no Qms or Rms; Qms = 5 was assumed. Add Qms from the datasheet for accurate damping.',
+      '18DS100 gives no Qms or Rms; Qms = 5 was assumed. Add Qms from the datasheet for accurate damping.',
+    ]);
   });
 
   it('is a notice, not a second chance to be incomplete', () => {
