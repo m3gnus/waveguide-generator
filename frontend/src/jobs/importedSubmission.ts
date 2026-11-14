@@ -265,11 +265,22 @@ export function importedSubmissionNotices(
   // the run where it matters.
   // hornlab-sim assumes Qms = 5 for a driver with neither Qms nor Rms. The
   // solve is still worth running, but its damping is invented, so say so.
-  const notices: string[] = state.driveChannels.flatMap((channel) => {
+  // One notice per driver, naming its channels once: the same library driver
+  // on three channels is one missing datasheet value, not three.
+  const undamped = new Map<string, string[]>();
+  state.driveChannels.forEach((channel) => {
     const wire = channelAcceptsDriver(channel) ? channelDriverWire(state.channelDrivers[channel.id]) : undefined;
-    if (!wire || wire.qms !== undefined || wire.rms_kg_per_s !== undefined) return [];
-    const name = typeof wire.label === 'string' && wire.label ? wire.label : `The driver on ${label(channel.id)}`;
-    return [`${name} gives no Qms or Rms; Qms = 5 was assumed. Add Qms from the datasheet for accurate damping.`];
+    if (!wire || wire.qms !== undefined || wire.rms_kg_per_s !== undefined) return;
+    const key = typeof wire.label === 'string' ? wire.label : '';
+    const channels = undamped.get(key) ?? [];
+    if (!channels.includes(label(channel.id))) channels.push(label(channel.id));
+    undamped.set(key, channels);
+  });
+  const notices: string[] = [...undamped].map(([driver, channels]) => {
+    const subject = driver
+      ? `${driver} (${channels.join(', ')}) gives`
+      : `The ${channels.length === 1 ? 'driver' : 'drivers'} on ${list(channels)} ${channels.length === 1 ? 'gives' : 'give'}`;
+    return `${subject} no Qms or Rms; Qms = 5 was assumed. Add Qms from the datasheet for accurate damping.`;
   });
   if (!undriven.length || !driven) return notices;
   const undrivenLabels = [...new Set(undriven.map(label))];

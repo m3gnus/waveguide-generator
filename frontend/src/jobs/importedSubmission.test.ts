@@ -353,19 +353,33 @@ describe('an undriven channel is announced, not refused', () => {
     expect(importedSubmissionNotices()).toEqual([]);
   });
 
-  it('says when a driver with no Qms or Rms is solved with Qms = 5', () => {
+  it('says once per driver when one with no Qms or Rms is solved with Qms = 5', () => {
     const { qms: _qms, ...noDamping } = COMPLETE;
+    const preset = { label: '18DS100', values: noDamping };
     ready({
-      'drive-lf': { fields: noDamping, preset: { label: '18DS100', values: noDamping } },
-      'drive-mf': { fields: noDamping, preset: null },
-      'drive-hf': { fields: { ...noDamping, rms_kg_per_s: 2.1 }, preset: null },
+      'drive-lf': { fields: noDamping, preset },
+      'drive-mf': { fields: noDamping, preset },
+      'drive-hf': { fields: noDamping, preset: null },
     });
 
     expect(importedSubmissionBlocker()).toBeNull();
-    expect(importedSubmissionNotices(undefined, (id) => `Channel ${id}`)).toEqual([
-      'The driver on Channel drive-mf gives no Qms or Rms; Qms = 5 was assumed. Add Qms from the datasheet for accurate damping.',
-      '18DS100 gives no Qms or Rms; Qms = 5 was assumed. Add Qms from the datasheet for accurate damping.',
+    const notices = importedSubmissionNotices(undefined, (id) => id.replace('drive-', '').toUpperCase());
+    expect(notices).toEqual([
+      'The driver on HF gives no Qms or Rms; Qms = 5 was assumed. Add Qms from the datasheet for accurate damping.',
+      '18DS100 (MF, LF) gives no Qms or Rms; Qms = 5 was assumed. Add Qms from the datasheet for accurate damping.',
     ]);
+    // The panels key their rows by text, so each line must be unique.
+    expect(new Set(notices).size).toBe(notices.length);
+  });
+
+  it('says nothing about damping when a driver gives Rms instead of Qms', () => {
+    const { qms: _qms, ...noDamping } = COMPLETE;
+    ready({
+      'drive-lf': { fields: { ...noDamping, rms_kg_per_s: 2.1 }, preset: null },
+      'drive-mf': { fields: COMPLETE, preset: null },
+      'drive-hf': { fields: COMPLETE, preset: null },
+    });
+    expect(importedSubmissionNotices()).toEqual([]);
   });
 
   it('is a notice, not a second chance to be incomplete', () => {
