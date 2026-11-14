@@ -3,7 +3,7 @@ import { samplingNotes } from './sampling';
 import type { Preferences } from '../prefs/preferences';
 import { familyOrders, isFilterFamily, type FilterFamily } from './crossoverSpec';
 import { buildOnAxisFrd } from './frd';
-import { normalizePhaseConvention, phaseSpatialSign, wrapPhaseDegrees } from './phaseConvention';
+import { engineeringPhaseFactor, normalizePhaseConvention, phaseSpatialSign, wrapPhaseDegrees } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
 import { ProgramFault } from '../api/httpError';
 
@@ -111,11 +111,10 @@ function impedancePhaseRule(result: ResultPayload): { factor: 1 | -1; note: stri
   if (explicit != null && String(explicit).trim()) {
     const spatialSign = phaseSpatialSign(explicit);
     if (spatialSign !== null) {
-      // Raw exp(+ikr) phasors are the conjugate of engineering +jωt; the
-      // opposite spatial sign is already engineering-oriented. This shares
-      // FRD's tag resolver so additions to the accepted vocabulary affect both.
+      // Shares FRD's tag resolver and sign flip so additions to the accepted
+      // vocabulary, or a change of convention, affect both files alike.
       return {
-        factor: -spatialSign as 1 | -1,
+        factor: engineeringPhaseFactor(spatialSign),
         note: `converted to engineering exp(+jωt) from impedance tag ${String(explicit)}`,
       };
     }

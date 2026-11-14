@@ -3,8 +3,8 @@
 exports[`FRD builders > keeps exact decimal bytes for large levels, rounding boundaries and signed zero 1`] = `
 {
   "onAxis": "* HornLab on-axis frequency response
-* Phasor convention: solver and FRD pressure use exp(-i omega t)
-* Phase sign: when present, Phase(degrees) = arg(p); engineering NPZ exp(+j omega t) phase has the opposite sign
+* Phase convention: unknown -- the result carries no supported phase convention tag
+* Phase sign: raw solver phase emitted unconverted; do not use it for crossover alignment
 * Observation distance: unavailable
 * Observation origin: unavailable
 * Normalization: absolute SPL re 20 µPa; level normalization none
@@ -24,8 +24,6 @@ exports[`FRD builders > keeps exact decimal bytes for large levels, rounding bou
     {
       "filename": "hor/decimals 0.frd",
       "text": "* Plane: horizontal, angle 0 deg
-* Phasor convention: solver and FRD pressure use exp(-i omega t)
-* Phase sign: when present, Phase(degrees) = arg(p); engineering NPZ exp(+j omega t) phase has the opposite sign
 * Observation distance: unavailable
 * Observation origin: unavailable
 * Normalization: per-frequency polar level; reference angle unavailable

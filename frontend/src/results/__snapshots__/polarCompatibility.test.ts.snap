@@ -27,8 +27,6 @@ exports[`polar value compatibility across charts and exports > retains exact CSV
     {
       "filename": "hor/compat 30.frd",
       "text": "* Plane: horizontal, angle 30 deg
-* Phasor convention: solver and FRD pressure use exp(-i omega t)
-* Phase sign: when present, Phase(degrees) = arg(p); engineering NPZ exp(+j omega t) phase has the opposite sign
 * Observation distance: unavailable
 * Observation origin: unavailable
 * Normalization: per-frequency polar level; reference angle unavailable

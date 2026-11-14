@@ -212,6 +212,89 @@ describe('VituixCAD exports', () => {
       .toEqual(['4', '4']);
   });
 
+  it('writes FRD phase so a source 100 mm behind is late, and the project delay aligns it', async () => {
+    // Two point sources on one axis, observed at 2 m: the woofer at 2.0 m and
+    // the horn's acoustic centre 100 mm further back. Raw solver pressure is
+    // exp(+ikr), so its stored angle is +360 f r / c.
+    const c = 343;
+    const frequencies = [200, 500, 1_000, 1_500, 2_000];
+    const channel = (rangeM: number): ResultPayload => electricalResult({
+      frequencies,
+      spl_on_axis: {
+        frequencies,
+        spl: frequencies.map(() => 90),
+        phase_degrees: frequencies.map((frequency) => ((360 * frequency * rangeM / c) % 360 + 540) % 360 - 180),
+      },
+      impedance: { frequencies, real: frequencies.map(() => 6), imaginary: frequencies.map(() => 0) },
+      metadata: {
+        ...electricalResult().metadata,
+        observation: { effective_distance_m: 2, sound_speed_m_per_s: c },
+      },
+    });
+    const gapS = 0.1 / c;
+    const wrapper: ResultPayload = {
+      frequencies: [],
+      channel_order: ['drive-lf', 'drive-hf', 'combined'],
+      channels: {
+        'drive-lf': channel(2),
+        'drive-hf': channel(2.1),
+        combined: {
+          frequencies: [],
+          metadata: {
+            combine: {
+              type: 'lr4_time_aligned_sum',
+              members: ['drive-lf', 'drive-hf'],
+              crossovers_hz: [1_000],
+              level_match: { gains_db: { 'drive-lf': 0, 'drive-hf': 0 } },
+              // The front (woofer) channel is delayed to meet the late horn.
+              delays_ms: { 'drive-lf': gapS * 1_000, 'drive-hf': 0 },
+            },
+          },
+        },
+      },
+    };
+    const saveText = vi.fn();
+    await runExportFormat('vxp', { result: wrapper, jobStem: 'pair', preferences: preferencesStore.getSnapshot(), saveText });
+    const saved = (name: string) => String(saveText.mock.calls.find(([, filename]) => filename === name)?.[0]);
+    const phases = (name: string) => dataRows(saved(name)).map((row) => Number(row[2]));
+    const lf = phases('pair-drive-lf.frd');
+    const hf = phases('pair-drive-hf.frd');
+
+    // After the common 2 m flight is removed the woofer is at zero phase and
+    // the horn lags by 360 f * 0.1 / c: it is behind, as built.
+    lf.forEach((phase) => expect(phase).toBeCloseTo(0, 3));
+    hf.forEach((phase, index) => {
+      const lag = ((-360 * frequencies[index] * gapS) % 360 + 540) % 360 - 180;
+      expect(phase).toBeCloseTo(lag, 3);
+    });
+
+    // VituixCAD applies Buffer dt as exp(-j omega dt) to the FRD it was given.
+    const document = new DOMParser().parseFromString(saved('pair.vxp'), 'application/xml');
+    // Each schematic row is wires, filters, a Buffer, then its Driver part.
+    const delayByModel: Record<string, number> = {};
+    let pendingDelayUs: number | null = null;
+    [...document.querySelectorAll('CROSSOVER > PART')].forEach((part) => {
+      const type = part.querySelector('Type')?.textContent;
+      if (type === 'Buffer') {
+        pendingDelayUs = Number([...part.querySelectorAll('PARAM')]
+          .find((parameter) => parameter.querySelector('Name')?.textContent === 'dt')?.querySelector('Value')?.textContent);
+      } else if (type === 'Driver') {
+        delayByModel[String(part.querySelector('Model')?.textContent)] = pendingDelayUs ?? Number.NaN;
+        pendingDelayUs = null;
+      }
+    });
+    const delaysUs = [delayByModel['drive-lf'], delayByModel['drive-hf']];
+    expect(delaysUs[0]).toBeCloseTo(gapS * 1e6, 3);
+    expect(delaysUs[1]).toBe(0);
+    const aligned = (phase: number, index: number, delayUs: number) => {
+      const shifted = phase - 360 * frequencies[index] * delayUs * 1e-6;
+      return ((shifted % 360) + 540) % 360 - 180;
+    };
+    lf.forEach((phase, index) => {
+      expect(aligned(phase, index, delaysUs[0])).toBeCloseTo(aligned(hf[index], index, delaysUs[1]), 2);
+    });
+  });
+
   it('maps the per-channel families, orders and polarity into Shape, Order and Inverted', async () => {
     const combined: ResultPayload = {
       frequencies: [],

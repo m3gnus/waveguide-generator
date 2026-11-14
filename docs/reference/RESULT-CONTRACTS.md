@@ -111,9 +111,12 @@ triangles define forward, and the configured mouth/source origin defines the ref
 point. Requested and effective distance plus sound speed are stored under
 `metadata.observation`.
 
-Stored phase is raw and wrapped. FRD export may remove common propagation delay only
-when distance, sound speed, and a supported spatial-phase convention are all present;
-otherwise it emits raw phase and says so in the file header. Charts receive the same
+Stored phase is raw and wrapped. FRD export writes engineering `exp(+jωt)` phase (a later
+arrival is a phase lag), converted through `frontend/src/results/phaseConvention.ts`, the
+same owner the ZMA uses, so FRDs agree with the engineering filters and positive delays of
+the VituixCAD project. It removes the common propagation delay only when distance, sound
+speed, and a supported spatial-phase convention are all present. Without a supported
+convention tag it emits raw phase unconverted and says so in the file header. Charts receive the same
 reference metadata. Smoothing applies to magnitude/DI/impedance series, never to raw
 phase.
 

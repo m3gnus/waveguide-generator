@@ -31,6 +31,24 @@ export function wrapPhaseDegrees(value: number): number {
   return positive > 180 ? positive - 360 : positive;
 }
 
+/**
+ * The factor that turns a raw phase angle into engineering exp(+jωt) phase.
+ *
+ * Raw exp(+ikr) phasors are the conjugate of engineering +jωt (the solver runs
+ * exp(-iωt)); the opposite spatial sign is already engineering-oriented. This
+ * is the one place the browser makes that flip, so every file written for a
+ * crossover tool (FRD and ZMA) agrees with the engineering filters and
+ * positive delays in the VituixCAD project.
+ */
+export function engineeringPhaseFactor(spatialSign: 1 | -1): 1 | -1 {
+  return spatialSign === 1 ? -1 : 1;
+}
+
+/** Engineering exp(+jωt) phase, wrapped, of a raw phase in the given spatial convention. */
+export function engineeringPhaseDegrees(rawDegrees: number, spatialSign: 1 | -1): number {
+  return wrapPhaseDegrees(engineeringPhaseFactor(spatialSign) * rawDegrees);
+}
+
 export interface PropagationReference {
   distanceM: number;
   speedOfSoundMps: number;

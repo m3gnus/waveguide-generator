@@ -4,7 +4,9 @@ import { samplingNotes } from './sampling';
 import { ARTIFACT_CONVENTIONS, ENGINEERING_NPZ_PHASOR } from '../api/conventions';
 import type { Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
-import { propagationReference, wrapPhaseDegrees, type PropagationReference } from './phaseConvention';
+import {
+  engineeringPhaseDegrees, phaseSpatialSign, propagationReference, type PropagationReference,
+} from './phaseConvention';
 import { resultChannelFileSuffix, scopeResultChannel, type ResultPayload } from './types';
 
 export interface PolarFrdFile {
@@ -47,10 +49,24 @@ function smoothingNote(smoothing: Preferences['smoothing']): string {
   return `Smoothing: ${smoothing === 'none' ? 'none' : smoothing}`;
 }
 
-const PHASE_CONVENTION_NOTES = [
-  `Phasor convention: solver and FRD pressure use ${ARTIFACT_CONVENTIONS.phasor}`,
-  `Phase sign: when present, Phase(degrees) = arg(p); engineering NPZ ${ENGINEERING_NPZ_PHASOR} phase has the opposite sign`,
-] as const;
+/**
+ * FRD phase is written in the engineering exp(+jωt) convention that REW,
+ * VituixCAD and every crossover tool assume: a later arrival is a phase lag
+ * (falling phase). The solver's own phasor is the conjugate, so the raw angle
+ * is flipped through the shared convention owner, the same one the ZMA uses.
+ */
+function phaseConventionNotes(spatialSign: 1 | -1 | null): string[] {
+  if (spatialSign === null) {
+    return [
+      'Phase convention: unknown -- the result carries no supported phase convention tag',
+      'Phase sign: raw solver phase emitted unconverted; do not use it for crossover alignment',
+    ];
+  }
+  return [
+    `Phasor convention: engineering ${ENGINEERING_NPZ_PHASOR}; converted from the solver's ${ARTIFACT_CONVENTIONS.phasor}`,
+    'Phase sign: a later arrival is a phase lag (falling phase), as REW and VituixCAD expect',
+  ];
+}
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -94,20 +110,21 @@ function fileText(header: string[], rows: string[]): string {
 function exportPhaseDegrees(
   phaseDegrees: number,
   frequency: number,
+  spatialSign: 1 | -1 | null,
   reference: PropagationReference | null,
 ): number {
-  if (!reference) return phaseDegrees;
-  // Mirrors the Fusion addin's VituixCAD export. Reconcile these two
-  // implementations when the addin and web exporter share a contract module.
-  return wrapPhaseDegrees(
-    phaseDegrees - reference.spatialSign * (360 * frequency * reference.distanceM) / reference.speedOfSoundMps,
-  );
+  if (spatialSign === null) return phaseDegrees;
+  // Remove the common time of flight in the raw convention (the same
+  // de-embedding the phase chart uses), then convert to engineering phase.
+  const deEmbedded = reference
+    ? phaseDegrees - reference.spatialSign * (360 * frequency * reference.distanceM) / reference.speedOfSoundMps
+    : phaseDegrees;
+  return engineeringPhaseDegrees(deEmbedded, spatialSign);
 }
 
 function propagationNote(reference: PropagationReference | null, result: ResultPayload): string {
   if (reference) {
-    const operator = reference.spatialSign === 1 ? '-' : '+';
-    return `Common time-of-flight removed: phase_deg ${operator} 360 * f * d / c; d=${reference.distanceM} m, c=${reference.speedOfSoundMps} m/s`;
+    return `Common time-of-flight removed: engineering phase_deg + 360 * f * d / c; d=${reference.distanceM} m, c=${reference.speedOfSoundMps} m/s`;
   }
   const metadata = result.metadata?.observation;
   const distanceM = metadata?.effective_distance_m ?? metadata?.requested_distance_m;
@@ -138,6 +155,7 @@ export function buildOnAxisFrd(
   // spl_on_axis is selected from the same directivity pressure field (first
   // plane, nearest zero-degree sample), so it has the same propagation reference.
   const reference = propagationReference(result);
+  const spatialSign = phaseSpatialSign(result.metadata?.phase_time_convention);
   const rows: string[] = [];
 
   frequencies.forEach((frequency, index) => {
@@ -147,14 +165,14 @@ export function buildOnAxisFrd(
     rows.push([
       fixed(frequency, FREQUENCY_PRECISION),
       fixed(magnitude, LEVEL_PRECISION),
-      fixed(exportPhaseDegrees(phaseDegrees, frequency, reference), PHASE_PRECISION),
+      fixed(exportPhaseDegrees(phaseDegrees, frequency, spatialSign, reference), PHASE_PRECISION),
     ].join(DELIMITER));
   });
 
   return fileText([
     'HornLab on-axis frequency response',
     ...samplingNotes(result),
-    ...PHASE_CONVENTION_NOTES,
+    ...phaseConventionNotes(spatialSign),
     ...observationNotes(result),
     normalizationNote(result, false),
     smoothingNote(preferences.smoothing),
@@ -231,6 +249,7 @@ export function buildPolarFrdSet(
   const frequencies = result.frequencies;
   const baseName = `${jobStem}${suffix}`;
   const reference = propagationReference(result);
+  const spatialSign = phaseSpatialSign(result.metadata?.phase_time_convention);
   const files: PolarFrdFile[] = [];
 
   (['horizontal', 'vertical'] as const).forEach((plane) => {
@@ -257,7 +276,7 @@ export function buildPolarFrdSet(
         if (includesPhase) {
           const phaseDegrees = phases[index];
           if (!finite(phaseDegrees)) return;
-          columns.push(fixed(exportPhaseDegrees(phaseDegrees, frequency, reference), PHASE_PRECISION));
+          columns.push(fixed(exportPhaseDegrees(phaseDegrees, frequency, spatialSign, reference), PHASE_PRECISION));
         }
         rows.push(columns.join(DELIMITER));
       });
@@ -278,7 +297,7 @@ export function buildPolarFrdSet(
           ...(includesPhase ? ['HornLab polar frequency response'] : []),
           `Plane: ${plane}, angle ${angle} deg`,
           ...samplingNotes(result),
-          ...PHASE_CONVENTION_NOTES,
+          ...(includesPhase ? phaseConventionNotes(spatialSign) : []),
           ...observationNotes(result),
           normalizationNote(result, true),
           smoothingNote(preferences.smoothing),
