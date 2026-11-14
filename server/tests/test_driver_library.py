@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from server.drivers.api import create_drivers_router, mount_drivers
-from server.drivers.csv_loader import parse_numeric
+from server.drivers.csv_loader import NumberFormatProblem, parse_numeric
 from server.drivers.library import DriverLibrary
 from server.drivers.paths import (
     DRIVER_LIBRARY_DIR_ENV,
@@ -58,6 +58,170 @@ def test_parse_numeric_tolerates_units_and_blanks(raw: str | None, expected: flo
 def test_parse_numeric_never_invents_a_value_for_garbage() -> None:
     assert parse_numeric("n/a") is None
     assert parse_numeric("TBD") is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    # Each of these used to read as the number before the separator: 0, 5, 1.
+    ["0,9", "5,1", "1,200", "1.200,5", "8/16", "5-6", "<1", "approx 8", "8 16"],
+)
+def test_parse_numeric_refuses_a_number_it_would_have_to_guess(raw: str) -> None:
+    with pytest.raises(NumberFormatProblem):
+        parse_numeric(raw)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("1 200", 1200.0), ("1 200", 1200.0), ("1 200,5", 1200.5), ("12 345 W", 12345.0)],
+)
+def test_parse_numeric_reads_space_grouping_when_it_is_unambiguous(
+    raw: str, expected: float
+) -> None:
+    assert parse_numeric(raw, decimal_comma=True) == expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("0,9", 0.9), ("5,1 Ohm", 5.1), ("0.125", 0.125), ("8", 8.0), ("-,5", -0.5)],
+)
+def test_parse_numeric_reads_a_decimal_comma_where_the_file_allows_it(
+    raw: str, expected: float
+) -> None:
+    assert parse_numeric(raw, decimal_comma=True) == expected
+
+
+@pytest.mark.parametrize("raw", ["1.200", "1,2,3", "1.200,5"])
+def test_parse_numeric_refuses_grouping_points_in_a_decimal_comma_file(raw: str) -> None:
+    with pytest.raises(NumberFormatProblem):
+        parse_numeric(raw, decimal_comma=True)
+
+
+def _write_raw(folder: Path, name: str, text: str) -> Path:
+    path = folder / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _only_file(library: DriverLibrary) -> dict[str, object]:
+    files = library.info()["files"]
+    assert len(files) == 1
+    return files[0]  # type: ignore[return-value]
+
+
+def test_a_quoted_decimal_comma_in_a_comma_file_refuses_the_row_and_says_where(
+    tmp_path: Path,
+) -> None:
+    _write_raw(
+        tmp_path,
+        "quoted.csv",
+        'Brand,Model,Re_ohm,Le_mH\nAcme,Good,5.1,0.9\nAcme,Comma,"5,1","0,9"\n',
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+    hits = library.search(q="", kind="all", z=None, limit=100)
+    assert {hit["model"] for hit in hits} == {"Good"}
+    problems = _only_file(library)["problems"]
+    assert len(problems) == 1
+    message = problems[0]
+    assert "quoted.csv" in message and "row 3" in message
+    assert "Re_ohm" in message and "5,1" in message
+    assert "point" in message  # how to fix it
+
+
+def test_a_semicolon_file_with_decimal_commas_is_read(tmp_path: Path) -> None:
+    """Excel's CSV in Norwegian, German and most European locales."""
+
+    _write_raw(
+        tmp_path,
+        "europe.csv",
+        "Brand;Model;Z_ohm;Re_ohm;Le_mH;Sd_cm2;Bl_Tm;Mms_g;Fs_Hz;Power_W\n"
+        "Acme;Euro12;8;5,1;0,9;522;18,5;65,2;42;1 200\n",
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+    hits = library.search(q="euro12", kind="all", z=None, limit=5)
+    assert len(hits) == 1
+    detail = library.get(hits[0]["id"])
+    assert detail is not None
+    assert detail["fields"]["re_ohm"] == 5.1
+    assert detail["fields"]["le_mh"] == 0.9
+    assert detail["fields"]["bl_t_m"] == 18.5
+    assert detail["fields"]["power_w"] == 1200.0
+    assert detail["completeness"] == "full"
+    assert "problems" not in _only_file(library)
+
+
+def test_a_tab_separated_file_is_read(tmp_path: Path) -> None:
+    _write_raw(tmp_path, "tabs.csv", "Brand\tModel\tSd_cm2\nAcme\tTab1\t300\n")
+    library = DriverLibrary(tmp_path, bundled=None)
+    hits = library.search(q="", kind="all", z=None, limit=5)
+    assert [hit["model"] for hit in hits] == ["Tab1"]
+
+
+def test_a_file_without_brand_and_model_columns_says_so(tmp_path: Path) -> None:
+    _write_raw(tmp_path, "nonames.csv", "Maker|Type|Sd\nAcme|X|300\n")
+    library = DriverLibrary(tmp_path, bundled=None)
+    assert library.search(q="", kind="all", z=None, limit=5) == []
+    problems = _only_file(library)["problems"]
+    assert len(problems) == 1
+    assert "nonames.csv" in problems[0] and "Brand" in problems[0] and "Model" in problems[0]
+
+
+def test_many_refused_rows_are_summarised_not_listed_one_by_one(tmp_path: Path) -> None:
+    rows = "".join(f'Acme,M{index},"0,{index}"\n' for index in range(1, 21))
+    _write_raw(tmp_path, "many.csv", "Brand,Model,Le_mH\nAcme,Fine,0.5\n" + rows)
+    library = DriverLibrary(tmp_path, bundled=None)
+    assert [hit["model"] for hit in library.search(q="", limit=100)] == ["Fine"]
+    problems = _only_file(library)["problems"]
+    assert len(problems) <= 6
+    assert "15 more rows" in problems[-1]
+
+
+def _legacy_parse_numeric(raw: str | None) -> float | None:
+    """The reader before decimal commas were refused, kept as the reference."""
+
+    import re
+
+    if raw is None or not raw.strip():
+        return None
+    match = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?").search(raw.strip())
+    return None if match is None else float(match.group(0))
+
+
+def test_the_shipped_library_parses_exactly_as_before() -> None:
+    """Every number in the shipped file reads to the same value it always has."""
+
+    import csv
+
+    from server.drivers.csv_loader import ALIASES, TEXT_FIELDS
+
+    folder = bundled_library_dir()
+    assert folder is not None
+    numeric_headers = {
+        alias.lower(): name for name, aliases in ALIASES.items() if name not in TEXT_FIELDS
+        for alias in aliases
+    }
+    library = DriverLibrary(folder / "does-not-exist", bundled=folder)
+    info = library.rescan()
+    assert "problems" not in info["files"][0]
+    by_key: dict[tuple[str, str, float | None], list[dict[str, object]]] = {}
+    for record in library._records:
+        for variant in record.variants:
+            key = (record.brand.casefold(), record.model.casefold(), variant.z_ohm)
+            by_key.setdefault(key, []).append(variant.fields)
+    checked = 0
+    with (folder / "hornlab-drivers.csv").open(encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            z = _legacy_parse_numeric(row["Z_ohm"])
+            key = (row["Brand"].strip().casefold(), row["Model"].strip().casefold(), z)
+            fields = by_key[key].pop(0)
+            for header, raw in row.items():
+                canonical = numeric_headers.get(header.lower())
+                if canonical is None:
+                    continue
+                expected = _legacy_parse_numeric(raw)
+                assert fields[canonical] == expected, (row["Brand"], row["Model"], header, raw)
+                checked += 1
+    assert not any(by_key.values())
+    assert checked > 7087 * 20
 
 
 # --- alias columns, blanks, extras ------------------------------------------

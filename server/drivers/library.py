@@ -18,6 +18,9 @@ import re
 
 from server.drivers.paths import bundled_library_dir
 from server.drivers.csv_loader import (
+    ALIASES,
+    CellProblem,
+    RowShapeProblem,
     build_display,
     build_source,
     build_spec,
@@ -220,6 +223,30 @@ def _user_rows_win(entries: list[_Row]) -> list[_Row]:
     return [row for row in entries if not row.bundled or row.fields.get("z_ohm") not in owned]
 
 
+#: The separators a spreadsheet writes CSV with: comma, and semicolon or tab
+#: where the comma is the decimal mark (Excel in most European locales).
+_DELIMITERS = (",", ";", "\t")
+_BRAND_HEADERS = {alias.lower() for alias in ALIASES["brand"]}
+_MODEL_HEADERS = {alias.lower() for alias in ALIASES["model"]}
+#: Refused rows listed one by one per file; the rest are counted.
+_LISTED_ROW_PROBLEMS = 5
+
+
+def _delimiter(header_line: str) -> str:
+    """The separator that splits the header into the most columns.
+
+    A tie goes to the comma, so every file this library read before semicolons
+    and tabs were understood still reads the same way.
+    """
+
+    best, best_columns = ",", 0
+    for candidate in _DELIMITERS:
+        columns = len(next(csv.reader([header_line], delimiter=candidate), []))
+        if columns > best_columns:
+            best, best_columns = candidate, columns
+    return best
+
+
 def _build_index(
     paths: list[Path], bundled: Path | None = None
 ) -> tuple[list[DriverRecord], list[dict[str, object]]]:
@@ -234,18 +261,51 @@ def _build_index(
         # must not leave its first half in the index looking like the whole.
         read: list[tuple[tuple[str, str], _Row, tuple[str, str]]] = []
         problems: list[str] = []
+        refused: list[str] = []
         try:
             with path.open("r", encoding="utf-8-sig", newline="") as handle:
-                reader = csv.DictReader(handle)
+                delimiter = _delimiter(handle.readline())
+                handle.seek(0)
+                # Only where a comma cannot be the column separator can it be a
+                # decimal mark; in a comma-separated file it is a guess.
+                decimal_comma = delimiter != ","
+                reader = csv.DictReader(handle, delimiter=delimiter)
+                headers = {(name or "").strip().lower() for name in reader.fieldnames or ()}
+                if not headers & _BRAND_HEADERS or not headers & _MODEL_HEADERS:
+                    problems.append(
+                        f"{path.name} has no Brand and Model columns, so none of its rows can "
+                        "be listed. Its first row must name the columns, including Brand and "
+                        "Model, separated by commas, semicolons or tabs."
+                    )
                 for raw_row in reader:
                     rows += 1
-                    fields, extras = parse_row(raw_row)
+                    try:
+                        fields, extras = parse_row(raw_row, decimal_comma=decimal_comma)
+                    except CellProblem as exc:
+                        refused.append(
+                            f"{path.name}, row {reader.line_num}, column {exc.column}: "
+                            f"\u201c{exc.value}\u201d was not read because {exc.reason} "
+                            "The row was skipped."
+                        )
+                        continue
+                    except RowShapeProblem as exc:
+                        refused.append(
+                            f"{path.name}, row {reader.line_num} was skipped because {exc}. "
+                            "Check for a missing or extra separator in that row."
+                        )
+                        continue
                     brand = fields.get("brand")
                     model = fields.get("model")
                     if not isinstance(brand, str) or not isinstance(model, str):
                         continue
                     key = (brand.casefold(), model.casefold())
                     read.append((key, _Row(path.name, is_bundled, fields, extras), (brand, model)))
+            problems.extend(refused[:_LISTED_ROW_PROBLEMS])
+            if len(refused) > _LISTED_ROW_PROBLEMS:
+                problems.append(
+                    f"{path.name}: {len(refused) - _LISTED_ROW_PROBLEMS} more rows were skipped "
+                    "for reasons like the ones above."
+                )
         except UnicodeDecodeError as exc:
             rows, read = 0, []
             problems.append(

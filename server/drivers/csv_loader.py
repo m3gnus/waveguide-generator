@@ -99,37 +99,150 @@ _ALIAS_LOOKUP: dict[str, str] = {
     for alias in aliases
 }
 
-_NUMERIC_PREFIX = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
+#: A leading number: digits and the separators a spreadsheet may put between
+#: them, then an optional exponent. Which separators mean what is decided
+#: afterwards, in ``_read_number``, because that depends on the file.
+_NUMBER_START = re.compile(
+    r"(?P<sign>[-+]?)(?P<body>[0-9.,][0-9.,\u00a0\u2009\u202f ]*)(?P<exp>[eE][-+]?[0-9]+)?"
+)
+#: Spaces a spreadsheet uses to group thousands: plain, no-break, thin and
+#: narrow no-break.
+_GROUP_SPACES = " \u00a0\u2009\u202f"
+_SPACE_GROUPED = re.compile(r"[0-9]{1,3}(?:[" + _GROUP_SPACES + r"][0-9]{3})+")
+#: What may follow a number in the same cell: a unit, which starts with a
+#: letter or a unit sign -- ``8 Ohm``, ``1.2 mH``, ``350 cm²``, ``92 dB``.
+_UNIT_START = re.compile(r"[^\W\d_]|[%°Ω\u00b5\u03bc\"']", re.UNICODE)
+
+_FIX_POINT = "Write it with a point as the decimal mark and no thousands separator, e.g. 0.9 or 1200."
 
 
-def parse_numeric(raw: str | None) -> float | None:
-    """Extract a leading number from a cell like ``8``, ``8.0`` or ``8 Ohm``.
+class NumberFormatProblem(ValueError):
+    """A cell holds a number that cannot be read without guessing.
 
-    A blank cell, or one with no recognisable number, reads as missing --
-    never as zero and never as a guess.
+    The message says why and how to write it instead; the caller adds where.
+    """
+
+
+def _read_number(body: str, *, decimal_comma: bool) -> str:
+    """``body`` as text ``float()`` accepts, or a refusal saying why."""
+
+    integer, mark, fraction = body, "", ""
+    if decimal_comma:
+        if "," in body and "." in body:
+            raise NumberFormatProblem(
+                "it uses both a comma and a point, so one of them must be a thousands "
+                "separator and the value is ambiguous. Write it with a comma as the decimal "
+                "mark and no thousands separator, e.g. 1200,5."
+            )
+        if body.count(",") > 1 or body.count(".") > 1:
+            raise NumberFormatProblem(
+                "it has more than one decimal mark. Write it with one comma as the decimal "
+                "mark and no thousands separator, e.g. 1200,5."
+            )
+        if "," in body:
+            integer, mark, fraction = body.partition(",")
+        elif "." in body:
+            integer, mark, fraction = body.partition(".")
+            if integer.strip(_GROUP_SPACES).lstrip("0") and len(fraction) == 3:
+                # 1.200 is 1200 in the locales that write decimal commas.
+                raise NumberFormatProblem(
+                    "in a file that uses decimal commas, a point followed by three digits "
+                    "may be a thousands separator. Write it as 1200 or as 1,2."
+                )
+    else:
+        if "," in body:
+            raise NumberFormatProblem(
+                "it contains a comma, which could be a decimal comma or a thousands "
+                "separator. " + _FIX_POINT
+            )
+        if body.count(".") > 1:
+            raise NumberFormatProblem("it has more than one decimal point. " + _FIX_POINT)
+        integer, mark, fraction = body.partition(".")
+    if any(space in integer for space in _GROUP_SPACES):
+        if not _SPACE_GROUPED.fullmatch(integer):
+            raise NumberFormatProblem(
+                "it has spaces inside the number that are not groups of three digits, so it "
+                "may be two values. Put a single value in the cell, without spaces."
+            )
+        integer = "".join(ch for ch in integer if ch not in _GROUP_SPACES)
+    if not fraction.isdigit() and fraction:
+        raise NumberFormatProblem("it is not a number. " + _FIX_POINT)
+    if not integer and not fraction:
+        raise NumberFormatProblem("it is not a number. " + _FIX_POINT)
+    return f"{integer or '0'}{'.' if mark else ''}{fraction}"
+
+
+def parse_numeric(raw: str | None, *, decimal_comma: bool = False) -> float | None:
+    """Read a cell like ``8``, ``8.0`` or ``8 Ohm`` as a number.
+
+    A blank cell, or one with no digits at all (``n/a``, ``TBD``), reads as
+    missing -- never as zero and never as a guess. A cell whose number could
+    only be read by guessing -- ``0,9`` in a comma-separated file, ``<1``,
+    ``8/16``, ``1 2`` -- raises ``NumberFormatProblem`` instead of being
+    read as the digits before the first separator.
+
+    ``decimal_comma`` is for a file separated by semicolons or tabs, where a
+    comma inside a cell can only be a decimal mark. Spaces group thousands in
+    either kind of file, but only as exact groups of three digits.
     """
 
     if raw is None:
         return None
     text = raw.strip()
-    if not text:
+    if not any(ch.isdigit() for ch in text):
         return None
-    match = _NUMERIC_PREFIX.search(text)
+    match = _NUMBER_START.match(text)
     if match is None:
-        return None
-    try:
-        return float(match.group(0))
-    except ValueError:
-        return None
+        raise NumberFormatProblem(
+            "there is text before the number, which changes what it means (for example "
+            "<1 or approx. 8). Put only the value in the cell, optionally followed by its unit."
+        )
+    raw_body = match.group("body")
+    body = raw_body.rstrip(_GROUP_SPACES)
+    if match.group("exp") is not None and body == raw_body:
+        exponent, rest = match.group("exp"), text[match.end():]
+    else:
+        exponent, rest = "", text[match.start("body") + len(body):]
+    rest = rest.lstrip(_GROUP_SPACES)
+    if rest and not _UNIT_START.match(rest):
+        raise NumberFormatProblem(
+            "there is more after the number than a unit (for example 8/16 or 5-6), so it may "
+            "be more than one value. Put a single value in the cell, optionally followed by its unit."
+        )
+    number = _read_number(body, decimal_comma=decimal_comma)
+    return float(f"{match.group('sign')}{number}{exponent}")
 
 
-def parse_row(row: dict[str | None, str | None]) -> tuple[dict[str, float | str | None], dict[str, str]]:
-    """Map cells to fields and extras; malformed rows return no identity."""
+class CellProblem(ValueError):
+    """A cell this row cannot be read with, and why."""
+
+    def __init__(self, column: str, value: str, reason: str) -> None:
+        super().__init__(f"{column} = {value!r}: {reason}")
+        self.column = column
+        self.value = value
+        self.reason = reason
+
+
+class RowShapeProblem(ValueError):
+    """The row has a different number of cells from the header."""
+
+
+def parse_row(
+    row: dict[str | None, str | None], *, decimal_comma: bool = False
+) -> tuple[dict[str, float | str | None], dict[str, str]]:
+    """Map cells to fields and extras.
+
+    Raises ``RowShapeProblem`` for a row with too many or too few cells and
+    ``CellProblem`` for a value that cannot be read without guessing, so the
+    caller skips the row, not the library, and can say why.
+    """
 
     # DictReader uses a None key for excess cells and None values for missing
-    # cells. Return no identity so the index skips the row, not the library.
-    if None in row or any(value is None for value in row.values()):
-        return {}, {}
+    # cells.
+    if None in row:
+        raise RowShapeProblem("it has more cells than the header has columns")
+    if any(value is None for value in row.values()):
+        raise RowShapeProblem("it has fewer cells than the header has columns")
 
     fields: dict[str, float | str | None] = {}
     extras: dict[str, str] = {}
@@ -150,9 +263,12 @@ def parse_row(row: dict[str | None, str | None]) -> tuple[dict[str, float | str 
         if canonical in TEXT_FIELDS:
             fields[canonical] = value or None
         else:
-            number = parse_numeric(value)
+            try:
+                number = parse_numeric(value, decimal_comma=decimal_comma)
+            except NumberFormatProblem as exc:
+                raise CellProblem(header, value, str(exc)) from None
             if number is not None and not math.isfinite(number):
-                return {}, {}
+                raise CellProblem(header, value, "the number is too large to use.")
             fields[canonical] = number
     return fields, extras
 
@@ -267,6 +383,9 @@ def classify_size(fields: dict[str, float | str | None], kind: str) -> str | Non
 
 __all__ = [
     "ALIASES",
+    "CellProblem",
+    "NumberFormatProblem",
+    "RowShapeProblem",
     "DRIVER_TYPES",
     "SPEC_FIELD_MAP",
     "TEXT_FIELDS",
