@@ -11,6 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import { useJobsApartFromProgress, useJobsEpoch } from '../api/jobsSelector';
 import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, type JobResults, type RadiationImpedancePresentation, type ResultData } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { axes, CHART_FONT_FAMILY, LABEL_FONT, type ChartDensity } from '../results/chartAxes';
@@ -2498,8 +2499,10 @@ function MeasuredOverlayRow({ overlay }: { overlay: MeasuredOverlay }) {
 }
 
 export function ResultsPanel() {
-  const jobsSnapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
-  const jobs = jobsSnapshot.jobs;
+  // Results draws runs; a solve's progress is drawn by CurrentModelStatus,
+  // which reads the whole snapshot itself.
+  const jobs = useJobsApartFromProgress();
+  const jobsEpoch = useJobsEpoch();
   const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
@@ -2713,13 +2716,13 @@ export function ResultsPanel() {
   const primaryJob = jobs.find(job => job.id === selection.primary) ?? resolved.job;
   const meshFreshness = useMeshFreshnessStore(state => state.jobs);
   useEffect(() => {
-    if (primaryJob) useMeshFreshnessStore.getState().check(primaryJob, false, jobsSnapshot.epoch);
-    if (resolved.job) useMeshFreshnessStore.getState().check(resolved.job, false, jobsSnapshot.epoch);
+    if (primaryJob) useMeshFreshnessStore.getState().check(primaryJob, false, jobsEpoch);
+    if (resolved.job) useMeshFreshnessStore.getState().check(resolved.job, false, jobsEpoch);
     for (const id of selection.overlays ?? []) {
       const job = jobs.find(candidate => candidate.id === id);
-      if (job) useMeshFreshnessStore.getState().check(job, false, jobsSnapshot.epoch);
+      if (job) useMeshFreshnessStore.getState().check(job, false, jobsEpoch);
     }
-  }, [primaryJob, resolved.job, jobs, selection.overlays, jobsSnapshot.epoch]);
+  }, [primaryJob, resolved.job, jobs, selection.overlays, jobsEpoch]);
   const staleMeshes = [...new Set([primaryJob?.id, resolved.job?.id, ...(selection.overlays ?? [])])]
     .flatMap(id => {
       const job = jobs.find(candidate => candidate.id === id);

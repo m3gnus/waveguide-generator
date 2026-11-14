@@ -1,7 +1,7 @@
 import { EmptyState } from '../shell/EmptyState';
 import { Notice } from '../shell/Notice';
 import { SOURCE_ROLE_LABELS } from '../model/cadLabels';
-import { useCadModelStatusLine } from '../shell/CadModelStatusLine';
+import { useCadModelStateApartFromProgress } from '../stores/cadModelState';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import { importedModelBlocker, useDesignModelStore, useImportedModelStore } from '../stores/importedModel';
 import { useShallow } from 'zustand/react/shallow';
@@ -12,6 +12,7 @@ import { oneLineRow } from './oneLineFit';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecodedFrame } from '../api/frame';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
+import { useJobsApartFromProgress, useJobsEpoch } from '../api/jobsSelector';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection, provisionalResults } from '../api/results';
 import { currentModel, currentModelScene, currentCadScenes, shownResult, showsRetainedMesh, spatialResult, useCurrentModel, type CurrentModel } from '../model/currentModel';
@@ -390,13 +391,16 @@ export function Viewport() {
   const solveSymmetry = useSolveOptionsStore((state) => state.symmetry);
   const designName = useDocumentStore((state) => state.designName);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const { model: cad } = useCadModelStatusLine();
+  const cad = useCadModelStateApartFromProgress();
+  // The empty state's Show Results offer follows the visible panels.
+  useSyncExternalStore(workspaceNavigation.subscribe, workspaceNavigation.getSnapshot, workspaceNavigation.getSnapshot);
   const cadRecord = cad.record;
   const cadName = cad.label;
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
-  const jobsSnapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
-  const jobs = jobsSnapshot.jobs;
+  // The viewport shows runs, never a solve's progress.
+  const jobs = useJobsApartFromProgress();
+  const jobsEpoch = useJobsEpoch();
   const solveRunningOrQueued = jobs.some((job) => isActiveJobStatus(job.status));
   const cadEmpty = cadViewportEmptyCopy(cad);
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
@@ -409,8 +413,8 @@ export function Viewport() {
   const recordedFreshness = useMeshFreshnessStore(state => shownJob ? state.jobs[shownJob.id] : undefined);
   const meshFreshness = hasMeshProvenance(shownJob) ? recordedFreshness : undefined;
   useEffect(() => {
-    if (shownJob) useMeshFreshnessStore.getState().check(shownJob, false, jobsSnapshot.epoch);
-  }, [shownJob, jobsSnapshot.epoch]);
+    if (shownJob) useMeshFreshnessStore.getState().check(shownJob, false, jobsEpoch);
+  }, [shownJob, jobsEpoch]);
   const availableFieldJob = useMemo(
     () => fieldPlaneJob(jobs, resultSelection.primary, coherenceContext, provisional.entries),
     [coherenceContext.key, coherenceContext.lineage, coherenceContext.kind, coherenceContext.viewportShowing, jobs, resultSelection.primary, provisional.entries, meshFreshness],

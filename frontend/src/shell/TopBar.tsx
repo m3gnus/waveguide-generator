@@ -4,7 +4,7 @@ import { selectJob } from '../jobs/selectJob';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { jobsSocket } from '../api/jobsSocket';
+import { useJobsApartFromProgress } from '../api/jobsSelector';
 import { CAD_CONTROL_DESCRIPTORS, cadControlIsAvailable, cadControlMatchesQuery } from '../design/cadControlRegistry';
 import { DesignFileMenu } from '../design/DesignFileMenu';
 import { CAD_PARAMETER_SECTION_DEFINITIONS, LEGACY_PARAMETER_REGISTRY, PARAMETER_REGISTRY, fieldIsVisible, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, parameterSectionIsVisible, type ParameterSection, type ParameterTab } from '../design/parameterRegistry';
@@ -30,7 +30,7 @@ import { cadWorkspace } from '../stores/cadWorkspace';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
 import { HeldCadRequestDialog } from './HeldCadRequestDialog';
 import { isFailedCadPreparation } from '../jobs/cadSolve';
-import { useCadModelState } from '../stores/cadModelState';
+import { useCadModelStateApartFromProgress } from '../stores/cadModelState';
 import { ExportDestinationDialog } from './ExportDestinationDialog';
 import { ReportDialog } from './ReportDialog';
 import { commandShortcutLabel } from './platformKeys';
@@ -298,8 +298,8 @@ export function AttentionNotices() {
   const developerDetails = useDeveloperDetails();
   const readyRun = useReadyRun();
   const failedAction = useFailedAction();
-  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
-  const model = useCadModelState();
+  const jobs = useJobsApartFromProgress();
+  const model = useCadModelStateApartFromProgress();
   // In CAD mode the model on screen says its own state (its status line and
   // Choose…): the chip announces only requests about other models.
   const onScreen = mode === 'cad' && model.selected;
@@ -420,7 +420,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const [updateOpen, setUpdateOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const update = useUpdateStatus();
-  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  const jobs = useJobsApartFromProgress();
   const canUndo = !undoReason;
   const canRedo = !redoReason;
 

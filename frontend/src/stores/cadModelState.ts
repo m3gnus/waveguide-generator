@@ -2,7 +2,7 @@ import { cadModelLabel } from '../model/cadLabels';
 import { useStore } from 'zustand';
 import { useSyncExternalStore } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useCurrentModelStatus, type currentModelStatus } from '../model/currentModel';
+import { useCurrentModelStatus, useCurrentModelStatusApartFromProgress, type currentModelStatus } from '../model/currentModel';
 import { preparesAutomatically, useCadReturnStore, type CadReturnState, type CadPreparationInputs } from './cadReturn';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { useDocumentStore } from './document';
@@ -135,6 +135,12 @@ export function useCadModelSelection(request: CadModelRequest | null = null) {
 /** The selected CAD model, including a request held for the user. */
 export function useCadModelState() {
   return useCadModelSelection(useCurrentModelStatus().status);
+}
+
+/** `useCadModelState` without re-rendering on a running solve's progress
+ * events; the model it returns never depends on them. */
+export function useCadModelStateApartFromProgress() {
+  return useCadModelSelection(useCurrentModelStatusApartFromProgress().status);
 }
 
 // The model's status wording has one owner: `cadModelStatusLine`

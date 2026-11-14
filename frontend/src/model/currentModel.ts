@@ -3,6 +3,7 @@ import { cadJobAboutModel, latestCadJobs, isFailedCadPreparation, isHeldCadJob }
 import { previewSocket } from '../api/previewSocket';
 import { useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
+import { useJobsApartFromProgress } from '../api/jobsSelector';
 import { canLoadJobDesign, openJobDesign } from '../jobs/jobDesign';
 import { DesignOpenSupersededError } from '../design/openCadProject';
 import { designFingerprint, jobDesignFingerprint } from '../results/runCoherence';
@@ -311,15 +312,29 @@ export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[]
   return { kind: 'never-solved' as const, job, message: readiness || 'This version of the model has not been solved.' };
 }
 
-/** The same request/run status for Results and the CAD model card. */
-export function useCurrentModelStatus(record?: CadReturnIngestRecord) {
-  const current = useCurrentModel();
+function modelStatusFrom(current: CurrentModel, jobs: readonly JobItem[], record?: CadReturnIngestRecord) {
   const model = record ? { ...current, kind: 'cad' as const, key: record.solve_model_sha256 || record.ingest_id,
     ingestId: record.ingest_id, manifestSha256: record.manifest_sha256, authoring: undefined,
     prepared: { key: record.solve_model_sha256 || record.ingest_id, ingestId: record.ingest_id,
       lineage: record.model_id || record.ingest_id, modelId: record.model_id } } : current;
-  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   return { model, status: currentModelStatus(model, jobs) };
+}
+
+/** The same request/run status for Results and the CAD model card. */
+export function useCurrentModelStatus(record?: CadReturnIngestRecord) {
+  const current = useCurrentModel();
+  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  return modelStatusFrom(current, jobs, record);
+}
+
+/**
+ * `useCurrentModelStatus` for views that never draw a solve's progress. It does
+ * not re-render on progress events, so a running status's `message` and its
+ * job's progress fields can be older than the solve: read only its kind and
+ * the job's identity, status and CAD state.
+ */
+export function useCurrentModelStatusApartFromProgress(record?: CadReturnIngestRecord) {
+  return modelStatusFrom(useCurrentModel(), useJobsApartFromProgress(), record);
 }
 
 export function runProvenanceMarker(job: Pick<JobItem, 'config_summary'>, mode: WorkspaceMode): string | null {

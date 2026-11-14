@@ -2,7 +2,7 @@ import type { EngineCapability, ImportedEngineVerdict, ImportedSolvePlan } from 
 import { SelectRow } from './SelectRow';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { jobsSocket } from '../api/jobsSocket';
+import { useJobsApartFromProgress } from '../api/jobsSelector';
 import { compareSelection } from '../api/results';
 import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
 import {
@@ -567,11 +567,11 @@ export function runPolarFromJob(job: { solve_options?: { polar_config?: unknown 
 
 export function SolvedWithReadout() {
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
-  const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
+  const jobs = useJobsApartFromProgress();
   const current = useScopedSolveOptions((state) => state.polar);
   const updatePolar = useScopedSolveOptions((state) => state.updatePolar);
 
-  const job = selection.primary ? snapshot.jobs.find((item) => item.id === selection.primary) : undefined;
+  const job = selection.primary ? jobs.find((item) => item.id === selection.primary) : undefined;
   const runPolar = runPolarFromJob(job);
   if (!job || !runPolar) return null;
   const differences = polarDifferences(runPolar, current);
