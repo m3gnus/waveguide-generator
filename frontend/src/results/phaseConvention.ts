@@ -75,3 +75,34 @@ export function propagationReference(result: ResultPayload): PropagationReferenc
     ? { distanceM, speedOfSoundMps, spatialSign }
     : null;
 }
+
+/** The tag that describes engineering-convention pressure: outgoing exp(-jkr). */
+export const ENGINEERING_SPATIAL_CONVENTION = 'exp(-ikr)';
+
+export interface DisplayPhase {
+  phaseDegrees: Array<number | null>;
+  /** Propagation reference in the convention of `phaseDegrees`. */
+  reference: PropagationReference | null;
+  /** Tag for `phaseDegrees`; null when the result's own tag is unsupported. */
+  convention: string | null;
+}
+
+/**
+ * On-axis phase as the chart, its PNG and the FRD all present it: engineering
+ * exp(+jωt), so a delay is a lag. Engineering pressure carries exp(-jkr), so
+ * the converted samples are de-embedded with spatial sign -1, which removes
+ * the same time of flight the FRD removes. An unsupported tag leaves the raw
+ * phase and no reference, as the FRD does.
+ */
+export function engineeringDisplayPhase(result: ResultPayload): DisplayPhase {
+  const raw = result.spl_on_axis?.phase_degrees ?? [];
+  const spatialSign = phaseSpatialSign(result.metadata?.phase_time_convention);
+  if (spatialSign === null) return { phaseDegrees: raw, reference: null, convention: null };
+  const factor = engineeringPhaseFactor(spatialSign);
+  const reference = propagationReference(result);
+  return {
+    phaseDegrees: raw.map((value) => (typeof value === 'number' && Number.isFinite(value) ? factor * value : null)),
+    reference: reference ? { ...reference, spatialSign: -1 } : null,
+    convention: ENGINEERING_SPATIAL_CONVENTION,
+  };
+}

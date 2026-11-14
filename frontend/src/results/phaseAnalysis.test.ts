@@ -10,6 +10,9 @@ import {
   propagationReference,
   weightedLinearFit,
 } from './phaseAnalysis';
+import { buildOnAxisFrd } from './frd';
+import { phaseSeries } from './mappers';
+import { engineeringDisplayPhase } from './phaseConvention';
 import type { ResultPayload } from './types';
 
 const SPEED = 343;
@@ -255,5 +258,54 @@ describe('group delay sign follows the spatial convention', () => {
       propagationReference(result()),
     );
     delays.forEach(({ value }) => expect(value).toBeCloseTo(0.3, 6));
+  });
+});
+
+describe('screen phase agrees with the FRD', () => {
+  // A horn whose acoustic centre is 100 mm behind the 2 m reference, plus a
+  // resonance-like bump the detrend cannot remove.
+  const c = 343;
+  const frequencies = Array.from({ length: 41 }, (_, index) => 200 * 10 ** (index / 40));
+  const bumpDeg = (frequency: number) => 40 * Math.exp(-((Math.log2(frequency / 900)) ** 2) / 0.1);
+  const wrap = (degrees: number) => ((degrees % 360) + 540) % 360 - 180;
+  const result: ResultPayload = {
+    frequencies,
+    spl_on_axis: {
+      frequencies,
+      spl: frequencies.map(() => 90),
+      // Raw exp(+ikr): a later arrival and a lagging bump both *raise* the stored angle.
+      phase_degrees: frequencies.map((frequency) => wrap(360 * frequency * 2.1 / c + bumpDeg(frequency))),
+    },
+    metadata: {
+      phase_time_convention: 'exp(+ikr)',
+      observation: { effective_distance_m: 2, sound_speed_m_per_s: c },
+    },
+  };
+
+  it('draws exactly the FRD phase, detrended the same way', () => {
+    const frdPhase = buildOnAxisFrd(result).trim().split('\n')
+      .filter((line) => !line.startsWith('*')).map((line) => Number(line.split('\t')[2]));
+    const expected = displayPhaseDegrees({ frequencies, phaseDegrees: frdPhase }, result.spl_on_axis!.spl ?? [], null);
+    const [shown] = phaseSeries([{ id: 'run', label: 'run', result }]);
+    expect(shown.points).toHaveLength(expected.length);
+    shown.points.forEach(([, value], index) => expect(value).toBeCloseTo(expected[index].value, 3));
+  });
+
+  it('shows a later arrival as a phase lag on screen and in the FRD', () => {
+    const shown = engineeringDisplayPhase(result);
+    const deEmbedded = deEmbeddedPhaseRadians({ frequencies, phaseDegrees: shown.phaseDegrees }, shown.reference);
+    const frdPhase = buildOnAxisFrd(result).trim().split('\n')
+      .filter((line) => !line.startsWith('*')).map((line) => Number(line.split('\t')[2]));
+    // 0.1 m excess path at 200 Hz: about -21 deg, before the small bump.
+    expect(deEmbedded[0].value * 180 / Math.PI).toBeLessThan(0);
+    expect(Math.sign(frdPhase[0])).toBe(Math.sign(deEmbedded[0].value));
+    expect(deEmbedded[deEmbedded.length - 1].value).toBeLessThan(deEmbedded[0].value);
+  });
+
+  it('leaves raw phase unconverted when the convention tag is unknown, as the FRD does', () => {
+    const untagged = { ...result, metadata: { observation: result.metadata!.observation } };
+    const shown = engineeringDisplayPhase(untagged);
+    expect(shown.reference).toBeNull();
+    expect(shown.phaseDegrees).toEqual(untagged.spl_on_axis!.phase_degrees);
   });
 });

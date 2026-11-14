@@ -125,8 +125,9 @@ changes their bandwidth. FRD files are always written unsmoothed, so their magni
 phase stay one complex response; CSV, text summary and chart PNGs carry the viewer's
 smoothing and say so.
 
-The interactive phase chart de-embeds the declared propagation term before unwrapping,
-then removes the residual output-weighted linear slope for display. Group delay is
+The interactive phase chart and its PNG draw the same engineering phase as the FRD
+(`engineeringDisplayPhase`; raw when the tag is unsupported). They de-embed the
+propagation term before unwrapping, then remove the residual output-weighted linear slope for display. Group delay is
 derived only when that same propagation reference is present and the retained sweep can
 resolve the residual unwrap; otherwise the card refuses to invent a curve and explains
 which metadata or sampling is missing.

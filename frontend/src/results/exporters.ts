@@ -30,7 +30,7 @@ import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
 import { withNormalizationAngle } from './normalization';
 import { impedanceUnits } from './mappers';
 import { polarValueDb } from './values';
-import { propagationReference } from './phaseConvention';
+import { engineeringDisplayPhase } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
 import { buildRunReportHtml } from './runReport';
 import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './vituixcad';
@@ -127,7 +127,6 @@ function smoothedSeries(result: ResultPayload, preferences: Preferences) {
   return {
     frequencies,
     spl: applySmoothing(frequencies, result.spl_on_axis?.spl ?? [], preferences.smoothing, 'level_db'),
-    phase: result.spl_on_axis?.phase_degrees ?? [],
     diFrequencies,
     di: applySmoothing(diFrequencies, flatDi(result), preferences.smoothing, 'level_db'),
     impedanceFrequencies,
@@ -608,14 +607,17 @@ export function buildChartRenderPayload(
   // Resolve these as one validity unit. Sending a distance with no sound speed
   // makes hornlab-plots assume 343 m/s while the browser correctly declines to
   // de-embed, so partially valid legacy metadata would produce two phase plots.
-  const phaseReference = propagationReference(result);
-  const convention = result.metadata?.phase_time_convention ?? result.metadata?.time_convention ?? result.metadata?.spatial_phase_convention;
+  // The PNG draws the same engineering phase as the screen and the FRD. The
+  // converted samples are tagged exp(-ikr), which hornlab-plots de-embeds with
+  // the matching sign; an unsupported tag sends raw phase and no reference.
+  const shown = engineeringDisplayPhase(result);
+  const phaseReference = shown.reference;
   return {
     frequencies: series.frequencies,
     spl: series.spl,
-    phase_degrees: preferences.splPhase ? series.phase : [],
+    phase_degrees: preferences.splPhase ? shown.phaseDegrees : [],
     phase_reference_distance_m: phaseReference?.distanceM ?? null,
-    phase_time_convention: phaseReference && convention != null ? String(convention) : null,
+    phase_time_convention: phaseReference ? shown.convention : null,
     sound_speed_m_per_s: phaseReference?.speedOfSoundMps ?? null,
     di: series.di,
     di_frequencies: series.diFrequencies,

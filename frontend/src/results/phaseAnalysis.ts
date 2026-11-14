@@ -147,11 +147,11 @@ export function weightedLinearFit(x: number[], y: number[], weights: number[]): 
  * slope weighted by output level, so the trace sits flat where the speaker
  * actually radiates and crossover and resonance deviations stay visible.
  *
- * Unlike `groupDelayMilliseconds` this deliberately does *not* fold in the
- * spatial sign. The PNG does not flip either, and phase is the one curve whose
- * whole purpose is to be read against that file; a sign applied on only one
- * side would make the screen and the export disagree to fix a convention the
- * detrending has already largely absorbed.
+ * This function does not choose a convention: it draws the samples it is
+ * given. Callers pass `engineeringDisplayPhase` (phaseConvention.ts), the
+ * same owner the FRD uses, so the screen, the PNG and the FRD all show
+ * engineering phase, where a delay is a lag. The PNG receives the same
+ * converted samples, so screen and export cannot disagree.
  */
 export function displayPhaseDegrees(
   samples: PhaseSamples,

@@ -759,7 +759,8 @@ describe('result exporters', () => {
       },
     }, context.preferences)).toMatchObject({
       phase_reference_distance_m: 1.5,
-      phase_time_convention: 'exp(+ikr)',
+      // The PNG receives engineering phase, tagged as engineering pressure.
+      phase_time_convention: 'exp(-ikr)',
       sound_speed_m_per_s: 343,
       impedance_units: 'Z/(rho*c)',
     });

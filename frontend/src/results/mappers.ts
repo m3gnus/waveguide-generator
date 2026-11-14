@@ -7,6 +7,7 @@ import { combineMetadataOf, type ResultPayload } from './types';
 import { resolveResultView, type ResultView } from '../stores/resultView';
 import { drivePowerSeries, excursionSeries, hasElectricalImpedance } from './drivePower';
 import { displayPhaseDegrees, groupDelayMilliseconds, propagationReference } from './phaseAnalysis';
+import { engineeringDisplayPhase } from './phaseConvention';
 import type { GroupDelayUnit } from '../prefs/preferences';
 
 export interface NamedResult {
@@ -357,17 +358,18 @@ export function impedanceSubtitle(items: NamedResult[]): string | null {
   return perDriver ? `${perDriver} · ${hidden}` : hidden;
 }
 
-/** On-axis phase, referenced and detrended exactly as the exported PNG draws it. */
+/** On-axis phase in engineering convention (as the FRD), referenced and detrended exactly as the exported PNG draws it. */
 export function phaseSeries(items: NamedResult[]) {
   return items.map(({ label, result }) => {
     const payload = result as ResultPayload;
     const frequencies = payload.spl_on_axis?.frequencies?.length
       ? payload.spl_on_axis.frequencies
       : payload.frequencies;
+    const shown = engineeringDisplayPhase(payload);
     const points = displayPhaseDegrees(
-      { frequencies, phaseDegrees: payload.spl_on_axis?.phase_degrees ?? [] },
+      { frequencies, phaseDegrees: shown.phaseDegrees },
       payload.spl_on_axis?.spl ?? [],
-      propagationReference(payload),
+      shown.reference,
     );
     return {
       name: label,
