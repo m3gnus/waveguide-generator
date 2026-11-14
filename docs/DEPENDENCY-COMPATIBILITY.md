@@ -155,7 +155,7 @@ The BEM++ pin `5d82a93` retains its opt-in prescribed-source exterior-pressure
 `solve_compiled` facade and native orders 4/4. Same-backend pressure comparisons
 establish input-translation equivalence; they do not establish numerical
 equivalence between Metal, BEM++ and BEAT. See
-[Installed legacy BEAT input qualification](LEGACY-BEAT-INPUT-QUALIFICATION.md).
+[Installed legacy BEAT input qualification](validation/LEGACY-BEAT-INPUT-QUALIFICATION.md).
 
 Engine defaults and saved engine choices are retained. Source and consumer
 checks remain distinct from installed application qualification, Windows
