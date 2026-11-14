@@ -140,6 +140,15 @@ export class DurableSettings {
   /** True once the server has answered, whatever it said. */
   get isHydrated(): boolean { return this.hydrated; }
 
+  private applied: Promise<void> | null = null;
+
+  /**
+   * Settles once the server's copy has been applied (or found unreachable),
+   * however long that takes past `hydrate`'s startup cap. Resolves at once when
+   * hydration was never started, as in a test with no server.
+   */
+  afterHydration(): Promise<void> { return this.applied ?? Promise.resolve(); }
+
   /**
    * The browser copy is the cache and stays the thing that is read.
    *
@@ -235,6 +244,7 @@ export class DurableSettings {
       } catch { return null; /* an unreachable server leaves the cache in charge */ }
     })();
     const applied = request.then((body) => { this.apply(body, cachedAtRequest); });
+    this.applied = applied;
 
     if (timeoutMs === undefined) {
       await applied;

@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AUTOSAVE_KEY, REJECTED_AUTOSAVE_KEY, restoreAutosave, restoreAutosaveWithLateRetry, startAutosave, writeAutosave } from './autosave';
+import {
+  AUTOSAVE_KEY, MAX_REJECTED_DRAFT_BYTES, MAX_REJECTED_DRAFTS, REJECTED_DRAFTS_NAMESPACE,
+  restoreAutosave, restoreAutosaveWithLateRetry, startAutosave, writeAutosave,
+} from './autosave';
 import { resetDesignStore, seedDesign, useDesignStore } from './design';
 import { DESIGN_CONTENT_KEY_VERSION } from './designContentKey';
+import { DurableSettings, namespaceStorage, SETTINGS_NAMESPACES } from './durableSettings';
 import { resetDocumentStore, useDocumentStore } from './document';
 import { workspaceModeStore } from './workspaceMode';
 import { useCadReturnStore } from './cadReturn';
@@ -110,67 +114,126 @@ describe('design autosave', () => {
     expect(useDocumentStore.getState()).toMatchObject({ identity: null, classification: null });
   });
 
-  it('sets a draft it cannot restore aside, says so once, and never deletes it', () => {
+  /** A real DurableSettings over this test's browser storage and a scripted server. */
+  function settingsWith(server: { accept?: boolean; envelope?: object; hold?: Promise<void> } = {}) {
+    const calls: { url: string; method: string }[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/settings') {
+        await server.hold;
+        return new Response(JSON.stringify(server.envelope ?? { namespaces: {} }), { status: 200 });
+      }
+      calls.push({ url, method: init?.method ?? 'GET' });
+      return new Response('{}', { status: server.accept === false ? 500 : 200 });
+    });
+    const settings = new DurableSettings({ storage: localStorage, fetcher: fetcher as unknown as typeof fetch, writeDelayMs: () => 0 });
+    return { settings, calls, draft: namespaceStorage('designDraft', settings) };
+  }
+
+  const keptDrafts = () => JSON.parse(localStorage.getItem(SETTINGS_NAMESPACES.rejectedDesignDraft)!)
+    .drafts.map((entry: { draft: string }) => entry.draft);
+
+  it('sets a draft it cannot restore aside, and clears it only once the server has the copy', async () => {
+    const { settings, calls, draft } = settingsWith();
     const corrupt = JSON.stringify({ version: 1, savedAt: '2026-11-13T21:04:00.000Z', design: { formula: 'BROKEN' } });
-    localStorage.setItem(AUTOSAVE_KEY, corrupt);
-    expect(restoreAutosave()).toBe(false);
+    settings.set('designDraft', corrupt);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(restoreAutosave(draft, settings)).toBe(false);
     expect(useDesignStore.getState().design).toEqual(seedDesign);
-    // Out of the restore slot, so the next start does not fail on it again...
-    expect(localStorage.getItem(AUTOSAVE_KEY)).toBeNull();
-    // ...but kept, byte for byte, where a later build can recover it.
-    const kept = JSON.parse(localStorage.getItem(REJECTED_AUTOSAVE_KEY)!);
-    expect(kept.drafts.map((entry: { draft: string }) => entry.draft)).toEqual([corrupt]);
+    await vi.waitFor(() => expect(localStorage.getItem(AUTOSAVE_KEY)).toBeNull());
+    // Stored first, and only then taken out of the restore slot.
+    const stored = calls.findIndex((call) => call.url === `/api/settings/${REJECTED_DRAFTS_NAMESPACE}` && call.method === 'PUT');
+    const cleared = calls.findIndex((call) => call.url === '/api/settings/designDraft' && call.method === 'DELETE');
+    expect(stored).toBeGreaterThan(0);
+    expect(cleared).toBeGreaterThan(stored);
+    expect(keptDrafts()).toEqual([corrupt]);
     const notice = useDesignStore.getState().loadNotice!;
     expect(notice).toContain('could not be restored');
-    expect(notice).toContain(REJECTED_AUTOSAVE_KEY);
+    expect(notice).toContain(`“${REJECTED_DRAFTS_NAMESPACE}”`);
     expect(notice).toContain('ui_settings.json');
 
     // Nothing left to fail on: a second start is silent and keeps what it set aside.
     useDesignStore.setState({ loadNotice: null });
-    expect(restoreAutosave()).toBe(false);
+    expect(restoreAutosave(draft, settings)).toBe(false);
+    await Promise.resolve();
     expect(useDesignStore.getState().loadNotice).toBeNull();
-    expect(JSON.parse(localStorage.getItem(REJECTED_AUTOSAVE_KEY)!).drafts).toHaveLength(1);
+    expect(keptDrafts()).toEqual([corrupt]);
   });
 
-  it('keeps every draft it sets aside, not only the latest', () => {
-    const first = JSON.stringify({ version: 1, design: { formula: 'BROKEN-1' } });
-    const second = JSON.stringify({ version: 1, design: { formula: 'BROKEN-2' } });
-    localStorage.setItem(AUTOSAVE_KEY, first);
-    expect(restoreAutosave()).toBe(false);
-    localStorage.setItem(AUTOSAVE_KEY, second);
-    expect(restoreAutosave()).toBe(false);
-    const kept = JSON.parse(localStorage.getItem(REJECTED_AUTOSAVE_KEY)!);
-    expect(kept.drafts.map((entry: { draft: string }) => entry.draft)).toEqual([first, second]);
-  });
-
-  it('leaves a draft where it is when it cannot be set aside', () => {
+  it('leaves the draft in place when the server does not take the set-aside copy', async () => {
+    const { settings, calls, draft } = settingsWith({ accept: false });
     const corrupt = JSON.stringify({ version: 1, design: { formula: 'BROKEN' } });
-    const removeItem = vi.fn();
-    const storage = { getItem: () => corrupt, setItem: vi.fn(), removeItem };
-    const rejected = {
-      getItem: () => null,
-      setItem: vi.fn(() => { throw new Error('quota'); }),
-      removeItem: vi.fn(),
-    };
-    expect(restoreAutosave(storage, rejected)).toBe(false);
-    expect(removeItem).not.toHaveBeenCalled();
+    localStorage.setItem(AUTOSAVE_KEY, corrupt);
+    expect(restoreAutosave(draft, settings)).toBe(false);
+    await vi.waitFor(() => expect(calls).toContainEqual({ url: `/api/settings/${REJECTED_DRAFTS_NAMESPACE}`, method: 'PUT' }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(localStorage.getItem(AUTOSAVE_KEY)).toBe(corrupt);
+    expect(calls).not.toContainEqual({ url: '/api/settings/designDraft', method: 'DELETE' });
     expect(useDesignStore.getState().loadNotice).toContain('could not be restored');
   });
 
-  it('sets aside a draft whose restore throws part-way', () => {
+  it('keeps the newest five set-aside drafts and says when older ones went', async () => {
+    const { settings, draft } = settingsWith();
+    const broken = (index: number) => JSON.stringify({ version: 1, design: { formula: `BROKEN-${index}` } });
+    for (let index = 1; index <= MAX_REJECTED_DRAFTS + 1; index += 1) {
+      localStorage.setItem(AUTOSAVE_KEY, broken(index));
+      useDesignStore.setState({ loadNotice: null });
+      expect(restoreAutosave(draft, settings)).toBe(false);
+      await vi.waitFor(() => expect(localStorage.getItem(AUTOSAVE_KEY)).toBeNull());
+    }
+    expect(keptDrafts()).toEqual([2, 3, 4, 5, 6].map(broken));
+    expect(useDesignStore.getState().loadNotice).toContain('the oldest draft set aside earlier was removed');
+  });
+
+  it('drops the oldest drafts to stay under the server size limit', async () => {
+    const { settings, draft } = settingsWith();
+    const big = (index: number) => JSON.stringify({ version: 1, design: { formula: `BROKEN-${index}`, pad: 'x'.repeat(70_000) } });
+    for (let index = 1; index <= 4; index += 1) {
+      localStorage.setItem(AUTOSAVE_KEY, big(index));
+      expect(restoreAutosave(draft, settings)).toBe(false);
+      await vi.waitFor(() => expect(localStorage.getItem(AUTOSAVE_KEY)).toBeNull());
+    }
+    const stored = localStorage.getItem(SETTINGS_NAMESPACES.rejectedDesignDraft)!;
+    expect(JSON.stringify(stored).length).toBeLessThanOrEqual(MAX_REJECTED_DRAFT_BYTES);
+    expect(keptDrafts().at(-1)).toBe(big(4));
+    expect(keptDrafts().length).toBeLessThan(4);
+  });
+
+  it('adds to the drafts the server already holds, not to a stale browser copy', async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const earlier = JSON.stringify({ version: 1, design: { formula: 'EARLIER' } });
+    const { settings, draft } = settingsWith({
+      hold,
+      envelope: { namespaces: { [REJECTED_DRAFTS_NAMESPACE]: JSON.stringify({ version: 1, drafts: [{ rejectedAt: '', draft: earlier }] }) } },
+    });
+    const hydration = settings.hydrate();
+    const corrupt = JSON.stringify({ version: 1, design: { formula: 'BROKEN' } });
+    localStorage.setItem(AUTOSAVE_KEY, corrupt);
+    expect(restoreAutosave(draft, settings)).toBe(false);
+    await Promise.resolve();
+    expect(localStorage.getItem(SETTINGS_NAMESPACES.rejectedDesignDraft)).toBeNull();
+    release();
+    await hydration;
+    await vi.waitFor(() => expect(localStorage.getItem(AUTOSAVE_KEY)).toBeNull());
+    expect(keptDrafts()).toEqual([earlier, corrupt]);
+  });
+
+  it('sets aside a draft whose restore throws part-way', async () => {
+    const { settings, draft } = settingsWith();
     useDesignStore.getState().updateField('R', 177);
-    expect(writeAutosave()).toBe(true);
+    expect(writeAutosave(draft)).toBe(true);
     const raw = localStorage.getItem(AUTOSAVE_KEY)!;
     resetDesignStore();
     const replaceDocument = vi.spyOn(useDesignStore.getState(), 'replaceDocument')
       .mockImplementation(() => { throw new Error('replace failed'); });
     try {
-      expect(restoreAutosave()).toBe(false);
+      expect(restoreAutosave(draft, settings)).toBe(false);
     } finally {
       replaceDocument.mockRestore();
     }
-    expect(localStorage.getItem(AUTOSAVE_KEY)).toBeNull();
-    expect(JSON.parse(localStorage.getItem(REJECTED_AUTOSAVE_KEY)!).drafts[0].draft).toBe(raw);
+    await vi.waitFor(() => expect(localStorage.getItem(AUTOSAVE_KEY)).toBeNull());
+    expect(keptDrafts()).toEqual([raw]);
   });
 
   it('retries restoration when a durable draft arrives after the cache was checked', () => {

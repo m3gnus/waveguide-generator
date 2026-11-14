@@ -2,7 +2,7 @@ import { hydrateDesignDocument, importNotice, importStoredDesign, needsDesignImp
 import { isDesignUid } from './designUid';
 import { NATIVE_FAMILIES, useDesignStore, type DesignDocument } from './design';
 import { DESIGN_CONTENT_KEY_VERSION } from './designContentKey';
-import { durableSettings, namespaceStorage } from './durableSettings';
+import { durableSettings, namespaceStorage, type DurableSettings } from './durableSettings';
 import { designNameFromFilename } from './designName';
 import {
   useDocumentStore,
@@ -12,13 +12,16 @@ import {
 import { ProgramFault } from '../api/httpError';
 
 export const AUTOSAVE_KEY = 'wg2.autosave.v1';
-/** Where a draft that failed to restore is kept. Never read back by WG. */
-export const REJECTED_AUTOSAVE_KEY = 'wg2.autosave.rejected.v1';
+/** The settings namespace a draft that failed to restore is kept in. Never read back by WG. */
+export const REJECTED_DRAFTS_NAMESPACE = 'rejectedDesignDraft';
+/** How many set-aside drafts are kept, newest first, and the size they must fit in. */
+export const MAX_REJECTED_DRAFTS = 5;
+/** Under the server's 256 KiB per-namespace limit, measured the way it measures. */
+export const MAX_REJECTED_DRAFT_BYTES = 240 * 1024;
 
 /** The draft follows the same durable path as settings: a lost browser profile
  * or a shifted port must not cost unsaved work either. */
 const draftStorage = namespaceStorage('designDraft');
-const rejectedDraftStorage = namespaceStorage('rejectedDesignDraft');
 export const AUTOSAVE_DELAY_MS = 750;
 
 interface AutosaveRecord {
@@ -57,45 +60,53 @@ function defaultStorage(): DraftStorage | null {
   return draftStorage;
 }
 
-function defaultRejectedStorage(): DraftStorage | null {
-  return rejectedDraftStorage;
-}
+/** What setting a rejected draft aside needs from the durable settings. */
+export type DraftSetAsideSettings = Pick<DurableSettings, 'get' | 'set' | 'retireAfterUpload' | 'afterHydration'>;
 
 interface RejectedDrafts {
   version: 1;
   drafts: { rejectedAt: string; draft: string }[];
 }
 
-/**
- * Keep a draft that failed to restore, beside any kept before it.
- *
- * It is moved out of the restore slot so the next start does not fail on it
- * again, but it is unsaved work: a later build, or someone helping the user,
- * may be able to open it, so nothing here ever drops one. Returns false when
- * it could not be kept, and the caller then leaves the draft where it was.
- */
-function setDraftAside(raw: string, storage: DraftStorage | null): boolean {
-  if (!storage) return false;
+/** The size the server will count: the namespace value is a string it JSON-encodes, escaping non-ASCII. */
+function storedBytes(kept: RejectedDrafts): number {
+  const encoded = JSON.stringify(JSON.stringify(kept));
+  let bytes = 0;
+  for (let index = 0; index < encoded.length; index += 1) bytes += encoded.charCodeAt(index) < 0x80 ? 1 : 6;
+  return bytes;
+}
+
+function readRejectedDrafts(existing: string | null): RejectedDrafts {
+  const kept: RejectedDrafts = { version: 1, drafts: [] };
+  if (!existing) return kept;
   try {
-    const existing = storage.getItem(REJECTED_AUTOSAVE_KEY);
-    let kept: RejectedDrafts = { version: 1, drafts: [] };
-    if (existing) {
-      try {
-        const parsed = JSON.parse(existing) as Partial<RejectedDrafts>;
-        if (parsed?.version === 1 && Array.isArray(parsed.drafts)) kept = { version: 1, drafts: parsed.drafts };
-        else kept.drafts.push({ rejectedAt: '', draft: existing });
-      } catch {
-        kept.drafts.push({ rejectedAt: '', draft: existing });
-      }
+    const parsed = JSON.parse(existing) as Partial<RejectedDrafts>;
+    if (parsed?.version === 1 && Array.isArray(parsed.drafts)) {
+      kept.drafts = parsed.drafts.filter((entry) => typeof entry?.draft === 'string');
+      return kept;
     }
-    if (!kept.drafts.some((entry) => entry?.draft === raw)) {
-      kept.drafts.push({ rejectedAt: new Date().toISOString(), draft: raw });
-    }
-    storage.setItem(REJECTED_AUTOSAVE_KEY, JSON.stringify(kept));
-    return true;
-  } catch {
-    return false;
+  } catch { /* kept below as an entry of its own */ }
+  kept.drafts.push({ rejectedAt: '', draft: existing });
+  return kept;
+}
+
+/**
+ * Add `raw` to the set-aside drafts: newest last, at most `MAX_REJECTED_DRAFTS`
+ * and within the server's size limit, the oldest dropped first. Returns null
+ * when `raw` alone does not fit, and how many older drafts had to go.
+ */
+function withRejectedDraft(existing: string | null, raw: string): { kept: RejectedDrafts; dropped: number } | null {
+  const kept = readRejectedDrafts(existing);
+  if (!kept.drafts.some((entry) => entry.draft === raw)) {
+    kept.drafts.push({ rejectedAt: new Date().toISOString(), draft: raw });
   }
+  let dropped = 0;
+  while (kept.drafts.length > MAX_REJECTED_DRAFTS
+    || (kept.drafts.length > 1 && storedBytes(kept) > MAX_REJECTED_DRAFT_BYTES)) {
+    kept.drafts.shift();
+    dropped += 1;
+  }
+  return storedBytes(kept) > MAX_REJECTED_DRAFT_BYTES ? null : { kept, dropped };
 }
 
 function draftSavedAt(raw: string): string | null {
@@ -109,15 +120,38 @@ function draftSavedAt(raw: string): string | null {
   }
 }
 
-function rejectedDraftNotice(raw: string, keptAside: boolean): string {
+function rejectedDraftNotice(raw: string, setAside: { dropped: number } | null): string {
   const savedAt = draftSavedAt(raw);
   const which = savedAt ? `The unsaved draft from ${savedAt}` : 'The unsaved draft from your last session';
-  return keptAside
-    ? `${which} could not be restored, so WG opened without it. It was not deleted: it is kept in `
-      + `ui_settings.json in WG's data folder, under “${REJECTED_AUTOSAVE_KEY}”, so a later version `
-      + 'of WG or support can recover it. Use Report a problem in the top bar to tell us about it.'
-    : `${which} could not be restored, so WG opened without it. It is still kept, and WG will try `
-      + 'it again at the next start. If this keeps happening, use Report a problem in the top bar.';
+  if (!setAside) {
+    return `${which} could not be restored, so WG opened without it. It is too large to set aside, so it `
+      + 'stays where it is and WG will try it again at the next start. If this keeps happening, use '
+      + 'Report a problem in the top bar.';
+  }
+  const dropped = setAside.dropped === 0 ? '' : ` To make room, the oldest ${setAside.dropped === 1
+    ? 'draft set aside earlier was' : `${setAside.dropped} drafts set aside earlier were`} removed; at most `
+    + `${MAX_REJECTED_DRAFTS} are kept.`;
+  return `${which} could not be restored, so WG opened without it. It was not deleted: it is kept in `
+    + `ui_settings.json in WG's data folder, in the settings entry “${REJECTED_DRAFTS_NAMESPACE}”, so a later `
+    + 'version of WG or support can recover it. Until that copy is saved, the draft also stays where it was.'
+    + `${dropped} Use Report a problem in the top bar to tell us about it.`;
+}
+
+/**
+ * Keep a draft that failed to restore, beside the ones kept before it.
+ *
+ * It is unsaved work, so it leaves the restore slot only once the server has
+ * acknowledged the set-aside copy (`retireAfterUpload`); until then, or if the
+ * server never takes it, it stays where it was. The set-aside list is read
+ * only after hydration has applied the server's copy, so a stale browser
+ * cache cannot overwrite drafts another session set aside.
+ */
+async function setDraftAside(raw: string, settings: DraftSetAsideSettings): Promise<void> {
+  await settings.afterHydration();
+  const setAside = withRejectedDraft(settings.get(REJECTED_DRAFTS_NAMESPACE), raw);
+  if (setAside) settings.set(REJECTED_DRAFTS_NAMESPACE, JSON.stringify(setAside.kept));
+  useDesignStore.setState({ loadNotice: rejectedDraftNotice(raw, setAside) });
+  if (setAside) await settings.retireAfterUpload('designDraft', [REJECTED_DRAFTS_NAMESPACE], raw);
 }
 
 function isRecord(value: unknown): value is AutosaveRecord {
@@ -216,7 +250,7 @@ let restoreGeneration = 0;
 
 export function restoreAutosave(
   storage: DraftStorage | null = defaultStorage(),
-  rejectedStorage: DraftStorage | null = defaultRejectedStorage(),
+  settings: DraftSetAsideSettings = durableSettings,
 ): boolean {
   if (!storage) return false;
   let raw: string | null;
@@ -268,13 +302,9 @@ export function restoreAutosave(
     } else apply(record.design);
     return true;
   } catch {
-    // Never delete unsaved work: the draft moves aside, and only once it is
-    // safely kept there does it leave the restore slot.
-    const keptAside = setDraftAside(raw, rejectedStorage);
-    if (keptAside) {
-      try { storage.removeItem(AUTOSAVE_KEY); } catch { /* unavailable storage stays non-fatal */ }
-    }
-    useDesignStore.setState({ loadNotice: rejectedDraftNotice(raw, keptAside) });
+    // Never delete unsaved work: the draft is set aside, and leaves the
+    // restore slot only once that copy is safely stored.
+    void setDraftAside(raw, settings);
     return false;
   }
 }
