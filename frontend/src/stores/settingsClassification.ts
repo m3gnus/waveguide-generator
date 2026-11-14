@@ -97,6 +97,8 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   // because the namespace list has to be answered exhaustively, and a design
   // change is the most solve-affecting thing there is.
   designDraft: 'solve-affecting',
+  // Kept only so a failed restore never deletes work; nothing reads it back.
+  rejectedDesignDraft: 'inert',
   designFiles: 'inert',
   sourceContourDraft: 'inert',
   // Display only: which annotations the sketch canvas draws.

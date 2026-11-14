@@ -12,10 +12,13 @@ import {
 import { ProgramFault } from '../api/httpError';
 
 export const AUTOSAVE_KEY = 'wg2.autosave.v1';
+/** Where a draft that failed to restore is kept. Never read back by WG. */
+export const REJECTED_AUTOSAVE_KEY = 'wg2.autosave.rejected.v1';
 
 /** The draft follows the same durable path as settings: a lost browser profile
  * or a shifted port must not cost unsaved work either. */
 const draftStorage = namespaceStorage('designDraft');
+const rejectedDraftStorage = namespaceStorage('rejectedDesignDraft');
 export const AUTOSAVE_DELAY_MS = 750;
 
 interface AutosaveRecord {
@@ -52,6 +55,69 @@ interface DraftSettingsSubscriber {
 
 function defaultStorage(): DraftStorage | null {
   return draftStorage;
+}
+
+function defaultRejectedStorage(): DraftStorage | null {
+  return rejectedDraftStorage;
+}
+
+interface RejectedDrafts {
+  version: 1;
+  drafts: { rejectedAt: string; draft: string }[];
+}
+
+/**
+ * Keep a draft that failed to restore, beside any kept before it.
+ *
+ * It is moved out of the restore slot so the next start does not fail on it
+ * again, but it is unsaved work: a later build, or someone helping the user,
+ * may be able to open it, so nothing here ever drops one. Returns false when
+ * it could not be kept, and the caller then leaves the draft where it was.
+ */
+function setDraftAside(raw: string, storage: DraftStorage | null): boolean {
+  if (!storage) return false;
+  try {
+    const existing = storage.getItem(REJECTED_AUTOSAVE_KEY);
+    let kept: RejectedDrafts = { version: 1, drafts: [] };
+    if (existing) {
+      try {
+        const parsed = JSON.parse(existing) as Partial<RejectedDrafts>;
+        if (parsed?.version === 1 && Array.isArray(parsed.drafts)) kept = { version: 1, drafts: parsed.drafts };
+        else kept.drafts.push({ rejectedAt: '', draft: existing });
+      } catch {
+        kept.drafts.push({ rejectedAt: '', draft: existing });
+      }
+    }
+    if (!kept.drafts.some((entry) => entry?.draft === raw)) {
+      kept.drafts.push({ rejectedAt: new Date().toISOString(), draft: raw });
+    }
+    storage.setItem(REJECTED_AUTOSAVE_KEY, JSON.stringify(kept));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function draftSavedAt(raw: string): string | null {
+  try {
+    const savedAt = (JSON.parse(raw) as { savedAt?: unknown })?.savedAt;
+    if (typeof savedAt !== 'string') return null;
+    const when = new Date(savedAt);
+    return Number.isNaN(when.getTime()) ? null : when.toLocaleString();
+  } catch {
+    return null;
+  }
+}
+
+function rejectedDraftNotice(raw: string, keptAside: boolean): string {
+  const savedAt = draftSavedAt(raw);
+  const which = savedAt ? `The unsaved draft from ${savedAt}` : 'The unsaved draft from your last session';
+  return keptAside
+    ? `${which} could not be restored, so WG opened without it. It was not deleted: it is kept in `
+      + `ui_settings.json in WG's data folder, under “${REJECTED_AUTOSAVE_KEY}”, so a later version `
+      + 'of WG or support can recover it. Use Report a problem in the top bar to tell us about it.'
+    : `${which} could not be restored, so WG opened without it. It is still kept, and WG will try `
+      + 'it again at the next start. If this keeps happening, use Report a problem in the top bar.';
 }
 
 function isRecord(value: unknown): value is AutosaveRecord {
@@ -148,7 +214,10 @@ export function writeAutosave(storage: DraftStorage | null = defaultStorage()): 
  * No key is ever derived from the draft itself. */
 let restoreGeneration = 0;
 
-export function restoreAutosave(storage: DraftStorage | null = defaultStorage()): boolean {
+export function restoreAutosave(
+  storage: DraftStorage | null = defaultStorage(),
+  rejectedStorage: DraftStorage | null = defaultRejectedStorage(),
+): boolean {
   if (!storage) return false;
   let raw: string | null;
   try { raw = storage.getItem(AUTOSAVE_KEY); } catch { return false; }
@@ -199,7 +268,13 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
     } else apply(record.design);
     return true;
   } catch {
-    try { storage.removeItem(AUTOSAVE_KEY); } catch { /* unavailable storage stays non-fatal */ }
+    // Never delete unsaved work: the draft moves aside, and only once it is
+    // safely kept there does it leave the restore slot.
+    const keptAside = setDraftAside(raw, rejectedStorage);
+    if (keptAside) {
+      try { storage.removeItem(AUTOSAVE_KEY); } catch { /* unavailable storage stays non-fatal */ }
+    }
+    useDesignStore.setState({ loadNotice: rejectedDraftNotice(raw, keptAside) });
     return false;
   }
 }

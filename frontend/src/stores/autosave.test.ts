@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AUTOSAVE_KEY, restoreAutosave, restoreAutosaveWithLateRetry, startAutosave, writeAutosave } from './autosave';
+import { AUTOSAVE_KEY, REJECTED_AUTOSAVE_KEY, restoreAutosave, restoreAutosaveWithLateRetry, startAutosave, writeAutosave } from './autosave';
 import { resetDesignStore, seedDesign, useDesignStore } from './design';
 import { DESIGN_CONTENT_KEY_VERSION } from './designContentKey';
 import { resetDocumentStore, useDocumentStore } from './document';
@@ -110,11 +110,67 @@ describe('design autosave', () => {
     expect(useDocumentStore.getState()).toMatchObject({ identity: null, classification: null });
   });
 
-  it('rejects and removes a corrupt draft without replacing the current design', () => {
-    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ version: 1, design: { formula: 'BROKEN' } }));
+  it('sets a draft it cannot restore aside, says so once, and never deletes it', () => {
+    const corrupt = JSON.stringify({ version: 1, savedAt: '2026-11-13T21:04:00.000Z', design: { formula: 'BROKEN' } });
+    localStorage.setItem(AUTOSAVE_KEY, corrupt);
     expect(restoreAutosave()).toBe(false);
-    expect(localStorage.getItem(AUTOSAVE_KEY)).toBeNull();
     expect(useDesignStore.getState().design).toEqual(seedDesign);
+    // Out of the restore slot, so the next start does not fail on it again...
+    expect(localStorage.getItem(AUTOSAVE_KEY)).toBeNull();
+    // ...but kept, byte for byte, where a later build can recover it.
+    const kept = JSON.parse(localStorage.getItem(REJECTED_AUTOSAVE_KEY)!);
+    expect(kept.drafts.map((entry: { draft: string }) => entry.draft)).toEqual([corrupt]);
+    const notice = useDesignStore.getState().loadNotice!;
+    expect(notice).toContain('could not be restored');
+    expect(notice).toContain(REJECTED_AUTOSAVE_KEY);
+    expect(notice).toContain('ui_settings.json');
+
+    // Nothing left to fail on: a second start is silent and keeps what it set aside.
+    useDesignStore.setState({ loadNotice: null });
+    expect(restoreAutosave()).toBe(false);
+    expect(useDesignStore.getState().loadNotice).toBeNull();
+    expect(JSON.parse(localStorage.getItem(REJECTED_AUTOSAVE_KEY)!).drafts).toHaveLength(1);
+  });
+
+  it('keeps every draft it sets aside, not only the latest', () => {
+    const first = JSON.stringify({ version: 1, design: { formula: 'BROKEN-1' } });
+    const second = JSON.stringify({ version: 1, design: { formula: 'BROKEN-2' } });
+    localStorage.setItem(AUTOSAVE_KEY, first);
+    expect(restoreAutosave()).toBe(false);
+    localStorage.setItem(AUTOSAVE_KEY, second);
+    expect(restoreAutosave()).toBe(false);
+    const kept = JSON.parse(localStorage.getItem(REJECTED_AUTOSAVE_KEY)!);
+    expect(kept.drafts.map((entry: { draft: string }) => entry.draft)).toEqual([first, second]);
+  });
+
+  it('leaves a draft where it is when it cannot be set aside', () => {
+    const corrupt = JSON.stringify({ version: 1, design: { formula: 'BROKEN' } });
+    const removeItem = vi.fn();
+    const storage = { getItem: () => corrupt, setItem: vi.fn(), removeItem };
+    const rejected = {
+      getItem: () => null,
+      setItem: vi.fn(() => { throw new Error('quota'); }),
+      removeItem: vi.fn(),
+    };
+    expect(restoreAutosave(storage, rejected)).toBe(false);
+    expect(removeItem).not.toHaveBeenCalled();
+    expect(useDesignStore.getState().loadNotice).toContain('could not be restored');
+  });
+
+  it('sets aside a draft whose restore throws part-way', () => {
+    useDesignStore.getState().updateField('R', 177);
+    expect(writeAutosave()).toBe(true);
+    const raw = localStorage.getItem(AUTOSAVE_KEY)!;
+    resetDesignStore();
+    const replaceDocument = vi.spyOn(useDesignStore.getState(), 'replaceDocument')
+      .mockImplementation(() => { throw new Error('replace failed'); });
+    try {
+      expect(restoreAutosave()).toBe(false);
+    } finally {
+      replaceDocument.mockRestore();
+    }
+    expect(localStorage.getItem(AUTOSAVE_KEY)).toBeNull();
+    expect(JSON.parse(localStorage.getItem(REJECTED_AUTOSAVE_KEY)!).drafts[0].draft).toBe(raw);
   });
 
   it('retries restoration when a durable draft arrives after the cache was checked', () => {

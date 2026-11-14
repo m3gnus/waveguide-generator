@@ -58,6 +58,8 @@ export const SETTINGS_NAMESPACES = {
   cadSolveProfiles: 'waveguide-v2-g3-cad-solve-profiles',
   driverLibrary: 'waveguide-v2-g3-driver-library',
   designDraft: 'wg2.autosave.v1',
+  /** Drafts that failed to restore, set aside rather than deleted (stores/autosave.ts). */
+  rejectedDesignDraft: 'wg2.autosave.rejected.v1',
   designFiles: 'wg2.design.files.v1',
   sourceContourDraft: 'wg2.source-contour-draft.v1',
   /** Sketch canvas view toggles: dimensions, names, constraints. */
