@@ -10,7 +10,7 @@ import { trimGeometry, extendGeometry, type Cut } from './topology';
 import { equivalent } from './coincidence';
 import { modifyContext } from './tools/modifyContext';
 import { applyFillet } from './virtualSharpFillet';
-import { isVirtualSharpHelper, pruneVirtualSharps, virtualSharpConstraintIds } from './virtualSharp';
+import { isVirtualSharpHelper, pruneVirtualSharps, virtualSharpAliases, virtualSharpConstraintIds } from './virtualSharp';
 
 /** Low-level removal shared by user deletion and reference lifecycle cleanup. */
 export function removeEntity(sketch: Sketch, id: string): { sketch: Sketch; removedConstraints: string[] } {
@@ -269,7 +269,11 @@ export function applyCommand(sketch: Sketch, command: Command): CommandResult {
           s.entities = s.entities.filter(e => e.id !== right.id).map(e => e.id === left.id
             ? { ...left, p1: left.p1 === command.id ? far : left.p1, p2: left.p2 === command.id ? far : left.p2 } : e);
           cleanConstraints(c => constraintRefs(c).includes(right.id) || constraintRefs(c).includes(command.id));
-        } else cleanConstraints(c => constraintRefs(c).includes(command.id));
+        } else {
+          // Deleting a virtual sharp deletes the whole corner, so no alias keeps its helpers alive.
+          const corner = virtualSharpAliases(s, command.id);
+          cleanConstraints(c => constraintRefs(c).some(id => corner.has(id)));
+        }
         s.points = s.points.filter(p => p.id !== command.id); break;
       }
       case 'deleteEntity': {

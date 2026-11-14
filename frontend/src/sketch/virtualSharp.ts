@@ -12,6 +12,9 @@ export function virtualSharpData(e: Entity): SharpData | undefined {
 }
 export const isVirtualSharpHelper = (e: Entity) => !!virtualSharpData(e);
 export const virtualSharpPointIds = (s: Sketch) => new Set(s.entities.flatMap(e => virtualSharpData(e)?.points ?? []));
+/** A virtual sharp is one corner: its point and every coincident alias it absorbed. */
+export const virtualSharpAliases = (s: Sketch, id: string) =>
+  new Set(s.entities.map(virtualSharpData).find(v => v?.points.includes(id))?.points ?? [id]);
 export const virtualSharpConstraintIds = (s: Sketch) => new Set(s.entities.flatMap(e => virtualSharpData(e)?.constraint ? [virtualSharpData(e)!.constraint!] : []));
 
 /** Preset dimensions still describe the original supporting-curve endpoint. */

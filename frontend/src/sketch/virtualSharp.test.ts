@@ -124,6 +124,20 @@ describe('virtual sharp fillets', () => {
     expect(removed.removedConstraints).toContain(joined.id);
   });
 
+  it('deletes a sharp whose coincident alias holds a dimension, with its helpers and aliases, in one step', () => {
+    let s = lineCorner(); s.points.push({ id: 'alias', x: 0, y: 0 });
+    s.entities[1] = { id: 'second', kind: 'line', p1: 'alias', p2: 'farB' };
+    s = edit(s, { kind: 'addConstraint', constraint: { kind: 'coincident', a: 'corner', b: 'alias' } }).sketch;
+    const relation = edit(s, { kind: 'addConstraint', constraint: { kind: 'distanceY', a: 'alias', b: 'farA', value: 10, driving: true } });
+    const after = edit(relation.sketch, { kind: 'fillet', point: 'corner', radius: 2 }).sketch;
+    expect(after.entities.filter(isVirtualSharpHelper)).toHaveLength(2);
+    const removed = edit(after, { kind: 'deletePoint', id: 'corner' });
+    expect(removed.sketch.entities).toEqual(after.entities.filter(e => !isVirtualSharpHelper(e)));
+    expect(removed.sketch.points.some(p => ['corner', 'alias'].includes(p.id))).toBe(false);
+    expect(removed.sketch.constraints.some(c => constraintRefs(c).some(id => ['corner', 'alias'].includes(id)))).toBe(false);
+    expect(removed.removedConstraints).toEqual(expect.arrayContaining([...relation.created, relation.sketch.constraints[0].id]));
+  });
+
   it('does not create helpers when the only relation is the endpoint join', () => {
     const s = lineCorner(); s.points.push({ id: 'alias', x: 0, y: 0 });
     s.entities[1] = { id: 'second', kind: 'line', p1: 'alias', p2: 'farB' };
