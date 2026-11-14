@@ -10,9 +10,9 @@ import { fileSubmissionSnapshot, useMeshImportStore } from '../stores/meshImport
 import type { ExportFormat } from '../prefs/preferences';
 import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { exportRunAutomatically } from '../jobs/autoExportRun';
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { useJobsApartFromProgress, useJobsLoaded } from '../api/jobsSelector';
+import { useJobsApartFromProgress } from '../api/jobsSelector';
 import { clearJobLink, jobIdFromLink, openLinkedJob } from '../jobs/jobDeepLink';
 import { compareSelection } from '../api/results';
 import type { CadReturnIngestRecord } from '../api/cadlink';
@@ -323,11 +323,10 @@ export async function refreshedArchiveJob(job: JobItem): Promise<JobItem> {
 }
 
 export function JobsCoordinator({ children, now = systemNow }: { children: ReactNode; now?: () => Date }) {
-  // Everything here reads runs for their status, CAD state and metadata, never
-  // their progress: a running solve's progress events must not rebuild the
-  // Solve command every panel reads.
-  const jobs = useJobsApartFromProgress();
-  const jobsLoaded = useJobsLoaded();
+  // The job list's own effects run in JobsFollower. The render still reads the
+  // socket (`heldEngineSolveJob`), so it follows the runs -- but not their
+  // progress, which nothing here reads.
+  useJobsApartFromProgress();
   // `?job=<id>` is the stable link to one run (CLI, Fusion, bookmarks). Read
   // once at start-up; handled as soon as the list has loaded, then dropped
   // from the address bar so a reload does not re-trigger it.
@@ -391,26 +390,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       sourceIngestId: claim.sourceIngestId ?? null,
     });
   }, []);
-
-  useEffect(() => {
-    for (const job of latestCadJobs(jobs)) {
-      const parent = jobs.find((candidate) => candidate.id === job.parent_job_id);
-      const inherited = parent ? cadSolveClaim(parent) : null;
-      // Merge, not only create: an Approve may have claimed the child first, without the ingestion.
-      if (inherited) rememberCadSolve(job.id, inherited.designName, inherited.sourceIngestId ?? null);
-      if (job.cad_state?.state === 'received' || job.cad_state?.state === 'processing') {
-        if (!cadSolveClaim(job)) rememberCadSolve(job.id, '');
-      }
-      completeCadSolve(job);
-      if (job.cad_state?.state === 'rejected') {
-        if (!acknowledgeCadSolve(job, 'refusal')) continue;
-        setActionError(`WG could not solve ${job.cad_state.snapshot?.document_name ?? 'the model'}: ${job.cad_state.message ?? job.cad_state.reason ?? 'no reason given'}`);
-      }
-    }
-  }, [jobs, completeCadSolve]);
-
-  useJobAttention(jobs);
-  useRecoveryNoticeAttention(recoveryNotices);
 
   // An assembly solves its compiled model, never the horn alone, on every Solve.
   const readyMeshActive = showsRetainedMesh(model.kind) || (model.kind === 'parametric' && !!design.assembly);
@@ -783,17 +762,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     });
   }, [acceptSubmission, beforePost, completeCadSolve, reportRequestNotice]);
 
-  // An empty `?job=` names no run; drop it at once.
-  useEffect(() => {
-    if (linkedJobId.current === null) clearJobLink();
-  }, []);
-  useEffect(() => {
-    const id = linkedJobId.current;
-    if (!id || !jobsLoaded) return;
-    linkedJobId.current = null;
-    openLinkedJob(id, jobs, reportError);
-    clearJobLink();
-  }, [jobs, jobsLoaded, reportError]);
   useEffect(() => {
     publishBridge({ available: true, continueRun, reportError, actionError });
     return () => publishBridge({
@@ -809,30 +777,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     window.addEventListener('wg-retry-auto-export', retryExport);
     return () => window.removeEventListener('wg-retry-auto-export', retryExport);
   }, [automation]);
-  useEffect(() => {
-    void automation.process(jobs, preferences, {
-      downloadMesh: (job, reportNotice) => saveMeshArtifactToWorkspace(job, reportNotice),
-      markMeshDownloaded: (job, filename) => jobsSocket.patchMetadata(job.id, { mesh_artifact_file: filename }),
-      exportCompleted: (job, formats) => ownedAutoExport(job, formats, (job, formats, fetcher) => exportRunAutomatically(job, formats, {
-        fetcher,
-        preferences,
-      }), preferences.autoExportFormats),
-      markExported: async (job, files, formats, completedAt) => jobsSocket.patchMetadata(job.id, {
-        exported_files: [...new Set([...(job.exported_files ?? []), ...files])],
-        auto_export_formats: formats,
-        auto_export_completed_at: completedAt,
-      }),
-      archiveCompleted: async (job) => {
-        // Archiving is another automatic bundle and shares the backend lane.
-        await ownedAutoExport(job, ['run_archive' as ExportFormat], async (freshJob, _formats, fetcher) => ({
-          files: await archiveRunToWorkspace(freshJob, preferences, fetcher), failures: [],
-        }));
-      },
-      markArchived: async () => undefined,
-      reportError,
-      reportMeshNotice: (jobId, message) => useRunExportStore.getState().reportMeshNotice(jobId, message),
-    });
-  }, [automation, jobs, preferences, reportError]);
 
   const parametricUnavailable = solveOptionsError
     ?? solvePlanError
@@ -944,7 +888,89 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     return () => publishSolveControl(null);
   }, [control]);
 
-  return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
+  return <SolveContext.Provider value={control}>{children}<JobsFollower
+    automation={automation} preferences={preferences} reportError={reportError} completeCadSolve={completeCadSolve}
+    setActionError={setActionError} recoveryNotices={recoveryNotices} linkedJobId={linkedJobId}/></SolveContext.Provider>;
+}
+
+/**
+ * The coordinator's work that follows every change to the job list.
+ *
+ * It lives in its own component so that it alone re-renders on each event of a
+ * running solve. The coordinator above builds the Solve command that the top
+ * bar, Results and the viewport read; re-rendering it per progress event made
+ * a new command, and so re-rendered all of them, for nothing they show. These
+ * effects run on exactly the job lists they did when the coordinator held them.
+ */
+function JobsFollower({ automation, preferences, reportError, completeCadSolve, setActionError, recoveryNotices, linkedJobId }: {
+  automation: JobAutomation;
+  preferences: ReturnType<typeof usePreferences>;
+  reportError: (message: string, actionNavigation?: number) => void;
+  completeCadSolve: (job: JobItem) => void;
+  setActionError: Dispatch<SetStateAction<string | null>>;
+  recoveryNotices: Parameters<typeof useRecoveryNoticeAttention>[0];
+  linkedJobId: MutableRefObject<string | null | undefined>;
+}) {
+  const jobsSnapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
+  const jobs = jobsSnapshot.jobs;
+  const jobsLoaded = jobsSnapshot.cursor !== null;
+  useEffect(() => {
+    for (const job of latestCadJobs(jobs)) {
+      const parent = jobs.find((candidate) => candidate.id === job.parent_job_id);
+      const inherited = parent ? cadSolveClaim(parent) : null;
+      // Merge, not only create: an Approve may have claimed the child first, without the ingestion.
+      if (inherited) rememberCadSolve(job.id, inherited.designName, inherited.sourceIngestId ?? null);
+      if (job.cad_state?.state === 'received' || job.cad_state?.state === 'processing') {
+        if (!cadSolveClaim(job)) rememberCadSolve(job.id, '');
+      }
+      completeCadSolve(job);
+      if (job.cad_state?.state === 'rejected') {
+        if (!acknowledgeCadSolve(job, 'refusal')) continue;
+        setActionError(`WG could not solve ${job.cad_state.snapshot?.document_name ?? 'the model'}: ${job.cad_state.message ?? job.cad_state.reason ?? 'no reason given'}`);
+      }
+    }
+  }, [jobs, completeCadSolve]);
+
+  useJobAttention(jobs);
+  useRecoveryNoticeAttention(recoveryNotices);
+
+  // An empty `?job=` names no run; drop it at once.
+  useEffect(() => {
+    if (linkedJobId.current === null) clearJobLink();
+  }, []);
+  useEffect(() => {
+    const id = linkedJobId.current;
+    if (!id || !jobsLoaded) return;
+    linkedJobId.current = null;
+    openLinkedJob(id, jobs, reportError);
+    clearJobLink();
+  }, [jobs, jobsLoaded, reportError]);
+  useEffect(() => {
+    void automation.process(jobs, preferences, {
+      downloadMesh: (job, reportNotice) => saveMeshArtifactToWorkspace(job, reportNotice),
+      markMeshDownloaded: (job, filename) => jobsSocket.patchMetadata(job.id, { mesh_artifact_file: filename }),
+      exportCompleted: (job, formats) => ownedAutoExport(job, formats, (job, formats, fetcher) => exportRunAutomatically(job, formats, {
+        fetcher,
+        preferences,
+      }), preferences.autoExportFormats),
+      markExported: async (job, files, formats, completedAt) => jobsSocket.patchMetadata(job.id, {
+        exported_files: [...new Set([...(job.exported_files ?? []), ...files])],
+        auto_export_formats: formats,
+        auto_export_completed_at: completedAt,
+      }),
+      archiveCompleted: async (job) => {
+        // Archiving is another automatic bundle and shares the backend lane.
+        await ownedAutoExport(job, ['run_archive' as ExportFormat], async (freshJob, _formats, fetcher) => ({
+          files: await archiveRunToWorkspace(freshJob, preferences, fetcher), failures: [],
+        }));
+      },
+      markArchived: async () => undefined,
+      reportError,
+      reportMeshNotice: (jobId, message) => useRunExportStore.getState().reportMeshNotice(jobId, message),
+    });
+  }, [automation, jobs, preferences, reportError]);
+
+  return <JobAnnouncer jobs={jobs}/>;
 }
 
 /**

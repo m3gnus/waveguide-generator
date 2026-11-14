@@ -59,7 +59,6 @@ export function sameJobsApartFromProgress(a: readonly JobItem[], b: readonly Job
 
 const selectJobs = (snapshot: JobsSnapshot) => snapshot.jobs;
 const selectEpoch = (snapshot: JobsSnapshot) => snapshot.epoch;
-const selectJobsLoaded = (snapshot: JobsSnapshot) => snapshot.cursor !== null;
 
 /**
  * The job list for views that do not draw a solve's progress.
@@ -77,9 +76,4 @@ export function useJobsApartFromProgress(): JobItem[] {
 /** The server epoch the job list belongs to. */
 export function useJobsEpoch(): number | null {
   return useJobsSelector(selectEpoch);
-}
-
-/** Whether the job list has loaded at least once. */
-export function useJobsLoaded(): boolean {
-  return useJobsSelector(selectJobsLoaded);
 }
