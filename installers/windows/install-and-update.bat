@@ -11,8 +11,7 @@ rem     The system cannot find the batch label specified - update_from_git
 rem     'ttps:' is not recognized as an internal or external command
 rem
 rem ("ttps:" being the tail of an https:// URL from a later line.) So: copy the
-rem coordinator and installer to %TEMP%, then transfer execution to the coordinator.
-rem No repository batch frame may remain suspended while Git updates the checkout.
+rem installer to %TEMP%, run the copy, and pass the repository root explicitly.
 rem git may then rewrite the repository freely. Exit code 10 means "code was
 rem updated, relaunch with the new installer", which we do from a fresh copy.
 rem
@@ -21,40 +20,9 @@ rem under "C:\My ! Projects (2)" neither loses characters nor closes a block
 rem early. See the header of install.bat.
 setlocal EnableExtensions DisableDelayedExpansion
 
-rem Batch chaining (without CALL) replaces this frame before any Git update.
-rem The staged copy inherits the original root and double-click name. It is
-rem also told so by a leading --wg-staged argument, so it can never stage
-rem itself again even if the inherited WG_TMP_WRAPPER were not visible.
-if "%~1"=="--wg-staged" goto coordinator_ready
-if defined WG_TMP_WRAPPER if /i "%~f0"=="%WG_TMP_WRAPPER%" goto coordinator_ready
-set "WG_WRAPPER_NAME=%~nx0"
 set "WG_ROOT=%~dp0..\.."
 for %%i in ("%WG_ROOT%") do set "WG_ROOT=%%~fi"
-set "WG_TMP_WRAPPER_DIR=%TEMP%\wg2-wrapper-%RANDOM%%RANDOM%"
-mkdir "%WG_TMP_WRAPPER_DIR%" >nul 2>&1
-if errorlevel 1 goto wrapper_directory_failed
-set "WG_TMP_WRAPPER=%WG_TMP_WRAPPER_DIR%\coordinate.bat"
-copy /y "%~f0" "%WG_TMP_WRAPPER%" >nul
-if errorlevel 1 goto wrapper_stage_failed
-"%WG_TMP_WRAPPER%" --wg-staged %*
-exit /b 1
-
-:wrapper_stage_failed
-del "%WG_TMP_WRAPPER%" >nul 2>&1
-rd "%WG_TMP_WRAPPER_DIR%" >nul 2>&1
-:wrapper_directory_failed
-echo ERROR: Could not stage the update coordinator in "%TEMP%".
-echo        Check that the temporary folder exists and is writable, then try again.
-exit /b 1
-
-:coordinator_ready
-if not defined WG_ROOT goto staged_root_missing
 set "WG_ARGS=%*"
-rem Drop the leading --wg-staged sentinel. %* is the raw argument text, which
-rem SHIFT does not change, so strip through the sentinel's first occurrence
-rem (it is always the first token) and keep the rest, quoting included,
-rem byte for byte. With no other arguments WG_ARGS ends up undefined.
-if "%~1"=="--wg-staged" set "WG_ARGS=%WG_ARGS:*--wg-staged=%"
 
 rem Did the caller ask us not to start the app? Detected by substring
 rem replacement rather than `echo %WG_ARGS% | find`, because the piped form
@@ -108,10 +76,10 @@ echo.
 echo Starting Waveguide Generator...
 call "%WG_ROOT%\launchers\windows\launch-wg.bat"
 set "RESULT=%ERRORLEVEL%"
-if "%RESULT%"=="0" goto coordinator_exit
+if "%RESULT%"=="0" exit /b 0
 rem Exit 2 is the documented "another instance already owns the lock" answer,
 rem not a failure: serve.py has already opened the browser on the running one.
-if "%RESULT%"=="2" goto coordinator_exit
+if "%RESULT%"=="2" exit /b 2
 rem Anything else goes through :finish so the window stays open long enough to
 rem read. launchers\windows\launch-wg.bat's own pause tests whether cmd's command line names
 rem *itself*, which it does not when it is reached through this script.
@@ -129,27 +97,14 @@ echo credentials; it does contain the project path.
 rem Only pause when launched by double-click. When a console was already
 rem attached, cmdcmdline contains the script path with /c, and pausing would
 rem block a scripted or CI run.
-echo %CMDCMDLINE% | find /i "%WG_WRAPPER_NAME%" >nul 2>&1
+echo %CMDCMDLINE% | find /i "%~nx0" >nul 2>&1
 if not errorlevel 1 pause
-:coordinator_exit
-rem Read cleanup and exit as one block before deleting the staged batch file.
-(
-    del "%WG_TMP_WRAPPER%" >nul 2>&1
-    rd "%WG_TMP_WRAPPER_DIR%" >nul 2>&1
-    exit /b %RESULT%
-)
-
-:staged_root_missing
-echo ERROR: The staged update coordinator did not receive the project folder.
-echo        Run installers\windows\install-and-update.bat from the project checkout again.
-set "RESULT=1"
-goto coordinator_exit
+exit /b %RESULT%
 
 :missing_installer
 echo ERROR: Could not find scripts\install.bat in the project checkout.
 echo        Expected project folder: %WG_ROOT%
-set "RESULT=1"
-goto coordinator_exit
+exit /b 1
 
 :run_installer
 set "WG_TMP_INSTALLER=%TEMP%\wg2-install-%RANDOM%%RANDOM%.bat"
