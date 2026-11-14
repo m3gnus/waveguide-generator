@@ -120,13 +120,16 @@ function exportPhaseDegrees(
   return engineeringPhaseDegrees(deEmbedded, spatialSign);
 }
 
-function propagationNote(reference: PropagationReference | null, result: ResultPayload): string {
+function propagationNote(reference: PropagationReference | null, result: ResultPayload, spatialSign: 1 | -1 | null): string {
   if (reference) {
     return `Common time-of-flight removed: engineering phase_deg + 360 * f * d / c; d=${reference.distanceM} m, c=${reference.speedOfSoundMps} m/s`;
   }
   const metadata = result.metadata?.observation;
   const distanceM = metadata?.effective_distance_m ?? metadata?.requested_distance_m;
   const speedOfSoundMps = metadata?.sound_speed_m_per_s;
+  if (spatialSign !== null) {
+    return 'Common time-of-flight not removed: directivity distance and/or speed-of-sound metadata is unavailable; engineering phase emitted';
+  }
   return finite(distanceM) && finite(speedOfSoundMps) && distanceM >= 0 && speedOfSoundMps > 0
     ? 'Common time-of-flight not removed: phase convention metadata is unavailable or unsupported; raw phase emitted'
     : 'Common time-of-flight not removed: directivity distance and/or speed-of-sound metadata is unavailable; raw phase emitted';
@@ -169,7 +172,7 @@ export function buildOnAxisFrd(
     ...observationNotes(result),
     normalizationNote(result, false),
     SMOOTHING_NOTE,
-    propagationNote(reference, result),
+    propagationNote(reference, result, spatialSign),
     ['Freq(Hz)', 'SPL(dB)', 'Phase(degrees)'].join(DELIMITER),
   ], rows);
 }
@@ -274,7 +277,7 @@ export function buildPolarFrdSet(
       // quantity offset by a constant, which they are not -- the difference
       // between them varies with frequency.
       const phaseHeader = includesPhase
-        ? [propagationNote(reference, result), ['Freq(Hz)', 'SPL_rel(dB)', 'Phase(degrees)'].join(DELIMITER)]
+        ? [propagationNote(reference, result, spatialSign), ['Freq(Hz)', 'SPL_rel(dB)', 'Phase(degrees)'].join(DELIMITER)]
         : [
           'HornLab polar frequency response — magnitude-only; phase is not available and is intentionally omitted',
           ['Freq(Hz)', 'SPL_rel(dB)'].join(DELIMITER),

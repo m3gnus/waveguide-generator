@@ -258,6 +258,18 @@ describe('FRD builders', () => {
       .toEqual([-9, -45, -90]);
   });
 
+  it('says engineering phase was emitted when only the time-of-flight metadata is missing', () => {
+    const result: ResultPayload = {
+      frequencies: [1],
+      spl_on_axis: { frequencies: [1], spl: [90], phase_degrees: [-100] },
+      metadata: { phase_time_convention: 'exp(+ikr)', observation: { sound_speed_m_per_s: 4 } },
+    };
+    const text = buildOnAxisFrd(result);
+
+    expect(dataRows(text)).toEqual([['1.000000', '90.0000', '100.0000']]);
+    expect(text).toContain('* Common time-of-flight not removed: directivity distance and/or speed-of-sound metadata is unavailable; engineering phase emitted');
+  });
+
   it('does not invent a correction sign when phase convention metadata is missing', () => {
     const result: ResultPayload = {
       frequencies: [1],

@@ -120,7 +120,8 @@ convention tag it emits raw phase unconverted and says so in the file header. Ch
 reference metadata. Smoothing applies to magnitude/DI/impedance series, never to raw
 phase. Levels in dB (SPL, polar level, DI, power response) are averaged as power,
 10^(L/10); Psychoacoustic takes the cubic mean of that power (REW's definition).
-Impedance real and imaginary parts are averaged as themselves, so Psychoacoustic only
+DI is smoothed as a level (power mean of 10^(DI/10)), a deliberate simplification rather
+than re-deriving it from smoothed on-axis and sphere power. Impedance real and imaginary parts are averaged as themselves, so Psychoacoustic only
 changes their bandwidth. FRD files are always written unsmoothed, so their magnitude and
 phase stay one complex response; CSV, text summary and chart PNGs carry the viewer's
 smoothing and say so.

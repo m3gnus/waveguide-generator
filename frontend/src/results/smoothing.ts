@@ -71,16 +71,18 @@ function gaussianSmoothing(
     if (!Number.isFinite(center)) return original;
     const { halfBandwidth, sigma } = band(frequencies[index]);
     const twoSigmaSquared = 2 * sigma * sigma;
-    // Levels are averaged relative to the centre (or first) level so the
-    // power of a large dB value cannot overflow; the offset cancels exactly.
-    const reference = numeric[index] ?? numeric.find((value) => value !== null) ?? 0;
+    const inWindow = positions.flatMap((position, sampleIndex) => (
+      Number.isFinite(position) && position >= center - halfBandwidth && position <= center + halfBandwidth
+        && numeric[sampleIndex] !== null ? [sampleIndex] : []));
+    // Levels are averaged relative to the window's loudest sample, so every
+    // power term is at most 1 and cannot overflow; the offset cancels exactly.
+    const reference = mean === 'arithmetic' ? 0
+      : Math.max(...inWindow.map((sampleIndex) => numeric[sampleIndex] as number));
     let weightedSum = 0;
     let weightSum = 0;
-    positions.forEach((position, sampleIndex) => {
-      if (!Number.isFinite(position) || position < center - halfBandwidth || position > center + halfBandwidth) return;
-      const value = numeric[sampleIndex];
-      if (value === null) return;
-      const distance = position - center;
+    inWindow.forEach((sampleIndex) => {
+      const value = numeric[sampleIndex] as number;
+      const distance = positions[sampleIndex] - center;
       const weight = Math.exp(-(distance * distance) / twoSigmaSquared);
       const term = mean === 'arithmetic' ? value
         : 10 ** (((mean === 'cubic_power' ? 3 : 1) * (value - reference)) / 10);

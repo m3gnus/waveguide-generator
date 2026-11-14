@@ -81,6 +81,16 @@ describe('smoothing', () => {
     });
   });
 
+  it('stays finite for levels whose power would overflow a double', () => {
+    // 10^(3 * 4000 / 10) is far past Number.MAX_VALUE; the window maximum is the reference.
+    const huge = fixtureFrequencies.map((_, index) => (index % 2 ? 4000 : 3990));
+    applySmoothing(fixtureFrequencies, huge, 'psychoacoustic', 'level_db').forEach((value) => {
+      expect(Number.isFinite(value)).toBe(true);
+      expect(Number(value)).toBeGreaterThan(3990);
+      expect(Number(value)).toBeLessThanOrEqual(4000);
+    });
+  });
+
   it('preserves the input reference for none and length mismatch', () => {
     expect(applySmoothing([100], fixtureValues, '1/3', 'level_db')).toBe(fixtureValues);
     expect(applySmoothing(fixtureFrequencies, fixtureValues, 'none', 'level_db')).toBe(fixtureValues);
