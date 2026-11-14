@@ -13,6 +13,7 @@ verification applies only to the artifact and environment it names.
 | [External STEP isolation](STEP-PARSER-ISOLATION.md) | Implemented boundary and accepted gate | Retain the documented enforcement approximations and dated platform qualification gaps. |
 | [Crossovers and driver library](CADLINK-CROSSOVER-DRIVERS.md) | Implemented slices 1–5 | Slice 6 optimisation and add-in parity remain proposed. Bundled and user libraries coexist. |
 | [CAD Link FEM regions](CADLINK-FEM-REGIONS.md) | Implemented contract plus qualification follow-ups | F10/F10a are implemented; F11 has scoped CPU references; F12 live Fusion and GPU qualification remain distinct. F9 storage efficiency is a future improvement. |
+| [Imported mesh workspace](IMPORTED-MESH-WORKSPACE.md) | Implemented workflow and review record | Current file-mesh workflow, compatibility limits and the review decisions behind it. Installed qualification stays with the release process. |
 | [Per-channel rear loads](DRIVER-REAR-LOAD.md) | Proposal partly overlapped by later implementation | Sealed BEAT rear loading and meshed FEM chambers exist. Lossy/vented unification still needs a bounded design and dependency check. |
 
 For current product behavior, start with the [documentation index](../README.md),
