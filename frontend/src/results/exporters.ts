@@ -14,7 +14,7 @@ import {
 } from '../api/exportDestination';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 import { pinRunCadDocument } from '../api/cadProjects';
-import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
+import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation, type ServerMember } from '../api/results';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildRunRecord } from '../jobs/runArchive';
 import { jobDesignForRebuild } from '../jobs/jobDesign';
@@ -73,6 +73,8 @@ export interface ExportContext {
   fetcher?: typeof fetch;
   saveBlob?: (blob: Blob, filename: string) => void;
   saveText?: (text: string, filename: string, type?: string) => void;
+  /** Stage a file the server holds; only a workspace bundle can write one. */
+  saveServerMember?: (member: ServerMember, filename: string) => void;
   reportWarning?: (warning: string) => void;
   now?: Date;
   destination?: 'manual' | 'workspace';
@@ -88,10 +90,13 @@ export interface ExportContext {
    * `existing=confirm` refusal is raised rather than silently overwritten.
    */
   confirmReplacements?: ConfirmReplacements;
-  /** Retention-consistent artifacts copied by the permanent-archive endpoint. */
+  /**
+   * Retention-consistent artifacts copied by the permanent-archive endpoint.
+   * The server holds their bytes; the bundle names them (`saveServerMember`).
+   */
   archiveSnapshot?: {
-    pressureBases: Record<string, { blob: Blob; filename: string }>;
-    radiationImpedance?: Blob;
+    pressureBases: Record<string, { server: ServerMember; filename: string }>;
+    radiationImpedance?: ServerMember;
     radiationPresentation?: RadiationImpedancePresentation;
   };
 }
@@ -346,23 +351,16 @@ async function responseError(response: Response, fallback: string): Promise<Erro
   return new Error(await httpErrorMessage(response, fallback));
 }
 
-export interface WorkspaceFile {
-  filename: string;
-  blob: Blob;
-}
+/** One file of a workspace write: bytes from the browser, or a file the server holds. */
+export type WorkspaceFile =
+  | { filename: string; blob: Blob; server?: undefined }
+  | { filename: string; server: ServerMember; blob?: undefined };
 
 export interface WorkspaceWriteResponse {
   directory: string;
   files: string[];
   /** Files that already existed and were replaced. Absent from older servers. */
   replaced?: string[];
-}
-
-function blobFromBase64(content: string, type = 'application/octet-stream'): Blob {
-  const decoded = atob(content);
-  const bytes = new Uint8Array(decoded.length);
-  for (let index = 0; index < decoded.length; index += 1) bytes[index] = decoded.charCodeAt(index);
-  return new Blob([bytes], { type });
 }
 
 /**
@@ -383,6 +381,15 @@ export function workspaceSubdirectory(context: ExportContext): string {
   return context.workspaceSubdirectory?.trim() || context.jobStem;
 }
 
+async function serverMemberUnavailable(response: Response): Promise<boolean> {
+  try {
+    const body = await response.clone().json() as { code?: unknown };
+    return body.code === 'server_member_unavailable';
+  } catch {
+    return false;
+  }
+}
+
 export async function writeWorkspaceFiles(
   subdirectory: string,
   members: WorkspaceFile[],
@@ -393,6 +400,7 @@ export async function writeWorkspaceFiles(
   jobId?: string,
 ): Promise<WorkspaceWriteResponse> {
   const compatibleBlobs = await Promise.all(members.map(async ({ blob }) => {
+    if (blob === undefined) return undefined;
     const crossRealmBlob = blob as unknown as {
       arrayBuffer: () => Promise<ArrayBuffer>;
       type: string;
@@ -401,6 +409,7 @@ export async function writeWorkspaceFiles(
       ? blob
       : new Blob([await crossRealmBlob.arrayBuffer()], { type: crossRealmBlob.type });
   }));
+  const referencesServer = members.some(({ server }) => server !== undefined);
   const post = async (policy: string): Promise<WorkspaceWriteResponse> => {
     const body = new FormData();
     // With a destination the user chose for this export, the files land in it.
@@ -411,7 +420,15 @@ export async function writeWorkspaceFiles(
     if (destination) body.append('destination', destination);
     if (jobId) body.append('job_id', jobId);
     members.forEach(({ filename }) => body.append('relative_path', filename));
-    members.forEach(({ filename }, index) => body.append('file', compatibleBlobs[index], filename));
+    // A file the server holds is named, not sent: one source per member, in
+    // order, and a file part for each upload.
+    if (referencesServer) {
+      members.forEach(({ server }) => body.append('member_source', server ? JSON.stringify(server) : 'upload'));
+    }
+    members.forEach(({ filename }, index) => {
+      const blob = compatibleBlobs[index];
+      if (blob) body.append('file', blob, filename);
+    });
     let response: Response;
     try {
       response = await fetcher('/api/workspace/write-export', { method: 'POST', body });
@@ -422,8 +439,12 @@ export async function writeWorkspaceFiles(
     // bundle would re-render its charts and restamp its timestamps, so the
     // second request would not be the export the user was asked about.
     if (!response.ok) {
+      const unavailable = response.status === 409 && await serverMemberUnavailable(response);
       const error = await collisionFrom(response) ?? await responseError(response, 'WG could not save the export files. Check the export folder, then export again.');
-      if (response.status === 409) Object.assign(error, { destinationConflict: true });
+      // A held file the server no longer has wrote nothing: not a conflict in
+      // the user's folder, and the caller may take the bytes another way.
+      if (unavailable) Object.assign(error, { serverMemberUnavailable: true });
+      else if (response.status === 409) Object.assign(error, { destinationConflict: true });
       throw error;
     }
     try {
@@ -481,10 +502,15 @@ async function radiationImpedancePresentation(
   return presentation;
 }
 
+function saveServerMember(context: ExportContext, member: ServerMember, filename: string): void {
+  if (!context.saveServerMember) throw new ProgramFault('A file the server holds can only be written to the workspace.');
+  context.saveServerMember(member, filename);
+}
+
 async function radiationImpedanceNpz(context: ExportContext): Promise<string[]> {
   if (context.archiveSnapshot?.radiationImpedance) {
     const filename = `${context.jobStem}_radiation_impedance.npz`;
-    (context.saveBlob ?? downloadBlob)(context.archiveSnapshot.radiationImpedance, filename);
+    saveServerMember(context, context.archiveSnapshot.radiationImpedance, filename);
     return [filename];
   }
   const jobId = requireArtifactJob(context);
@@ -754,7 +780,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
           ? Object.values(context.archiveSnapshot?.pressureBases ?? {})[0]
           : undefined;
       if (retained) {
-        (context.saveBlob ?? downloadBlob)(retained.blob, retained.filename);
+        saveServerMember(context, retained.server, retained.filename);
         return [retained.filename];
       }
       if (context.archiveSnapshot) {
@@ -977,6 +1003,7 @@ async function prepareWorkspaceBundle(
     // explicitly selected ZMA format. Stage by relative name so automatic
     // export sends one backend member instead of a duplicate-path request.
     saveBlob: (blob, filename) => prepared.set(filename, { blob, filename }),
+    saveServerMember: (server, filename) => prepared.set(filename, { server, filename }),
     saveText: (content, filename, type = 'text/plain;charset=utf-8') => {
       prepared.set(filename, { filename, blob: new Blob([content], { type }) });
     },
@@ -1107,6 +1134,17 @@ export async function saveMeshArtifactToWorkspace(
   fetcher: typeof fetch = fetch,
 ): Promise<string> {
   return activityOperation({ kind: 'export', label: 'Exporting MSH' }, fetcher, async (fetcher) => {
+    // A retained mesh is copied by the server; only one it no longer holds
+    // (one it must rebuild, with its notice) is downloaded and sent back.
+    try {
+      const written = await writeWorkspaceFiles(exportSubdirectoryForJob(job), [{
+        filename: `${exportStemForJob(job)}.msh`, server: { member: 'mesh' },
+      }], fetcher, 'merge_identical', undefined, undefined, job.id);
+      if (!written.files[0]) throw new ProgramFault('Workspace returned no saved mesh path.');
+      return written.files[0];
+    } catch (error) {
+      if (!(error as { serverMemberUnavailable?: boolean }).serverMemberUnavailable) throw error;
+    }
     let prepared: WorkspaceFile | null = null;
     let notice: string | undefined;
     await downloadMeshArtifact(job, (message) => { notice = message; }, fetcher, (blob, filename) => { prepared = { blob, filename }; });
@@ -1214,9 +1252,10 @@ export async function archiveRunToWorkspace(
 ): Promise<string[]> {
   return activityOperation({ kind: 'export', label: 'Archiving the run' }, fetcher, async (fetcher) => {
     const snapshot = await fetchJobArchiveSnapshot(job.id, fetcher);
-    const radiationImpedance = snapshot.radiation_impedance
-      ? blobFromBase64(snapshot.radiation_impedance.content_base64)
-      : undefined;
+    // The mesh, pressure bases and radiation matrix stay on the server, in the
+    // copy this snapshot's transaction made; the archive names them.
+    const held = (member: string): ServerMember => ({ hold: snapshot.hold, member });
+    const radiationImpedance = snapshot.radiation_impedance ?? undefined;
     // Availability in the archive record must describe the transaction snapshot,
     // not a jobs-socket item that may predate a retention event.
     const archiveJob: JobItem = {
@@ -1224,14 +1263,14 @@ export async function archiveRunToWorkspace(
       has_mesh_artifact: Boolean(snapshot.mesh_artifact),
       has_pressure_basis_artifact: snapshot.pressure_bases.length > 0,
       has_radiation_impedance_artifact: Boolean(radiationImpedance),
-      radiation_impedance_artifact_bytes: radiationImpedance?.size,
+      radiation_impedance_artifact_bytes: radiationImpedance?.bytes,
     };
     const subdirectory = exportSubdirectoryForJob(archiveJob);
-    const pressureBases = Object.fromEntries(snapshot.pressure_bases.map(({ channel_id, content_base64 }) => {
+    const pressureBases = Object.fromEntries(snapshot.pressure_bases.map(({ channel_id, member }) => {
       const stem = channel_id.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+|[.-]+$/g, '') || 'channel';
       return [channel_id, {
         filename: `${stem}_pressure_basis.npz`,
-        blob: blobFromBase64(content_base64),
+        server: held(member),
       }];
     }));
     const formats: ExportFormat[] = [
@@ -1249,7 +1288,7 @@ export async function archiveRunToWorkspace(
       hasRadiationImpedanceArtifact: Boolean(snapshot.radiation_impedance),
       archiveSnapshot: {
         pressureBases,
-        radiationImpedance,
+        radiationImpedance: radiationImpedance && held(radiationImpedance.member),
         radiationPresentation: snapshot.radiation_impedance?.presentation,
       },
       workspaceSubdirectory: subdirectory,
@@ -1284,7 +1323,7 @@ export async function archiveRunToWorkspace(
     const mesh = snapshot.mesh_artifact
       ? await writeArchiveMembers(subdirectory, [{
         filename: `${exportStemForJob(archiveJob)}.msh`,
-        blob: new Blob([snapshot.mesh_artifact], { type: 'text/plain;charset=utf-8' }),
+        server: held(snapshot.mesh_artifact.member),
       }], fetcher, job.id)
       : { files: [], moved: new Map<string, string>() };
     // The record names the artifacts it sits beside, wherever they landed.

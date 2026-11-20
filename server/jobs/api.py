@@ -727,11 +727,25 @@ def create_jobs_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.get("/api/jobs/{job_id}/archive-snapshot", response_model=None)
-    async def job_archive_snapshot(job_id: str) -> Response:
+    async def job_archive_snapshot(
+        job_id: str,
+        members: Literal["inline", "held"] = Query(
+            default="inline",
+            description=(
+                "inline: the mesh, pressure bases and radiation matrix in the "
+                "response (base64). held: the server keeps them under `hold`, "
+                "for POST /api/workspace/write-export to write by reference."
+            ),
+        ),
+    ) -> Response:
         """Return one retention-consistent set of permanent-archive inputs."""
 
         try:
-            snapshot = await runtime.get_archive_snapshot(job_id)
+            snapshot = await (
+                runtime.get_held_archive_snapshot(job_id)
+                if members == "held"
+                else runtime.get_archive_snapshot(job_id)
+            )
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:

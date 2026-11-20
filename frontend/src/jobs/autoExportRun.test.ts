@@ -54,15 +54,18 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   status, headers: { 'Content-Type': 'application/json' },
 });
 
+/** What the archive snapshot's hold keeps on the server. */
+const HELD = { mesh: 'retained mesh' };
+
 function workspace(jobId: string) {
   const files = new Map<string, string>();
   const writes: Array<{ subdirectory: string; existing: string; names: string[]; status: number }> = [];
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const path = String(input);
     if (path === `/api/results/${jobId}`) return json(result);
-    if (path === `/api/jobs/${jobId}/archive-snapshot`) return json({
-      schema_version: 1, results: result, results_sha256: 'a'.repeat(64),
-      mesh_artifact: 'retained mesh', pressure_bases: [], radiation_impedance: null,
+    if (path === `/api/jobs/${jobId}/archive-snapshot?members=held`) return json({
+      schema_version: 1, results: result, results_sha256: 'a'.repeat(64), hold: 'held-copy',
+      mesh_artifact: { member: 'mesh', bytes: HELD.mesh.length }, pressure_bases: [], radiation_impedance: null,
     });
     if (path === `/api/export/runs/${jobId}/step`) return new Response('returned step bytes');
     if (path === '/api/export/step?body=solid') return new Response('step bytes', {
@@ -76,8 +79,14 @@ function workspace(jobId: string) {
     const existing = String(form.get('existing'));
     const names = form.getAll('relative_path').map(String);
     const blobs = form.getAll('file') as Blob[];
+    // As the server does: a held member is the snapshot's copy, an upload the next file part.
+    const sources = form.has('member_source') ? form.getAll('member_source').map(String) : names.map(() => 'upload');
+    let upload = 0;
     const members = await Promise.all(names.map(async (name, index) => ({
-      path: `${subdirectory}/${name}`, text: await blobs[index].text(),
+      path: `${subdirectory}/${name}`,
+      text: sources[index] === 'upload'
+        ? await blobs[upload++].text()
+        : HELD[(JSON.parse(sources[index]) as { member: keyof typeof HELD }).member],
     })));
     // Case-insensitive, as on Windows: a name that differs only in case is
     // the same file, and the server reports it with its on-disk casing.

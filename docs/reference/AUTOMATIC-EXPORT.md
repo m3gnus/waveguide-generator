@@ -34,7 +34,19 @@ each result and mesh file the archive wrote where it landed (`artifacts.files`, 
 `archive/<name>` for one that moved, beside the mesh and impedance entries; `run.json`
 itself and the run's CAD document are not listed). Because `run.json` is also written
 with `confirm`, re-archiving a run whose `run.json` an older version wrote places the
-new record at `archive/run.json` and leaves the older one in place. A release after `finish`, or by any token that no
+new record at `archive/run.json` and leaves the older one in place.
+
+Files the server already holds do not travel through the browser. The archive reads
+`GET /api/jobs/{id}/archive-snapshot?members=held`: the same one-transaction snapshot,
+with the mesh, pressure bases and radiation matrix kept on the server under a `hold`
+id (30 minutes) instead of returned as base64. Its `write-export` requests name them
+with `member_source` (`{"hold": …, "member": …}`, one entry per `relative_path`;
+`"upload"` takes the next file part), so the server writes the very bytes the
+snapshot copied. The automatic mesh save names the run's retained mesh
+(`{"member": "mesh"}`) the same way, and downloads and sends a mesh only when the
+server no longer holds one (`409`, `code: "server_member_unavailable"`), as when it
+must rebuild it. An expired hold refuses the write with that code; the archive is
+retried. The inline (base64) snapshot and plain uploads still work. A release after `finish`, or by any token that no
 longer owns the lane, is an idempotent success.
 
 Capability requests have a ten-second client timeout. Pending qualification, refresh

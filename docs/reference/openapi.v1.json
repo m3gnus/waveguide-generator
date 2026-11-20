@@ -19265,6 +19265,22 @@
               "title": "Job Id",
               "type": "string"
             }
+          },
+          {
+            "description": "inline: the mesh, pressure bases and radiation matrix in the response (base64). held: the server keeps them under `hold`, for POST /api/workspace/write-export to write by reference.",
+            "in": "query",
+            "name": "members",
+            "required": false,
+            "schema": {
+              "default": "inline",
+              "description": "inline: the mesh, pressure bases and radiation matrix in the response (base64). held: the server keeps them under `hold`, for POST /api/workspace/write-export to write by reference.",
+              "enum": [
+                "inline",
+                "held"
+              ],
+              "title": "Members",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -23045,6 +23061,13 @@
                     "description": "Run whose recorded location owns this write.",
                     "type": "string"
                   },
+                  "member_source": {
+                    "description": "Optional; one per relative_path. \"upload\" takes the next file part. Otherwise a JSON server member: {\"hold\": <archive-snapshot hold>, \"member\": <name>}, or {\"member\": \"mesh\"} for the run's retained mesh. Needs job_id.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
                   "relative_path": {
                     "items": {
                       "type": "string"
@@ -23057,8 +23080,7 @@
                 },
                 "required": [
                   "subdirectory",
-                  "relative_path",
-                  "file"
+                  "relative_path"
                 ],
                 "type": "object"
               }

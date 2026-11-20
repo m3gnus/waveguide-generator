@@ -399,16 +399,33 @@ export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fet
   }
 }
 
+/**
+ * A file the server already holds, written by `POST /api/workspace/write-export`
+ * without its bytes crossing to the browser: a member of an archive snapshot's
+ * `hold`, or (no hold) the run's retained mesh as stored now.
+ */
+export interface ServerMember {
+  hold?: string;
+  member: string;
+}
+
+/** A held member of an archive snapshot, with its size in bytes. */
+export interface HeldArchiveMember {
+  member: string;
+  bytes: number;
+}
+
 export interface JobArchiveSnapshot {
   schema_version: 1;
   results: JobResults;
   results_sha256: string;
-  mesh_artifact: string | null;
-  pressure_bases: Array<{ channel_id: string; content_base64: string }>;
-  radiation_impedance: {
-    content_base64: string;
+  /** Names the server's copy of the members below, for write-export. */
+  hold: string;
+  mesh_artifact: HeldArchiveMember | null;
+  pressure_bases: Array<HeldArchiveMember & { channel_id: string }>;
+  radiation_impedance: (HeldArchiveMember & {
     presentation: RadiationImpedancePresentation;
-  } | null;
+  }) | null;
 }
 
 /**
@@ -417,6 +434,8 @@ export interface JobArchiveSnapshot {
  * The server copies these members inside one store transaction.  Callers must
  * not mix this payload with the ordinary per-artifact endpoints: doing so
  * would reintroduce a window where retention can delete a later member.
+ * The mesh, pressure bases and radiation matrix stay on the server under
+ * `hold` (`members=held`): the archive writes them by reference.
  */
 export async function fetchJobArchiveSnapshot(
   jobId: string,
@@ -425,7 +444,7 @@ export async function fetchJobArchiveSnapshot(
   const revision = issueResultsRequest(jobId, 'read');
   let result: JobResults | null = null;
   try {
-    const response = await deadlineFetch(fetcher, `/api/jobs/${encodeURIComponent(jobId)}/archive-snapshot`);
+    const response = await deadlineFetch(fetcher, `/api/jobs/${encodeURIComponent(jobId)}/archive-snapshot?members=held`);
     if (!response.ok) {
       throw new Error(await httpErrorMessage(response, 'WG could not read this run’s saved copy. Select the run again.'));
     }

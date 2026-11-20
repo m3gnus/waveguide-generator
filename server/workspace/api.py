@@ -221,6 +221,77 @@ def _workspace_unavailable_response(exc: WorkspaceUnavailableError) -> JSONRespo
 
 
 
+@dataclass(frozen=True)
+class ServerMember:
+    """A member whose bytes the server already holds for the request's run.
+
+    ``hold`` names an archive snapshot's copy (``GET
+    /api/jobs/{id}/archive-snapshot?members=held``) and ``member`` one of its
+    members. Without a hold, ``member`` may only be ``mesh``: the run's
+    retained solve mesh as stored now. The bytes are resolved on the server;
+    the member's relative path is checked like every other member's.
+    """
+
+    member: str
+    hold: str | None = None
+
+
+class ServerMemberUnavailable(Exception):
+    """A referenced member the server no longer holds."""
+
+
+def _server_member_unavailable_response(exc: ServerMemberUnavailable) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={"code": "server_member_unavailable", "detail": str(exc)},
+    )
+
+
+def _parse_server_member(value: str) -> ServerMember:
+    from server.jobs.archive_holds import MESH_MEMBER
+
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("member_source must be 'upload' or a server member") from exc
+    if not isinstance(parsed, dict) or set(parsed) - {"hold", "member"}:
+        raise ValueError("a server member names only hold and member")
+    member, hold = parsed.get("member"), parsed.get("hold")
+    if not isinstance(member, str) or not member or len(member) > 512:
+        raise ValueError("a server member needs a member name")
+    if hold is not None and (not isinstance(hold, str) or not hold or len(hold) > 200):
+        raise ValueError("a server member's hold must be a hold id")
+    if hold is None and member != MESH_MEMBER:
+        raise ValueError("only the run's mesh can be named without a hold")
+    return ServerMember(member=member, hold=hold)
+
+
+def _resolve_server_members(
+    runtime: Any, job_id: str | None, members: list[tuple[str, bytes | ServerMember]]
+) -> list[tuple[str, bytes]]:
+    """Replace each server member with its bytes, from a worker thread."""
+
+    resolved: list[tuple[str, bytes]] = []
+    for relative_path, content in members:
+        if isinstance(content, ServerMember):
+            if job_id is None:
+                raise ValueError("A server member needs the run it belongs to (job_id).")
+            if content.hold is None:
+                text = runtime.store.get_mesh_artifact(job_id)
+                if text is None:
+                    raise ServerMemberUnavailable("This run did not keep its mesh.")
+                content = text.encode("utf-8")
+            else:
+                held = runtime.archive_holds.get(content.hold, job_id, content.member)
+                if held is None:
+                    raise ServerMemberUnavailable(
+                        "WG no longer holds this run’s copied files. Archive the run again."
+                    )
+                content = held
+        resolved.append((relative_path, content))
+    return resolved
+
+
 def _member_bytes(member: ExportMember, remaining: int = MAX_EXPORT_BYTES) -> bytes:
     if member.text is not None:
         content = member.text.encode("utf-8")
@@ -264,7 +335,7 @@ def _decode_json_export_request(
 
 async def _decode_multipart_export_request(
     request: Request,
-) -> tuple[str, str, list[tuple[str, bytes]], str | None, str | None]:
+) -> tuple[str, str, list[tuple[str, bytes | ServerMember]], str | None, str | None]:
     form = await request.form()
     subdirectory = form.get("subdirectory", "")
     existing = form.get("existing", "reject")
@@ -274,6 +345,9 @@ async def _decode_multipart_export_request(
         raise ValueError("job_id must identify a run")
     relative_paths = form.getlist("relative_path")
     files = form.getlist("file")
+    # Absent: every member is an upload, in order. Present: one entry per
+    # relative_path, "upload" (the next file part) or a server member.
+    sources = form.getlist("member_source")
     if destination is not None and not isinstance(destination, str):
         raise ValueError("destination must be an export-destination handle")
     if not isinstance(subdirectory, str) or (not subdirectory and destination is None):
@@ -282,16 +356,29 @@ async def _decode_multipart_export_request(
         raise ValueError(
             "existing must be one of " + ", ".join(sorted(EXISTING_FILE_POLICIES))
         )
-    if not 1 <= len(files) <= MAX_EXPORT_MEMBERS:
-        raise ValueError(f"file count must be between 1 and {MAX_EXPORT_MEMBERS}")
-    if len(relative_paths) != len(files) or not all(
+    if not sources:
+        sources = ["upload"] * len(files)
+        if not 1 <= len(files) <= MAX_EXPORT_MEMBERS:
+            raise ValueError(f"file count must be between 1 and {MAX_EXPORT_MEMBERS}")
+    if not 1 <= len(sources) <= MAX_EXPORT_MEMBERS:
+        raise ValueError(f"member count must be between 1 and {MAX_EXPORT_MEMBERS}")
+    if not all(isinstance(source, str) for source in sources) or (
+        sum(source == "upload" for source in sources) != len(files)
+    ):
+        raise ValueError("each upload source requires one file")
+    if len(relative_paths) != len(sources) or not all(
         isinstance(path, str) for path in relative_paths
     ):
         raise ValueError("each file requires one corresponding relative_path")
 
-    members: list[tuple[str, bytes]] = []
+    members: list[tuple[str, bytes | ServerMember]] = []
     total_bytes = 0
-    for relative_path, upload in zip(relative_paths, files, strict=True):
+    uploads = iter(files)
+    for relative_path, source in zip(relative_paths, sources, strict=True):
+        if source != "upload":
+            members.append((relative_path, _parse_server_member(source)))
+            continue
+        upload = next(uploads)
         if not isinstance(upload, UploadFile):
             raise ValueError("file fields must contain binary uploads")
         remaining = MAX_EXPORT_BYTES - total_bytes
@@ -1194,7 +1281,7 @@ _WRITE_EXPORT_OPENAPI = {
             "multipart/form-data": {
                 "schema": {
                     "type": "object",
-                    "required": ["subdirectory", "relative_path", "file"],
+                    "required": ["subdirectory", "relative_path"],
                     "properties": {
                         "subdirectory": {"type": "string"},
                         "job_id": {"type": "string", "description": "Run whose recorded location owns this write."},
@@ -1222,6 +1309,16 @@ _WRITE_EXPORT_OPENAPI = {
                         "file": {
                             "type": "array",
                             "items": {"type": "string", "format": "binary"},
+                        },
+                        "member_source": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Optional; one per relative_path. \"upload\" takes the next "
+                                "file part. Otherwise a JSON server member: "
+                                "{\"hold\": <archive-snapshot hold>, \"member\": <name>}, or "
+                                "{\"member\": \"mesh\"} for the run's retained mesh. Needs job_id."
+                            ),
                         },
                     },
                 }
@@ -1447,6 +1544,16 @@ def create_workspace_router(
                 raise HTTPException(status_code=409, detail=exc.args[0]) from exc
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        if any(isinstance(content, ServerMember) for _path, content in members):
+            try:
+                members = await asyncio.to_thread(
+                    _resolve_server_members, request.app.state.jobs_runtime, job_id, members
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except ServerMemberUnavailable as exc:
+                return _server_member_unavailable_response(exc)
 
         try:
             written = await asyncio.to_thread(

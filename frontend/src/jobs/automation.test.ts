@@ -46,6 +46,13 @@ describe('job completion automation', () => {
       expect(String(input)).toBe('/api/workspace/write-export');
       expect((init!.body as FormData).get('job_id')).toBe(job.id);
       expect((init!.body as FormData).get('subdirectory')).toBe('server-folder/7_recorded-run');
+      // A regenerated mesh is one the server no longer holds: it refuses the
+      // reference, and the rebuilt bytes are downloaded and sent.
+      if ((init!.body as FormData).has('member_source')) {
+        return regenerated
+          ? new Response(JSON.stringify({ code: 'server_member_unavailable', detail: 'This run did not keep its mesh.' }), { status: 409 })
+          : new Response(JSON.stringify({ directory: 'server-folder/7_recorded-run', files: [savedPath] }));
+      }
       expect((init!.body as FormData).get('file')).toHaveProperty('name', filename);
       return new Response(JSON.stringify({ directory: 'server-folder/7_recorded-run', files: [savedPath] }));
     });
@@ -59,7 +66,7 @@ describe('job completion automation', () => {
     const preferences = { ...preferencesStore.getSnapshot(), autoDownloadMesh: true, autoExportOnComplete: false, archiveRunsOnComplete: false };
     await automation.process([job], preferences, dependencies);
     await automation.process([job], preferences, dependencies);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(regenerated ? 3 : 1);
     expect(dependencies.markMeshDownloaded).toHaveBeenCalledExactlyOnceWith(job, savedPath);
     expect(reportError).not.toHaveBeenCalled();
     expect(reportMeshNotice).toHaveBeenCalledTimes(regenerated ? 1 : 0);

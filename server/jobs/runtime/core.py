@@ -42,6 +42,12 @@ from server.cadlink.store import CadLinkStore
 from server.workspace import archive_identity
 from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig, Expr
+from server.jobs.archive_holds import (
+    MESH_MEMBER,
+    RADIATION_IMPEDANCE_MEMBER,
+    ArchiveSnapshotHolds,
+    pressure_basis_member,
+)
 from server.jobs.design_reader import parse, read_design, read_request
 from server.engines.registry import (
     SELECTABLE_ENGINE_NAMES,
@@ -467,10 +473,14 @@ def _solved_under_legacy_axial(results_text: str | None, axial_ids: Sequence[str
     return False
 
 
-def _archive_snapshot_presentation(
+def _archive_snapshot_members(
     job_id: str, snapshot: Mapping[str, Any] | None
 ) -> dict[str, Any]:
-    """Convert one copied retention-consistent snapshot on a worker thread."""
+    """Read one copied retention-consistent snapshot's members on a worker thread.
+
+    Returns the parsed results and the exact bytes of each binary member,
+    which both snapshot forms below publish unchanged.
+    """
 
     from server.jobs.radiation_impedance import (
         radiation_impedance_presentation,
@@ -493,7 +503,7 @@ def _archive_snapshot_presentation(
             "WG could not read this run’s results. Solve the design again."
         ) from exc
 
-    pressure_bases: list[dict[str, str]] = []
+    pressure_bases: list[tuple[str, bytes]] = []
     bases_npz = snapshot["channel_bases"]
     if bases_npz is not None:
         try:
@@ -501,21 +511,14 @@ def _archive_snapshot_presentation(
             for artifact in export_pressure_bases(
                 bases_npz, results, request_motions=motions
             ):
-                pressure_bases.append(
-                    {
-                        "channel_id": artifact.channel_id,
-                        "content_base64": base64.b64encode(
-                            artifact.content
-                        ).decode("ascii"),
-                    }
-                )
+                pressure_bases.append((artifact.channel_id, artifact.content))
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning("Could not read pressure basis of run %s: %s", job_id, exc)
             raise JobResourceUnavailableError(
                 "WG could not read this run’s saved response. Solve the design again."
             ) from exc
 
-    radiation: dict[str, Any] | None = None
+    radiation: tuple[bytes, Any] | None = None
     radiation_npz = snapshot["radiation_impedance"]
     if radiation_npz is not None:
         try:
@@ -525,18 +528,85 @@ def _archive_snapshot_presentation(
             raise JobResourceUnavailableError(
                 "WG could not read this run’s port data. Solve the design again."
             ) from exc
-        radiation = {
-            "content_base64": base64.b64encode(radiation_npz).decode("ascii"),
-            "presentation": presentation,
-        }
+        radiation = (radiation_npz, presentation)
 
     return {
-        "schema_version": 1,
         "results": results,
         "results_sha256": snapshot["results_sha256"],
-        "mesh_artifact": snapshot["mesh_text"],
+        "mesh_text": snapshot["mesh_text"],
         "pressure_bases": pressure_bases,
-        "radiation_impedance": radiation,
+        "radiation": radiation,
+    }
+
+
+def _archive_snapshot_presentation(
+    job_id: str, snapshot: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Convert one copied retention-consistent snapshot on a worker thread."""
+
+    members = _archive_snapshot_members(job_id, snapshot)
+    radiation = members["radiation"]
+    return {
+        "schema_version": 1,
+        "results": members["results"],
+        "results_sha256": members["results_sha256"],
+        "mesh_artifact": members["mesh_text"],
+        "pressure_bases": [
+            {
+                "channel_id": channel_id,
+                "content_base64": base64.b64encode(content).decode("ascii"),
+            }
+            for channel_id, content in members["pressure_bases"]
+        ],
+        "radiation_impedance": None if radiation is None else {
+            "content_base64": base64.b64encode(radiation[0]).decode("ascii"),
+            "presentation": radiation[1],
+        },
+    }
+
+
+def _held_archive_snapshot_presentation(
+    job_id: str, snapshot: Mapping[str, Any] | None, holds: ArchiveSnapshotHolds
+) -> dict[str, Any]:
+    """The snapshot with its binary members kept on the server.
+
+    The browser receives what it builds files from (results, the radiation
+    presentation) and, for each member it only writes, a name and a byte
+    count. ``POST /api/workspace/write-export`` writes those members from the
+    hold: the same bytes the base64 form carries.
+    """
+
+    members = _archive_snapshot_members(job_id, snapshot)
+    radiation = members["radiation"]
+    held: dict[str, bytes] = {}
+    mesh_text = members["mesh_text"]
+    if mesh_text is not None:
+        held[MESH_MEMBER] = mesh_text.encode("utf-8")
+    for channel_id, content in members["pressure_bases"]:
+        held[pressure_basis_member(channel_id)] = content
+    if radiation is not None:
+        held[RADIATION_IMPEDANCE_MEMBER] = radiation[0]
+    return {
+        "schema_version": 1,
+        "results": members["results"],
+        "results_sha256": members["results_sha256"],
+        "hold": holds.hold(job_id, held),
+        "mesh_artifact": None if mesh_text is None else {
+            "member": MESH_MEMBER, "bytes": len(held[MESH_MEMBER]),
+        },
+        "pressure_bases": [
+            {
+                "channel_id": channel_id,
+                "member": pressure_basis_member(channel_id),
+                "bytes": len(content),
+            }
+            for channel_id, content in members["pressure_bases"]
+        ],
+        "radiation_impedance": None if radiation is None else {
+            "member": RADIATION_IMPEDANCE_MEMBER,
+            "bytes": len(radiation[0]),
+            "presentation": radiation[1],
+        },
     }
 
 
@@ -1522,6 +1592,7 @@ class JobRuntime:
         self.protect_cad_document: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None
         self.engine_registry = engine_registry or EngineRegistry(factory=get_engine)
         self.events = EventBroker()
+        self.archive_holds = ArchiveSnapshotHolds()
         self._queue: deque[str] = deque()
         self._running: set[str] = set()
         self._cancellation_flags: dict[str, threading.Event] = {}
@@ -3159,6 +3230,19 @@ class JobRuntime:
         await self.start()
         snapshot = await asyncio.to_thread(self.store.get_archive_snapshot, job_id)
         return await asyncio.to_thread(_archive_snapshot_presentation, job_id, snapshot)
+
+    async def get_held_archive_snapshot(self, job_id: str) -> dict[str, Any]:
+        """``get_archive_snapshot`` with the binary members held on the server.
+
+        Same store read and conversion; the mesh, pressure bases and radiation
+        matrix stay in ``archive_holds`` for write-export to copy by reference.
+        """
+
+        await self.start()
+        snapshot = await asyncio.to_thread(self.store.get_archive_snapshot, job_id)
+        return await asyncio.to_thread(
+            _held_archive_snapshot_presentation, job_id, snapshot, self.archive_holds
+        )
 
     async def get_radiation_impedance(self, job_id: str) -> bytes:
         """Return the lossless passive-cardioid radiation matrix artifact."""

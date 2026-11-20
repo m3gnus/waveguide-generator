@@ -10252,7 +10252,10 @@ export interface operations {
     };
     job_archive_snapshot_api_jobs__job_id__archive_snapshot_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description inline: the mesh, pressure bases and radiation matrix in the response (base64). held: the server keeps them under `hold`, for POST /api/workspace/write-export to write by reference. */
+                members?: "inline" | "held";
+            };
             header?: never;
             path: {
                 job_id: string;
@@ -12997,9 +13000,11 @@ export interface operations {
                      * @enum {string}
                      */
                     existing?: "reject" | "merge_identical" | "overwrite" | "confirm";
-                    file: string[];
+                    file?: string[];
                     /** @description Run whose recorded location owns this write. */
                     job_id?: string;
+                    /** @description Optional; one per relative_path. "upload" takes the next file part. Otherwise a JSON server member: {"hold": <archive-snapshot hold>, "member": <name>}, or {"member": "mesh"} for the run's retained mesh. Needs job_id. */
+                    member_source?: string[];
                     relative_path: string[];
                     subdirectory: string;
                 };

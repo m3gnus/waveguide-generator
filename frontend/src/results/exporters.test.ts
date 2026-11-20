@@ -88,15 +88,17 @@ function workspacePayload(init?: RequestInit) {
   const form = init?.body as FormData;
   const paths = form.getAll('relative_path').map(String);
   const files = form.getAll('file');
+  // Without member_source every member is an upload; with it, one source per path.
+  const sources = form.has('member_source') ? form.getAll('member_source').map(String) : paths.map(() => 'upload');
+  let upload = 0;
   return {
     subdirectory: String(form.get('subdirectory')),
     existing: String(form.get('existing')),
     destination: form.get('destination'),
     jobId: form.get('job_id'),
-    members: paths.map((relative_path, index) => ({
-      relative_path,
-      blob: files[index] as Blob,
-    })),
+    members: paths.map((relative_path, index) => sources[index] === 'upload'
+      ? { relative_path, blob: files[upload++] as Blob, server: undefined }
+      : { relative_path, blob: undefined as unknown as Blob, server: JSON.parse(sources[index]) as { hold?: string; member: string } }),
   };
 }
 
@@ -1216,12 +1218,34 @@ describe('result exporters', () => {
     expect(JSON.parse(String(requests.find(({ path }) => path === '/api/render-charts')!.init?.body)).directivity).toEqual({});
   });
 
-  it.each([false, true])('auto-saves a mesh with regenerated=%s into the same per-run Workspace directory', async (regenerated) => {
+  it('auto-saves a retained mesh by reference: the server copies it, nothing is downloaded', async () => {
+    const reportNotice = vi.fn();
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      directory: 'C:/output/123_asro68', files: ['C:/output/123_asro68/123_asro68.msh'],
+    }), { status: 200 }));
+
+    const saved = await saveMeshArtifactToWorkspace({
+      id: 'artifact-uuid', archive_folder: 'asro68', archive_run: '123_asro68', run_number: 123, label: 'asro68', config_summary: {},
+    }, reportNotice, fetcher);
+
+    expect(saved).toBe('C:/output/123_asro68/123_asro68.msh');
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/workspace/write-export']);
+    const payload = workspacePayload(fetcher.mock.calls[0][1]);
+    expect(payload).toMatchObject({ subdirectory: 'asro68/123_asro68', existing: 'merge_identical', jobId: 'artifact-uuid' });
+    expect(payload.members).toEqual([{ relative_path: '123_asro68.msh', blob: undefined, server: { member: 'mesh' } }]);
+    expect(reportNotice).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('auto-saves a mesh the server no longer holds (regenerated=%s) as before', async (regenerated) => {
     const reportNotice = vi.fn();
     const expectedName = `123_asro68${regenerated ? '-regenerated' : ''}.msh`;
+    let writes = 0;
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       if (String(input) === '/api/mesh-artifact/artifact-uuid') return new Response('mesh bytes', { status: 200, headers: regenerated ? { 'X-WG2-Mesh-Regenerated': '1' } : {} });
       expect(reportNotice).not.toHaveBeenCalled();
+      if (++writes === 1) return new Response(JSON.stringify({
+        code: 'server_member_unavailable', detail: 'This run did not keep its mesh.',
+      }), { status: 409 });
       return new Response(JSON.stringify({
         directory: 'C:/output/123_asro68',
         files: [`C:/output/123_asro68/${expectedName}`],
@@ -1233,15 +1257,25 @@ describe('result exporters', () => {
     }, reportNotice, fetcher);
 
     expect(saved).toBe(`C:/output/123_asro68/${expectedName}`);
-    const payload = workspacePayload(fetcher.mock.calls[1][1]);
+    const payload = workspacePayload(fetcher.mock.calls[2][1]);
     expect(payload.subdirectory).toBe('asro68/123_asro68');
     expect(payload.members[0].relative_path).toBe(expectedName);
     expect(await payload.members[0].blob.text()).toBe('mesh bytes');
     expect(reportNotice).toHaveBeenCalledTimes(regenerated ? 1 : 0);
     if (regenerated) expect(reportNotice).toHaveBeenCalledWith('#123 · asro68: the original mesh is gone, so WG rebuilt it with the current version and may differ from the mesh that was solved.');
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
-      '/api/mesh-artifact/artifact-uuid', '/api/workspace/write-export',
+      '/api/workspace/write-export', '/api/mesh-artifact/artifact-uuid', '/api/workspace/write-export',
     ]);
+  });
+
+  it('keeps a mesh save refused by the folder a destination conflict, without downloading', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      detail: 'A different file already exists at C:/output/123_asro68/123_asro68.msh. Move it, or choose another folder.',
+    }), { status: 409 }));
+    await expect(saveMeshArtifactToWorkspace({
+      id: 'artifact-uuid', archive_folder: 'asro68', archive_run: '123_asro68', run_number: 123, label: 'asro68', config_summary: {},
+    }, vi.fn(), fetcher)).rejects.toMatchObject({ destinationConflict: true });
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 
   it('adds both radiation artifacts to the permanent run archive only when retained', async () => {
@@ -1255,17 +1289,18 @@ describe('result exporters', () => {
       design_revision: 1, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null,
       auto_export_formats: {}, archived_at: null, raw_results_file: null, mesh_artifact_file: null, log_tail: [],
     };
-    const writes: Array<{ subdirectory: string; jobId: FormDataEntryValue | null; members: Array<{ relative_path: string }> }> = [];
+    const writes: ReturnType<typeof workspacePayload>[] = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'export', label: 'Archiving the run' }]);
       const path = String(input);
-      if (path === '/api/jobs/archive-cardioid/archive-snapshot') return new Response(JSON.stringify({
+      if (path === '/api/jobs/archive-cardioid/archive-snapshot?members=held') return new Response(JSON.stringify({
         schema_version: 1,
         results: finalResult,
         results_sha256: 'a'.repeat(64),
+        hold: 'held-cardioid',
         mesh_artifact: null,
-        pressure_bases: [{ channel_id: 'mf drive', content_base64: 'BAUG' }],
-        radiation_impedance: { content_base64: 'AQID', presentation: radiation },
+        pressure_bases: [{ channel_id: 'mf drive', member: 'pressure_basis/mf drive', bytes: 3 }],
+        radiation_impedance: { member: 'radiation_impedance', bytes: 3, presentation: radiation },
       }), { status: 200 });
       if (path === '/api/workspace/write-export') {
         const payload = workspacePayload(init);
@@ -1295,9 +1330,18 @@ describe('result exporters', () => {
       '8_Cardioid_radiation_impedance.npz',
       '8_Cardioid_radiation_impedance.csv',
     ]);
+    // The server writes the bytes it holds: only their names cross.
+    expect(writes[0].members.map(({ server }) => server)).toEqual([
+      undefined, undefined, undefined, undefined, undefined,
+      { hold: 'held-cardioid', member: 'pressure_basis/mf drive' },
+      { hold: 'held-cardioid', member: 'radiation_impedance' },
+      undefined,
+    ]);
+    const record = JSON.parse(await writes.at(-1)!.members[0].blob.text());
+    expect(record.artifacts.radiationImpedance.bytes).toBe(3);
     expect(fetcher.mock.calls.map(([input]) => String(input)).filter((path) => (
       path.includes('archive-cardioid')
-    ))).toEqual(['/api/jobs/archive-cardioid/archive-snapshot']);
+    ))).toEqual(['/api/jobs/archive-cardioid/archive-snapshot?members=held']);
   });
 
   it.each(['missing', 'pinned', 'legacy-record', 'retryable'])('preserves the CAD reference before publishing run.json (%s)', async (outcome) => {
@@ -1322,8 +1366,8 @@ describe('result exporters', () => {
     const records: Record<string, unknown>[] = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
-      if (path === '/api/jobs/archive-cad/archive-snapshot') return new Response(JSON.stringify({
-        schema_version: 1, results: finalResult, results_sha256: 'c'.repeat(64),
+      if (path === '/api/jobs/archive-cad/archive-snapshot?members=held') return new Response(JSON.stringify({
+        schema_version: 1, results: finalResult, results_sha256: 'c'.repeat(64), hold: 'held-cad',
         mesh_artifact: null, pressure_bases: [], radiation_impedance: null,
       }), { status: 200 });
       if (path.endsWith('/mesh-replay')) return new Response(JSON.stringify({ detail: 'Retained CAD originals unavailable' }), { status: 409 });
@@ -1366,7 +1410,7 @@ describe('result exporters', () => {
     warn.mockRestore();
   });
 
-  it('writes the exact retained mesh copied into the archive snapshot', async () => {
+  it('writes the exact retained mesh copied into the archive snapshot, by reference', async () => {
     const job = {
       id: 'archive-mesh', archive_folder: 'OSSE', archive_run: '9_OSSE', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
       stage: null, stage_message: null, created_at: '2026-08-20T10:00:00Z', queued_at: '2026-08-20T10:00:00Z',
@@ -1378,9 +1422,9 @@ describe('result exporters', () => {
     } satisfies JobItem;
     const writes: ReturnType<typeof workspacePayload>[] = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
-      if (String(input) === '/api/jobs/archive-mesh/archive-snapshot') return new Response(JSON.stringify({
-        schema_version: 1, results: finalResult, results_sha256: 'b'.repeat(64),
-        mesh_artifact: 'exact mesh bytes', pressure_bases: [], radiation_impedance: null,
+      if (String(input) === '/api/jobs/archive-mesh/archive-snapshot?members=held') return new Response(JSON.stringify({
+        schema_version: 1, results: finalResult, results_sha256: 'b'.repeat(64), hold: 'held-mesh',
+        mesh_artifact: { member: 'mesh', bytes: 16 }, pressure_bases: [], radiation_impedance: null,
       }), { status: 200 });
       const payload = workspacePayload(init);
       writes.push(payload);
@@ -1395,7 +1439,8 @@ describe('result exporters', () => {
     expect(writes[1].members.map(({ relative_path }) => relative_path)).toEqual([
       '9_Mesh_Run.msh',
     ]);
-    expect(await writes[1].members[0].blob.text()).toBe('exact mesh bytes');
+    // The exact mesh the snapshot copied, written by the server from its hold.
+    expect(writes[1].members[0].server).toEqual({ hold: 'held-mesh', member: 'mesh' });
     expect(JSON.parse(await writes[2].members[0].blob.text()).artifacts.mesh)
       .toBe('9_Mesh_Run.msh');
   });
@@ -1413,9 +1458,9 @@ describe('result exporters', () => {
     } satisfies JobItem;
     const writes: ReturnType<typeof workspacePayload>[] = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
-      if (String(input).endsWith('/archive-snapshot')) return new Response(JSON.stringify({
-        schema_version: 1, results: finalResult, results_sha256: 'b'.repeat(64),
-        mesh_artifact: 'exact mesh bytes', pressure_bases: [], radiation_impedance: null,
+      if (String(input).endsWith('/archive-snapshot?members=held')) return new Response(JSON.stringify({
+        schema_version: 1, results: finalResult, results_sha256: 'b'.repeat(64), hold: 'held-replay',
+        mesh_artifact: { member: 'mesh', bytes: 16 }, pressure_bases: [], radiation_impedance: null,
       }));
       if (String(input).endsWith('/mesh-replay')) return new Response(status === 200
         ? '{"exact":"retained package"}' : '{"detail":"Original mesh unavailable"}', { status });
@@ -1504,7 +1549,10 @@ it.each(['format', 'download bundle', 'workspace', 'automatic', 'mesh download',
                 : saveMeshArtifactToWorkspace(job, vi.fn(), fetcher);
       expect(activityStore.getSnapshot()).toHaveLength(1);
       const settled = pending.catch(error => error);
-      if (fail) first.reject(new Error('request failed')); else first.resolve(new Response('geometry'));
+      if (fail) first.reject(new Error('request failed'));
+      else first.resolve(style === 'mesh save'
+        ? new Response(JSON.stringify({ directory: 'out', files: ['out/1_horn.msh'] }))
+        : new Response('geometry'));
       const outcome = await settled;
       if (!fail) expect(outcome).not.toBeInstanceOf(Error);
       expect(started).toHaveBeenCalledTimes(1);
