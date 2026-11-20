@@ -8,7 +8,6 @@ capability state and never gets faked.
 
 from __future__ import annotations
 
-import asyncio
 from functools import lru_cache
 import importlib
 import importlib.metadata
@@ -22,7 +21,6 @@ from typing import Any, Mapping, Sequence
 
 from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
-from server.mesh.builder import build_solver_mesh
 from server.platform.temp_session import spawned_directory_root
 from server.preview.translate import has_closed_outer_body
 
@@ -32,6 +30,8 @@ from .bempp_opencl import (
     execution_route, native_call, qualification_revision, qualified_opencl, retry_pending,
 )
 from .base import (
+    FIELD_TRACES_KEY,
+    FIELD_TRACE_UNAVAILABLE_REASON_KEY,
     ArtifactCallback,
     CancelCallback,
     EngineRunResult,
@@ -40,6 +40,7 @@ from .base import (
     StageCallback,
 )
 from .context import SolverContext
+from .engine_run import full_3d_solve_path, run_imported_engine, run_parametric_engine
 from .frequency_sweep import (
     live_execution_frequencies,
     sort_native_result_frequencies,
@@ -57,7 +58,6 @@ from .ground_plane import (
     observation_below_ground_warning,
     place_above_ground,
 )
-from .imported import read_verified_import_mesh, verify_record_mesh_text
 from .infinite_baffle import require_coupled_aperture_tag
 from .result_mapping import (
     build_provisional_frequency_response,
@@ -1039,8 +1039,8 @@ def solve_bempp_from_msh_text(
     )
     if retain_traces and field_traces is None:
         trace_reason = "trace_output_missing"
-    response["_field_traces"] = field_traces
-    response["_field_trace_unavailable_reason"] = trace_reason
+    response[FIELD_TRACES_KEY] = field_traces
+    response[FIELD_TRACE_UNAVAILABLE_REASON_KEY] = trace_reason
     return response
 
 
@@ -1081,36 +1081,27 @@ class BemppEngine:
                 result_cb=result_cb,
             )
         context = SolverContext.from_request(request, solver_mode="full_3d")
-        mesh = await build_solver_mesh(
-            request.design,
-            request.options,
-            cancel_cb,
-            lambda stage, progress, message: stage_cb(stage, progress, message),
-        )
-        if artifact_cb is not None:
-            await artifact_cb(mesh["msh_text"], mesh["stats"])
-        cancel_cb()
-        from .bempp_process import solve_bempp_in_process
 
-        results = await solve_bempp_in_process(
-            mesh["msh_text"],
-            context,
-            mesh_metadata=mesh["metadata"],
-            mesh_stats=mesh["stats"],
+        async def solve(mesh: Mapping[str, Any]) -> dict[str, Any]:
+            from .bempp_process import solve_bempp_in_process
+
+            return await solve_bempp_in_process(
+                mesh["msh_text"],
+                context,
+                mesh_metadata=mesh["metadata"],
+                mesh_stats=mesh["stats"],
+                cancel_cb=cancel_cb,
+                stage_cb=stage_cb,
+                result_cb=result_cb,
+            )
+
+        return await run_parametric_engine(
+            request,
             cancel_cb=cancel_cb,
             stage_cb=stage_cb,
-            result_cb=result_cb,
-        )
-        results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
-        results.setdefault("metadata", {})["solve_path"] = "full-3d"
-        field_traces = results.pop("_field_traces", None)
-        field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
-        return EngineRunResult(
-            results=results,
-            msh_text=mesh["msh_text"],
-            mesh_stats=mesh["stats"],
-            field_traces=field_traces,
-            field_trace_unavailable_reason=field_trace_reason,
+            artifact_cb=artifact_cb,
+            solve=solve,
+            annotate=full_3d_solve_path,
         )
 
     async def _run_imported(
@@ -1125,42 +1116,23 @@ class BemppEngine:
     ) -> EngineRunResult:
         if imported_record is None:
             raise ValueError("imported BEMPP solve requires its ingestion record")
-        # The verified record mesh, never a re-mesh: the same bytes Metal and
-        # BEAT are handed for the same record.
-        execution_msh = imported_record.get("_execution_msh_text")
-        if isinstance(execution_msh, str):
-            msh_text = verify_record_mesh_text(imported_record, execution_msh)
-        else:
-            msh_text = await asyncio.to_thread(read_verified_import_mesh, imported_record)
-        mesh_record = imported_record.get("mesh")
-        mesh_stats = (
-            dict(mesh_record.get("stats") or {}) if isinstance(mesh_record, Mapping) else {}
-        )
-        if artifact_cb is not None:
-            await artifact_cb(msh_text, mesh_stats)
-        cancel_cb()
-        from .bempp_process import solve_imported_bempp_in_process
+        record = imported_record
 
-        # In the same killable worker as a design solve, so Stop stays prompt.
-        results = await solve_imported_bempp_in_process(
-            msh_text,
-            request,
-            {key: value for key, value in imported_record.items() if key != "_execution_msh_text"},
-            cancel_cb=cancel_cb,
-            stage_cb=stage_cb,
-            result_cb=result_cb,
-        )
-        results.setdefault("metadata", {})["mesh_stats"] = mesh_stats
-        channel_bases = results.pop("_channel_bases_npz", None)
-        field_traces = results.pop("_field_traces", None)
-        field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
-        return EngineRunResult(
-            results=results,
-            msh_text=msh_text,
-            mesh_stats=mesh_stats,
-            channel_bases=channel_bases,
-            field_traces=field_traces,
-            field_trace_unavailable_reason=field_trace_reason,
+        async def solve(msh_text: str) -> dict[str, Any]:
+            from .bempp_process import solve_imported_bempp_in_process
+
+            # In the same killable worker as a design solve, so Stop stays prompt.
+            return await solve_imported_bempp_in_process(
+                msh_text,
+                request,
+                {key: value for key, value in record.items() if key != "_execution_msh_text"},
+                cancel_cb=cancel_cb,
+                stage_cb=stage_cb,
+                result_cb=result_cb,
+            )
+
+        return await run_imported_engine(
+            record, cancel_cb=cancel_cb, artifact_cb=artifact_cb, solve=solve,
         )
 
 

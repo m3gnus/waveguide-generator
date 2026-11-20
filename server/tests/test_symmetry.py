@@ -215,7 +215,7 @@ def _metal_request(mode: str = "auto", *, diagonal_angle: float = 45.0) -> Solve
 
 
 def test_metal_legacy_auto_always_uses_the_full_3d_path(monkeypatch) -> None:
-    from server.solver import metal
+    from server.solver import engine_run, metal
 
     async def fake_mesh(*_args, **_kwargs):
         return {
@@ -224,7 +224,7 @@ def test_metal_legacy_auto_always_uses_the_full_3d_path(monkeypatch) -> None:
             "metadata": {},
         }
 
-    monkeypatch.setattr(metal, "build_solver_mesh", fake_mesh)
+    monkeypatch.setattr(engine_run, "build_solver_mesh", fake_mesh)
     monkeypatch.setattr(
         metal,
         "solve_metal_from_msh_text",

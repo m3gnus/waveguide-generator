@@ -1100,7 +1100,7 @@ def test_real_bempp_engine_traces_round_trip_through_field_plane_pipeline(
     pytest.importorskip("hornlab_bempp_bem")
     pytest.importorskip("bempp_cl.api")
     from server.engines import registry
-    from server.solver import bempp
+    from server.solver import bempp, engine_run
 
     status = bempp.bempp_status()
     if not status["available"]:
@@ -1113,7 +1113,7 @@ def test_real_bempp_engine_traces_round_trip_through_field_plane_pipeline(
             "metadata": {},
         }
 
-    monkeypatch.setattr(bempp, "build_solver_mesh", build_tetrahedron)
+    monkeypatch.setattr(engine_run, "build_solver_mesh", build_tetrahedron)
     # The synthetic full tetrahedron replaces a mesher output, so explicitly
     # request the full domain instead of relying on an in-process monkeypatch:
     # native BEMPP now runs in a killable child process.

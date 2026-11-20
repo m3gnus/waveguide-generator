@@ -29,7 +29,6 @@ from server.jobs.models import (
     passive_cardioid_apertures as _passive_cardioid_apertures,
     SolveRequest,
 )
-from server.mesh.builder import build_solver_mesh
 from server.platform.temp_session import temporary_directory_root
 from server.preview.translate import has_closed_outer_body
 
@@ -41,6 +40,10 @@ from .driver_lem import (
     radiation_mass_warning,
 )
 from .base import (
+    CHANNEL_BASES_KEY,
+    RADIATION_IMPEDANCE_KEY,
+    FIELD_TRACES_KEY,
+    FIELD_TRACE_UNAVAILABLE_REASON_KEY,
     ArtifactCallback,
     CancelCallback,
     EngineRunResult,
@@ -49,6 +52,7 @@ from .base import (
     StageCallback,
 )
 from .context import SolverContext
+from .engine_run import run_imported_engine, run_parametric_engine
 from .frequency_sweep import (
     _FREQUENCY_SHAPED_RESULT_FIELDS,
     canonical_frequencies,
@@ -82,8 +86,6 @@ from .imported import (
     has_axial_channel,
     mesh_frequency_validation,
     prepare_axial_drive,
-    read_verified_import_mesh,
-    verify_record_mesh_text,
 )
 from .imported_channels import (
     prescribed_entry,
@@ -995,8 +997,8 @@ def solve_metal_from_msh_text(
     )
     if retain_traces and field_traces is None:
         trace_reason = "trace_output_missing"
-    response["_field_traces"] = field_traces
-    response["_field_trace_unavailable_reason"] = trace_reason
+    response[FIELD_TRACES_KEY] = field_traces
+    response[FIELD_TRACE_UNAVAILABLE_REASON_KEY] = trace_reason
     return response
 
 
@@ -2245,9 +2247,9 @@ def solve_imported_metal_from_msh_text(
     elif cardioid_failure is not None:
         metadata["passive_cardioid"] = cardioid_failure
     if channel_bases_npz is not None:
-        envelope["_channel_bases_npz"] = channel_bases_npz
+        envelope[CHANNEL_BASES_KEY] = channel_bases_npz
     if cardioid_campaign is not None:
-        envelope["_radiation_impedance_npz"] = cardioid_campaign["artifact"]
+        envelope[RADIATION_IMPEDANCE_KEY] = cardioid_campaign["artifact"]
     field_traces = (
         build_field_trace_artifact(
             msh_text,
@@ -2261,8 +2263,8 @@ def solve_imported_metal_from_msh_text(
     )
     if retain_traces and field_traces is None:
         trace_reason = "trace_output_missing"
-    envelope["_field_traces"] = field_traces
-    envelope["_field_trace_unavailable_reason"] = trace_reason
+    envelope[FIELD_TRACES_KEY] = field_traces
+    envelope[FIELD_TRACE_UNAVAILABLE_REASON_KEY] = trace_reason
     return envelope
 
 
@@ -2377,53 +2379,35 @@ class MetalEngine:
         if isinstance(request.geometry, ImportedGeometrySource):
             if imported_record is None:
                 raise ValueError("imported Metal solve requires its ingestion record")
-            execution_msh = imported_record.get("_execution_msh_text")
-            if isinstance(execution_msh, str):
-                msh_text = verify_record_mesh_text(imported_record, execution_msh)
-            else:
-                msh_text = await asyncio.to_thread(
-                    read_verified_import_mesh, imported_record
+            record = imported_record
+
+            async def solve_imported(msh_text: str) -> dict[str, Any]:
+                return await asyncio.to_thread(
+                    solve_imported_metal_from_msh_text,
+                    msh_text,
+                    request,
+                    record,
+                    stage_callback=stage_cb,
+                    cancellation_callback=cancel_cb,
+                    result_callback=result_cb,
                 )
-            mesh_record = imported_record.get("mesh")
-            mesh_stats = (
-                dict(mesh_record.get("stats") or {})
-                if isinstance(mesh_record, Mapping)
-                else {}
-            )
-            if artifact_cb is not None:
-                await artifact_cb(msh_text, mesh_stats)
-            cancel_cb()
-            results = await asyncio.to_thread(
-                solve_imported_metal_from_msh_text,
-                msh_text,
-                request,
-                imported_record,
-                stage_callback=stage_cb,
-                cancellation_callback=cancel_cb,
-                result_callback=result_cb,
-            )
-            metadata = results.setdefault("metadata", {})
-            metadata["mesh_stats"] = mesh_stats
-            if _mesh_ladder_requested(request):
-                metadata["mesh_ladder"] = {
-                    "applied": False,
-                    "reason": (
-                        "imported geometry is solved on the mesh that was "
-                        "imported; there is no design resolution to coarsen"
-                    ),
-                }
-            channel_bases = results.pop("_channel_bases_npz", None)
-            radiation_matrix = results.pop("_radiation_impedance_npz", None)
-            field_traces = results.pop("_field_traces", None)
-            field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
-            return EngineRunResult(
-                results=results,
-                msh_text=msh_text,
-                mesh_stats=mesh_stats,
-                channel_bases=channel_bases,
-                radiation_impedance=radiation_matrix,
-                field_traces=field_traces,
-                field_trace_unavailable_reason=field_trace_reason,
+
+            def annotate_imported(metadata: dict[str, Any]) -> None:
+                if _mesh_ladder_requested(request):
+                    metadata["mesh_ladder"] = {
+                        "applied": False,
+                        "reason": (
+                            "imported geometry is solved on the mesh that was "
+                            "imported; there is no design resolution to coarsen"
+                        ),
+                    }
+
+            return await run_imported_engine(
+                record,
+                cancel_cb=cancel_cb,
+                artifact_cb=artifact_cb,
+                solve=solve_imported,
+                annotate=annotate_imported,
             )
 
         mode = str(request.options.solver_mode or "full_3d").strip().lower()
@@ -2431,52 +2415,44 @@ class MetalEngine:
             raise ValueError("solver_mode must be auto or full_3d")
 
         context = SolverContext.from_request(request, solver_mode="full_3d")
-        mesh = await build_solver_mesh(
-            request.design,
-            request.options,
-            cancel_cb,
-            lambda stage, progress, message: stage_cb(stage, progress, message),
-        )
-        # The stored artifact is always the design's own mesh, ladder or not.
-        # A laddered sweep says so in ``metadata['mesh_ladder']`` rather than by
-        # substituting a different artifact.
-        if artifact_cb is not None:
-            await artifact_cb(mesh["msh_text"], mesh["stats"])
-        cancel_cb()
-        ladder_bands, ladder_refusal, ladder_plan = await _resolve_mesh_ladder(
-            request, context, mesh, cancel_cb, stage_cb
-        )
-        results = await asyncio.to_thread(
-            solve_metal_from_msh_text,
-            mesh["msh_text"],
-            context,
-            mesh_metadata=mesh["metadata"],
-            mesh_stats=mesh["stats"],
-            stage_callback=stage_cb,
-            cancellation_callback=cancel_cb,
-            result_callback=result_cb,
-            ladder_bands=ladder_bands,
-        )
-        results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
-        metadata = results.setdefault("metadata", {})
-        if ladder_refusal is not None:
-            metadata["mesh_ladder"] = {"applied": False, "reason": ladder_refusal}
-        elif ladder_plan is not None and isinstance(metadata.get("mesh_ladder"), dict):
-            metadata["mesh_ladder"].update(ladder_plan.as_metadata())
-        metadata["solve_path"] = "full-3d"
-        metadata["solve_path_reason"] = (
-            "solver_mode='full_3d' selected native full 3D"
-            if mode == "full_3d"
-            else "legacy solver_mode='auto' defaults to native full 3D"
-        )
-        field_traces = results.pop("_field_traces", None)
-        field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
-        return EngineRunResult(
-            results=results,
-            msh_text=mesh["msh_text"],
-            mesh_stats=mesh["stats"],
-            field_traces=field_traces,
-            field_trace_unavailable_reason=field_trace_reason,
+        ladder: dict[str, Any] = {}
+
+        async def solve(mesh: Mapping[str, Any]) -> dict[str, Any]:
+            ladder_bands, ladder["refusal"], ladder["plan"] = await _resolve_mesh_ladder(
+                request, context, mesh, cancel_cb, stage_cb
+            )
+            return await asyncio.to_thread(
+                solve_metal_from_msh_text,
+                mesh["msh_text"],
+                context,
+                mesh_metadata=mesh["metadata"],
+                mesh_stats=mesh["stats"],
+                stage_callback=stage_cb,
+                cancellation_callback=cancel_cb,
+                result_callback=result_cb,
+                ladder_bands=ladder_bands,
+            )
+
+        def annotate(metadata: dict[str, Any]) -> None:
+            ladder_refusal, ladder_plan = ladder["refusal"], ladder["plan"]
+            if ladder_refusal is not None:
+                metadata["mesh_ladder"] = {"applied": False, "reason": ladder_refusal}
+            elif ladder_plan is not None and isinstance(metadata.get("mesh_ladder"), dict):
+                metadata["mesh_ladder"].update(ladder_plan.as_metadata())
+            metadata["solve_path"] = "full-3d"
+            metadata["solve_path_reason"] = (
+                "solver_mode='full_3d' selected native full 3D"
+                if mode == "full_3d"
+                else "legacy solver_mode='auto' defaults to native full 3D"
+            )
+
+        return await run_parametric_engine(
+            request,
+            cancel_cb=cancel_cb,
+            stage_cb=stage_cb,
+            artifact_cb=artifact_cb,
+            solve=solve,
+            annotate=annotate,
         )
 
 

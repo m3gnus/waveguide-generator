@@ -23,9 +23,10 @@ from typing import Any, Mapping, Sequence
 from .acoustics import BEAT_SOUND_SPEED_M_PER_S
 from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
-from server.mesh.builder import build_solver_mesh
 
 from .base import (
+    FIELD_TRACES_KEY,
+    FIELD_TRACE_UNAVAILABLE_REASON_KEY,
     ArtifactCallback,
     CancelCallback,
     EngineRunResult,
@@ -34,6 +35,7 @@ from .base import (
     StageCallback,
 )
 from .context import SolverContext
+from .engine_run import full_3d_solve_path, run_imported_engine, run_parametric_engine
 from .field_traces_store import (
     BEAT_FIELD_TRACE_BACKEND,
     build_field_trace_artifact,
@@ -47,7 +49,6 @@ from .adaptive_sweep import (
 from .frequency_sweep import (
     live_execution_frequencies,
 )
-from .imported import read_verified_import_mesh, verify_record_mesh_text
 from .infinite_baffle import reject_beat_infinite_baffle
 from .result_mapping import (
     build_provisional_frequency_response,
@@ -440,8 +441,8 @@ def solve_beat_from_msh_text(
     )
     if retain_traces and field_traces is None:
         trace_reason = "trace_output_missing"
-    response["_field_traces"] = field_traces
-    response["_field_trace_unavailable_reason"] = trace_reason
+    response[FIELD_TRACES_KEY] = field_traces
+    response[FIELD_TRACE_UNAVAILABLE_REASON_KEY] = trace_reason
     return response
 
 
@@ -502,36 +503,27 @@ class BeatEngine:
             )
         context = SolverContext.from_request(request, solver_mode="full_3d")
         reject_beat_infinite_baffle(context)
-        mesh = await build_solver_mesh(
-            request.design,
-            request.options,
-            cancel_cb,
-            lambda stage, progress, message: stage_cb(stage, progress, message),
-        )
-        if artifact_cb is not None:
-            await artifact_cb(mesh["msh_text"], mesh["stats"])
-        cancel_cb()
-        results = await asyncio.to_thread(
-            solve_beat_from_msh_text,
-            mesh["msh_text"],
-            context,
-            backend=self.backend,
-            mesh_metadata=mesh["metadata"],
-            mesh_stats=mesh["stats"],
-            stage_callback=stage_cb,
-            cancellation_callback=cancel_cb,
-            result_callback=result_cb,
-        )
-        results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
-        results.setdefault("metadata", {})["solve_path"] = "full-3d"
-        field_traces = results.pop("_field_traces", None)
-        field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
-        return EngineRunResult(
-            results=results,
-            msh_text=mesh["msh_text"],
-            mesh_stats=mesh["stats"],
-            field_traces=field_traces,
-            field_trace_unavailable_reason=field_trace_reason,
+
+        async def solve(mesh: Mapping[str, Any]) -> dict[str, Any]:
+            return await asyncio.to_thread(
+                solve_beat_from_msh_text,
+                mesh["msh_text"],
+                context,
+                backend=self.backend,
+                mesh_metadata=mesh["metadata"],
+                mesh_stats=mesh["stats"],
+                stage_callback=stage_cb,
+                cancellation_callback=cancel_cb,
+                result_callback=result_cb,
+            )
+
+        return await run_parametric_engine(
+            request,
+            cancel_cb=cancel_cb,
+            stage_cb=stage_cb,
+            artifact_cb=artifact_cb,
+            solve=solve,
+            annotate=full_3d_solve_path,
         )
 
     async def _run_coupled(self, request, record, *, cancel_cb, stage_cb, result_cb, execution_metadata_cb):
@@ -691,41 +683,22 @@ class BeatEngine:
             raise ValueError("imported BEAT solve requires its ingestion record")
         from .beat_imported import solve_imported_beat_from_msh_text
 
-        # The verified record mesh, never a re-mesh: the same bytes Metal is
-        # handed for the same record.
-        execution_msh = imported_record.get("_execution_msh_text")
-        if isinstance(execution_msh, str):
-            msh_text = verify_record_mesh_text(imported_record, execution_msh)
-        else:
-            msh_text = await asyncio.to_thread(read_verified_import_mesh, imported_record)
-        mesh_record = imported_record.get("mesh")
-        mesh_stats = (
-            dict(mesh_record.get("stats") or {}) if isinstance(mesh_record, Mapping) else {}
-        )
-        if artifact_cb is not None:
-            await artifact_cb(msh_text, mesh_stats)
-        cancel_cb()
-        results = await asyncio.to_thread(
-            solve_imported_beat_from_msh_text,
-            msh_text,
-            request,
-            imported_record,
-            backend=self.backend or BEAT_CPU_BACKEND,
-            stage_callback=stage_cb,
-            cancellation_callback=cancel_cb,
-            result_callback=result_cb,
-        )
-        results.setdefault("metadata", {})["mesh_stats"] = mesh_stats
-        channel_bases = results.pop("_channel_bases_npz", None)
-        field_traces = results.pop("_field_traces", None)
-        field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
-        return EngineRunResult(
-            results=results,
-            msh_text=msh_text,
-            mesh_stats=mesh_stats,
-            channel_bases=channel_bases,
-            field_traces=field_traces,
-            field_trace_unavailable_reason=field_trace_reason,
+        record = imported_record
+
+        async def solve(msh_text: str) -> dict[str, Any]:
+            return await asyncio.to_thread(
+                solve_imported_beat_from_msh_text,
+                msh_text,
+                request,
+                record,
+                backend=self.backend or BEAT_CPU_BACKEND,
+                stage_callback=stage_cb,
+                cancellation_callback=cancel_cb,
+                result_callback=result_cb,
+            )
+
+        return await run_imported_engine(
+            record, cancel_cb=cancel_cb, artifact_cb=artifact_cb, solve=solve,
         )
 
 

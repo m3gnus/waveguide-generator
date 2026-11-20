@@ -30,7 +30,7 @@ from server.jobs.runtime.cad_lane import _imported_symmetry_metadata
 from server.jobs.runtime.core import _replay_request
 from server.jobs.store import JobStore
 from server.mesh.imported import polar_grid_from_symmetry
-from server.solver import imported_channels, metal
+from server.solver import engine_run, imported_channels, metal
 from server.solver.base import EngineRunResult
 from server.solver.imported import (
     ImportedSymmetryUnsupportedError,
@@ -2281,7 +2281,7 @@ def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
     monkeypatch.setattr(metal, "native_config", config)
     monkeypatch.setattr(metal, "native_solve_multi_source", solve_multi)
     monkeypatch.setattr(
-        metal,
+        engine_run,
         "build_solver_mesh",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("imported jobs must never rebuild geometry")

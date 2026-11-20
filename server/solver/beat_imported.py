@@ -22,7 +22,14 @@ from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 
 from .beat_runtime.warm_cache import signature_scope as solve_signature_scope
-from .base import CancelCallback, ResultCallback, StageCallback
+from .base import (
+    CHANNEL_BASES_KEY,
+    FIELD_TRACES_KEY,
+    FIELD_TRACE_UNAVAILABLE_REASON_KEY,
+    CancelCallback,
+    ResultCallback,
+    StageCallback,
+)
 from .beat import (
     BeatUnavailable,
     announce_beat_warmup_wait,
@@ -764,7 +771,7 @@ def solve_imported_beat_from_msh_text(
             for i in range(len(envelope_frequencies))
         ]
     if channel_bases_npz is not None:
-        envelope["_channel_bases_npz"] = channel_bases_npz
+        envelope[CHANNEL_BASES_KEY] = channel_bases_npz
     # Surface traces retain the ingestion mesh vertex and face order: the
     # same mesh the job stores and the viewport draws.
     field_traces = (
@@ -780,8 +787,8 @@ def solve_imported_beat_from_msh_text(
     )
     if retain_traces and field_traces is None:
         trace_reason = "trace_output_missing"
-    envelope["_field_traces"] = field_traces
-    envelope["_field_trace_unavailable_reason"] = trace_reason
+    envelope[FIELD_TRACES_KEY] = field_traces
+    envelope[FIELD_TRACE_UNAVAILABLE_REASON_KEY] = trace_reason
     return envelope
 
 

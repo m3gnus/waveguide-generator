@@ -31,6 +31,7 @@ from .beat_adapter.transducers import (
     EXTERIOR_AXIS_SYMMETRY_MESSAGE, ExteriorDriver, TransducerSweep, build_transducer_request, resolve_driver_sd,
 )
 
+from .base import CHANNEL_BASES_KEY, FIELD_TRACE_UNAVAILABLE_REASON_KEY
 from .context import SolverContext
 from .frequency_sweep import canonical_frequencies
 from .imported import imported_anchor_frame, imported_domain_planes, imported_symmetry_from_cut_planes
@@ -458,11 +459,11 @@ def package_sweep(
             "channels": channels,
             "frequencies": frequencies.tolist(),
             "metadata": metadata,
-            "_field_trace_unavailable_reason": "native_transducer_traces_not_retained",
+            FIELD_TRACE_UNAVAILABLE_REASON_KEY: "native_transducer_traces_not_retained",
         }
     )
     if bases is not None:
-        envelope["_channel_bases_npz"] = bases
+        envelope[CHANNEL_BASES_KEY] = bases
     return envelope
 
 
@@ -550,12 +551,12 @@ def solve(
             delta = TransducerSweep(sweep.rows[-1:], False, sweep.requested_frequency_count)
             frame = package_sweep(delta, compiled, request, record, started=started,
                                   port_indices=port_indices, solver_engine=solver_engine)
-            frame.pop("_channel_bases_npz", None)
+            frame.pop(CHANNEL_BASES_KEY, None)
             if request.geometry.combine is not None:
                 # The crossover is the durable final's, from the whole sweep.
                 frame["channels"].pop(request.geometry.combine.id, None)
                 frame["channel_order"] = [c.id for c in request.geometry.drive_channels] + [g.id for g in request.geometry.wiring_groups]
-            frame.pop("_field_trace_unavailable_reason", None)
+            frame.pop(FIELD_TRACE_UNAVAILABLE_REASON_KEY, None)
             frame["metadata"]["provisional"] = {
                 "completed_frequency_count": len(sweep.rows),
                 "expected_frequency_count": sweep.requested_frequency_count,

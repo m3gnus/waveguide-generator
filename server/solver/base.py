@@ -47,6 +47,52 @@ class EngineRunResult:
     execution_metadata: dict[str, Any] | None = None
 
 
+# The artifacts a solve function returns beside its JSON results. The solve
+# functions (and the BEMPP worker, across its pipe) still return one dict, so
+# these names are the hand-off contract; ``EngineSolveOutput.from_results`` is
+# the only reader and takes every one of them out before the JSON is stored.
+CHANNEL_BASES_KEY = "_channel_bases_npz"
+RADIATION_IMPEDANCE_KEY = "_radiation_impedance_npz"
+FIELD_TRACES_KEY = "_field_traces"
+FIELD_TRACE_UNAVAILABLE_REASON_KEY = "_field_trace_unavailable_reason"
+
+
+@dataclass(slots=True)
+class EngineSolveOutput:
+    """A solve's JSON results with its binary artifacts split out."""
+
+    results: dict[str, Any]
+    channel_bases: bytes | None = None
+    radiation_impedance: bytes | None = None
+    field_traces: FieldTraceArtifact | None = None
+    field_trace_unavailable_reason: str | None = None
+
+    @classmethod
+    def from_results(cls, results: dict[str, Any]) -> "EngineSolveOutput":
+        channel_bases = results.pop(CHANNEL_BASES_KEY, None)
+        radiation_impedance = results.pop(RADIATION_IMPEDANCE_KEY, None)
+        field_traces = results.pop(FIELD_TRACES_KEY, None)
+        reason = results.pop(FIELD_TRACE_UNAVAILABLE_REASON_KEY, None)
+        return cls(
+            results=results,
+            channel_bases=channel_bases,
+            radiation_impedance=radiation_impedance,
+            field_traces=field_traces,
+            field_trace_unavailable_reason=reason,
+        )
+
+    def run_result(self, *, msh_text: str, mesh_stats: dict[str, Any]) -> EngineRunResult:
+        return EngineRunResult(
+            results=self.results,
+            msh_text=msh_text,
+            mesh_stats=mesh_stats,
+            channel_bases=self.channel_bases,
+            radiation_impedance=self.radiation_impedance,
+            field_traces=self.field_traces,
+            field_trace_unavailable_reason=self.field_trace_unavailable_reason,
+        )
+
+
 class Full3DSolverPort(Protocol):
     """HornLab-facing contact point for an independently implemented solver.
 
@@ -76,8 +122,13 @@ class Full3DSolverPort(Protocol):
 
 __all__ = [
     "ArtifactCallback",
+    "CHANNEL_BASES_KEY",
     "CancelCallback",
     "EngineRunResult",
+    "EngineSolveOutput",
+    "FIELD_TRACES_KEY",
+    "FIELD_TRACE_UNAVAILABLE_REASON_KEY",
+    "RADIATION_IMPEDANCE_KEY",
     "ExecutionMetadataCallback",
     "Full3DSolverPort",
     "ResultCallback",

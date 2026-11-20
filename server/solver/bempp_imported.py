@@ -40,7 +40,14 @@ from server.platform.temp_session import spawned_directory_root
 
 from . import bempp
 from .acoustics import solver_sound_speed_m_per_s
-from .base import CancelCallback, ResultCallback, StageCallback
+from .base import (
+    CHANNEL_BASES_KEY,
+    FIELD_TRACES_KEY,
+    FIELD_TRACE_UNAVAILABLE_REASON_KEY,
+    CancelCallback,
+    ResultCallback,
+    StageCallback,
+)
 from .bempp import (
     BEMPP_ADAPTIVE_QUADRATURE_KH_MAX,
     BEMPP_ADAPTIVE_QUADRATURE_KH_MIN,
@@ -643,7 +650,7 @@ def solve_imported_bempp_from_msh_text(
         trace_cap_bytes=trace_cap_bytes,
     )
     if channel_bases_npz is not None:
-        envelope["_channel_bases_npz"] = channel_bases_npz
+        envelope[CHANNEL_BASES_KEY] = channel_bases_npz
     field_traces = (
         build_field_trace_artifact(
             msh_text,
@@ -657,8 +664,8 @@ def solve_imported_bempp_from_msh_text(
     )
     if retain_traces and field_traces is None:
         trace_reason = "trace_output_missing"
-    envelope["_field_traces"] = field_traces
-    envelope["_field_trace_unavailable_reason"] = trace_reason
+    envelope[FIELD_TRACES_KEY] = field_traces
+    envelope[FIELD_TRACE_UNAVAILABLE_REASON_KEY] = trace_reason
     return envelope
 
 
