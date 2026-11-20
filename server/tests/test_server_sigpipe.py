@@ -19,10 +19,12 @@ from scripts import qualify_installed_cpu as gate
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="SIGPIPE is POSIX-only")
 REPO_ROOT = Path(__file__).resolve().parents[2]
-#: Upper bound for a start or stop that never finishes (see the test). Twelve
-#: times the old 5 s, and small enough that a hung start plus its forced stop
-#: stays inside pytest.ini's 300 s faulthandler backstop.
-HANG_BOUND_S = 60.0
+#: Upper bound for a start or stop that never finishes (see the test). Eight
+#: times the old 5 s, and small enough that the worst case -- a slow first run
+#: (40 + 40 s) then a hung second start (40 s, stack dump 5 s, forced stop
+#: 40 + 30 + 30 s) -- stays at 225 s, inside pytest.ini's 300 s faulthandler
+#: backstop, which would otherwise end the whole worker.
+HANG_BOUND_S = 40.0
 
 _SERVER = r'''
 import argparse

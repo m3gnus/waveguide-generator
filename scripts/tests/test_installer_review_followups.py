@@ -962,7 +962,10 @@ if blocked:
     time.sleep({HUNG_MOVE_S})
 ''')
     # Exercise the actual watchdog with a shorter deadline for this 20-case matrix.
-    install.script.write_text(install.script.read_text().replace('sleep 30 >/dev/null 2>&1 &', 'sleep 1 >/dev/null 2>&1 &'))
+    shipped = install.script.read_text()
+    # The old 8 s wait failed if this stopped matching; the long wait would not, so check it.
+    assert 'sleep 30 >/dev/null 2>&1 &' in shipped, 'the installer watchdog line changed; update this test'
+    install.script.write_text(shipped.replace('sleep 30 >/dev/null 2>&1 &', 'sleep 1 >/dev/null 2>&1 &'))
     proc = spawn(install, env)
     try:
         # Only the 1 s watchdog can end the installer before the hung move
