@@ -1350,3 +1350,55 @@ def test_small_real_occ_build_has_source_tag_stats_integrity_and_msh() -> None:
         assert [stage for stage, _, _ in stages] == ["mesh_prepare", "mesh_validate"]
 
     asyncio.run(scenario())
+
+
+def test_triangle_estimates_are_cached_like_solve_meshes(monkeypatch) -> None:
+    calls = []
+
+    async def estimate(fn, dump, *, cancel_cb=None, lane):
+        assert fn is mesh_builder._estimate_design_sync
+        assert lane == "aux"
+        calls.append(dump)
+        return {"triangle_count": 1000 + len(calls), "surface_deviation_mm": dump["mesh"].get("surface_deviation_mm")}
+
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", estimate)
+    clear_solver_mesh_cache()
+    design = _tiny_design()
+    sampling_only = _tiny_design()
+    sampling_only.root.simulation.f1 = 600
+    reshaped = _tiny_design()
+    reshaped.root.mesh.mouth_resolution = Expr(value=12.0)
+
+    async def scenario() -> list[dict]:
+        return [
+            await mesh_builder.estimate_solver_mesh(design),
+            await mesh_builder.estimate_solver_mesh(sampling_only),
+            await mesh_builder.estimate_solver_mesh(reshaped),
+            await mesh_builder.estimate_solver_mesh(design),
+        ]
+
+    try:
+        first, same, other, again = asyncio.run(scenario())
+        assert len(calls) == 2
+        assert first == same == again == {"triangle_count": 1001, "surface_deviation_mm": None}
+        assert other["triangle_count"] == 1002
+        first["triangle_count"] = -1
+        assert asyncio.run(mesh_builder.estimate_solver_mesh(design))["triangle_count"] == 1001
+        clear_solver_mesh_cache()
+        asyncio.run(mesh_builder.estimate_solver_mesh(design))
+        assert len(calls) == 3
+    finally:
+        clear_solver_mesh_cache()
+
+
+def test_cached_estimate_equals_a_fresh_one() -> None:
+    """The cache returns the child's own answer, unchanged, in-process."""
+
+    design = _tiny_design()
+    clear_solver_mesh_cache()
+    try:
+        fresh = mesh_builder._estimate_design_sync(design.model_dump(mode="json"))
+        cached = asyncio.run(mesh_builder.estimate_solver_mesh(design))
+        assert asyncio.run(mesh_builder.estimate_solver_mesh(design)) == cached == fresh
+    finally:
+        clear_solver_mesh_cache()

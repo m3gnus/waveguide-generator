@@ -175,7 +175,8 @@ def test_live_step_stages_and_stop_use_the_real_app(body, tmp_path, monkeypatch)
 
     entered = asyncio.Event()
 
-    async def building(_fn, _dump, _work_dir, *, cancel_cb):
+    async def building(_fn, _dump, _work_dir, *, cancel_cb, lane):
+        assert lane == "aux"
         entered.set()
         while True:
             cancel_cb()

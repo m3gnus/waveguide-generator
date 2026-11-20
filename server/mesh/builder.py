@@ -55,6 +55,7 @@ from server.contracts.geometry import (
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
 from .errors import MesherEstimateUnavailable, MeshTooLarge, SolverMemoryTooLarge
 from .child import (
+    AUX_LANE,
     MesherChildError,
     MesherCrashError,
     run_mesh_build,
@@ -339,6 +340,10 @@ def _dense_solver_memory_limit_stats(limit: DenseSolverMemoryLimit) -> dict[str,
 SOLVER_MESH_CACHE_FORMAT_VERSION = 2
 
 _solver_mesh_cache = SolverMeshArtifactCache()
+# Triangle estimates, keyed like the solve meshes: an estimate is the density
+# pass of the same mesher config, so an unchanged or reverted design (and the
+# badge's second, target-free request) reuses it instead of another OCC build.
+_mesh_estimate_cache = SolverMeshArtifactCache(max_entries=64, max_bytes=64 * 64 * 1024)
 
 CancelCallback = Callable[[], None]
 ProgressCallback = Callable[[str, float, str], None]
@@ -971,6 +976,7 @@ def clear_solver_mesh_cache() -> None:
     """Drop all reusable artifacts, for recovery or explicit recomputation."""
 
     _solver_mesh_cache.clear()
+    _mesh_estimate_cache.clear()
 
 
 def solver_mesh_cache_info() -> SolverMeshCacheInfo:
@@ -1241,8 +1247,30 @@ def _estimate_design_sync(design_dump: dict[str, Any], cancel_cb: CancelCallback
 
 
 async def estimate_solver_mesh(design: DesignConfig, cancel_cb: CancelCallback | None = None) -> dict[str, Any]:
-    """Use the ordinary density pass in the same isolated mesher child."""
-    return await run_mesh_build(_estimate_design_sync, design.model_dump(mode="json"), cancel_cb=cancel_cb)
+    """Use the ordinary density pass in an isolated mesher child (the export lane).
+
+    Plain designs are answered from a cache keyed like the solve-mesh cache.
+    An assembly's config also depends on its woofer placement pass, so it is
+    always estimated afresh.
+    """
+
+    key = None
+    if design.root.assembly is None:
+        try:
+            key = f"{_solver_mesh_cache_key(design)}:{design.root.mesh.surface_deviation_mm!r}"
+        except Exception:  # noqa: BLE001 - the child reports this design's error as before
+            key = None
+    if key is not None:
+        cached = _mesh_estimate_cache.get(key)
+        if cached is not None:
+            _check_cancel(cancel_cb)
+            return cached
+    result = await run_mesh_build(
+        _estimate_design_sync, design.model_dump(mode="json"), cancel_cb=cancel_cb, lane=AUX_LANE,
+    )
+    if key is not None:
+        _mesh_estimate_cache.put(key, result)
+    return result
 
 
 def _build_assembly_sync(

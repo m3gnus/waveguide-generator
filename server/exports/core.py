@@ -38,7 +38,7 @@ from server.mesh.inner_grid import (
     validate_export_segments,
 )
 from server.mesh.builder import _solver_mesher_config, _triangles_and_tags
-from server.mesh.child import run_mesh_build
+from server.mesh.child import AUX_LANE, run_mesh_build
 from server.mesh.gmsh_worker import _preserve_native_windows_path
 from server.platform.temp_session import spawned_directory_root, temporary_directory_root
 from server.preview.construction import retain_mesher_construction
@@ -614,7 +614,9 @@ async def _export_child(fn: Any, design: DesignConfig, cancel_cb: Any, progress_
     if progress_cb is not None:
         progress_cb("resolve")
     with tempfile.TemporaryDirectory(prefix="wg2-export-", dir=temporary_directory_root()) as work_dir:
-        result = await run_mesh_build(fn, dump, work_dir, **({"cancel_cb": cancel_cb} if cancel_cb else {}))
+        result = await run_mesh_build(
+            fn, dump, work_dir, lane=AUX_LANE, **({"cancel_cb": cancel_cb} if cancel_cb else {}),
+        )
     if cancel_cb is not None:
         cancel_cb()
     if progress_cb is not None:

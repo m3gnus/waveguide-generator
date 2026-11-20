@@ -299,14 +299,16 @@ def test_geometry_is_submitted_to_the_killable_child(monkeypatch, tmp_path):
     real_run = service.run_mesh_build
     submissions = []
 
-    async def run(fn, *args):
+    async def run(fn, *args, **kwargs):
         from server.exports.wglink_geometry import build_bundle
+
+        assert kwargs.get("lane") == "aux"
 
         assert fn is build_bundle
         assert all(not isinstance(arg, CadLinkStore) for arg in args)
         assert ".wg2-wglink-" in args[1]
         submissions.append(fn)
-        return await real_run(fn, *args)
+        return await real_run(fn, *args, **kwargs)
 
     monkeypatch.setattr(service, "run_mesh_build", run)
     service.export_wglink_sync(_request(saved), store, workspace, "A")

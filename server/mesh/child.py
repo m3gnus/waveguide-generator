@@ -16,6 +16,12 @@ child instead:
 * one child stays warm across builds, so the 1-2 s import of gmsh, OCC and
   scipy is paid at boot (in the background) and again only after a death. gmsh
   itself is initialised and finalised around every build, as it always was.
+* exports and triangle estimates have a lane of their own, a second child, so
+  a long STEP export or an estimate never queues a solve's mesh behind it. The
+  second lane exists only on a host with the memory for two (or by
+  ``WG2_MESH_CHILD_LANES``); otherwise everything shares the one child as
+  before. Its child is retired after a few idle minutes, so an idle server
+  holds one mesher's memory, not two.
 * cancelling a build that is running in the child kills the child, the only
   bounded way to stop OCC. Cancelling before the build is sent leaves it alone.
 
@@ -61,6 +67,18 @@ log = logging.getLogger("wg.mesh")
 
 IN_PROCESS_ENV = "WG2_TEST_MESH_IN_PROCESS"
 TIMEOUT_ENV = "WG2_MESH_BUILD_TIMEOUT_S"
+LANES_ENV = "WG2_MESH_CHILD_LANES"
+
+#: Solve meshes, wall checks, assemblies and prepared file meshes.
+SOLVE_LANE = "solve"
+#: Exports (STL, STEP, profiles, Send to CAD) and triangle estimates.
+AUX_LANE = "aux"
+# Two mesher children can each hold a large OCC model and its mesh at once.
+# Below this much installed memory both lanes share one child, as before.
+_TWO_LANE_MIN_PHYSICAL_BYTES = 16 * 1024**3
+# An idle export/estimate child is stopped after this long; the next export or
+# estimate starts it again (the 1-2 s warm-up).
+AUX_IDLE_RETIRE_SECONDS = 10 * 60.0
 
 _POLL_SECONDS = 0.1
 _JOIN_SECONDS = 2.0
@@ -93,6 +111,24 @@ class MesherChildError(RuntimeError):
 
 class MesherShuttingDownError(RuntimeError):
     """App shutdown interrupted a build or rejected its submission."""
+
+
+def mesh_child_lanes() -> int:
+    """How many mesher children may build at once: 1 or 2.
+
+    ``WG2_MESH_CHILD_LANES`` set to 1 or 2 decides. Otherwise two only when
+    this host's installed memory is known and at least 16 GiB.
+    """
+
+    raw = os.environ.get(LANES_ENV, "").strip()
+    if raw in {"1", "2"}:
+        return int(raw)
+    from server.platform.memory import physical_memory
+
+    memory = physical_memory()
+    if memory.known and (memory.bytes or 0) >= _TWO_LANE_MIN_PHYSICAL_BYTES:
+        return 2
+    return 1
 
 
 def child_enabled() -> bool:
@@ -289,9 +325,12 @@ class MesherChildHost:
         *,
         process_context: multiprocessing.context.BaseContext | None = None,
         target: Callable[[Connection, str | None], None] = _child_main,
+        idle_retire_seconds: float | None = None,
     ) -> None:
         self._context = process_context or multiprocessing.get_context("spawn")
         self._target = target
+        self._idle_retire_seconds = idle_retire_seconds
+        self._idle_timer: threading.Timer | None = None
         self._channel: _Channel | None = None
         self._closing = False
         self._closed = False
@@ -383,8 +422,41 @@ class MesherChildHost:
             self._closing = True
             self._closed = True
             channel, self._channel = self._channel, None
+            timer, self._idle_timer = self._idle_timer, None
+        if timer is not None:
+            timer.cancel()
         if channel is not None:
             channel.kill()
+
+    def _schedule_idle_retire(self) -> None:
+        """After a build, (re)start the countdown that stops an unused child."""
+
+        if self._idle_retire_seconds is None:
+            return
+        with self._state:
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+            if self._closing or self._closed:
+                self._idle_timer = None
+                return
+            timer = threading.Timer(self._idle_retire_seconds, self._retire_if_idle)
+            timer.daemon = True
+            timer.name = "wg2-mesh-idle-retire"
+            self._idle_timer = timer
+            timer.start()
+
+    def _retire_if_idle(self) -> None:
+        """Stop the child unless a build holds it; that build's end re-arms this."""
+
+        if not self._serial.acquire(blocking=False):
+            return
+        try:
+            with self._state:
+                channel, self._channel = self._channel, None
+            if channel is not None:
+                channel.kill()
+        finally:
+            self._serial.release()
 
     # one build ------------------------------------------------------------
     def _run_blocking(
@@ -460,6 +532,7 @@ class MesherChildHost:
                     raise MesherChildError(f"{name}: {message}")
         finally:
             self._serial.release()
+            self._schedule_idle_retire()
 
     def _crashed(self, channel: _Channel) -> MesherCrashError:
         process = channel.process
@@ -493,12 +566,23 @@ class MesherChildHost:
 
 
 _host: MesherChildHost | None = None
+_aux_host: MesherChildHost | None = None
 _host_lock = threading.Lock()
 
 
-def get_mesher_child() -> MesherChildHost:
-    global _host
+def get_mesher_child(lane: str = SOLVE_LANE) -> MesherChildHost:
+    """The shared child for ``lane``; the solve child when one lane is allowed."""
+
+    global _host, _aux_host
+    if lane not in {SOLVE_LANE, AUX_LANE}:
+        raise ValueError(f"unknown mesher lane {lane!r}")
+    aux = lane == AUX_LANE and mesh_child_lanes() > 1
     with _host_lock:
+        if aux:
+            if _aux_host is None:
+                _aux_host = MesherChildHost(idle_retire_seconds=AUX_IDLE_RETIRE_SECONDS)
+                atexit.register(close_mesher_child)
+            return _aux_host
         if _host is None:
             _host = MesherChildHost()
             atexit.register(close_mesher_child)
@@ -512,33 +596,40 @@ def begin_mesher_child_shutdown() -> None:
     cannot create a child between this hook and the final close.
     """
 
-    get_mesher_child().begin_shutdown()
+    get_mesher_child(SOLVE_LANE).begin_shutdown()
+    get_mesher_child(AUX_LANE).begin_shutdown()
 
 
 def close_mesher_child(*, keep_shutdown_guard: bool = False) -> None:
-    """Kill the shared child, if any. Safe to call repeatedly.
+    """Kill the shared children, if any. Safe to call repeatedly.
 
     Intermediate worker cleanup keeps an app's closing host as a submission
     guard. The app's final lifespan cleanup releases it for subsequent apps or
     builds in the same process. Standalone worker cleanup releases it normally.
     """
 
-    global _host
+    global _host, _aux_host
     with _host_lock:
-        host = _host
-        keep_host = host is not None and keep_shutdown_guard and host._closing
-    if host is not None:
+        hosts = [host for host in (_host, _aux_host) if host is not None]
+        kept = {
+            id(host) for host in hosts if keep_shutdown_guard and host._closing
+        }
+    for host in hosts:
         host.close()
-        with _host_lock:
-            if _host is host and not keep_host:
-                _host = None
+    with _host_lock:
+        if _host is not None and _host in hosts and id(_host) not in kept:
+            _host = None
+        if _aux_host is not None and _aux_host in hosts and id(_aux_host) not in kept:
+            _aux_host = None
 
 
 def prewarm_mesher_child() -> None:
-    """Start the shared child in the background; a no-op when children are off."""
+    """Start the shared children in the background; a no-op when children are off."""
 
     if child_enabled() and os.environ.get("WG2_MESH_CHILD_PREWARM") != "0":
-        get_mesher_child().prewarm()
+        get_mesher_child(SOLVE_LANE).prewarm()
+        if mesh_child_lanes() > 1:
+            get_mesher_child(AUX_LANE).prewarm()
 
 
 async def run_mesh_build(
@@ -546,15 +637,16 @@ async def run_mesh_build(
     /,
     *args: Any,
     cancel_cb: Callable[[], None] | None = None,
+    lane: str = SOLVE_LANE,
 ) -> Any:
-    """Run ``fn(*args)`` where it can be killed: the mesher child.
+    """Run ``fn(*args)`` where it can be killed: the mesher child of ``lane``.
 
     ``fn`` and ``args`` must be picklable. With the child switched off the call
     runs on the in-process gmsh worker thread and ``fn`` is given ``cancel_cb``.
     """
 
     if child_enabled():
-        return await get_mesher_child().run(fn, *args, cancel_cb=cancel_cb)
+        return await get_mesher_child(lane).run(fn, *args, cancel_cb=cancel_cb)
     from server.mesh.gmsh_worker import run_on_gmsh_worker
 
     if cancel_cb is not None:
@@ -563,6 +655,8 @@ async def run_mesh_build(
 
 
 __all__ = [
+    "AUX_LANE",
+    "SOLVE_LANE",
     "MesherChildError",
     "MesherCrashError",
     "MesherShuttingDownError",
@@ -572,6 +666,7 @@ __all__ = [
     "begin_mesher_child_shutdown",
     "close_mesher_child",
     "get_mesher_child",
+    "mesh_child_lanes",
     "prewarm_mesher_child",
     "run_mesh_build",
 ]

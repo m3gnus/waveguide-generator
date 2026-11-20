@@ -154,7 +154,8 @@ def test_binary_stl_filters_to_horn_and_applies_mm_axis_transform() -> None:
 def _stl_through_build(monkeypatch, formula: str) -> bytes:
     from types import SimpleNamespace
 
-    async def fake_mesh(_fn, _dump, _work_dir):
+    async def fake_mesh(_fn, _dump, _work_dir, *, lane):
+        assert lane == "aux"
         return {
             "vertices": [0.001, 0.002, 0.003, 0.004, 0.002, 0.003, 0.001, 0.006, 0.003, 0.001, 0.002, 0.008],
             "indices": [0, 1, 2, 0, 2, 3, 1, 2, 3],

@@ -24,7 +24,7 @@ from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
 from server.design.uid import DesignUid
 from server.jobs.request_cancellation import ClientDisconnected
-from server.mesh.child import run_mesh_build
+from server.mesh.child import AUX_LANE, run_mesh_build
 from server.platform.paths import app_root
 from server.preview.translate import design_to_mesher_config
 from server.workspace.archive_identity import bind_design_lineage
@@ -421,7 +421,7 @@ def export_wglink_sync(
                 asyncio.run(run_mesh_build(build_bundle,
                     request.design.model_dump(mode="json"), str(staged), dict(facts),
                     identity.lineage_id, design_name, instance_slug, _app_version(),
-                    **({"cancel_cb": cancel_cb} if cancel_cb else {})))
+                    lane=AUX_LANE, **({"cancel_cb": cancel_cb} if cancel_cb else {})))
                 if progress_cb is not None:
                     progress_cb("mesh")
 

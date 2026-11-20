@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from functools import partial
 from multiprocessing.connection import Connection
 import json
@@ -972,3 +973,91 @@ def test_app_shutdown_does_not_respawn_the_mesh_child(
                 await lifespan.__aexit__(None, None, None)
 
     asyncio.run(scenario())
+
+
+# ------------------------------------------------- the export/estimate lane
+
+
+@pytest.mark.parametrize(
+    ("override", "physical", "expected"),
+    [
+        ("1", 64 * 1024**3, 1),
+        ("2", 4 * 1024**3, 2),
+        ("", 16 * 1024**3, 2),
+        ("", 16 * 1024**3 - 1, 1),
+        ("", None, 1),
+        ("bogus", 32 * 1024**3, 2),
+    ],
+)
+def test_two_lanes_only_with_the_memory_for_two(monkeypatch, override, physical, expected) -> None:
+    from server.mesh import child
+    from server.platform import memory
+
+    monkeypatch.setenv(child.LANES_ENV, override)
+    monkeypatch.setattr(memory, "physical_memory", lambda: memory.PhysicalMemory(
+        bytes=physical, source="test", known=physical is not None,
+    ))
+    assert child.mesh_child_lanes() == expected
+
+
+def test_one_lane_shares_the_solve_child(monkeypatch, shared_child) -> None:
+    from server.mesh import child
+
+    monkeypatch.setenv(child.LANES_ENV, "1")
+    assert child.get_mesher_child(child.AUX_LANE) is child.get_mesher_child(child.SOLVE_LANE)
+    monkeypatch.setenv(child.LANES_ENV, "2")
+    assert child.get_mesher_child(child.AUX_LANE) is not child.get_mesher_child(child.SOLVE_LANE)
+    with pytest.raises(ValueError, match="unknown mesher lane"):
+        child.get_mesher_child("other")
+
+
+def test_an_export_build_does_not_wait_for_a_running_solve_mesh(monkeypatch, shared_child, tmp_path) -> None:
+    from server.mesh import child
+
+    monkeypatch.setenv(child.LANES_ENV, "2")
+
+    async def scenario() -> None:
+        marker = tmp_path / "solving"
+        solve = asyncio.create_task(run_mesh_build(marked_hang_build, str(marker)))
+        try:
+            await _wait_for_child_marker(marker)
+            exported = await asyncio.wait_for(run_mesh_build(ok_build, "export", lane=child.AUX_LANE), 30)
+            assert exported["value"] == "export"
+            assert exported["pid"] != child.get_mesher_child()._channel.process.pid
+            assert not solve.done()
+        finally:
+            solve.cancel()
+            with contextlib.suppress(BaseException):
+                await solve
+            close_mesher_child()
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_guards_the_export_lane_too(monkeypatch, shared_child) -> None:
+    from server.mesh import child
+
+    monkeypatch.setenv(child.LANES_ENV, "2")
+    begin_mesher_child_shutdown()
+    with pytest.raises(MesherShuttingDownError):
+        asyncio.run(run_mesh_build(ok_build, lane=child.AUX_LANE))
+    assert child.get_mesher_child(child.AUX_LANE)._channel is None
+    close_mesher_child()
+    assert child._aux_host is None and child._host is None
+
+
+def test_an_idle_lane_child_is_retired_and_started_again(monkeypatch) -> None:
+    monkeypatch.delenv("WG2_TEST_MESH_IN_PROCESS", raising=False)
+    host = MesherChildHost(idle_retire_seconds=0.3)
+    try:
+        first = asyncio.run(host.run(ok_build, "first"))
+        deadline = time.monotonic() + 15
+        while host._channel is not None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert host._channel is None, "the idle child was not retired"
+        second = asyncio.run(host.run(ok_build, "second"))
+        assert second["value"] == "second"
+        assert second["pid"] != first["pid"]
+    finally:
+        host.close()
+    assert host._idle_timer is None
