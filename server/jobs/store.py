@@ -2484,12 +2484,19 @@ class JobStore:
 
         ``None`` confirms text this job's artifact row already holds -- the
         imported mesh its run read from that row -- without writing it again.
+        With no row left to confirm it changes nothing.
         """
 
         with self._lock, self._transaction() as conn:
             if not self._job_exists(conn, job_id):
                 return
-            if msh_text is not None:
+            if msh_text is None:
+                stored = conn.execute(
+                    "SELECT 1 FROM simulation_artifacts WHERE job_id = ?", (job_id,)
+                ).fetchone()
+                if stored is None:
+                    return
+            else:
                 conn.execute(
                     """
                     INSERT INTO simulation_artifacts (job_id, msh_text) VALUES (?, ?)

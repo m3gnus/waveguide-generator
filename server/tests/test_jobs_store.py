@@ -855,6 +855,24 @@ def test_store_round_trips_jobs_results_artifacts_and_metadata(tmp_path: Path) -
     assert store.get_mesh_artifact("roundtrip").startswith("$MeshFormat")
 
 
+def test_confirming_a_mesh_artifact_needs_its_row(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    try:
+        store.create_job(_job("none"))
+        store.store_mesh_artifact("none", None)
+        assert not store.get_job_row("none")["has_mesh_artifact"]
+        assert store.get_mesh_artifact("none") is None
+        store.create_job(_job("kept"))
+        store.store_mesh_artifact("kept", "$MeshFormat\n")
+        store.update_job("kept", has_mesh_artifact=False)
+        store.store_mesh_artifact("kept", None)
+        assert store.get_job_row("kept")["has_mesh_artifact"]
+        assert store.get_mesh_artifact("kept") == "$MeshFormat\n"
+    finally:
+        store.close()
+
+
 def test_exported_files_metadata_is_an_ordered_set_union(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()

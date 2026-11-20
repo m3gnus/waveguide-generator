@@ -535,14 +535,16 @@ def create_app(
     async def open_solver_mesh_disk_cache() -> None:
         from server.mesh.builder import configure_solver_mesh_disk_cache
 
-        await asyncio.to_thread(
+        application.state.solver_mesh_disk_cache = await asyncio.to_thread(
             configure_solver_mesh_disk_cache, resolved_data_dir / SOLVER_MESH_DISK_CACHE_DIRNAME,
         )
 
     async def close_solver_mesh_disk_cache() -> None:
-        from server.mesh.builder import configure_solver_mesh_disk_cache
+        from server.mesh.builder import close_solver_mesh_disk_cache as close
 
-        configure_solver_mesh_disk_cache(None)
+        cache = getattr(application.state, "solver_mesh_disk_cache", None)
+        application.state.solver_mesh_disk_cache = None
+        await asyncio.to_thread(close, cache)
 
     application.router.add_event_handler("startup", open_solver_mesh_disk_cache)
     application.router.add_event_handler("shutdown", close_solver_mesh_disk_cache)

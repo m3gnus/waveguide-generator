@@ -12,6 +12,7 @@ from contextlib import nullcontext
 
 import asyncio
 import functools
+import threading
 import hashlib
 import importlib.metadata
 import logging
@@ -743,7 +744,15 @@ def _build_with_memory_stop(
         aperture_tags = geometry.mesh_surface_groups.get("mouth_aperture", [])
         if mode == "infinite-baffle" and aperture_tags:
             import gmsh
-            aperture_size = float(geometry.metadata["apertureMeshInteriorSizeMm"])
+            # Recorded by the density pass of mesher a04a6cd and later whenever
+            # aperture surfaces exist; without it the stop cannot be applied.
+            aperture_size = geometry.metadata.get("apertureMeshInteriorSizeMm")
+            if aperture_size is None:
+                refusal = MesherEstimateUnavailable(
+                    "Mesher did not supply the aperture mesh size for its pre-mesh estimate"
+                )
+                raise mesher.TriangleBudgetExceeded(str(refusal)) from refusal
+            aperture_size = float(aperture_size)
             aperture = estimate_triangle_count([
                 (gmsh.model.occ.getMass(2, tag), aperture_size) for tag in aperture_tags
             ])
@@ -980,28 +989,103 @@ def _solver_mesh_generator() -> dict[str, Any]:
     }
 
 
+@functools.lru_cache(maxsize=1)
+def _wg_mesh_code_identity() -> str | None:
+    """Digest of WG's own mesh code, which shapes every artifact after its key.
+
+    ``server/mesh`` turns the mesher's output into the artifact: the policy
+    config, the memory stop, stats, warnings and integrity reports. A disk
+    artifact from other code (a WG update, another branch on the same data
+    folder) must not be served. None when the sources cannot be read.
+    """
+
+    root = Path(__file__).resolve().parent
+    try:
+        files = sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
+        if not files:
+            return None
+        digest = hashlib.sha256()
+        for path in files:
+            name = path.relative_to(root).as_posix().encode("utf-8")
+            content = path.read_bytes()
+            digest.update(len(name).to_bytes(4, "big"))
+            digest.update(name)
+            digest.update(len(content).to_bytes(8, "big"))
+            digest.update(content)
+    except OSError:
+        return None
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _solver_mesh_disk_generator() -> dict[str, Any] | None:
+    """What a disk artifact must share with this process to be served.
+
+    Beyond the in-memory key's generator: WG's mesh code, and the dense-solver
+    ceiling with the memory facts the artifact's stats report. A hit skips the
+    memory stop, so an artifact admitted under another ceiling is a miss and
+    is rebuilt -- and refused -- under this one. None (no disk cache) when an
+    identity cannot be measured.
+    """
+
+    generator = _solver_mesh_generator()
+    code = _wg_mesh_code_identity()
+    if code is None or str(generator["mesher_identity"]).startswith("unmeasured:"):
+        return None
+    return {
+        **generator,
+        "wg_mesh_code": code,
+        "dense_solver_memory": _dense_solver_memory_limit_stats(dense_solver_memory_limit()),
+    }
+
+
 _solver_mesh_disk_cache: SolverMeshDiskCache | None = None
+_disk_cache_lock = threading.Lock()
 
 
-def configure_solver_mesh_disk_cache(root: Path | None) -> None:
-    """Keep solver meshes under ``root`` across restarts; ``None`` turns it off.
+def configure_solver_mesh_disk_cache(root: Path | None) -> SolverMeshDiskCache | None:
+    """Keep solver meshes under ``root`` across restarts.
 
-    The application points this at its data folder while it runs. Opening it
-    deletes the meshes a different mesher or gmsh built.
+    The application opens it at its data folder while it runs and passes the
+    returned cache to :func:`close_solver_mesh_disk_cache` when it stops.
+    ``None`` turns any cache off (tests). Returns the opened cache, or None
+    when no cache could be opened.
     """
 
     global _solver_mesh_disk_cache
     if root is None:
-        _solver_mesh_disk_cache = None
-        return
-    cache = SolverMeshDiskCache(Path(root), _solver_mesh_generator())
+        with _disk_cache_lock:
+            previous, _solver_mesh_disk_cache = _solver_mesh_disk_cache, None
+        if previous is not None:
+            previous.close()
+        return None
+    generator = _solver_mesh_disk_generator()
+    if generator is None:
+        logger.warning("Solver mesh disk cache off: WG or mesher code identity is unmeasured")
+        return None
+    cache = SolverMeshDiskCache(Path(root), generator)
     try:
         cache.open()
     except OSError as exc:
         logger.warning("Solver mesh disk cache unavailable at %s: %s", root, exc)
-        _solver_mesh_disk_cache = None
+        cache.close()
+        return None
+    with _disk_cache_lock:
+        previous, _solver_mesh_disk_cache = _solver_mesh_disk_cache, cache
+    if previous is not None:
+        previous.close()
+    return cache
+
+
+def close_solver_mesh_disk_cache(cache: SolverMeshDiskCache | None) -> None:
+    """Turn off ``cache`` if it is still the one in use; another app's stays."""
+
+    global _solver_mesh_disk_cache
+    if cache is None:
         return
-    _solver_mesh_disk_cache = cache
+    with _disk_cache_lock:
+        if _solver_mesh_disk_cache is cache:
+            _solver_mesh_disk_cache = None
+    cache.close()
 
 
 def clear_solver_mesh_cache() -> None:
@@ -1702,6 +1786,10 @@ async def build_solver_mesh(
         async with _solver_mesh_cache.build_slot(cache_key, lambda: _check_cancel(cancel_cb)):
             result = None if force_rebuild else _solver_mesh_cache.get(cache_key)
             disk = _solver_mesh_disk_cache
+            if disk is not None and disk.generator.get("dense_solver_memory") != _dense_solver_memory_limit_stats(
+                dense_solver_memory_limit()
+            ):
+                disk = None  # the ceiling changed under this process (tests): build
             if result is None and disk is not None and not force_rebuild:
                 result = await asyncio.to_thread(disk.get, cache_key)
                 if result is not None:
@@ -1715,7 +1803,7 @@ async def build_solver_mesh(
                 )
                 _solver_mesh_cache.put(cache_key, result)
                 if disk is not None:
-                    await asyncio.to_thread(disk.put, cache_key, result)
+                    disk.put_later(cache_key, result)
     try:
         _enforce_artifact_triangle_ceiling(
             int(result["stats"]["triangle_count"]),

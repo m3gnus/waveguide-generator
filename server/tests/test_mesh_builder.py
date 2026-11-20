@@ -521,6 +521,21 @@ def test_memory_stop_hook_leaves_the_mesh_bytes_unchanged(tmp_path):
     assert not hasattr(mesher.configure_density, "__wrapped__")
 
 
+def test_a_missing_aperture_size_is_an_internal_refusal(tmp_path):
+    from server.mesh.errors import MesherEstimateUnavailable
+
+    def build(_config, _path, *, allow_large_mesh, after_density):
+        after_density(SimpleNamespace(
+            metadata={"meshTriangleEstimate": 10}, mesh_surface_groups={"mouth_aperture": [1]},
+        ))
+
+    with pytest.raises(MesherEstimateUnavailable, match="aperture mesh size"):
+        mesh_builder._build_with_memory_stop(
+            {"mode": "infinite-baffle", "mesh": {"quadrants": 1234}}, tmp_path / "mesh.msh",
+            limit=mesh_builder.dense_solver_memory_limit(), build_from_config=build,
+        )
+
+
 GIB = 1024**3
 _OVERRIDE = "WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES"
 _UNSAFE = "WG2_DENSE_SOLVER_MEMORY_LIMIT_UNSAFE"
