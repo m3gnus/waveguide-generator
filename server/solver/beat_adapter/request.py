@@ -314,9 +314,15 @@ def build_request(
 
 def build_parametric_request(
     msh_text: str, context: SolverContext, *, frequencies_hz: Sequence[float] | None = None,
-    precision: str = "float32", mesh_scale_to_m: float = 1., **options: Any,
+    precision: str = "float32", mesh_scale_to_m: float = 1.,
+    _frame_parts: SimpleNamespace | None = None, **options: Any,
 ) -> CompiledRequest:
-    """Translate beat.py's context as an official compiled request."""
+    """Translate beat.py's context as an official compiled request.
+
+    ``_frame_parts`` is the ``native_observation_frame(context, msh_text,
+    SimpleNamespace)`` value a caller already read from this same artifact;
+    passing it saves a second parse of the mesh text. It is not modified.
+    """
     context.validate()
     if context.sim_type != 2:
         raise ValueError("Exterior adapter cannot represent a coupled infinite baffle")
@@ -327,7 +333,8 @@ def build_parametric_request(
             f"quarter domains; {plane!r} is not "
             "representable by the BEAT Engine solver (compiled-request qualification limit)")
     # Existing WG frame policy includes cabinet and reduced-source corrections.
-    native = native_observation_frame(context, msh_text, SimpleNamespace)
+    native = (native_observation_frame(context, msh_text, SimpleNamespace)
+              if _frame_parts is None else _frame_parts)
     if native is None:
         raise ValueError("Parametric mesh requires the authoritative source-tag-2 frame")
     frame = vars(native).copy()

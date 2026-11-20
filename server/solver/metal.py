@@ -15,6 +15,7 @@ import importlib.metadata
 from io import BytesIO
 import logging
 import tempfile
+from types import SimpleNamespace
 import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -719,12 +720,21 @@ def solve_metal_from_msh_text(
             cap_bytes=field_trace_cap_bytes,
         )
     )
-    frame_override = native_observation_frame(
-        context,
-        msh_text,
-        ObservationFrame,
-        aperture_tag=aperture_tag,
+    # Only the qualified exterior, normal-motion subset uses the compatible
+    # worker. Other Metal features keep the same engine and native path. The
+    # route is known before anything is built, so the observation frame is
+    # read from the mesh once and serves both the native config (which the
+    # response mapping reads on either route) and the worker request.
+    worker_eligible = (
+        ladder_bands is None and aperture_tag is None and context.sim_type == 2
+        and context.source_motion == "normal" and context.quadrants in {1, 14, 1234}
     )
+    frame_parts = (
+        native_observation_frame(context, msh_text, SimpleNamespace, aperture_tag=aperture_tag)
+        if ObservationFrame is not None
+        else None
+    )
+    frame_override = None if frame_parts is None else ObservationFrame(**vars(frame_parts))
     # The coupled infinite baffle runs real k; everything else keeps complex_k.
     # The rationale is in server/solver/formulation.py. What is chosen here is
     # what the native config executes and what the result metadata records.
@@ -758,20 +768,23 @@ def solve_metal_from_msh_text(
         kwargs["source_motion"] = context.source_motion
     config = _native_config_or_unavailable(kwargs)
 
-    # Only the qualified exterior, normal-motion subset uses the compatible
-    # worker. Other Metal features keep the same engine and native path.
     worker_request = None
     worker_reason = "This Metal solve requires the native interface"
-    if (ladder_bands is None and aperture_tag is None and context.sim_type == 2
-            and context.source_motion == "normal" and context.quadrants in {1, 14, 1234}):
+    if worker_eligible:
         from .beat_adapter.request import build_parametric_request
         from .metal_worker import select_worker_request
 
+        # The request gets its own arrays, so nothing it does can reach the
+        # frame the native config holds.
+        worker_frame = (
+            None if frame_parts is None
+            else SimpleNamespace(**{name: np.array(value, copy=True) for name, value in vars(frame_parts).items()})
+        )
         worker_request, worker_reason = select_worker_request(lambda mesh: build_parametric_request(
             msh_text, context, frequencies_hz=(live_execution_frequencies(context)
                                                if result_callback is not None else canonical_frequencies(context)),
             engine_id="beat-metal", backend="metal", surface_traces=retain_traces,
-            _source_mesh=mesh,
+            _source_mesh=mesh, _frame_parts=worker_frame,
         ), msh_text=msh_text, merge_tol=float(getattr(config, "mesh_merge_tol", 1e-9)),
             stage_callback=stage_callback)
 
