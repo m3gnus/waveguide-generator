@@ -43,6 +43,17 @@ function outputs(result: ResultPayload, preferences: Preferences) {
   };
 }
 
+/**
+ * The report's bytes apart from its charts and stylesheet. The charts changed
+ * from hand-written SVG to hornlab-plots images (approved look change, 261120);
+ * everything else -- cards, notes, tables, metadata -- must stay byte for byte.
+ */
+function reportWithoutCharts(html: string): string {
+  return html
+    .replace(/<style>[\s\S]*?<\/style>/, '')
+    .replace(/<h3>Response and power response<\/h3>[\s\S]*?(?=<h3>Warnings<\/h3>)/g, '');
+}
+
 describe('adaptive numeric export disclosure and base bytes', () => {
   it('preserves all unflagged numeric exports byte for byte against base 44226173', () => {
     const preferences = { ...preferencesStore.getSnapshot(), smoothing: 'none' as const };
@@ -64,7 +75,8 @@ describe('adaptive numeric export disclosure and base bytes', () => {
       for (const [settings, expected] of [[preferences, fixture.outputs], [smoothed, fixture.smoothed]] as const) {
         for (const [format, content] of Object.entries(outputs(fixture.input, settings))) {
           expect(content, format).not.toContain('\r');
-          expect(utf8.encode(content), format).toEqual(utf8.encode(expected[format]));
+          const comparable = format === 'html' ? reportWithoutCharts : (text: string) => text;
+          expect(utf8.encode(comparable(content)), format).toEqual(utf8.encode(comparable(expected[format])));
         }
       }
     } finally {

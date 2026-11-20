@@ -5,12 +5,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { addWoofer, emptyAssembly } from '../stores/assembly';
 import { designForFamily, serializeDesign, useDesignStore } from '../stores/design';
 import { resultExportSnapshot } from './exportContext';
+import { runReportChartSpecs } from './runReport';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
 import type { RadiationImpedancePresentation } from '../api/results';
 import { writeToOutputFolder } from '../api/workspace';
 import { runAutomaticWorkspaceExport, archiveRunToWorkspace, buildChartRenderPayload, buildDirectivityRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
+
+/**
+ * The report's charts are drawn by hornlab-plots on the server. These tests
+ * exercise what the exports write around them, so the drawing is stubbed here
+ * and checked in runReport.test.ts and chartImage.test.ts.
+ */
+const reportChart = vi.hoisted(() => ({ render: vi.fn(async () => 'data:image/png;base64,iVBORw==') }));
+vi.mock('./chartImage', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./chartImage')>(),
+  renderChartSpec: reportChart.render,
+}));
 import {
   ExportCancelledError,
   ExportCollisionError,
@@ -637,6 +649,12 @@ describe('result exporters', () => {
     expect(saveText.mock.calls[0][0]).toContain('<h1>Horn One</h1>');
     expect(saveText.mock.calls[0][0]).toContain('<h2>HF</h2>');
     expect(saveText.mock.calls[0][0]).toContain('<h2>MF</h2>');
+    // Both channels' charts, drawn in the export theme and embedded, so the
+    // file opens offline on its own.
+    const drawn = runReportChartSpecs(wrapped);
+    expect(drawn.map(({ section }) => section)).toEqual(['HF', 'MF']);
+    expect(reportChart.render.mock.calls.map((call) => (call as unknown[]).slice(0, 2))).toEqual(drawn.map(({ spec }) => [spec, 'classic']));
+    expect(saveText.mock.calls[0][0].match(/<img class="plot"[^>]*src="data:image\/png;base64,iVBORw=="/g)).toHaveLength(2);
   });
   it('exports only the selected CAD drive channel and refuses an ambiguous wrapper', async () => {
     const wrapped: ResultPayload = {

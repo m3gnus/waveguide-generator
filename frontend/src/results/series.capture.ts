@@ -41,7 +41,10 @@ export async function captureSeriesOutputs(): Promise<Record<string, string>> {
     const item = [{ id: 'a', label: 'A', result }];
     put(`${name}|derivedCsv`, () => buildDerivedAcousticsCsv(result));
     put(`${name}|derivedJson`, () => buildDerivedAcousticsJson(result));
-    put(`${name}|report`, () => buildRunReportHtml(result, { title: 'Run', generatedAt: now }));
+    // The report's numbers: its cards and table. Its stylesheet and chart
+    // blocks are left out -- the charts became hornlab-plots images (approved
+    // look change, 261120) and their values are checked in runReport.test.ts.
+    put(`${name}|report`, () => reportNumbers(buildRunReportHtml(result, { title: 'Run', generatedAt: now })));
     put(`${name}|phase`, () => phaseSeries(item));
     put(`${name}|groupDelay`, () => groupDelaySeries(item));
     put(`${name}|groupDelayCycles`, () => groupDelaySeries(item, 'cycles'));
@@ -58,7 +61,9 @@ export async function captureSeriesOutputs(): Promise<Record<string, string>> {
       }
     }
     for (const [mode] of SMOOTHING_MODES) {
-      const preferences = { ...preferencesStore.getSnapshot(), smoothing: mode };
+      // The export theme is not a series value; pin the one the old default
+      // resolved to so the PNG payload compares values only.
+      const preferences = { ...preferencesStore.getSnapshot(), smoothing: mode, chartTheme: 'auto' };
       const key = `${name}|${mode}`;
       put(`${key}|csv`, () => buildFrequencyCsv(result, preferences));
       put(`${key}|summary`, () => buildSummaryText(result, preferences, now));
@@ -73,6 +78,12 @@ export async function captureSeriesOutputs(): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const [key, text] of texts) out[key] = await sha256Hex(canonicalNumbers(text));
   return out;
+}
+
+function reportNumbers(html: string): string {
+  return html
+    .replace(/<style>[\s\S]*?<\/style>/, '')
+    .replace(/<h3>Response and power response<\/h3>[\s\S]*?(?=<h3>Warnings<\/h3>)/g, '');
 }
 
 /** Significant digits kept for every non-integer number before hashing. */
