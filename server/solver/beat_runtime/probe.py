@@ -13,6 +13,8 @@ import struct
 import tempfile
 from typing import Protocol
 
+from server.solver.acoustics import BEAT_AIR_DENSITY_KG_PER_M3, BEAT_SOUND_SPEED_M_PER_S
+
 from . import paths
 
 PROBE_CONTRACT = "system-v1/result-v2"
@@ -62,7 +64,7 @@ def build_request(mesh: Path, *, backend: str = "cpu") -> dict:
                         "purpose": "bem_surface", "scale_to_m": 1.0, "translation_m": [0, 0, 0]}],
             "regions": [{"id": "region:air", "name": "Air", "kind": "unbounded_air",
                          "mesh_ids": ["mesh:probe"], "volume_groups": [],
-                         "sound_speed_m_per_s": 343.0, "density_kg_per_m3": 1.2041,
+                         "sound_speed_m_per_s": BEAT_SOUND_SPEED_M_PER_S, "density_kg_per_m3": BEAT_AIR_DENSITY_KG_PER_M3,
                          "loss_model": {}}],
             "boundaries": [{"id": "boundary:probe", "name": "Source", "kind": "moving",
                             "region_id": "region:air", "parameters": {},

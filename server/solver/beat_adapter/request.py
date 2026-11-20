@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import numpy as np
 
-from server.solver.acoustics import BEAT_SOUND_SPEED_M_PER_S
+from server.solver.acoustics import BEAT_AIR_DENSITY_KG_PER_M3, BEAT_SOUND_SPEED_M_PER_S
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
 from server.contracts.geometry import PLANE_BY_QUADRANTS
 from server.jobs.models import DriveChannel
@@ -169,7 +169,7 @@ def build_request(
     layout: ObservationLayout, frame: Mapping[str, Any], frequencies_hz: Sequence[float],
     engine_id: str = "beat-cpu", backend: str | None = None, precision: str = "float32",
     symmetry: str = "full", ground: GroundPlane | None = None, mesh_scale_to_m: float = 1.,
-    sound_speed_m_per_s: float = BEAT_SOUND_SPEED_M_PER_S, density_kg_per_m3: float = 1.2041,
+    sound_speed_m_per_s: float = BEAT_SOUND_SPEED_M_PER_S, density_kg_per_m3: float = BEAT_AIR_DENSITY_KG_PER_M3,
     quadrature_order: int = QUADRATURE_ORDER, singular_order: int = SINGULAR_ORDER, surface_traces: bool = False,
     cancel_path: Path | None = None, ground_plane_min_clearance_m: float = 0.,
     _retain_source_mesh: bool = False, _source_mesh: SurfaceMesh | None = None,

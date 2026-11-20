@@ -83,8 +83,8 @@ def test_a_host_with_no_backend_still_gets_a_reference(
     assert acoustics.reference_sound_speed_m_per_s() == acoustics._FALLBACK_SOUND_SPEED_M_PER_S
 
 
-def test_every_beat_request_writes_the_one_beat_sound_speed() -> None:
-    """BEAT publishes no constant; WG's request builders carry the value it runs."""
+def test_every_beat_request_writes_the_one_beat_medium() -> None:
+    """BEAT publishes no medium; WG's request builders carry the air it runs."""
 
     import inspect
 
@@ -92,6 +92,14 @@ def test_every_beat_request_writes_the_one_beat_sound_speed() -> None:
     from server.solver.beat_adapter.transducers import build_transducer_request
 
     assert acoustics.BEAT_SOUND_SPEED_M_PER_S == 343.0
+    assert acoustics.BEAT_AIR_DENSITY_KG_PER_M3 == 1.2041
     for builder in (build_request, build_transducer_request):
-        default = inspect.signature(builder).parameters["sound_speed_m_per_s"].default
-        assert default == acoustics.BEAT_SOUND_SPEED_M_PER_S
+        parameters = inspect.signature(builder).parameters
+        assert parameters["sound_speed_m_per_s"].default == acoustics.BEAT_SOUND_SPEED_M_PER_S
+        assert parameters["density_kg_per_m3"].default == acoustics.BEAT_AIR_DENSITY_KG_PER_M3
+
+
+def test_beat_runs_the_same_air_as_the_native_packages() -> None:
+    constants = _constants("hornlab_metal_bem")
+    assert acoustics.BEAT_SOUND_SPEED_M_PER_S == constants.SPEED_OF_SOUND
+    assert acoustics.BEAT_AIR_DENSITY_KG_PER_M3 == constants.AIR_DENSITY

@@ -26,11 +26,15 @@ _CONSTANT_PACKAGES = ("hornlab_metal_bem", "hornlab_bempp_bem")
 _FALLBACK_SOUND_SPEED_M_PER_S = 343.0
 _FALLBACK_AIR_DENSITY_KG_PER_M3 = 1.2041
 
-# The BEAT engine (``beat_engine``) publishes no sound speed: it solves with the
-# medium WG writes into each compiled request region, and every BEAT request WG
-# builds -- parametric, imported and transducer -- writes this one value.  The
-# reference phase, group delay and acceleration scale of BEAT results use it too.
-BEAT_SOUND_SPEED_M_PER_S = 343.0
+# The BEAT engine (``beat_engine``) publishes no medium: it solves with the
+# sound speed and density WG writes into each compiled request region, and every
+# BEAT request WG builds -- parametric, imported, transducer and the readiness
+# probe -- writes these values.  They are the same air the native packages run,
+# so they are named from the shared values rather than typed again.  The
+# reference phase, group delay and acceleration scale of BEAT results use the
+# speed too.
+BEAT_SOUND_SPEED_M_PER_S = _FALLBACK_SOUND_SPEED_M_PER_S
+BEAT_AIR_DENSITY_KG_PER_M3 = _FALLBACK_AIR_DENSITY_KG_PER_M3
 
 
 def _solver_constant(package_name: str, attribute: str) -> float:
@@ -97,6 +101,7 @@ def reference_sound_speed_m_per_s() -> float:
 
 
 __all__ = [
+    "BEAT_AIR_DENSITY_KG_PER_M3",
     "BEAT_SOUND_SPEED_M_PER_S",
     "reference_air_density_kg_per_m3",
     "reference_sound_speed_m_per_s",
