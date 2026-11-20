@@ -152,7 +152,9 @@ def select_worker_request(
     if not worker_available():
         return None, "The installed Metal-BEM package does not expose the compatible interface"
     if stage_callback:
-        stage_callback("setup", 0.0, "Preparing Metal mesh and solver request")
+        from .metal import PREPARING_METAL_STAGE_MESSAGE
+
+        stage_callback("setup", 0.0, PREPARING_METAL_STAGE_MESSAGE)
     try:
         from hornlab_metal_bem.mesh import _compact_surface_vertices, _merge_duplicate_vertices
 

@@ -218,10 +218,12 @@ def test_metal_adapter_maps_quadrants_axial_drive_stages_and_cancellation(monkey
     assert cancellations == 3
     assert [stage for stage, _, _ in callbacks] == [
         "setup",
+        "setup",
         "frequency_solve",
         "frequency_solve",
         "finalizing",
     ]
+    assert callbacks[1][2] == "Preparing Metal mesh and solver request"
     assert response["metadata"]["source_motion"] == "axial"
 
 

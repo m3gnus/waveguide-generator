@@ -147,6 +147,12 @@ GEOMETRY_SOURCES: tuple[str, ...] = ("parametric", "imported")
 IMPORTED_FEATURES: tuple[str, ...] = ("passive-cardioid",)
 
 
+# Recorded as ``interface_reason`` whenever a Metal solve runs on the native
+# interface for want of a worker route. Parametric solves always do.
+NATIVE_INTERFACE_REASON = "This Metal solve requires the native interface"
+PREPARING_METAL_STAGE_MESSAGE = "Preparing Metal mesh and solver request"
+
+
 class MetalUnavailable(RuntimeError):
     """The package or loadable release helper required by Metal is absent."""
 
@@ -851,6 +857,10 @@ def solve_metal_from_msh_text(
         result = merged.result
         ladder_dropped_fields = merged.dropped_fields
     else:
+        # The native helper loads and validates the mesh before its first
+        # frequency; say so, so the setup stage does not sit silent meanwhile.
+        if stage_callback:
+            stage_callback("setup", 0.0, PREPARING_METAL_STAGE_MESSAGE)
         path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -900,6 +910,7 @@ def solve_metal_from_msh_text(
         },
         "metal": {
             "interface": "native",
+            "interface_reason": NATIVE_INTERFACE_REASON,
             "solver_mode": "full_3d",
             "native_symmetry_plane": getattr(config, "native_symmetry_plane", kwargs["native_symmetry_plane"]),
             "native_check_open_edges": getattr(config, "native_check_open_edges", kwargs["native_check_open_edges"]),
@@ -1799,7 +1810,7 @@ def solve_imported_metal_from_msh_text(
     coupled_payload: dict[str, Any] | None = None
     coupled_mf_channel: Any | None = None
     worker_request = None
-    worker_reason = "This Metal solve requires the native interface"
+    worker_reason = NATIVE_INTERFACE_REASON
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".msh", delete=False, encoding="utf-8",

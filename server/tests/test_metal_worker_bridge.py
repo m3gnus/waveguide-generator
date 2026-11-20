@@ -173,9 +173,17 @@ def test_parametric_metal_always_solves_on_the_native_interface(monkeypatch):
     monkeypatch.setattr(metal_worker, "select_worker_request", lambda *_, **__: pytest.fail("worker selected"))
     monkeypatch.setattr(metal_worker, "solve_worker", lambda *_, **__: pytest.fail("worker solved"))
     for axial in (False, True):
-        response = metal.solve_metal_from_msh_text(_cabinet_msh(), _context(axial=axial, field_plane=False))
+        stages = []
+        response = metal.solve_metal_from_msh_text(_cabinet_msh(), _context(axial=axial, field_plane=False),
+                                                 stage_callback=lambda *values: stages.append(values))
         assert response["metadata"]["metal"]["interface"] == "native"
-        assert "interface_reason" not in response["metadata"]["metal"]
+        # Same metadata shape as every native solve before the worker was retired.
+        assert response["metadata"]["metal"]["interface_reason"] == "This Metal solve requires the native interface"
+        # The native load has its own setup stage, after configuring and before any frequency.
+        names = [message for _stage, _fraction, message in stages]
+        assert names.index("Configuring Metal BEM solve") < names.index("Preparing Metal mesh and solver request")
+        assert ("setup", 0.0, "Preparing Metal mesh and solver request") in stages
+        assert all(stage != "frequency_solve" for stage, *_ in stages[:names.index("Preparing Metal mesh and solver request")])
 
 
 def test_imported_single_source_preserves_channel_live_results(monkeypatch, tmp_path):
