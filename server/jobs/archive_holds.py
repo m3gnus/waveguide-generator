@@ -43,6 +43,14 @@ def pressure_basis_member(channel_id: str) -> str:
     return f"{PRESSURE_BASIS_MEMBER_PREFIX}{channel_id}"
 
 
+def _readable_size(size: int) -> str:
+    """Bytes as MB below one GB, else GB, in the binary units the caps use."""
+
+    if size < 1024 ** 3:
+        return f"{size / 1024 ** 2:.0f} MB"
+    return f"{size / 1024 ** 3:.1f} GB"
+
+
 class HoldTooLarge(ValueError):
     """One snapshot's members exceed what the server keeps for an archive."""
 
@@ -112,8 +120,9 @@ class ArchiveSnapshotHolds:
         size = sum(len(content) for content in members.values())
         if size > self._max_bytes:
             raise HoldTooLarge(
-                f"This run’s saved files are larger than WG can archive at once "
-                f"({size} bytes, over {self._max_bytes}). Use Export on the run to save them."
+                f"This run’s mesh and pressure data come to {_readable_size(size)}, more than the "
+                f"{_readable_size(self._max_bytes)} WG can archive, so WG cannot archive it. "
+                "Use Export on the run to save the files you need."
             )
         token = secrets.token_urlsafe(24)
         now = self._clock()

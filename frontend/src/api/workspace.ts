@@ -72,6 +72,13 @@ export type WorkspaceFile =
   | { filename: string; blob: Blob; server?: undefined }
   | { filename: string; server: ServerMember; blob?: undefined };
 
+/**
+ * The bytes one write-export request may carry, uploads and server members
+ * together: `MAX_EXPORT_BYTES` in `server/workspace/api.py`, which a server
+ * test checks this against.
+ */
+export const WRITE_EXPORT_MAX_BYTES = 256 * 1024 * 1024;
+
 const OUTPUT_FOLDER_WRITE_FAILED = 'WG could not read the Runs folder. Choose the WG folder in Settings.';
 
 async function serverMemberUnavailable(response: Response): Promise<boolean> {

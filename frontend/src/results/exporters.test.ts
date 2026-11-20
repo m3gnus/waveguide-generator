@@ -1457,6 +1457,49 @@ describe('result exporters', () => {
       .toBe('9_Mesh_Run.msh');
   });
 
+  it.each([
+    ['fits one request', 100, 100, 1],
+    ['300 MB class, over the per-request cap', 200, 100, 2],
+  ] as const)('writes the mesh with the bundle only when both fit one request (%s)', async (_case, basisMb, meshMb, requests) => {
+    const MB = 1024 * 1024;
+    const job = {
+      id: 'archive-big', archive_folder: 'OSSE', archive_run: '9_OSSE', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
+      stage: null, stage_message: null, created_at: '2026-08-20T10:00:00Z', queued_at: '2026-08-20T10:00:00Z',
+      started_at: '2026-08-20T10:00:01Z', completed_at: '2026-08-20T10:02:00Z', config_summary: {},
+      solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: false,
+      label: 'Mesh Run', error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null,
+      design_revision: 1, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null,
+      auto_export_formats: {}, archived_at: null, raw_results_file: null, mesh_artifact_file: null, log_tail: [],
+    } satisfies JobItem;
+    const writes: ReturnType<typeof workspacePayload>[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (init?.method === 'DELETE') return new Response(JSON.stringify({ released: true }));
+      if (String(input).endsWith('/archive-snapshot?members=held')) return new Response(JSON.stringify({
+        schema_version: 1, results: finalResult, results_sha256: 'b'.repeat(64), hold: 'held-big',
+        // Sizes only: the server holds the bytes, so none are allocated here.
+        mesh_artifact: { member: 'mesh', bytes: meshMb * MB },
+        pressure_bases: [{ channel_id: 'drive', member: 'pressure_basis/drive', bytes: basisMb * MB }],
+        radiation_impedance: null,
+      }));
+      const payload = workspacePayload(init);
+      writes.push(payload);
+      return new Response(JSON.stringify({
+        directory: `/workspace/${payload.subdirectory}`,
+        files: payload.members.map(({ relative_path }) => `/workspace/${payload.subdirectory}/${relative_path}`),
+      }));
+    });
+    const files = await archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher);
+    const names = writes.map(({ members }) => members.map(({ relative_path }) => relative_path));
+    const bundle = ['9_Mesh_Run.json', '9_Mesh_Run.csv', '9_Mesh_Run_derived_acoustics.csv',
+      '9_Mesh_Run_derived_acoustics.json', '9_Mesh_Run_report.html', 'drive_pressure_basis.npz'];
+    expect(names).toEqual(requests === 1
+      ? [[...bundle, '9_Mesh_Run.msh'], ['run.json']]
+      : [bundle, ['9_Mesh_Run.msh'], ['run.json']]);
+    // Either way the same files, in the same order, and the same record.
+    expect(files.map((file) => file.split('/').at(-1))).toEqual([...bundle, '9_Mesh_Run.msh', 'run.json']);
+    expect(JSON.parse(await writes.at(-1)!.members[0].blob.text()).artifacts.mesh).toBe('9_Mesh_Run.msh');
+  });
+
   it.each([1, 2])('takes a fresh snapshot when a held copy is lost (%s time(s)), leaving nothing partial', async (losses) => {
     const job = {
       id: 'archive-lost', archive_folder: 'OSSE', archive_run: '9_OSSE', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,

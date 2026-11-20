@@ -161,6 +161,34 @@ def test_one_hold_over_the_byte_cap_is_refused():
     with pytest.raises(HoldTooLarge, match="Use Export on the run"):
         holds.hold("a", {"mesh": b"12345"})
     assert len(holds) == 0
+    gib = 1024 ** 3
+    oversize = ArchiveSnapshotHolds(schedule=_Timers())
+    with pytest.raises(HoldTooLarge) as refused:
+        oversize.hold("a", {"mesh": _Sized(gib + gib // 2)})
+    assert str(refused.value) == (
+        "This run’s mesh and pressure data come to 1.5 GB, more than the 1.0 GB WG can "
+        "archive, so WG cannot archive it. Use Export on the run to save the files you need."
+    )
+
+
+class _Sized(bytes):
+    """A member that reports a size without allocating it."""
+
+    def __new__(cls, size):
+        member = super().__new__(cls, b"")
+        member.size = size
+        return member
+
+    def __len__(self):
+        return self.size
+
+
+def test_the_client_mirrors_the_write_export_byte_cap():
+    # frontend/src/api/workspace.ts plans archive requests with this number.
+    from server.workspace.api import MAX_EXPORT_BYTES
+
+    source = (Path(__file__).resolve().parents[2] / "frontend/src/api/workspace.ts").read_text()
+    assert f"WRITE_EXPORT_MAX_BYTES = {MAX_EXPORT_BYTES // (1024 * 1024)} * 1024 * 1024;" in source
 
 
 @dataclass
