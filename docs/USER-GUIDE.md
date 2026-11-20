@@ -350,11 +350,14 @@ show the same referenced phase trace over the on-axis SPL chart that appears in 
 export. Partial solves keep usable samples and show their warnings and failed-frequency
 diagnostics.
 
-**Settings → Results → Export theme** chooses the chart theme; the results
-preferences popover offers the same choice. **Match interface** follows the light
-or dark interface when exporting. Until you choose a theme, WG uses the server's
-chart theme default, including for automatic exports. Your explicit choice is
-remembered and takes precedence over that default.
+Every saved chart image is drawn by HornLab plots: a card's **Copy** and **Export
+PNG**, the **Chart Images (PNG)** export and the charts in the HTML report. The image
+carries the card's own curves, axis range (including a zoom) and labels; the 3D
+balloon and the forward beam map are the exception and save the view on screen.
+**Settings → Results → Export theme** chooses the images' theme; the results
+preferences popover offers the same choice. The default is **Classic**, the white
+HornLab report look. **Match interface** follows the light or dark interface when
+exporting. Your explicit choice is remembered and takes precedence over the default.
 
 ### Crossover and combined output
 
