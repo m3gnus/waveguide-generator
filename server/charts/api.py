@@ -14,7 +14,8 @@ import hashlib
 import math
 import threading
 from collections import OrderedDict
-from typing import Any
+import logging
+from typing import Annotated, Any, Literal, Union
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -148,10 +149,144 @@ class DirectivityRenderRequest(ChartModel):
         return _theme(value)
 
 
-class ChartSpecRenderRequest(ChartModel):
-    """One chart described as data; hornlab_plots.spec documents the shape."""
+# Bounds on what one chart may ask hornlab-plots to draw. A real chart is far
+# inside them (a solve has a few hundred frequencies, a card a few dozen
+# curves); a request outside them is a program fault, refused before it can
+# hold the render lock that every chart export shares.
+MAX_SPEC_SERIES = 64
+MAX_SPEC_POINTS = 20_000
+MAX_SPEC_TOTAL_POINTS = 200_000
+MAX_SPEC_BANDS = 64
+MAX_SPEC_HLINES = 16
+MAX_SPEC_SHADE = 8
+MAX_POLAR_RINGS = 60
+MAX_FREQUENCY_HZ = 1.0e6
+MAX_LOG_DECADES = 8
+_Text = Annotated[str, Field(max_length=200)]
+_Value = Annotated[float, Field(ge=-1.0e9, le=1.0e9)]
+_Values = Annotated[list[_Value | None], Field(max_length=MAX_SPEC_POINTS)]
+_ColorRole = Annotated[int, Field(ge=0, le=63)] | Literal["accent", "ink", "muted"]
 
-    spec: dict[str, Any]
+
+def _ordered(low: float | None, high: float | None, what: str) -> None:
+    if low is not None and high is not None and not high > low:
+        raise ValueError(f"the {what} range is reversed or empty; set its maximum above its minimum")
+
+
+class ChartSpecAxis(ChartModel):
+    label: _Text = ""
+    scale: Literal["log", "linear"] = "linear"
+    min: _Value | None = None
+    max: _Value | None = None
+
+    @model_validator(mode="after")
+    def sane_range(self) -> "ChartSpecAxis":
+        _ordered(self.min, self.max, "axis")
+        if self.scale == "log":
+            if self.min is not None and not 0.0 < self.min:
+                raise ValueError("a log frequency axis must start above 0 Hz")
+            if self.max is not None and self.max > MAX_FREQUENCY_HZ:
+                raise ValueError(f"a log frequency axis must end at or below {MAX_FREQUENCY_HZ:g} Hz")
+            if self.min is not None and self.max is not None and math.log10(self.max / self.min) > MAX_LOG_DECADES:
+                raise ValueError(f"a log frequency axis may span at most {MAX_LOG_DECADES} decades")
+        return self
+
+
+class ChartSpecLineStyle(ChartModel):
+    color: _ColorRole = 0
+    style: Literal["solid", "dashed", "dotted"] = "solid"
+    width: Annotated[float, Field(gt=0.0, le=20.0)] = 2.0
+    opacity: Annotated[float, Field(ge=0.0, le=1.0)] = 1.0
+
+
+class ChartSpecLineSeries(ChartSpecLineStyle):
+    label: _Text | None = None
+    x: _Values
+    y: _Values
+    axis: Literal[0, 1] = 0
+    z: Annotated[float, Field(ge=-10.0, le=20.0)] | None = None
+    markers: Annotated[list[Annotated[int, Field(ge=0, lt=MAX_SPEC_POINTS)]], Field(max_length=MAX_SPEC_POINTS)] | None = None
+
+
+class ChartSpecBand(ChartModel):
+    x0: _Value
+    x1: _Value
+    label: _Text | None = None
+
+
+class ChartSpecHLine(ChartModel):
+    y: _Value
+    axis: Literal[0, 1] = 0
+
+
+class LineChartSpec(ChartModel):
+    kind: Literal["lines"]
+    title: _Text = ""
+    subtitle: _Text | None = None
+    x: ChartSpecAxis = Field(default_factory=lambda: ChartSpecAxis(scale="log"))
+    y: ChartSpecAxis = Field(default_factory=ChartSpecAxis)
+    y2: ChartSpecAxis | None = None
+    series: Annotated[list[ChartSpecLineSeries], Field(max_length=MAX_SPEC_SERIES)]
+    bands: Annotated[list[ChartSpecBand], Field(max_length=MAX_SPEC_BANDS)] | None = None
+    hlines: Annotated[list[ChartSpecHLine], Field(max_length=MAX_SPEC_HLINES)] | None = None
+
+    @model_validator(mode="after")
+    def bounded_points(self) -> "LineChartSpec":
+        if sum(len(series.x) for series in self.series) > MAX_SPEC_TOTAL_POINTS:
+            raise ValueError(f"a chart may draw at most {MAX_SPEC_TOTAL_POINTS} points")
+        if self.x.scale == "log" and any(
+            value is not None and not 0.0 < value <= MAX_FREQUENCY_HZ
+            for series in self.series for value in series.x
+        ):
+            raise ValueError(f"log frequency samples must lie above 0 and at or below {MAX_FREQUENCY_HZ:g} Hz")
+        return self
+
+
+class ChartSpecRadius(ChartModel):
+    min: Annotated[float, Field(ge=-1000.0, le=1000.0)]
+    max: Annotated[float, Field(ge=-1000.0, le=1000.0)]
+    step: Annotated[float, Field(gt=0.0)] | None = None
+    unit: _Text = "dB"
+
+    @model_validator(mode="after")
+    def bounded_rings(self) -> "ChartSpecRadius":
+        _ordered(self.min, self.max, "polar radius")
+        if self.step is not None and (self.max - self.min) / self.step > MAX_POLAR_RINGS:
+            raise ValueError(f"the polar ring step may give at most {MAX_POLAR_RINGS} rings")
+        return self
+
+
+class ChartSpecPolarSeries(ChartSpecLineStyle):
+    label: _Text | None = None
+    angle: Annotated[list[Annotated[float, Field(ge=-360.0, le=360.0)] | None], Field(max_length=MAX_SPEC_POINTS)]
+    r: _Values
+
+
+class ChartSpecShade(ChartModel):
+    from_: Annotated[float, Field(ge=-360.0, le=360.0, alias="from")]
+    to: Annotated[float, Field(ge=-360.0, le=360.0)]
+    label: _Text | None = None
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, populate_by_name=True)
+
+
+class PolarChartSpec(ChartModel):
+    kind: Literal["polar"]
+    title: _Text = ""
+    subtitle: _Text | None = None
+    r: ChartSpecRadius
+    series: Annotated[list[ChartSpecPolarSeries], Field(max_length=MAX_SPEC_SERIES)]
+    shade: Annotated[list[ChartSpecShade], Field(max_length=MAX_SPEC_SHADE)] | None = None
+
+
+class ChartSpecRenderRequest(ChartModel):
+    """One chart described as data; hornlab_plots.spec documents the shape.
+
+    Typed and bounded here so a malformed or oversized spec is a 422 naming
+    the field, never a renderer exception or minutes under the render lock.
+    """
+
+    spec: Annotated[Union[LineChartSpec, PolarChartSpec], Field(discriminator="kind")]
     theme: str = DEFAULT_CHART_THEME
 
     @field_validator("theme", mode="before")
@@ -161,6 +296,8 @@ class ChartSpecRenderRequest(ChartModel):
 
 
 router = APIRouter(tags=["chart-export"])
+_log = logging.getLogger(__name__)
+CHART_SPEC_RENDER_FAILED = "WG could not draw this chart image. Try again; if it keeps failing, send a problem report."
 _render_lock = threading.Lock()
 _cache_lock = threading.Lock()
 _cache: OrderedDict[str, Any] = OrderedDict()
@@ -283,7 +420,9 @@ async def render_directivity(request: DirectivityRenderRequest) -> dict[str, str
 
 @router.post("/api/render-chart")
 async def render_chart(request: ChartSpecRenderRequest) -> dict[str, str]:
-    payload = request.model_dump(mode="json")
+    # by_alias: the shaded sector's start is "from" on the wire and to the
+    # renderer; exclude_none: an absent option is the renderer's default.
+    payload = request.model_dump(mode="json", by_alias=True, exclude_none=True)
     key = _key("spec", payload)
     cached = _cached(key)
     if cached is not None:
@@ -292,8 +431,11 @@ async def render_chart(request: ChartSpecRenderRequest) -> dict[str, str]:
         rendered = await asyncio.to_thread(_render_chart_spec, payload)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except (TypeError, ValueError, KeyError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (ArithmeticError, AttributeError, LookupError, TypeError, ValueError) as exc:
+        # The request validated, so this is the renderer refusing the spec: a
+        # program fault. The user gets a fixed sentence; the log keeps why.
+        _log.warning("hornlab-plots refused a chart spec: %s", exc, exc_info=True)
+        raise HTTPException(status_code=422, detail=CHART_SPEC_RENDER_FAILED) from exc
     if rendered is None:
         raise HTTPException(status_code=422, detail="This chart has no values to draw. Choose a chart with data, then export again.")
     image = f"data:image/png;base64,{rendered}"
@@ -307,6 +449,8 @@ def mount_charts(application: FastAPI) -> None:
 
 __all__ = [
     "ChartSpecRenderRequest",
+    "LineChartSpec",
+    "PolarChartSpec",
     "ChartsReferencePayload",
     "ChartsRenderRequest",
     "DEFAULT_CHART_THEME",

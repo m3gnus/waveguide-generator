@@ -63,6 +63,7 @@ def test_directivity_request_rejects_invalid_display_ranges(display_range_db) ->
 
 def _spec() -> dict:
     return {
+        "kind": "lines",
         "title": "Group delay",
         "x": {"label": "Frequency [Hz]", "scale": "log"},
         "y": {"label": "Group delay [ms]"},
@@ -90,7 +91,11 @@ def test_chart_spec_route_renders_once_per_spec_and_theme(monkeypatch) -> None:
     assert len(calls) == 1
     asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec=_spec(), theme="vellum")))
     assert [theme for _spec_, theme in calls] == ["classic", "vellum"]
-    assert calls[0][0] == _spec()
+    # What reaches the renderer is the request as sent, with defaults filled.
+    sent = calls[0][0]
+    assert sent["series"][0]["x"] == [100.0, 1000.0, 10000.0]
+    assert sent["series"][0]["y"] == [1.0, None, 0.5]
+    assert sent["x"] == {"label": "Frequency [Hz]", "scale": "log"}
     _clear_chart_cache()
 
 
@@ -98,23 +103,25 @@ def test_chart_spec_route_refuses_bad_specs_and_empty_charts(monkeypatch) -> Non
     class Plots:
         @staticmethod
         def chart_spec_b64(spec, *, theme):
-            if spec.get("kind") == "pie":
-                raise ValueError("chart kind must be one of: lines, polar")
+            if spec["title"] == "refused":
+                raise AttributeError("'str' object has no attribute 'get'")
             return None
 
     monkeypatch.setattr(charts_api, "_plots", lambda: Plots)
     _clear_chart_cache()
     with pytest.raises(charts_api.HTTPException) as refused:
-        asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec={"kind": "pie"})))
+        asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec={**_spec(), "title": "refused"})))
+    # A renderer refusal is a program fault: a fixed sentence, not Python's.
     assert refused.value.status_code == 422
+    assert refused.value.detail == charts_api.CHART_SPEC_RENDER_FAILED
     with pytest.raises(charts_api.HTTPException) as empty:
-        asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec={"series": []})))
+        asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec={**_spec(), "series": []})))
     assert empty.value.status_code == 422
     assert "no values to draw" in empty.value.detail
     with pytest.raises(ValidationError):
         charts_api.ChartSpecRenderRequest(spec=_spec(), theme="no-such-theme")
     with pytest.raises(ValidationError, match="finite"):
-        charts_api.ChartSpecRenderRequest(spec={"series": [{"x": [float("nan")], "y": [1.0]}]})
+        charts_api.ChartSpecRenderRequest(spec={**_spec(), "series": [{"x": [float("nan")], "y": [1.0]}]})
     _clear_chart_cache()
 
 
@@ -125,4 +132,68 @@ def test_chart_spec_route_draws_with_the_pinned_renderer() -> None:
     _clear_chart_cache()
     image = asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec=_spec())))["image"]
     assert image.startswith("data:image/png;base64,iVBORw0KGgo")
+    _clear_chart_cache()
+
+
+def _polar(**radius) -> dict:
+    return {"kind": "polar", "r": {"min": -30.0, "max": 0.0, **radius},
+            "series": [{"angle": [-90.0, 0.0, 90.0], "r": [-6.0, 0.0, None]}]}
+
+
+@pytest.mark.parametrize(("spec", "field"), [
+    # The reviewers' probes: each took seconds to minutes under the render lock.
+    (_polar(step=0.001), "rings"),
+    (_polar(min=-2000.0, step=1.0), "greater than or equal"),
+    ({**_spec(), "x": {"scale": "log", "min": 1e-300, "max": 1e300}}, "less than or equal"),
+    ({**_spec(), "x": {"scale": "log", "min": 1e-3, "max": 1e6}}, "decades"),
+    ({**_spec(), "hlines": [{"y": 0.0}] * 20_000}, "at most 16"),
+    ({**_spec(), "bands": [{"x0": 100.0, "x1": 200.0}] * 1_000}, "at most 64"),
+    ({**_spec(), "series": ["x"]}, "valid dictionary"),
+    ({**_spec(), "x": 5}, "valid dictionary"),
+    ({**_spec(), "series": [{"x": [100.0] * 20_001, "y": [1.0] * 20_001}]}, "at most 20000"),
+    ({**_spec(), "series": [{"x": [100.0], "y": [1.0]}] * 65}, "at most 64"),
+    ({**_spec(), "series": [{"x": [100.0], "y": [1.0], "color": "#ff0000"}]}, "color"),
+    ({**_spec(), "series": [{"x": [100.0], "y": [1.0], "opacity": 5.0}]}, "less than or equal"),
+    ({**_spec(), "series": [{"x": [0.0, 100.0], "y": [1.0, 2.0]}]}, "above 0"),
+    ({**_spec(), "series": [{"x": [100.0], "y": [int("9" * 400)]}]}, "y"),
+    ({**_spec(), "kind": "pie"}, "kind"),
+    ({**_spec(), "y": {"min": 5.0, "max": 1.0}}, "reversed"),
+])
+def test_chart_spec_request_refuses_costly_and_malformed_specs(spec, field) -> None:
+    with pytest.raises(ValidationError) as refused:
+        charts_api.ChartSpecRenderRequest(spec=spec)
+    assert field in str(refused.value)
+
+
+def test_chart_spec_route_answers_422_naming_the_field_over_http(monkeypatch) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    rendered = []
+    monkeypatch.setattr(charts_api, "_plots", lambda: rendered.append(1))
+    application = FastAPI()
+    charts_api.mount_charts(application)
+    client = TestClient(application, raise_server_exceptions=False)
+    for spec in ({"series": ["x"]}, {**_spec(), "series": ["x"]}, _polar(step=0.001)):
+        response = client.post("/api/render-chart", json={"spec": spec})
+        assert response.status_code == 422
+        assert all("loc" in item and "msg" in item for item in response.json()["detail"])
+    assert rendered == []
+
+
+def test_valid_polar_spec_reaches_the_renderer_with_its_wire_names(monkeypatch) -> None:
+    calls = []
+
+    class Plots:
+        @staticmethod
+        def chart_spec_b64(spec, *, theme):
+            calls.append(spec)
+            return "YQ=="
+
+    monkeypatch.setattr(charts_api, "_plots", lambda: Plots)
+    _clear_chart_cache()
+    spec = {**_polar(step=10.0), "shade": [{"from": 90.0, "to": 180.0, "label": "rear"}]}
+    asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec=spec)))
+    assert calls[0]["shade"] == [{"from": 90.0, "to": 180.0, "label": "rear"}]
+    assert calls[0]["series"][0]["r"] == [-6.0, 0.0, None]
     _clear_chart_cache()
