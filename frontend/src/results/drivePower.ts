@@ -24,6 +24,7 @@
  * no relationship to programme material. The chart says so.
  */
 import type { ResultPayload } from './types';
+import { seriesFrequencies } from './series';
 
 export interface ElectricalDrive {
   voltageV: number;
@@ -110,7 +111,7 @@ export function drivePowerSeries(result: ResultPayload): DrivePowerSeries | null
   const drive = electricalDrive(result);
   if (!drive) return null;
   const impedance = result.impedance;
-  const frequencies = impedance?.frequencies?.length ? impedance.frequencies : result.frequencies;
+  const frequencies = seriesFrequencies(impedance?.frequencies, result.frequencies);
   const real = impedance?.real ?? [];
   const imaginary = impedance?.imaginary ?? [];
   if (!frequencies?.length || !real.length) return null;

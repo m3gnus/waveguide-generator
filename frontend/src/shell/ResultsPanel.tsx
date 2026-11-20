@@ -62,6 +62,7 @@ import { channelLabel } from '../results/channelLabel';
 import { unqualifiedMessage, channelQualificationSummary, chartUnqualifiedBands, powerChipLabel, powerQualificationDetail, powerQualificationOf, unqualifiedCaption, withUnqualifiedBands, type UnqualifiedBand } from '../results/powerQualification';
 import { solveAttention } from './solveAttention';
 import { failureWords } from '../api/httpError';
+import { splFrequencies } from '../results/series';
 
 export function newRunBadgeLabel(runNumber: number | null): string {
   return runNumber === null ? 'New' : `New · #${runNumber}`;
@@ -1715,7 +1716,7 @@ export function driverChartMissingReason(result: ResultPayload, chart: string): 
  */
 export function groupDelayMissingReason(result: ResultPayload): string {
   const samples = {
-    frequencies: result.spl_on_axis?.frequencies?.length ? result.spl_on_axis.frequencies : result.frequencies,
+    frequencies: splFrequencies(result),
     phaseDegrees: result.spl_on_axis?.phase_degrees ?? [],
   };
   if (!hasOnAxisPhase(samples.phaseDegrees)) {

@@ -5,6 +5,7 @@ import { buildOnAxisFrd } from './frd';
 import { engineeringPhaseFactor, normalizePhaseConvention, phaseSpatialSign, wrapPhaseDegrees } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
 import { ProgramFault } from '../api/httpError';
+import { seriesFrequencies } from './series';
 
 export interface VituixCadTextFile {
   filename: string;
@@ -134,7 +135,7 @@ export function buildZma(result: ResultPayload, channelId?: string): string {
   result = scopeResultChannel(result, channelId);
   const impedance = electricalImpedance(result);
   const phaseRule = impedancePhaseRule(result);
-  const frequencies = impedance.frequencies?.length ? impedance.frequencies : result.frequencies;
+  const frequencies = seriesFrequencies(impedance.frequencies, result.frequencies);
   const rows = frequencies.flatMap((frequency, index) => {
     const real = impedance.real?.[index];
     const imaginary = impedance.imaginary?.[index];

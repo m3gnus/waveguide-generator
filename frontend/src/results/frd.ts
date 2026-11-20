@@ -7,6 +7,7 @@ import {
   engineeringPhaseDegrees, phaseSpatialSign, propagationReference, type PropagationReference,
 } from './phaseConvention';
 import { resultChannelFileSuffix, scopeResultChannel, type ResultPayload } from './types';
+import { splFrequencies } from './series';
 
 export interface PolarFrdFile {
   filename: string;
@@ -33,12 +34,6 @@ type PolarPlane = 'horizontal' | 'vertical';
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
-}
-
-function onAxisFrequencies(result: ResultPayload): number[] {
-  return result.spl_on_axis?.frequencies?.length
-    ? result.spl_on_axis.frequencies
-    : result.frequencies;
 }
 
 // FRD files feed crossover and alignment tools, which read magnitude and
@@ -145,7 +140,7 @@ export function buildOnAxisFrd(
   channelId?: string,
 ): string {
   result = scopeResultChannel(result, channelId);
-  const frequencies = onAxisFrequencies(result);
+  const frequencies = splFrequencies(result);
   const spl = result.spl_on_axis?.spl ?? [];
   const phase = result.spl_on_axis?.phase_degrees ?? [];
   // spl_on_axis is selected from the same directivity pressure field (first

@@ -248,7 +248,7 @@ export function powerResponseSeries(result: ResultPayload, smoothing: SmoothingM
 
 export function beamShapeSeries(result: ResultPayload) {
   const beam = result.beam_shape;
-  const frequencies = beam?.frequencies?.length ? beam.frequencies : result.balloon?.frequencies ?? [];
+  const frequencies = seriesFrequencies(beam?.frequencies, result.balloon?.frequencies ?? []);
   return [
     { name: 'H −6 dB', values: beam?.horizontal_beamwidth_deg ?? [] },
     { name: 'V −6 dB', values: beam?.vertical_beamwidth_deg ?? [] },
@@ -450,7 +450,7 @@ export function excursionChartSeries(result: ResultPayload) {
  */
 export function beamFitSeries(result: ResultPayload) {
   const beam = result.beam_shape;
-  const frequencies = beam?.frequencies?.length ? beam.frequencies : result.balloon?.frequencies ?? [];
+  const frequencies = seriesFrequencies(beam?.frequencies, result.balloon?.frequencies ?? []);
   return [
     { name: 'Aspect ratio (H/V)', values: beam?.aspect_ratio ?? [], axis: 0 },
     { name: 'Superellipse exponent', values: beam?.shape_exponent ?? [], axis: 0 },

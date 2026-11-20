@@ -43,6 +43,7 @@
  */
 import type { NullableNumber, PolarSample, ResultData } from '../api/results';
 import type { ResultPayload } from './types';
+import { seriesFrequencies } from './series';
 import { polarValueDb as sampleDb } from './values';
 
 export const POLAR_PLANES = ['horizontal', 'vertical', 'diagonal'] as const;
@@ -223,7 +224,7 @@ export function withMeasurementAngle<T extends ResultData>(result: T, plane: Mea
 
   const payload = result as unknown as ResultPayload;
   const onAxis = payload.spl_on_axis ?? {};
-  const frequencies = onAxis.frequencies?.length ? onAxis.frequencies : result.frequencies;
+  const frequencies = seriesFrequencies(onAxis.frequencies, result.frequencies);
   const phaseRows = (payload.directivity_phase as Record<string, PhaseRows | undefined> | undefined)?.[plane];
   const spl: NullableNumber[] = [];
   const phase: NullableNumber[] = [];

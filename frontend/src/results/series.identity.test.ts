@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { applySmoothing, SMOOTHING_MODES, type SmoothingMode } from './smoothing';
 import { SERIES_FIXTURES } from './series.fixtures';
-import { flatDi, powerResponseOnDiGrid, smoothedExportSeries } from './series';
-import { buildDerivedAcoustics } from './derivedAcoustics';
+import { smoothedExportSeries } from './series';
+import { captureSeriesOutputs } from './series.capture';
+import FROZEN from './series.capture.json';
 import { directivityIndexSeries, impedanceSeries, powerResponseSeries, splSeries } from './mappers';
 import type { ResultPayload } from './types';
 
@@ -71,11 +72,6 @@ function exportOracle(result: ResultPayload, smoothing: SmoothingMode) {
   };
 }
 
-/** derivedAcoustics.ts power response column: unsmoothed SPL minus DI per row, where both are present. */
-function derivedPowerOracle(rows: ReturnType<typeof buildDerivedAcoustics>['rows']) {
-  return rows.map(({ on_axis_spl_db: onAxis, directivity_index_db: di }) => (onAxis !== null && di !== null ? onAxis - di : null));
-}
-
 const cases = Object.entries(SERIES_FIXTURES).flatMap(([name, result]) => (
   SMOOTHING_MODES.map(([mode]) => [name, mode, result] as const)
 ));
@@ -94,18 +90,14 @@ describe('one series layer keeps every consumer’s values', () => {
     expect(smoothedExportSeries(result, mode)).toEqual(exportOracle(result, mode));
   });
 
-  it.each(Object.entries(SERIES_FIXTURES))('derived power response: %s', (_name, result) => {
-    const { rows } = buildDerivedAcoustics(result);
-    expect(rows.map(({ power_response_db_spl_avg: value }) => value)).toEqual(derivedPowerOracle(rows));
-  });
-
-  it('smooths the screen power response after forming it', () => {
-    const result = SERIES_FIXTURES['shared grid, plane DI'];
-    const screen = powerResponseSeries(result, '1/3')[0].data.map(([, value]) => value);
-    const onDiGrid = powerResponseOnDiGrid(result);
-    // The screen forms SPL - DI on the DI grid, then smooths that one curve.
-    expect(screen).toEqual(applySmoothing(onDiGrid.frequencies, onDiGrid.values, '1/3', 'level_db'));
-    // The DI every flat curve shows is the horizontal plane.
-    expect(flatDi(result)).toBe((result.di!.di as Record<string, number[]>).horizontal);
+  it('every consumer reproduces the outputs captured from the old code', async () => {
+    // series.capture.json: captureSeriesOutputs() run at WG dev ef17eccb1,
+    // before the series layer existed. Covers the CSV, summary, PNG payload,
+    // derived CSV/JSON, report, screen series, phase, group delay, beam, drive
+    // power, FRD, ZMA and measurement-angle outputs.
+    const outputs = await captureSeriesOutputs();
+    expect(Object.keys(outputs).sort()).toEqual(Object.keys(FROZEN).sort());
+    const changed = Object.keys(FROZEN).filter((key) => outputs[key] !== (FROZEN as Record<string, string>)[key]);
+    expect(changed).toEqual([]);
   });
 });
