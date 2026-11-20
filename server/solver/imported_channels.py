@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, cast
+import time
+from typing import Any, Callable, Mapping, Sequence, cast
 from types import SimpleNamespace
 
 import numpy as np
 
 from server.cadlink.roles import normalize_source_role
+from server.contracts.conventions import ENGINEERING_PHASE_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 
+from .combined_channel import package_combined_channel
 from .context import SolverContext
 from .driver_lem import channel_drive_scaling
 from .excitation_basis import pressure_per_velocity_scale
@@ -349,6 +352,187 @@ def prescribed_entry(entry: Mapping[str, Any], frequency_hz: float,
     return {**entry, **{source: getattr(native, target)[0] for source, target in fields.items() if hasattr(native, target)},
             **({"excitation_normalization": native.excitation_normalization}
                if hasattr(native, "excitation_normalization") else {})}
+
+
+def imported_combined_channel(
+    *,
+    geometry: ImportedGeometrySource,
+    sorted_results: Mapping[str, Any],
+    request: SolveRequest,
+    quadrants: int,
+    config: Any,
+    config_motion: str,
+    started: float,
+    per_source_validity: Mapping[str, Any],
+    channel_identity: Mapping[str, Mapping[str, Any]],
+    member_channels: Mapping[str, Any],
+    sound_speed_m_per_s: float,
+    backend_metadata: Callable[[Any], dict[str, Any]],
+) -> dict[str, Any]:
+    """Package an imported request's combined channel: the filtered sum.
+
+    Every multi-RHS imported adapter (Metal, BEMPP, BEAT) combines its member
+    channels the same way; only the backend's metadata block differs, and the
+    adapter supplies it as ``backend_metadata``.
+    """
+
+    spec = geometry.combine
+    assert spec is not None
+    return package_combined_channel(
+        spec=spec,
+        drive_channels=geometry.drive_channels,
+        results_by_id=sorted_results,
+        member_channels=member_channels,
+        per_source_validity=per_source_validity,
+        member_roles={member: identity.get("role") for member, identity in channel_identity.items()},
+        max_drive_voltage_v=geometry.max_drive_voltage_v,
+        frequencies_hz=sorted_results[geometry.physical_members(spec.members)[0]].frequencies_hz,
+        request=request,
+        quadrants=quadrants,
+        config_motion=config_motion,
+        config=config,
+        start_time=started,
+        sound_speed_m_per_s=sound_speed_m_per_s,
+        backend_metadata=backend_metadata,
+    )
+
+
+def finish_imported_channel_response(
+    channel_response: dict[str, Any],
+    *,
+    geometry: ImportedGeometrySource,
+    driver_payload: dict[str, Any] | None,
+    rms_velocity: bool,
+    omit_impedance: bool,
+) -> bool:
+    """Apply the impedance and driver contract to one imported channel response.
+
+    ``omit_impedance`` drops a per-patch impedance that is not a channel
+    impedance; a voltage-driven channel then reports its electrical input
+    impedance instead. Returns whether a driver payload was applied.
+    """
+
+    if rms_velocity:
+        channel_response["metadata"]["impedance_drive"] = "rms_velocity"
+    if omit_impedance:
+        channel_response.pop("impedance", None)
+        channel_response["metadata"]["impedance_omitted"] = (
+            "multi-source channel: per-patch impedance is not a channel impedance"
+        )
+    if driver_payload is None:
+        return False
+    electrical = driver_payload.pop("electrical_impedance_ohm")
+    channel_response["impedance"] = {
+        "frequencies": electrical["frequencies"],
+        "real": electrical["real"],
+        "imaginary": electrical["imaginary"],
+    }
+    metadata = channel_response["metadata"]
+    metadata["impedance_units"] = "ohms"
+    metadata["impedance_quantity"] = "electrical_input_impedance"
+    # hornlab_sim's LEM uses engineering +jω throughout. The channel's pressure
+    # keeps its own convention tag, so impedance needs its own or an exporter
+    # could faithfully apply the wrong sign while honouring the acoustic one.
+    metadata["impedance_phase_convention"] = ENGINEERING_PHASE_CONVENTION
+    metadata["impedance_drive"] = "voltage"
+    metadata["driver"] = driver_payload
+    metadata["drive"] = {
+        "voltage_v": geometry.drive_voltage_v,
+        "rg_ohm": geometry.rg_ohm,
+    }
+    warnings = metadata.setdefault("warnings", [])
+    warnings.extend(driver_payload.get("warnings") or [])
+    metadata["warning_count"] = len(warnings)
+    return True
+
+
+def imported_fem_exclusion(record: Mapping[str, Any], geometry: ImportedGeometrySource) -> dict[str, Any]:
+    """Whether the record's declared FEM air volumes were left out of this solve."""
+
+    evidence = record.get("evidence")
+    fem_volumes = (evidence or {}).get("fem_air_volumes") if isinstance(evidence, Mapping) else []
+    fem_volumes = fem_volumes or []
+    if fem_volumes and geometry.exterior_only:
+        return {
+            "excluded": True,
+            "declared_volume_count": len(fem_volumes),
+            "reason": "Phase 2 exterior_only override",
+        }
+    return {"excluded": False, "declared_volume_count": len(fem_volumes)}
+
+
+def imported_envelope(
+    *,
+    geometry: ImportedGeometrySource,
+    record: Mapping[str, Any],
+    channels: dict[str, Any],
+    channel_order: list[str],
+    per_source_validity: Mapping[str, Any],
+    domain_planes: Sequence[str],
+    frame_basis: Mapping[str, Any],
+    solver_backend: str,
+    solver_engine: Mapping[str, Any],
+    started: float,
+    trace_estimated_bytes: int | None,
+    trace_cap_bytes: int | None,
+    leading_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The imported ``multi_channel`` result envelope shared by every backend.
+
+    Backend-specific metadata is the ``solver_backend`` name and the
+    ``solver_engine`` block; ``leading_metadata`` keys come first, and an
+    adapter appends its own extras to ``envelope["metadata"]`` afterwards.
+    """
+
+    metadata: dict[str, Any] = {
+        **(leading_metadata or {}),
+        "result_contract_version": 2,
+        "geometry_type": "imported",
+        "solver_backend": solver_backend,
+        "solver_mode": "full_3d",
+        "solve_path": "full-3d",
+        "solver_engine": dict(solver_engine),
+        "ingest_id": geometry.ingest_id,
+        "manifest_sha256": geometry.manifest_sha256,
+        "artifact_sha256": geometry.artifact_sha256,
+        "tag_namespace": record.get("tag_namespace"),
+        "tag_map": json_safe_native_value(record.get("tag_map") or {}),
+        "per_source_frequency_validity": per_source_validity,
+        "symmetry_planes_used": sorted(domain_planes),
+        "polar_grid_derivation": json_safe_native_value(
+            record.get("polar_grid_derivation") or {}
+        ),
+        "observation_origin_effective": "throat",
+        "observation_frame_basis": dict(frame_basis),
+        "acknowledged_findings": list(geometry.acknowledged_findings),
+        "exterior_only": geometry.exterior_only,
+        "fem_exclusion": imported_fem_exclusion(record, geometry),
+        "performance": {"total_time_seconds": time.time() - started},
+        "field_trace_retention": {
+            "estimated_bytes": trace_estimated_bytes,
+            "cap_bytes": trace_cap_bytes,
+        },
+    }
+    envelope: dict[str, Any] = {
+        "result_kind": "multi_channel",
+        "result_contract_version": 2,
+        "channels": channels,
+        "channel_order": channel_order,
+        "metadata": metadata,
+    }
+    # A convenience mirror of the per-channel grids: the sorted union of every
+    # channel's frequencies. Optional in the contract -- envelopes persisted
+    # before it existed remain valid without it.
+    envelope_frequencies = sorted(
+        {
+            float(value)
+            for channel_payload in channels.values()
+            for value in (channel_payload.get("frequencies") or [])
+        }
+    )
+    if envelope_frequencies:
+        envelope["frequencies"] = envelope_frequencies
+    return envelope
 
 
 # Compatibility names for callers of the original conversion helper.

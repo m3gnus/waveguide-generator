@@ -34,10 +34,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from server.contracts.conventions import (
-    ENGINEERING_PHASE_CONVENTION,
-    PHASE_TIME_CONVENTION,
-)
+from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.platform.temp_session import spawned_directory_root
 
@@ -53,7 +50,6 @@ from .bempp import (
     BemppUnavailable,
 )
 from .combine import serialize_channel_bases
-from .combined_channel import package_combined_channel
 from .context import SolverContext
 from .field_traces_store import (
     BEMPP_FIELD_TRACE_BACKEND,
@@ -74,6 +70,9 @@ from .imported_channels import (
     normalize_prescribed_result,
     prescribed_entry,
     channel_source_identity,
+    finish_imported_channel_response,
+    imported_combined_channel,
+    imported_envelope,
     imported_validity_metadata,
     prepare_imported_solve_facts,
 )
@@ -187,9 +186,6 @@ def _combined_channel_response(
 ) -> dict[str, Any]:
     """BEMPP's counterpart of Metal's combined channel: the filtered sum."""
 
-    spec = geometry.combine
-    assert spec is not None
-
     def bempp_metadata(combined_result: Any) -> dict[str, Any]:
         return {
             "solver_backend": "bempp",
@@ -214,20 +210,17 @@ def _combined_channel_response(
             ),
         }
 
-    return package_combined_channel(
-        spec=spec,
-        drive_channels=geometry.drive_channels,
-        results_by_id=sorted_results,
-        member_channels=member_channels,
-        per_source_validity=per_source_validity,
-        member_roles={member: identity.get("role") for member, identity in channel_identity.items()},
-        max_drive_voltage_v=geometry.max_drive_voltage_v,
-        frequencies_hz=sorted_results[geometry.physical_members(spec.members)[0]].frequencies_hz,
+    return imported_combined_channel(
+        geometry=geometry,
+        sorted_results=sorted_results,
         request=request,
         quadrants=quadrants,
-        config_motion=config_motion,
         config=config,
-        start_time=started,
+        config_motion=config_motion,
+        started=started,
+        per_source_validity=per_source_validity,
+        channel_identity=channel_identity,
+        member_channels=member_channels,
         sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_bempp_bem"),
         backend_metadata=bempp_metadata,
     )
@@ -591,34 +584,13 @@ def solve_imported_bempp_from_msh_text(
             metadata=channel_metadata,
             sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_bempp_bem"),
         )
-        if geometry.normalization_for_engine("bempp") == "rms_velocity":
-            channel_response["metadata"]["impedance_drive"] = "rms_velocity"
-        if len(channel.source_ids) > 1:
-            channel_response.pop("impedance", None)
-            channel_response["metadata"]["impedance_omitted"] = (
-                "multi-source channel: per-patch impedance is not a channel impedance"
-            )
-        driver_payload = driver_payloads.get(channel.id)
-        if driver_payload is not None:
-            electrical = driver_payload.pop("electrical_impedance_ohm")
-            channel_response["impedance"] = {
-                "frequencies": electrical["frequencies"],
-                "real": electrical["real"],
-                "imaginary": electrical["imaginary"],
-            }
-            response_metadata = channel_response["metadata"]
-            response_metadata["impedance_units"] = "ohms"
-            response_metadata["impedance_quantity"] = "electrical_input_impedance"
-            response_metadata["impedance_phase_convention"] = ENGINEERING_PHASE_CONVENTION
-            response_metadata["impedance_drive"] = "voltage"
-            response_metadata["driver"] = driver_payload
-            response_metadata["drive"] = {
-                "voltage_v": geometry.drive_voltage_v,
-                "rg_ohm": geometry.rg_ohm,
-            }
-            warnings = response_metadata.setdefault("warnings", [])
-            warnings.extend(driver_payload.get("warnings") or [])
-            response_metadata["warning_count"] = len(warnings)
+        finish_imported_channel_response(
+            channel_response,
+            geometry=geometry,
+            driver_payload=driver_payloads.get(channel.id),
+            rms_velocity=geometry.normalization_for_engine("bempp") == "rms_velocity",
+            omit_impedance=len(channel.source_ids) > 1,
+        )
         channels[channel.id] = channel_response
 
     per_source_validity = imported_validity_metadata(record)
@@ -647,18 +619,16 @@ def solve_imported_bempp_from_msh_text(
             frame_basis=frame_basis,
         )
         channel_order.append(geometry.combine.id)
-    fem_volumes = (
-        (record.get("evidence") or {}).get("fem_air_volumes")
-        if isinstance(record.get("evidence"), Mapping)
-        else []
-    ) or []
-    metadata = {
-        "result_contract_version": 2,
-        "geometry_type": "imported",
-        "solver_backend": "bempp",
-        "solver_mode": "full_3d",
-        "solve_path": "full-3d",
-        "solver_engine": {
+    envelope = imported_envelope(
+        geometry=geometry,
+        record=record,
+        channels=channels,
+        channel_order=channel_order,
+        per_source_validity=per_source_validity,
+        domain_planes=domain_planes,
+        frame_basis=frame_basis,
+        solver_backend="bempp",
+        solver_engine={
             "engine": "bempp",
             "package": "hornlab-bempp-bem",
             "package_version": status.get("version"),
@@ -668,51 +638,10 @@ def solve_imported_bempp_from_msh_text(
             "formulation": json_safe_native_value(formulation),
             "complex_k_shift": DEFAULT_COMPLEX_K_SHIFT,
         },
-        "ingest_id": geometry.ingest_id,
-        "manifest_sha256": geometry.manifest_sha256,
-        "artifact_sha256": geometry.artifact_sha256,
-        "tag_namespace": record.get("tag_namespace"),
-        "tag_map": json_safe_native_value(record.get("tag_map") or {}),
-        "per_source_frequency_validity": per_source_validity,
-        "symmetry_planes_used": sorted(domain_planes),
-        "polar_grid_derivation": json_safe_native_value(
-            record.get("polar_grid_derivation") or {}
-        ),
-        "observation_origin_effective": "throat",
-        "observation_frame_basis": dict(frame_basis),
-        "acknowledged_findings": list(geometry.acknowledged_findings),
-        "exterior_only": geometry.exterior_only,
-        "fem_exclusion": (
-            {
-                "excluded": True,
-                "declared_volume_count": len(fem_volumes),
-                "reason": "Phase 2 exterior_only override",
-            }
-            if fem_volumes and geometry.exterior_only
-            else {"excluded": False, "declared_volume_count": len(fem_volumes)}
-        ),
-        "performance": {"total_time_seconds": time.time() - started},
-        "field_trace_retention": {
-            "estimated_bytes": trace_estimated_bytes,
-            "cap_bytes": trace_cap_bytes,
-        },
-    }
-    envelope: dict[str, Any] = {
-        "result_kind": "multi_channel",
-        "result_contract_version": 2,
-        "channels": channels,
-        "channel_order": channel_order,
-        "metadata": metadata,
-    }
-    envelope_frequencies = sorted(
-        {
-            float(value)
-            for channel_payload in channels.values()
-            for value in (channel_payload.get("frequencies") or [])
-        }
+        started=started,
+        trace_estimated_bytes=trace_estimated_bytes,
+        trace_cap_bytes=trace_cap_bytes,
     )
-    if envelope_frequencies:
-        envelope["frequencies"] = envelope_frequencies
     if channel_bases_npz is not None:
         envelope["_channel_bases_npz"] = channel_bases_npz
     field_traces = (

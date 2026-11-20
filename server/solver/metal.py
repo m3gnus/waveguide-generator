@@ -35,7 +35,6 @@ from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
 from .combine import serialize_channel_bases
-from .combined_channel import package_combined_channel
 from .driver_lem import (
     hornlab_driver,
     one_way_peak_excursion_mm,
@@ -92,6 +91,9 @@ from .imported_channels import (
     apply_channel_driver,
     channel_basis_metadata,
     channel_source_identity,
+    finish_imported_channel_response,
+    imported_combined_channel,
+    imported_envelope,
     imported_validity_metadata,
     prepare_imported_solve_facts,
     record_source_area_m2,
@@ -1562,9 +1564,6 @@ def _combined_channel_response(
 ) -> dict[str, Any]:
     """Package the filtered time-aligned sum as one more contract-shaped channel."""
 
-    spec = geometry.combine
-    assert spec is not None
-
     def metal_metadata(combined_result: Any) -> dict[str, Any]:
         return {
             "solver_backend": "metal",
@@ -1587,20 +1586,17 @@ def _combined_channel_response(
             },
         }
 
-    return package_combined_channel(
-        spec=spec,
-        drive_channels=geometry.drive_channels,
-        results_by_id=sorted_results,
-        member_channels=member_channels,
-        per_source_validity=per_source_validity,
-        member_roles={member: identity.get("role") for member, identity in channel_identity.items()},
-        max_drive_voltage_v=geometry.max_drive_voltage_v,
-        frequencies_hz=sorted_results[geometry.physical_members(spec.members)[0]].frequencies_hz,
+    return imported_combined_channel(
+        geometry=geometry,
+        sorted_results=sorted_results,
         request=request,
         quadrants=quadrants,
-        config_motion=config_motion,
         config=config,
-        start_time=started,
+        config_motion=config_motion,
+        started=started,
+        per_source_validity=per_source_validity,
+        channel_identity=channel_identity,
+        member_channels=member_channels,
         sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_metal_bem"),
         backend_metadata=metal_metadata,
     )
@@ -2008,41 +2004,14 @@ def solve_imported_metal_from_msh_text(
                     "hornlab_metal_bem"
                 ),
             )
-            if geometry.uses_rms_velocity:
-                channel_response["metadata"]["impedance_drive"] = "rms_velocity"
-            if len(channel.source_ids) > 1:
-                channel_response.pop("impedance", None)
-                channel_response["metadata"]["impedance_omitted"] = (
-                    "multi-source channel: per-patch impedance is not a channel impedance"
-                )
-            driver_payload = driver_payloads.get(channel.id)
-            if driver_payload is not None:
-                electrical = driver_payload.pop("electrical_impedance_ohm")
-                channel_response["impedance"] = {
-                    "frequencies": electrical["frequencies"],
-                    "real": electrical["real"],
-                    "imaginary": electrical["imaginary"],
-                }
-                channel_metadata = channel_response["metadata"]
-                channel_metadata["impedance_units"] = "ohms"
-                channel_metadata["impedance_quantity"] = "electrical_input_impedance"
-                # hornlab_sim's LEM uses engineering +jω throughout. The
-                # channel's pressure tag remains exp(+ikr), so impedance needs
-                # its own tag or an exporter could faithfully apply the wrong
-                # sign while trying to honour the acoustic convention.
-                channel_metadata["impedance_phase_convention"] = (
-                    "engineering_exp_plus_jwt"
-                )
-                channel_metadata["impedance_drive"] = "voltage"
-                channel_metadata["driver"] = driver_payload
-                channel_metadata["drive"] = {
-                    "voltage_v": geometry.drive_voltage_v,
-                    "rg_ohm": geometry.rg_ohm,
-                }
-                warnings = channel_metadata.setdefault("warnings", [])
-                warnings.extend(driver_payload.get("warnings") or [])
-                channel_metadata["warning_count"] = len(warnings)
-            elif cardioid_owns_driver:
+            driver_applied = finish_imported_channel_response(
+                channel_response,
+                geometry=geometry,
+                driver_payload=driver_payloads.get(channel.id),
+                rms_velocity=geometry.uses_rms_velocity,
+                omit_impedance=len(channel.source_ids) > 1,
+            )
+            if not driver_applied and cardioid_owns_driver:
                 channel_response["metadata"]["driver_coupling_deferred_to"] = (
                     "passive_cardioid"
                 )
@@ -2191,19 +2160,23 @@ def solve_imported_metal_from_msh_text(
         )
         channels[geometry.combine.id] = combined_response
         channel_order.append(geometry.combine.id)
-    fem_volumes = (
-        (record.get("evidence") or {}).get("fem_air_volumes")
-        if isinstance(record.get("evidence"), Mapping)
-        else []
-    ) or []
-    metadata = {
-        "_solver_fingerprints": _metal_fingerprints(results),
-        "result_contract_version": 2,
-        "geometry_type": "imported",
-        "solver_backend": "metal",
-        "solver_mode": "full_3d",
-        "solve_path": "full-3d",
-        "solver_engine": {
+    envelope = imported_envelope(
+        geometry=geometry,
+        record=record,
+        channels=channels,
+        channel_order=channel_order,
+        per_source_validity=per_source_validity,
+        domain_planes=domain_planes,
+        frame_basis={
+            "axis": json_safe_native_value(frame_override.axis),
+            "u": json_safe_native_value(frame_override.u),
+            "v": json_safe_native_value(frame_override.v),
+            "origin_m": json_safe_native_value(frame_override.origin),
+            "mouth_center_m": json_safe_native_value(frame_override.mouth_center),
+            "source_center_m": json_safe_native_value(frame_override.source_center),
+        },
+        solver_backend="metal",
+        solver_engine={
             "engine": "metal",
             "package": "hornlab-metal-bem",
             "package_version": status.get("version"),
@@ -2213,42 +2186,12 @@ def solve_imported_metal_from_msh_text(
             "formulation": kwargs["formulation"],
             "complex_k_shift": kwargs["complex_k_shift"],
         },
-        "ingest_id": geometry.ingest_id,
-        "manifest_sha256": geometry.manifest_sha256,
-        "artifact_sha256": geometry.artifact_sha256,
-        "tag_namespace": record.get("tag_namespace"),
-        "tag_map": json_safe_native_value(record.get("tag_map") or {}),
-        "per_source_frequency_validity": per_source_validity,
-        "symmetry_planes_used": sorted(domain_planes),
-        "polar_grid_derivation": json_safe_native_value(
-            record.get("polar_grid_derivation") or {}
-        ),
-        "observation_origin_effective": "throat",
-        "observation_frame_basis": {
-            "axis": json_safe_native_value(frame_override.axis),
-            "u": json_safe_native_value(frame_override.u),
-            "v": json_safe_native_value(frame_override.v),
-            "origin_m": json_safe_native_value(frame_override.origin),
-            "mouth_center_m": json_safe_native_value(frame_override.mouth_center),
-            "source_center_m": json_safe_native_value(frame_override.source_center),
-        },
-        "acknowledged_findings": list(geometry.acknowledged_findings),
-        "exterior_only": geometry.exterior_only,
-        "fem_exclusion": (
-            {
-                "excluded": True,
-                "declared_volume_count": len(fem_volumes),
-                "reason": "Phase 2 exterior_only override",
-            }
-            if fem_volumes and geometry.exterior_only
-            else {"excluded": False, "declared_volume_count": len(fem_volumes)}
-        ),
-        "performance": {"total_time_seconds": time.time() - started},
-        "field_trace_retention": {
-            "estimated_bytes": trace_estimated_bytes,
-            "cap_bytes": trace_cap_bytes,
-        },
-    }
+        started=started,
+        trace_estimated_bytes=trace_estimated_bytes,
+        trace_cap_bytes=trace_cap_bytes,
+        leading_metadata={"_solver_fingerprints": _metal_fingerprints(results)},
+    )
+    metadata = envelope["metadata"]
     if cardioid_campaign is not None:
         matrix_result = cardioid_campaign["result"]
         diagnostics = cardioid_campaign["diagnostics"]
@@ -2301,25 +2244,6 @@ def solve_imported_metal_from_msh_text(
         }
     elif cardioid_failure is not None:
         metadata["passive_cardioid"] = cardioid_failure
-    envelope: dict[str, Any] = {
-        "result_kind": "multi_channel",
-        "result_contract_version": 2,
-        "channels": channels,
-        "channel_order": channel_order,
-        "metadata": metadata,
-    }
-    # A convenience mirror of the per-channel grids: the sorted union of every
-    # channel's frequencies. Optional in the contract -- envelopes persisted
-    # before it existed remain valid without it.
-    envelope_frequencies = sorted(
-        {
-            float(value)
-            for channel_payload in channels.values()
-            for value in (channel_payload.get("frequencies") or [])
-        }
-    )
-    if envelope_frequencies:
-        envelope["frequencies"] = envelope_frequencies
     if channel_bases_npz is not None:
         envelope["_channel_bases_npz"] = channel_bases_npz
     if cardioid_campaign is not None:
