@@ -2,6 +2,7 @@ import { samplingComments, samplingProvenance } from './sampling';
 import { groupDelayMilliseconds, propagationReference } from './phaseAnalysis';
 import { radiatedPowerMetadata } from './radiatedPower';
 import type { ResultPayload } from './types';
+import { flatDi, powerResponseDb, seriesFrequencies, splFrequencies } from './series';
 
 export const DERIVED_ACOUSTICS_SCHEMA_VERSION = 1;
 
@@ -57,14 +58,6 @@ function seriesAt(
   return output;
 }
 
-/** The DI series to show: a flat array as it is, else the horizontal plane, else the first plane. */
-export function flatDi(result: ResultPayload): Array<number | null> {
-  const values = result.di?.di;
-  if (Array.isArray(values)) return values;
-  if (!values) return [];
-  return values.horizontal ?? Object.values(values)[0] ?? [];
-}
-
 function unionFrequencies(grids: Array<number[] | undefined>): number[] {
   const values = new Set<number>();
   grids.forEach((grid) => (grid ?? []).forEach((value) => {
@@ -75,13 +68,10 @@ function unionFrequencies(grids: Array<number[] | undefined>): number[] {
 }
 
 export function buildDerivedAcoustics(result: ResultPayload): DerivedAcousticsPayload {
-  const splFrequencies = result.spl_on_axis?.frequencies?.length
-    ? result.spl_on_axis.frequencies : result.frequencies;
-  const diFrequencies = result.di?.frequencies?.length
-    ? result.di.frequencies : result.frequencies;
-  const beamFrequencies = result.beam_shape?.frequencies?.length
-    ? result.beam_shape.frequencies : result.frequencies;
-  const spl = seriesAt(splFrequencies, result.spl_on_axis?.spl);
+  const onAxisFrequencies = splFrequencies(result);
+  const diFrequencies = seriesFrequencies(result.di?.frequencies, result.frequencies);
+  const beamFrequencies = seriesFrequencies(result.beam_shape?.frequencies, result.frequencies);
+  const spl = seriesAt(onAxisFrequencies, result.spl_on_axis?.spl);
   const di = seriesAt(diFrequencies, flatDi(result));
   const beam = result.beam_shape;
   const horizontal = seriesAt(beamFrequencies, beam?.horizontal_beamwidth_deg);
@@ -95,11 +85,11 @@ export function buildDerivedAcoustics(result: ResultPayload): DerivedAcousticsPa
   const powerAgreement = seriesAt(result.frequencies, radiatedPower?.agreement_db);
   const reference = propagationReference(result);
   const groupDelay = new Map(groupDelayMilliseconds({
-    frequencies: splFrequencies,
+    frequencies: onAxisFrequencies,
     phaseDegrees: result.spl_on_axis?.phase_degrees ?? [],
   }, reference).map(({ frequencyHz, value }) => [frequencyHz, value]));
   const frequencies = unionFrequencies([
-    splFrequencies,
+    onAxisFrequencies,
     diFrequencies,
     beamFrequencies,
     radiatedPower ? result.frequencies : undefined,
@@ -112,8 +102,8 @@ export function buildDerivedAcoustics(result: ResultPayload): DerivedAcousticsPa
       frequency_hz: frequency,
       on_axis_spl_db: onAxis,
       directivity_index_db: directivityIndex,
-      power_response_db_spl_avg: onAxis !== null && directivityIndex !== null
-        ? onAxis - directivityIndex : null,
+      // Unsmoothed, per row of the union grid (`series.ts`).
+      power_response_db_spl_avg: powerResponseDb(onAxis, directivityIndex),
       radiated_power_surface_w: surfacePower.get(frequency) ?? null,
       radiated_power_sphere_w: spherePower.get(frequency) ?? null,
       power_agreement_db: powerAgreement.get(frequency) ?? null,

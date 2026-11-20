@@ -1,7 +1,8 @@
 import { runExcitationBasis, withRunExcitationBasis } from './excitationBasis';
 import { polarValueDb as patternDb } from './values';
 import type { PolarSample, ResultData } from '../api/results';
-import { applySmoothing, type SmoothingMode } from './smoothing';
+import type { SmoothingMode } from './smoothing';
+import { powerResponseOnDiGrid, seriesFrequencies, smoothLevels, smoothLinear, splFrequencies } from './series';
 import { channelLabel } from './channelLabel';
 import { combineMetadataOf, type ResultPayload } from './types';
 import { resolveResultView, type ResultView } from '../stores/resultView';
@@ -89,14 +90,10 @@ function finite(value: unknown): value is number {
 
 export { complexToDb } from './values';
 
-function frequencyAxis(result: ResultData, nested?: number[]): number[] {
-  return nested?.length ? nested : result.frequencies;
-}
-
 export function splSeries(items: NamedResult[], smoothing: SmoothingMode = 'none') {
   return items.map(({ label, result }) => {
-    const frequencies = frequencyAxis(result, result.spl_on_axis?.frequencies);
-    const spl = applySmoothing(frequencies, result.spl_on_axis?.spl ?? [], smoothing, 'level_db');
+    const frequencies = splFrequencies(result);
+    const spl = smoothLevels(frequencies, result.spl_on_axis?.spl ?? [], smoothing);
     return {
       name: label + (result.frequency_status?.includes('interpolated') ? ' · ○ interpolated' : ''),
       type: 'line' as const,
@@ -177,9 +174,9 @@ export function polarSeries(result: ResultData, frequencyIndex: number, plane: '
 }
 
 export function impedanceSeries(result: ResultData, mode: 'cartesian' | 'polar', smoothing: SmoothingMode = 'none') {
-  const frequencies = frequencyAxis(result, result.impedance?.frequencies);
-  const real = applySmoothing(frequencies, result.impedance?.real ?? [], smoothing, 'linear');
-  const imaginary = applySmoothing(frequencies, result.impedance?.imaginary ?? [], smoothing, 'linear');
+  const frequencies = seriesFrequencies(result.impedance?.frequencies, result.frequencies);
+  const real = smoothLinear(frequencies, result.impedance?.real ?? [], smoothing);
+  const imaginary = smoothLinear(frequencies, result.impedance?.imaginary ?? [], smoothing);
   if (mode === 'cartesian') {
     return [
       { name: 'Re', type: 'line' as const, showSymbol: false, data: frequencies.map((f, i) => [f, real[i] ?? null]) },
@@ -193,11 +190,11 @@ export function impedanceSeries(result: ResultData, mode: 'cartesian' | 'polar',
 }
 
 export function directivityIndexSeries(result: ResultPayload, smoothing: SmoothingMode = 'none') {
-  const frequencies = result.di?.frequencies?.length ? result.di.frequencies : result.frequencies;
+  const frequencies = seriesFrequencies(result.di?.frequencies, result.frequencies);
   const raw = result.di?.di;
   const entries = Array.isArray(raw) ? [['DI', raw] as const] : Object.entries(raw ?? {});
   return entries.filter(([, values]) => values.some(finite)).map(([name, values]) => {
-    const smoothed = applySmoothing(frequencies, values, smoothing, 'level_db');
+    const smoothed = smoothLevels(frequencies, values, smoothing);
     return {
       name,
       type: 'line' as const,
@@ -232,26 +229,14 @@ export function powerResponseMethodCaption(result: ResultPayload): string {
     : FULL_SPHERE_POWER_RESPONSE_METHOD;
 }
 
-/** Spatially averaged SPL: on-axis SPL minus full-sphere directivity index. */
+/**
+ * Spatially averaged SPL: on-axis SPL minus full-sphere directivity index.
+ * Formed on the DI grid first, then smoothed as one curve (`series.ts`).
+ */
 export function powerResponseSeries(result: ResultPayload, smoothing: SmoothingMode = 'none') {
-  const frequencies = result.di?.frequencies?.length ? result.di.frequencies : result.frequencies;
-  const rawDi = result.di?.di;
-  const di = Array.isArray(rawDi)
-    ? rawDi
-    : rawDi?.horizontal ?? Object.values(rawDi ?? {})[0] ?? [];
-  const splFrequencies = result.spl_on_axis?.frequencies?.length
-    ? result.spl_on_axis.frequencies : result.frequencies;
-  const splByFrequency = new Map(splFrequencies.map((frequency, index) => [
-    frequency,
-    result.spl_on_axis?.spl?.[index] ?? null,
-  ]));
-  const raw = frequencies.map((frequency, index) => {
-    const onAxis = splByFrequency.get(frequency);
-    const directivityIndex = di[index];
-    return finite(onAxis) && finite(directivityIndex) ? onAxis - directivityIndex : null;
-  });
+  const { frequencies, values: raw } = powerResponseOnDiGrid(result);
   if (!raw.some(finite)) return [];
-  const values = applySmoothing(frequencies, raw, smoothing, 'level_db');
+  const values = smoothLevels(frequencies, raw, smoothing);
   return [{
     name: powerResponseMethodCaption(result),
     type: 'line' as const,
@@ -328,7 +313,7 @@ export function impedanceComparable(items: NamedResult[]): { items: NamedResult[
   const present = items.filter(({ result }) => {
     const payload = result as ResultPayload;
     const impedance = payload.impedance;
-    const frequencies = impedance?.frequencies?.length ? impedance.frequencies : payload.frequencies;
+    const frequencies = seriesFrequencies(impedance?.frequencies, payload.frequencies);
     return Boolean(frequencies?.length && [...(impedance?.real ?? []), ...(impedance?.imaginary ?? [])].some(finite));
   });
   if (!present.length) return { items: [], units: NORMALIZED_ACOUSTIC_IMPEDANCE, excluded: 0 };
@@ -362,9 +347,7 @@ export function impedanceSubtitle(items: NamedResult[]): string | null {
 export function phaseSeries(items: NamedResult[]) {
   return items.map(({ label, result }) => {
     const payload = result as ResultPayload;
-    const frequencies = payload.spl_on_axis?.frequencies?.length
-      ? payload.spl_on_axis.frequencies
-      : payload.frequencies;
+    const frequencies = splFrequencies(payload);
     const shown = engineeringDisplayPhase(payload);
     const points = displayPhaseDegrees(
       { frequencies, phaseDegrees: shown.phaseDegrees },
@@ -393,9 +376,7 @@ export function groupDelayValue(milliseconds: number, frequencyHz: number, unit:
 export function groupDelaySeries(items: NamedResult[], unit: GroupDelayUnit = 'ms') {
   return items.map(({ label, result }) => {
     const payload = result as ResultPayload;
-    const frequencies = payload.spl_on_axis?.frequencies?.length
-      ? payload.spl_on_axis.frequencies
-      : payload.frequencies;
+    const frequencies = splFrequencies(payload);
     const points = groupDelayMilliseconds(
       { frequencies, phaseDegrees: payload.spl_on_axis?.phase_degrees ?? [] },
       propagationReference(payload),

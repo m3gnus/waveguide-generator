@@ -8,6 +8,7 @@ import { resultExportSnapshot } from './exportContext';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
 import type { RadiationImpedancePresentation } from '../api/results';
+import { writeToOutputFolder } from '../api/workspace';
 import { runAutomaticWorkspaceExport, archiveRunToWorkspace, buildChartRenderPayload, buildDirectivityRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 import {
@@ -1516,6 +1517,21 @@ describe('result exporters', () => {
   });
 });
 
+
+it('writes through one write-export client: each caller keeps its policy and words', async () => {
+  const member = [{ filename: 'one.csv', blob: new Blob(['saved']) }];
+  const policies: string[] = [];
+  const accepted = vi.fn<typeof fetch>(async (_input, init) => {
+    policies.push(String((init!.body as FormData).get('existing')));
+    return new Response(JSON.stringify({ directory: 'out', files: ['out/one.csv'] }));
+  });
+  await expect(writeToOutputFolder('design', member, accepted)).resolves.toEqual({ directory: 'out', files: ['out/one.csv'], replaced: [] });
+  await expect(writeWorkspaceFiles('run', member, accepted)).resolves.toEqual({ directory: 'out', files: ['out/one.csv'], replaced: [] });
+  expect(policies).toEqual(['overwrite', 'merge_identical']);
+  const refused = () => vi.fn().mockResolvedValue(new Response('{}', { status: 500 }));
+  await expect(writeToOutputFolder('design', member, refused())).rejects.toThrow('WG could not read the Runs folder. Choose the WG folder in Settings.');
+  await expect(writeWorkspaceFiles('run', member, refused())).rejects.toThrow('WG could not save the export files. Check the export folder, then export again.');
+});
 
 it('marks lost Workspace publication response bodies as indeterminate', async () => {
   const broken = new Response(new ReadableStream({ start(controller) { controller.error(new Error('Response body connection lost')); } }), { status: 200 });

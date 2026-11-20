@@ -6,12 +6,13 @@ import { fetchMeshReplay, MeshReplayRefusal } from '../api/meshReplay';
 import { deadlineFetch } from '../api/deadlineFetch';
 import { samplingComments, samplingProvenance } from './sampling';
 import { buildGeometryExport, downloadBlob, downloadText, type GeometryExportFile } from '../api/designIo';
+import { ExportCollisionError, type ConfirmReplacements } from '../api/exportDestination';
 import {
-  collisionFrom,
-  ExportCollisionError,
-  writeConfirmingReplacements,
-  type ConfirmReplacements,
-} from '../api/exportDestination';
+  writeToOutputFolder,
+  type ExistingFilePolicy,
+  type OutputFolderWrite,
+  type WorkspaceFile,
+} from '../api/workspace';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 import { pinRunCadDocument } from '../api/cadProjects';
 import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation, type ServerMember } from '../api/results';
@@ -24,8 +25,9 @@ import { designFileExtension } from '../stores/designName';
 import { designWireWithSolveSettings } from '../stores/designWire';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import { EXPORT_FORMATS, resolveChartTheme, runDisplayName, type ExportFormat, type Preferences } from '../prefs/preferences';
-import { applySmoothing, type SmoothingValue } from './smoothing';
-import { buildDerivedAcousticsCsv, buildDerivedAcousticsJson, flatDi } from './derivedAcoustics';
+import type { SmoothingValue } from './smoothing';
+import { smoothedExportSeries } from './series';
+import { buildDerivedAcousticsCsv, buildDerivedAcousticsJson } from './derivedAcoustics';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
 import { withNormalizationAngle } from './normalization';
 import { impedanceUnits } from './mappers';
@@ -121,23 +123,9 @@ function csvCell(value: unknown): string {
   return finite(value) === null ? '' : String(value);
 }
 
-function resultFrequencies(result: ResultPayload): number[] {
-  return result.spl_on_axis?.frequencies?.length ? result.spl_on_axis.frequencies : result.frequencies;
-}
-
+/** SPL, DI and impedance, each smoothed on its own grid (`series.ts`). */
 function smoothedSeries(result: ResultPayload, preferences: Preferences) {
-  const frequencies = resultFrequencies(result);
-  const impedanceFrequencies = result.impedance?.frequencies?.length ? result.impedance.frequencies : frequencies;
-  const diFrequencies = result.di?.frequencies?.length ? result.di.frequencies : frequencies;
-  return {
-    frequencies,
-    spl: applySmoothing(frequencies, result.spl_on_axis?.spl ?? [], preferences.smoothing, 'level_db'),
-    diFrequencies,
-    di: applySmoothing(diFrequencies, flatDi(result), preferences.smoothing, 'level_db'),
-    impedanceFrequencies,
-    impedanceReal: applySmoothing(impedanceFrequencies, result.impedance?.real ?? [], preferences.smoothing, 'linear'),
-    impedanceImaginary: applySmoothing(impedanceFrequencies, result.impedance?.imaginary ?? [], preferences.smoothing, 'linear'),
-  };
+  return smoothedExportSeries(result, preferences.smoothing);
 }
 
 function indexByFrequency(frequencies: number[]): Map<number, number> {
@@ -351,46 +339,15 @@ async function responseError(response: Response, fallback: string): Promise<Erro
   return new Error(await httpErrorMessage(response, fallback));
 }
 
-/** One file of a workspace write: bytes from the browser, or a file the server holds. */
-export type WorkspaceFile =
-  | { filename: string; blob: Blob; server?: undefined }
-  | { filename: string; server: ServerMember; blob?: undefined };
-
-export interface WorkspaceWriteResponse {
-  directory: string;
-  files: string[];
-  /** Files that already existed and were replaced. Absent from older servers. */
-  replaced?: string[];
-}
-
-/**
- * What to do about files a previous export already wrote.
- *
- * Automatic post-run export is a background write nobody asked for twice, so
- * it merges and refuses to change anything: `merge_identical`. A user choosing
- * an export a second time is asking for the file again, so it replaces:
- * `overwrite`. Merging a repeat manual export cannot work -- the JSON and
- * summary builders stamp the current time into their output, and smoothing or
- * chart preferences change the bytes too, so every repeat differed and the
- * whole bundle was rejected with a 409.
- */
-export type ExistingFilePolicy = 'reject' | 'merge_identical' | 'overwrite' | 'confirm';
+export type { ExistingFilePolicy, WorkspaceFile };
 
 /** The folder a bundle is written to, which callers may group by design. */
 export function workspaceSubdirectory(context: ExportContext): string {
   return context.workspaceSubdirectory?.trim() || context.jobStem;
 }
 
-async function serverMemberUnavailable(response: Response): Promise<boolean> {
-  try {
-    const body = await response.clone().json() as { code?: unknown };
-    return body.code === 'server_member_unavailable';
-  } catch {
-    return false;
-  }
-}
-
-export async function writeWorkspaceFiles(
+/** Write run files through the one write-export client, refusing to change a file by default. */
+export function writeWorkspaceFiles(
   subdirectory: string,
   members: WorkspaceFile[],
   fetcher: typeof fetch = fetch,
@@ -398,66 +355,11 @@ export async function writeWorkspaceFiles(
   destination?: string,
   confirmReplacements?: ConfirmReplacements,
   jobId?: string,
-): Promise<WorkspaceWriteResponse> {
-  const compatibleBlobs = await Promise.all(members.map(async ({ blob }) => {
-    if (blob === undefined) return undefined;
-    const crossRealmBlob = blob as unknown as {
-      arrayBuffer: () => Promise<ArrayBuffer>;
-      type: string;
-    };
-    return blob instanceof Blob
-      ? blob
-      : new Blob([await crossRealmBlob.arrayBuffer()], { type: crossRealmBlob.type });
-  }));
-  const referencesServer = members.some(({ server }) => server !== undefined);
-  const post = async (policy: string): Promise<WorkspaceWriteResponse> => {
-    const body = new FormData();
-    // With a destination the user chose for this export, the files land in it.
-    // The subdirectory is how exports are kept apart inside the shared output
-    // folder, and it is not what someone who just named a folder asked for.
-    body.append('subdirectory', destination ? '' : subdirectory);
-    body.append('existing', policy);
-    if (destination) body.append('destination', destination);
-    if (jobId) body.append('job_id', jobId);
-    members.forEach(({ filename }) => body.append('relative_path', filename));
-    // A file the server holds is named, not sent: one source per member, in
-    // order, and a file part for each upload.
-    if (referencesServer) {
-      members.forEach(({ server }) => body.append('member_source', server ? JSON.stringify(server) : 'upload'));
-    }
-    members.forEach(({ filename }, index) => {
-      const blob = compatibleBlobs[index];
-      if (blob) body.append('file', blob, filename);
-    });
-    let response: Response;
-    try {
-      response = await fetcher('/api/workspace/write-export', { method: 'POST', body });
-    } catch (error) {
-      throw Object.assign(error instanceof Error ? error : new Error(String(error)), { publicationUncertain: true });
-    }
-    // The bytes are built once and posted again on confirmation: rebuilding the
-    // bundle would re-render its charts and restamp its timestamps, so the
-    // second request would not be the export the user was asked about.
-    if (!response.ok) {
-      const unavailable = response.status === 409 && await serverMemberUnavailable(response);
-      const error = await collisionFrom(response) ?? await responseError(response, 'WG could not save the export files. Check the export folder, then export again.');
-      // A held file the server no longer has wrote nothing: not a conflict in
-      // the user's folder, and the caller may take the bytes another way.
-      if (unavailable) Object.assign(error, { serverMemberUnavailable: true });
-      else if (response.status === 409) Object.assign(error, { destinationConflict: true });
-      throw error;
-    }
-    try {
-      return await response.json() as WorkspaceWriteResponse;
-    } catch (error) {
-      // Fetch resolves at response headers; losing the body can still hide a
-      // completed publication. Never automatically regenerate that bundle.
-      throw Object.assign(error instanceof Error ? error : new Error(String(error)), { publicationUncertain: true });
-    }
-  };
-  return existing === 'confirm'
-    ? writeConfirmingReplacements(post, confirmReplacements)
-    : post(existing);
+): Promise<OutputFolderWrite> {
+  return writeToOutputFolder(
+    subdirectory, members, fetcher, existing, destination, confirmReplacements, jobId,
+    'WG could not save the export files. Check the export folder, then export again.',
+  );
 }
 
 async function postGeometry(context: ExportContext, kind: 'step' | 'stl'): Promise<string> {
@@ -593,11 +495,9 @@ export interface ChartReference {
  * Z/ρc reference curve onto its own scale, where a 0..2 acoustic trace
  * flatlines along the bottom of a 4..60 Ω axis and reads as a dead run.
  *
- * Known gap: `_impedance_ylabel` in hornlab-plots 0.1.1 has no ohms branch — it
- * returns "Z / ρc" for anything mentioning rho and "Z [Pa·s/m]" otherwise — so
- * the exported electrical PNG still carries an acoustic axis label, now the
- * generic one rather than a positive claim of normalization. Closing that needs
- * an Ω branch in hornlab-plots and a pin bump; it cannot be done from here.
+ * The axis label follows the same tag: hornlab-plots' `_impedance_ylabel` (in
+ * the pinned revision, `pins.json`) labels `ohms` "Z [Ω]" and the normalized
+ * pair "Z / ρc", so the exported PNG names the same quantity as the screen.
  */
 function impedanceRenderTags(result: ResultPayload): Record<string, string> {
   return impedanceUnits(result).electrical
