@@ -34,7 +34,8 @@ import { impedanceUnits, isModalImpedance } from './mappers';
 import { polarValueDb } from './values';
 import { engineeringDisplayPhase } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
-import { buildRunReportHtml } from './runReport';
+import { buildRunReportHtml, renderRunReportCharts } from './runReport';
+import { pngBlobFromDataUri, renderDirectivityMap } from './chartImage';
 import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './vituixcad';
 import { reportCaughtError } from '../shell/clientErrors';
 import { failureWords, httpErrorMessage, isAbortError, ProgramFault } from '../api/httpError';
@@ -449,13 +450,9 @@ async function chartPng(context: ExportContext): Promise<string[]> {
   // Validate both canonical renderer responses before saving the first image.
   // This keeps PNG a single retryable format rather than leaving half a chart
   // set behind when the directivity renderer fails.
-  const directivityResponse = await fetcher('/api/render-directivity', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(buildDirectivityRenderPayload(result, context.preferences)),
-  });
-  if (!directivityResponse.ok) throw await responseError(directivityResponse, CHART_EXPORT_FAILED);
-  const directivityBody = await directivityResponse.json() as { image?: string };
-  if (!directivityBody.image) throw new ProgramFault('HornLab plots returned no directivity image.');
+  const directivityImage = await renderDirectivityMap(
+    buildDirectivityRenderPayload(result, context.preferences), fetcher, CHART_EXPORT_FAILED,
+  );
   // The dedicated renderer owns the map settings. Keep the combined request
   // to line charts so the map is rendered once, and ignore any legacy map key
   // in its response before filenames are staged by the bundle.
@@ -466,19 +463,14 @@ async function chartPng(context: ExportContext): Promise<string[]> {
   const entries = Object.entries(body.charts ?? {}).filter(([chart]) => chart !== 'directivity_map');
   if (!entries.length) throw new ProgramFault('Chart renderer returned no images.');
   const baseName = exportContextBaseName(context);
+  const saveBlob = context.saveBlob ?? downloadBlob;
   const files = entries.map(([chart, data]) => {
-    const encoded = data.includes(',') ? data.slice(data.indexOf(',') + 1) : data;
-    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
     const filename = `${baseName}_${chart}.png`;
-    (context.saveBlob ?? downloadBlob)(new Blob([bytes], { type: 'image/png' }), filename);
+    saveBlob(pngBlobFromDataUri(data), filename);
     return filename;
   });
   const directivityFilename = `${baseName}_directivity_map.png`;
-  const directivityEncoded = directivityBody.image.includes(',')
-    ? directivityBody.image.slice(directivityBody.image.indexOf(',') + 1)
-    : directivityBody.image;
-  const directivityBytes = Uint8Array.from(atob(directivityEncoded), (character) => character.charCodeAt(0));
-  (context.saveBlob ?? downloadBlob)(new Blob([directivityBytes], { type: 'image/png' }), directivityFilename);
+  saveBlob(pngBlobFromDataUri(directivityImage), directivityFilename);
   return [...files, directivityFilename];
 }
 
@@ -737,10 +729,14 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     if (format === 'html_report') {
       if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
       const filename = `${context.jobStem}_report.html`;
+      const charts = await renderRunReportCharts(
+        context.result, resolveChartTheme(context.preferences.chartTheme), context.fetcher ?? fetch,
+      );
       saveText(buildRunReportHtml(context.result, {
         title: context.designName ?? context.jobStem,
         generatedAt: now,
         groupDelayUnit: context.preferences.groupDelayUnit,
+        charts,
       }), filename, 'text/html;charset=utf-8');
       return [filename];
     }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { composeChartCanvases, copyChartPng, saveChartPng } from './chartImage';
+import { composeChartCanvases, copyChartPng, pngBlobFromDataUri, renderChartSpec, saveChartPng } from './chartImage';
 import { activityStore } from '../shell/activity';
 
 const workspace = vi.hoisted(() => ({ write: vi.fn() }));
@@ -49,21 +49,21 @@ describe('chart PNG composition', () => {
     expect(() => composeChartCanvases(container)).toThrow('no image');
   });
 
-  it('encodes the captured canvas and writes the identical blob under one export activity', async () => {
-    const captured = document.createElement('canvas');
-    let finishEncoding!: BlobCallback;
-    vi.spyOn(captured, 'toBlob').mockImplementation((callback) => { finishEncoding = callback; });
+  it('writes the drawn blob under one export activity', async () => {
+    let finishDrawing!: (blob: Blob) => void;
+    const image = new Promise<Blob>((resolve) => { finishDrawing = resolve; });
     let finishWriting!: (value: { directory: string }) => void;
     workspace.write.mockImplementation(() => new Promise((resolve) => { finishWriting = resolve; }));
     const confirm = vi.fn(async () => true);
-    const saving = saveChartPng(captured, 'A.png', 'chosen', confirm);
-    const [encoding] = activityStore.getSnapshot();
-    expect(encoding).toMatchObject({ kind: 'export', label: 'Encoding chart PNG' });
+    const saving = saveChartPng(image, 'A.png', 'chosen', confirm);
+    const [drawing] = activityStore.getSnapshot();
+    expect(drawing).toMatchObject({ kind: 'export', label: 'Drawing chart PNG' });
     expect(workspace.write).not.toHaveBeenCalled();
-    const blob = new Blob(['captured A pixels'], { type: 'image/png' });
-    finishEncoding(blob);
+    const blob = new Blob(['drawn A pixels'], { type: 'image/png' });
+    finishDrawing(blob);
     await Promise.resolve();
-    expect(activityStore.getSnapshot()).toMatchObject([{ id: encoding.id, label: 'Writing chart PNG' }]);
+    await Promise.resolve();
+    expect(activityStore.getSnapshot()).toMatchObject([{ id: drawing.id, label: 'Writing chart PNG' }]);
     expect(workspace.write).toHaveBeenCalledWith('', [{ filename: 'A.png', blob }], expect.any(Function), 'confirm', 'chosen', confirm);
     expect(workspace.write.mock.calls[0][1][0].blob).toBe(blob);
     finishWriting({ directory: 'chosen directory' });
@@ -71,33 +71,17 @@ describe('chart PNG composition', () => {
     expect(activityStore.getSnapshot()).toEqual([]);
   });
 
-  it('ends a failed encoding activity without writing a file', async () => {
-    const captured = document.createElement('canvas');
-    vi.spyOn(captured, 'toBlob').mockImplementation((callback) => { callback(null); });
-    await expect(saveChartPng(captured, 'A.png', 'chosen')).rejects.toThrow('could not make an image');
+  it('ends a failed drawing activity without writing a file', async () => {
+    const image = Promise.reject(new Error('WG could not draw this chart image. Try again.'));
+    await expect(saveChartPng(image, 'A.png', 'chosen')).rejects.toThrow('could not draw');
     expect(workspace.write).not.toHaveBeenCalled();
     expect(activityStore.getSnapshot()).toEqual([]);
   });
 
-  it('writes the composited blob to the image clipboard as PNG', async () => {
-    const container = document.createElement('div');
-    const layer = document.createElement('canvas');
-    container.append(layer);
-    layer.width = 200; layer.height = 100;
-    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(rect(0, 0, 100, 50));
-    vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(rect(0, 0, 100, 50));
-
-    const output = document.createElement('canvas');
-    const context = { setTransform: vi.fn(), fillRect: vi.fn(), drawImage: vi.fn(), fillStyle: '' };
-    vi.spyOn(output, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
+  it('starts the clipboard write in the gesture and hands it the pending image', async () => {
     const blob = new Blob(['png'], { type: 'image/png' });
-    let finishEncoding!: BlobCallback;
-    vi.spyOn(output, 'toBlob').mockImplementation((callback) => { finishEncoding = callback; });
-    const nativeCreateElement = document.createElement.bind(document);
-    const createElement = vi.spyOn(document, 'createElement').mockImplementation(((tagName: string, options?: ElementCreationOptions) => (
-      tagName.toLowerCase() === 'canvas' ? output : nativeCreateElement(tagName, options)
-    )) as typeof document.createElement);
-
+    let finishDrawing!: (blob: Blob) => void;
+    const draw = vi.fn(() => new Promise<Blob>((resolve) => { finishDrawing = resolve; }));
     let itemData: Record<string, Promise<Blob>> | undefined;
     class FakeClipboardItem {
       constructor(data: Record<string, Promise<Blob>>) { itemData = data; }
@@ -108,18 +92,35 @@ describe('chart PNG composition', () => {
     Object.defineProperty(globalThis, 'ClipboardItem', { configurable: true, value: FakeClipboardItem });
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { write } });
     try {
-      const copying = copyChartPng(container, '#211f1d');
+      const copying = copyChartPng(draw);
+      expect(draw).toHaveBeenCalledTimes(1);
       expect(write).toHaveBeenCalledWith([expect.any(FakeClipboardItem)]);
       expect(itemData?.['image/png']).toBeInstanceOf(Promise);
-      finishEncoding(blob);
+      finishDrawing(blob);
       await copying;
       expect(await itemData?.['image/png']).toBe(blob);
     } finally {
-      createElement.mockRestore();
       if (clipboardItemDescriptor) Object.defineProperty(globalThis, 'ClipboardItem', clipboardItemDescriptor);
       else delete (globalThis as { ClipboardItem?: unknown }).ClipboardItem;
       if (clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', clipboardDescriptor);
       else delete (navigator as { clipboard?: unknown }).clipboard;
     }
+  });
+
+  it('asks hornlab-plots for a spec in the export theme and decodes its PNG', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ image: 'data:image/png;base64,iVBORw==' }), { status: 200 }));
+    const spec = { kind: 'lines' as const, title: 'DI', x: { scale: 'log' as const }, y: {}, series: [] };
+    const image = await renderChartSpec(spec, 'classic', fetcher as unknown as typeof fetch);
+    expect(fetcher).toHaveBeenCalledWith('/api/render-chart', expect.objectContaining({ method: 'POST' }));
+    expect(JSON.parse((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)).toEqual({ spec, theme: 'classic' });
+    const blob = pngBlobFromDataUri(image);
+    expect(blob.type).toBe('image/png');
+    expect([...new Uint8Array(await blob.arrayBuffer())]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+  });
+
+  it('says what failed when the renderer refuses a chart', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ detail: 'This chart has no values to draw. Choose a chart with data, then export again.' }), { status: 422 }));
+    await expect(renderChartSpec({ kind: 'lines', title: '', x: {}, y: {}, series: [] }, 'classic', fetcher as unknown as typeof fetch))
+      .rejects.toThrow('no values to draw');
   });
 });

@@ -41,6 +41,14 @@ export type ChartType = typeof CHART_TYPES[number]['id'];
  */
 export const MATCH_INTERFACE_THEME = 'auto';
 
+/**
+ * The export theme a profile that never chose one gets: the classic HornLab
+ * report look (white page, near-black ink), which every saved chart image is
+ * drawn in by hornlab-plots. It mirrors DEFAULT_CHART_THEME in
+ * server/charts/api.py, which the app reads at start-up.
+ */
+export const DEFAULT_EXPORT_THEME = 'classic';
+
 export function resolveChartTheme(chartTheme: string): string {
   if (chartTheme !== MATCH_INTERFACE_THEME) return chartTheme;
   const light = typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light';
@@ -249,7 +257,7 @@ const defaults: Preferences = {
   // Forward Beam Map both need spherical sampling, which is off by default, so
   // defaulting to them left two of six panels permanently showing their stub.
   chartTypes: ['frequency_response', 'directivity_map_h', 'directivity_map_v', 'directivity_index', 'impedance', 'summary'],
-  chartTheme: MATCH_INTERFACE_THEME,
+  chartTheme: DEFAULT_EXPORT_THEME,
   splPhase: true,
   measurementPlane: 'horizontal',
   measurementAngles: [],

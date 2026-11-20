@@ -16,6 +16,7 @@ import type { EChartsOption } from 'echarts';
 import { chartGutter, inAxisGutter, rulerLabel } from './chartRuler';
 import { chartPixelRatio } from './chartPixelRatio';
 import { withDisplayLines } from './displayLine';
+import { DRAWN_CHART_CLASS, registerDrawnChart, screenAxisExtent } from './drawnCharts';
 
 echarts.use([
   LineChart,
@@ -75,6 +76,17 @@ export function EChartRenderer({ option, label, live = false }: { option: EChart
     };
   }, []);
 
+  // The card's copy and export draw the image from this option and the axis
+  // extents on screen, not from the canvas.
+  useEffect(() => {
+    const element = frame.current;
+    if (!element) return;
+    return registerDrawnChart(element, {
+      option,
+      extent: (axis, index) => screenAxisExtent(chart.current, option)(axis, index),
+    });
+  }, [option]);
+
   // Every call here redraws the chart from nothing, which is a visible flash.
   // That is correct for a genuinely new result and wrong for anything else, so
   // the discipline this depends on lives upstream: `option` must keep its
@@ -118,7 +130,7 @@ export function EChartRenderer({ option, label, live = false }: { option: EChart
 
   return <div
     ref={frame}
-    className="chart-frame"
+    className={DRAWN_CHART_CLASS}
     data-ruler={ruler ? 'on' : undefined}
     style={{ position: 'relative', width: '100%', height: '100%', minHeight: 0 }}
     onMouseMove={track}

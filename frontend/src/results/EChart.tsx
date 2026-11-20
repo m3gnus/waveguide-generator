@@ -40,11 +40,11 @@ export interface ChartTokens {
 
 export function readChartTokens(): ChartTokens {
   // These values mirror hornlab_plots.style.CONSOLE_THEME and VELLUM_THEME,
-  // which are the interface's own palettes rather than an independent design.
-  // Keeping the live charts on the same role palette as the export gives them
-  // the canonical look without replacing their responsive, inspectable canvas
-  // with a rendered PNG -- so these must move together with
-  // DEFAULT_CHART_THEME in server/charts/api.py and with the themes there.
+  // which are the interface's own palettes rather than an independent design,
+  // and which the export theme's "Match interface" setting draws images in.
+  // Saved images are drawn by hornlab-plots (classic by default); a series'
+  // index in `series` is the palette slot its image takes, so these lists
+  // keep the six-slot order of every hornlab-plots theme cycle.
   //
   // background is the panel colour, not a darker plot well. A chart ground the
   // interface uses nowhere else is what made the charts read as pasted into

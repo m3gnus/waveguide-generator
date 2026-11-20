@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
 import { preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import type { ChartTokens } from '../results/EChart';
+import type { EChartsOption } from 'echarts';
+import { DRAWN_CHART_CLASS, registerDrawnChart } from '../results/drawnCharts';
 import type { NamedResult } from '../results/mappers';
 import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
@@ -17,16 +19,29 @@ import { resultExportSnapshot } from '../results/exportContext';
 import { beamShapeMissingReason, ChartDetailDialog, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, measurementAngleEntries, phaseOption, polarOption, powerResponseOption, resolveMeasurementSelection, ResultsChartGrid, resolvedPolarStepNotice, resultLayoutClass, splOption, splSubtitle } from './ResultsPanel';
 
 const chartImageMocks = vi.hoisted(() => ({
-  copy: vi.fn<() => Promise<void>>(),
-  save: vi.fn<() => Promise<string>>(),
-  compose: vi.fn<(target: HTMLElement, background?: string) => HTMLCanvasElement>(),
+  copy: vi.fn<(image: (fetcher: typeof fetch) => Promise<Blob>) => Promise<void>>(),
+  save: vi.fn<(image: Promise<Blob>, filename: string, destination: string, confirm?: unknown) => Promise<string>>(),
+  render: vi.fn<(spec: unknown, theme: string) => Promise<string>>(),
 }));
 vi.mock('../results/chartImage', async (importOriginal) => ({
   ...await importOriginal<typeof import('../results/chartImage')>(),
   copyChartPng: chartImageMocks.copy,
   saveChartPng: chartImageMocks.save,
-  composeChartCanvases: chartImageMocks.compose,
+  renderChartSpec: chartImageMocks.render,
 }));
+
+/** Stand in for EChartRenderer: a drawn chart frame with a canvas, registered with its option. */
+function drawChart(target: HTMLElement, option: EChartsOption): () => void {
+  let frame = target.querySelector<HTMLElement>('[data-test-frame]');
+  if (!frame) {
+    frame = document.createElement('div');
+    frame.className = DRAWN_CHART_CLASS;
+    frame.dataset.testFrame = '';
+    frame.append(document.createElement('canvas'));
+    target.prepend(frame);
+  }
+  return registerDrawnChart(frame, { option, extent: () => null });
+}
 
 const summaryMocks = vi.hoisted(() => ({
   groups: vi.fn<(context: SummaryContext) => SummaryGroup[]>(() => []),
@@ -657,7 +672,7 @@ describe('results chart layouts', () => {
     summaryMocks.text.mockReset().mockReturnValue('');
     chartImageMocks.copy.mockReset().mockResolvedValue(undefined);
     chartImageMocks.save.mockReset().mockResolvedValue('/exports');
-    chartImageMocks.compose.mockReset().mockImplementation(() => document.createElement('canvas'));
+    chartImageMocks.render.mockReset().mockResolvedValue('data:image/png;base64,iVBORw==');
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -784,7 +799,7 @@ describe('results chart layouts', () => {
     }
   });
 
-  it('copies and exports one composited PNG from a graphical chart', async () => {
+  it('copies and exports a hornlab-plots PNG of what the card drew', async () => {
     const chartResult: ResultPayload = {
       frequencies: [500, 1_000],
       spl_on_axis: { frequencies: [500, 1_000], spl: [80, 82] },
@@ -793,14 +808,22 @@ describe('results chart layouts', () => {
       chartTypes: ['frequency_response'], result: chartResult, named: [], tokens,
     })));
     const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
-    await act(async () => { target.append(document.createElement('canvas')); await Promise.resolve(); });
+    const option = splOption([{ id: 'primary', label: 'Run', result: chartResult, primary: true }], tokens, 'none', 'regular');
+    await act(async () => { drawChart(target, option); await Promise.resolve(); });
 
     const copy = host.querySelector<HTMLButtonElement>('[aria-label="Copy panel 1 as PNG"]')!;
     const save = host.querySelector<HTMLButtonElement>('[aria-label="Export panel 1 as PNG"]')!;
     expect(copy).not.toBeNull();
     expect(save).not.toBeNull();
     await act(async () => { copy.click(); });
-    expect(chartImageMocks.copy).toHaveBeenCalledWith(target, tokens.background);
+    expect(chartImageMocks.copy).toHaveBeenCalledOnce();
+    const blob = await chartImageMocks.copy.mock.calls[0][0](fetch);
+    expect(blob.type).toBe('image/png');
+    // The image is the card's own series in the export theme (classic by default).
+    const [spec, theme] = chartImageMocks.render.mock.calls[0] as [{ kind: string; title: string; series: Array<{ label: string; x: number[]; y: number[] }> }, string];
+    expect(theme).toBe('classic');
+    expect(spec).toMatchObject({ kind: 'lines', title: 'Sound pressure level', y: { label: 'dB SPL' } });
+    expect(spec.series).toEqual([expect.objectContaining({ label: 'Run', x: [500, 1_000], y: [80, 82], color: 0 })]);
     expect(host.querySelector('.result-image-status')?.textContent).toBe('Copied PNG');
 
     // A chart image is a file export like any other: it asks where it goes,
@@ -810,8 +833,7 @@ describe('results chart layouts', () => {
     provideExportDestinationPrompt(async () => ({ token: 'handle-png', directory: '/exports' }));
     await act(async () => { save.click(); });
     expect(chartImageMocks.save).toHaveBeenCalledWith(
-      chartImageMocks.compose.mock.results[0].value, 'result_frequency_response.png', 'handle-png',
-      expect.any(Function),
+      expect.any(Promise), 'result_frequency_response.png', 'handle-png', expect.any(Function),
     );
     expect(host.querySelector('.result-image-status')?.textContent).toBe('Saved PNG');
 
@@ -831,32 +853,24 @@ describe('results chart layouts', () => {
     })));
     renderRun('A');
     const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
-    const layer = document.createElement('canvas');
-    layer.dataset.pixels = 'A';
-    await act(async () => { target.append(layer); });
-    const snapshot = document.createElement('canvas');
-    const bounds = { left: 0, top: 0, width: 100, height: 50 } as DOMRect;
-    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue(bounds);
-    vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(bounds);
-    vi.spyOn(snapshot, 'getContext').mockReturnValue({
-      setTransform: vi.fn(), fillRect: vi.fn(),
-      drawImage: (source: HTMLCanvasElement) => { snapshot.dataset.pixels = source.dataset.pixels; },
-    } as unknown as CanvasRenderingContext2D);
-    const actual = await vi.importActual<typeof import('../results/chartImage')>('../results/chartImage');
-    chartImageMocks.compose.mockImplementation((element, background) => actual.composeChartCanvases(element, background, () => snapshot));
+    const runOption = (label: string, spl: number) => splOption([{ id: label, label, result: { frequencies: [500], spl_on_axis: { frequencies: [500], spl: [spl] } }, primary: true }], tokens, 'none', 'regular');
+    await act(async () => { drawChart(target, runOption('A', 80)); });
     let answer!: (choice: { token: string; directory: string } | null) => void;
     const prompt = vi.fn(() => new Promise<{ token: string; directory: string } | null>((resolve) => { answer = resolve; }));
     provideExportDestinationPrompt(prompt);
     act(() => { host.querySelector<HTMLButtonElement>('[aria-label="Export panel 1 as PNG"]')!.click(); });
     expect(prompt).toHaveBeenCalledWith({ title: 'Export chart PNG', detail: '1_A_frequency_response.png' });
+    // The image is already being drawn from run A while the user chooses.
+    expect(chartImageMocks.render).toHaveBeenCalledOnce();
     renderRun('B');
     expect(host.querySelector('.chart-placeholder')).toBe(target);
-    layer.dataset.pixels = 'B';
+    drawChart(target, runOption('B', 90));
     await act(async () => { answer(accept ? { token: 'chosen', directory: '/exports' } : null); });
-    expect(chartImageMocks.compose).toHaveBeenCalledOnce();
-    expect(snapshot.dataset.pixels).toBe('A');
+    expect(chartImageMocks.render).toHaveBeenCalledOnce();
+    const [spec] = chartImageMocks.render.mock.calls[0] as [{ series: Array<{ label: string; y: number[] }> }];
+    expect(spec.series).toEqual([expect.objectContaining({ label: 'A', y: [80] })]);
     if (accept) {
-      expect(chartImageMocks.save).toHaveBeenCalledWith(snapshot, '1_A_frequency_response.png', 'chosen', expect.any(Function));
+      expect(chartImageMocks.save).toHaveBeenCalledWith(expect.any(Promise), '1_A_frequency_response.png', 'chosen', expect.any(Function));
     } else {
       expect(chartImageMocks.save).not.toHaveBeenCalled();
       expect(host.querySelector('.result-image-status')?.textContent).toBe('Export cancelled');
@@ -868,7 +882,7 @@ describe('results chart layouts', () => {
     const chartResult: ResultPayload = { frequencies: [500], spl_on_axis: { frequencies: [500], spl: [80] } };
     act(() => root.render(createElement(ResultsChartGrid, { chartTypes: ['frequency_response'], result: chartResult, named: [], tokens })));
     const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
-    await act(async () => { target.append(document.createElement('canvas')); });
+    await act(async () => { drawChart(target, splOption([{ id: 'primary', label: 'Run', result: chartResult, primary: true }], tokens, 'none', 'regular')); });
     await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Copy panel 1 as PNG"]')!.click(); });
     const remedy = operation === 'copy'
       ? 'Copying images is not available here. Use Export PNG instead.'
@@ -918,7 +932,7 @@ describe('results chart layouts', () => {
       chartTypes: ['frequency_response'], result: chartResult, named: [], tokens,
     })));
     const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
-    await act(async () => { target.append(document.createElement('canvas')); await Promise.resolve(); });
+    await act(async () => { drawChart(target, splOption([{ id: 'primary', label: 'Run', result: chartResult, primary: true }], tokens, 'none', 'regular')); await Promise.resolve(); });
     await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Copy panel 1 as PNG"]')!.click(); });
     // Poll rather than count ticks. A rejected copy settles later than the
     // resolved one above -- the throw has to unwind into the handler's catch

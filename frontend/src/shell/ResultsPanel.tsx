@@ -23,7 +23,10 @@ import {
   askToReplaceExports,
 } from './exportDestinationPrompt';
 import { ExportCancelledError } from '../api/exportDestination';
-import { composeChartCanvases, copyChartPng, saveChartPng } from '../results/chartImage';
+import { canvasPngBlob, composeChartCanvases, copyChartPng, pngBlobFromDataUri, renderChartSpec, renderDirectivityMap, saveChartPng } from '../results/chartImage';
+import { chartSpecFromOption, withImageLabels } from '../results/chartSpec';
+import { drawnChartIn } from '../results/drawnCharts';
+import { buildDirectivityRenderPayload } from '../results/exporters';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { latestCombine } from '../results/latestCombine';
 import { limitingSummary, maxOutputChartSeries, maxOutputMissingReason, maxOutputOf, memberLabelOf } from '../results/maxOutput';
@@ -38,7 +41,7 @@ import { hydrateJobDesign } from '../jobs/jobDesign';
 import { workspaceNavigation } from './workspaceNavigation';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
-import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, useDeveloperDetails, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
+import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, resolveChartTheme, runDisplayName, useDeveloperDetails, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyLabelIndices, directivityFrequencyTickLabel, directivityFrequencyTickLabels, logFrequencyTicks } from '../results/directivityFrequencyAxis';
 import { directivityMapCanvas, solvedSampleSpan } from '../results/mapBitmap';
@@ -233,7 +236,8 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
   // name adds nothing the chip does not say, and more than about a third of the
   // row overprints the chip.
   const names = new Set((Array.isArray(series) ? series : [series]).map((entry) => (entry as { name?: string } | undefined)?.name));
-  return {
+  // The axis names are drawn only on a full-size chart; its image always has them.
+  return withImageLabels<EChartsOption>({
     animationDuration: 180,
     backgroundColor: tokens.background,
     color: tokens.series,
@@ -274,7 +278,7 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
       : { type: 'value', ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'left' as const } } : {}), ...valueAxis },
     dataZoom: [{ type: 'inside', xAxisIndex: 0, filterMode: 'none', zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: true }],
     series,
-  };
+  }, { y: yName, y2: secondaryName });
 }
 
 /**
@@ -1308,6 +1312,7 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
     }];
   });
   const labelSize = LABEL_FONT[density];
+  const sliceCaption = `${plane === 'horizontal' ? 'Horizontal' : 'Vertical'} · ${formatFrequencyHz(frequencyHz, '—')}`;
   // Only when every compared run has a zero-radiation rear: the wedge is drawn
   // once for the whole chart, so it must not cover another run's real rear trace.
   const shadeRear = items.length > 0 && items.every(({ result }) => hasZeroRadiationRear(result));
@@ -1327,7 +1332,8 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
     areaStyle: { origin: 'start' as const, color: tokens.muted, opacity: .22 },
     data: Array.from({ length: 19 }, (_, step) => [0, from + ((to - from) * step) / 18]),
   });
-  return {
+  // The slider holds the frequency and plane on screen; the image names them.
+  return withImageLabels<EChartsOption>({
     animationDuration: 180,
     backgroundColor: tokens.background,
     color: tokens.series,
@@ -1366,7 +1372,7 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
       splitLine: { lineStyle: { color: tokens.grid, width: 1 } },
     },
     series: shadeRear ? [rearWedge(90, 180), rearWedge(-180, -90), ...series] : series,
-  };
+  }, { subtitle: sliceCaption });
 }
 
 function chartLabel(chartType: ChartType): string {
@@ -2209,12 +2215,69 @@ function useChartDescription({ chartType, result, named, job }: { chartType: Cha
   return { samplingDisclosure, subtitle, unit };
 }
 
+/** Views whose image is their canvas: hornlab-plots has no renderer for a 3D balloon or a beam map. */
+const CANVAS_VIEWS = new Set<ChartType>(['balloon', 'beam_map']);
+
+function isDirectivityMap(chartType: ChartType): chartType is DirectivityMapChartType {
+  return chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map';
+}
+
+interface ChartImageSource {
+  chartType: ChartType;
+  result?: ResultPayload;
+  named: NamedResult[];
+  tokens: ChartTokens;
+  /** The chart's title and subtitle, as the card shows them. */
+  title: string;
+  subtitle?: string | null;
+  normAngle: number;
+}
+
+/**
+ * What a chart's image is drawn from, captured when Copy or Export is pressed.
+ *
+ * Charts go to hornlab-plots in the export theme: a directivity map as its own
+ * canonical heatmap (the primary run, normalised as on screen, with the first
+ * compared run as its contour), every other chart as the spec of what the card
+ * drew. Everything is read now and drawn later, so a run that lands while the
+ * user picks a folder does not change the picture they asked for.
+ */
+export function chartImageSource(target: HTMLElement, source: ChartImageSource): (fetcher: typeof fetch) => Promise<Blob> {
+  const { chartType, result, named, tokens, title, subtitle, normAngle } = source;
+  if (CANVAS_VIEWS.has(chartType)) {
+    const canvas = composeChartCanvases(target, tokens.background);
+    return () => canvasPngBlob(canvas);
+  }
+  const preferences = preferencesStore.getSnapshot();
+  if (isDirectivityMap(chartType)) {
+    if (!result) throw new Error('This run has no directivity to draw. Choose a completed run.');
+    const compared = named.find((entry) => !entry.secondary && !entry.notComparable && entry.result !== result);
+    const payload = buildDirectivityRenderPayload(
+      withNormalizationAngle(result, normAngle),
+      preferences,
+      directivityPlaneForChart(chartType) ?? undefined,
+      compared ? { result: withNormalizationAngle(compared.result as ResultPayload, normAngle), label: compared.label } : undefined,
+    );
+    return async (fetcher) => pngBlobFromDataUri(await renderDirectivityMap(payload, fetcher));
+  }
+  const drawn = drawnChartIn(target);
+  if (!drawn) throw new Error('This chart is empty, so there is no image to copy. Choose a chart with data.');
+  const spec = chartSpecFromOption(drawn.option, tokens, { title, subtitle, extent: drawn.extent });
+  const theme = resolveChartTheme(preferences.chartTheme);
+  return async (fetcher) => pngBlobFromDataUri(await renderChartSpec(spec, theme, fetcher));
+}
+
 /** Copy and export of whichever element holds the rendered chart. */
-function useChartImage({ capture, chartType, job, channelId, background }: {
+function useChartImage({ capture, chartType, job, channelId, result, named, tokens, title, subtitle }: {
   capture: () => HTMLElement | null | undefined;
   chartType: ChartType;
-  background: ChartTokens['background'];
+  result?: ResultPayload;
+  named: NamedResult[];
+  tokens: ChartTokens;
+  title: string;
+  subtitle?: string | null;
 } & Pick<SummarySourceProps, 'job' | 'channelId'>) {
+  const normAngle = useRunNormAngle(job);
   const [imageOperation, setImageOperation] = useState<'copy' | 'download' | null>(null);
   const [imageStatus, setImageStatus] = useState<string | null>(null);
   const imageStatusTimer = useRef<number | null>(null);
@@ -2229,12 +2292,15 @@ function useChartImage({ capture, chartType, job, channelId, background }: {
     setImageStatus(null);
     let failed = false;
     try {
+      const draw = chartImageSource(target, { chartType, result, named, tokens, title, subtitle, normAngle });
       if (operation === 'copy') {
-        await copyChartPng(target, background);
+        await copyChartPng(draw);
         setImageStatus('Copied PNG');
       } else {
         const filename = chartImageFilename(chartType, job, channelId);
-        const image = composeChartCanvases(target, background);
+        // Drawn while the user picks a folder; a cancelled export drops it.
+        const image = draw(fetch);
+        image.catch(() => undefined);
         const destination = await askForExportDestination({ title: 'Export chart PNG', detail: filename });
         if (!destination) { setImageStatus('Export cancelled'); return; }
         await saveChartPng(
@@ -2272,7 +2338,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   const { density, wide } = useCardMetrics(card);
   const { imageOperation, imageStatus, imageAction } = useChartImage({
     capture: () => card.current?.querySelector<HTMLElement>('.chart-placeholder'),
-    chartType, job, channelId, background: tokens.background,
+    chartType, job, channelId, result, named, tokens, title: chartTitle(chartType, true), subtitle,
   });
   useLayoutEffect(() => {
     const element = card.current;
@@ -2371,7 +2437,8 @@ export function ChartDetailDialog({ index, chartTypes, tokens, data, unavailable
   // rather than from the card behind it: a large view must hand back its own image.
   const { imageOperation, imageStatus, imageAction } = useChartImage({
     capture: () => dialog.current?.querySelector<HTMLElement>('.result-detail-chart'),
-    chartType, job: data?.job, channelId: data?.channelId, background: tokens.background,
+    chartType, job: data?.job, channelId: data?.channelId, result: data?.result, named: data?.named ?? NO_NAMED_RESULTS,
+    tokens, title: chartTitle(chartType, true), subtitle,
   });
   const runIndex = runs.findIndex((job) => job.id === runId);
   const showRun = (job: JobItem | undefined) => {
