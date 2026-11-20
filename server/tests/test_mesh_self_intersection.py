@@ -334,7 +334,7 @@ def _crossing_mesh_design(monkeypatch, tmp_path) -> DesignConfig:
         cell_data={"gmsh:physical": [np.asarray([2, 2], dtype=np.int32)]},
     )
 
-    def fake_build_from_config(config, mesh_path, *, allow_large_mesh):
+    def fake_build_from_config(config, mesh_path, *, allow_large_mesh, after_density):
         mesh_path.write_text("$MeshFormat\n", encoding="utf-8")
         return SimpleNamespace(metadata={}, units="m")
 

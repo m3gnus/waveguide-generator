@@ -720,12 +720,14 @@ def _build_with_memory_stop(
         1, _dense_solver_triangle_stop(quadrants, mode=mode, limit=limit)
         * _domain_multiplier_for_quadrants(quadrants),
     )
-    original = mesher.configure_density
     refusal: SolverMemoryTooLarge | MesherEstimateUnavailable | None = None
 
-    def configure_with_memory_stop(geometry: Any, density: Any) -> None:
+    def stop_over_memory(geometry: Any) -> None:
+        # The mesher calls this right after its density pass, before any mesh
+        # generation. The aperture interior size is the one that pass just
+        # applied (mouth resolution x aperture scale), recorded whenever the
+        # model has aperture surfaces.
         nonlocal refusal
-        original(geometry, density)
         estimate = geometry.metadata.get("meshTriangleEstimate")
         if estimate is None:
             estimate = (geometry.metadata.get("sourceBody") or {}).get("triangleEstimate")
@@ -733,11 +735,12 @@ def _build_with_memory_stop(
             refusal = MesherEstimateUnavailable("Mesher did not supply its pre-mesh triangle estimate")
             raise mesher.TriangleBudgetExceeded(str(refusal)) from refusal
         aperture = 0
-        if mode == "infinite-baffle":
+        aperture_tags = geometry.mesh_surface_groups.get("mouth_aperture", [])
+        if mode == "infinite-baffle" and aperture_tags:
             import gmsh
+            aperture_size = float(geometry.metadata["apertureMeshInteriorSizeMm"])
             aperture = estimate_triangle_count([
-                (gmsh.model.occ.getMass(2, tag), density.mouth_res_mm * density.aperture_res_scale)
-                for tag in geometry.mesh_surface_groups.get("mouth_aperture", [])
+                (gmsh.model.occ.getMass(2, tag), aperture_size) for tag in aperture_tags
             ])
         try:
             _enforce_premesh_memory(
@@ -748,15 +751,14 @@ def _build_with_memory_stop(
             refusal = exc
             raise mesher.TriangleBudgetExceeded(str(exc)) from exc
 
-    mesher.configure_density = configure_with_memory_stop
     try:
-        return build_from_config(private, mesh_path, allow_large_mesh=True)
+        return build_from_config(
+            private, mesh_path, allow_large_mesh=True, after_density=stop_over_memory,
+        )
     except Exception:
         if refusal is not None:
             raise refusal
         raise
-    finally:
-        mesher.configure_density = original
 
 
 def _require_closed_acoustic_topology(

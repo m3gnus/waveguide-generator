@@ -167,7 +167,7 @@ def test_build_solver_mesh_continues_past_user_budget_and_preserves_warning(
         cell_data={"gmsh:physical": [tags]},
     )
 
-    def fake_build_from_config(config, mesh_path, *, allow_large_mesh):
+    def fake_build_from_config(config, mesh_path, *, allow_large_mesh, after_density):
         assert config["mesh"]["maxTriangles"] == MAX_SOLVER_MESH_ARTIFACT_TRIANGLES
         assert config["mesh"]["allowLargeMesh"] is False
         assert config["mesh"]["max_triangles"] > 0
@@ -447,40 +447,78 @@ def test_premesh_memory_boundary_uses_the_measured_memory_rule(quadrants, mode, 
 @pytest.mark.parametrize("override", [False, True])
 def test_parametric_memory_refusal_happens_before_mesh_generation(monkeypatch, eight_gib_ceiling, override):
     import gmsh
-    from hornlab_mesher import config_builder, mesher
+    from hornlab_mesher import config_builder
     from server.mesh.errors import SolverMemoryTooLarge
 
     sample_grid = config_builder._build_acoustic_sampling_grid
     monkeypatch.setattr(config_builder, "_build_acoustic_sampling_grid",
                         lambda *args, **kwargs: sample_grid(*args, **{**kwargs, "topology_mode": "legacy"}))
-    original = mesher.configure_density
     monkeypatch.setattr(gmsh.model.mesh, "generate", lambda *_args: pytest.fail("mesh generation was reached"))
     design = _tiny_design()
     design.root.mesh.wall_thickness = Expr(value=0.0)
     design.root.mesh.mouth_resolution = Expr(value=0.05)
     with pytest.raises(SolverMemoryTooLarge, match="before meshing"):
         asyncio.run(build_solver_mesh(design, {"mesh_limit_override": override}, force_rebuild=True))
-    assert mesher.configure_density is original
 
 
-def test_missing_premesh_estimate_is_an_internal_refusal_and_restores_hook(monkeypatch, tmp_path):
-    from hornlab_mesher import mesher
+def test_missing_premesh_estimate_is_an_internal_refusal(tmp_path):
     from server.mesh.errors import MesherEstimateUnavailable
 
-    def original(*_args):
-        pass
-    monkeypatch.setattr(mesher, "configure_density", original)
-
-    def build(_config, _path, *, allow_large_mesh):
+    def build(_config, _path, *, allow_large_mesh, after_density):
         assert allow_large_mesh
-        mesher.configure_density(SimpleNamespace(metadata={}), SimpleNamespace())
+        after_density(SimpleNamespace(metadata={}, mesh_surface_groups={}))
 
     with pytest.raises(MesherEstimateUnavailable, match="pre-mesh triangle estimate"):
         mesh_builder._build_with_memory_stop(
             {"mesh": {"quadrants": 1234}}, tmp_path / "mesh.msh",
             limit=mesh_builder.dense_solver_memory_limit(), build_from_config=build,
         )
-    assert mesher.configure_density is original
+
+
+def test_memory_stop_hook_leaves_the_mesh_bytes_unchanged(tmp_path):
+    """The pre-mesh memory stop only observes the density pass.
+
+    It runs as the mesher's ``after_density`` hook (it replaced a swap of the
+    module-global ``configure_density``). A build with the stop and a build of
+    the same private config without it must write byte-identical meshes, and
+    the infinite-baffle aperture size it reads from the density metadata must be
+    the mouth resolution times the aperture scale that the old swap computed.
+    """
+    import math as _math
+
+    from hornlab_mesher import mesher
+    from hornlab_mesher.config_builder import build_from_config, resolve_geometry
+
+    design = _tiny_design()
+    design.root.simulation.sim_type = "infinite-baffle"
+    config, _, _ = _mesh_policy(design, _solver_mesher_config(design))
+    seen: dict[str, object] = {}
+
+    def build(private, path, *, allow_large_mesh, after_density):
+        seen["config"] = private
+        density = resolve_geometry(private, allow_large_mesh=True).density
+
+        def observe(built):
+            tags = built.mesh_surface_groups.get("mouth_aperture", [])
+            seen["aperture_tags"] = list(tags)
+            seen["aperture_size"] = built.metadata.get("apertureMeshInteriorSizeMm")
+            seen["swap_size"] = density.mouth_res_mm * density.aperture_res_scale
+            after_density(built)
+
+        return build_from_config(private, path, allow_large_mesh=allow_large_mesh, after_density=observe)
+
+    stopped = tmp_path / "stopped.msh"
+    mesh_builder._build_with_memory_stop(
+        config, stopped, limit=mesh_builder.dense_solver_memory_limit(), build_from_config=build,
+    )
+    plain = tmp_path / "plain.msh"
+    build_from_config(seen["config"], plain, allow_large_mesh=True)
+
+    assert stopped.read_bytes() == plain.read_bytes()
+    assert seen["aperture_tags"], "the infinite-baffle model must have aperture surfaces"
+    assert _math.isfinite(seen["aperture_size"])
+    assert seen["aperture_size"] == seen["swap_size"]
+    assert not hasattr(mesher.configure_density, "__wrapped__")
 
 
 GIB = 1024**3

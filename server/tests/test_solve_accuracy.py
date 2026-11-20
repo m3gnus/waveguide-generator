@@ -63,7 +63,8 @@ def test_complex_guide_opt_in_estimate_fits_the_existing_memory_stop(tmp_path):
     import json
     from pathlib import Path
 
-    from hornlab_mesher.config_builder import estimate_from_config
+    from hornlab_mesher.config_builder import build_from_config
+    from hornlab_mesher.mesher import _DensityEstimateReady
 
     from server.mesh import builder
     from server.platform.memory import PhysicalMemory
@@ -74,8 +75,18 @@ def test_complex_guide_opt_in_estimate_fits_the_existing_memory_stop(tmp_path):
         physical=PhysicalMemory(bytes=64 * 1024**3, source='sysconf', known=True),
     )
 
-    def estimate_only(current, *args, **kwargs):
-        return estimate_from_config(current)
+    def estimate_only(current, path, *, allow_large_mesh, after_density):
+        # The real build's density pass, with the memory stop applied, then
+        # stop before generating the mesh, as estimate_from_config does.
+        def observe(built):
+            after_density(built)
+            raise _DensityEstimateReady(built.metadata)
+
+        try:
+            build_from_config(current, path, allow_large_mesh=allow_large_mesh, after_density=observe)
+        except _DensityEstimateReady as ready:
+            return ready.metadata
+        raise AssertionError("the density pass did not run")
 
     metadata = builder._build_with_memory_stop(
         config, tmp_path / 'estimate.msh', limit=limit, build_from_config=estimate_only,
