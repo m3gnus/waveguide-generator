@@ -26,6 +26,12 @@ from scripts.tests import test_linux_bundle_install_update as linux  # noqa: E40
 STRESS = os.environ.get("WG_STRESS") == "1"
 SERIES_RUNS = 50 if STRESS else 5
 ROLLBACK_BATCHES = 10 if STRESS else 1
+# A blocked forward move hangs this long, ignoring SIGTERM; only the
+# installer's own deadline watchdog can end it sooner. The test waits a
+# fraction of the hang, so a loaded machine has room while a missing or broken
+# watchdog still fails (the move would outlast the wait).
+HUNG_MOVE_S = 600
+WATCHDOG_WAIT_S = HUNG_MOVE_S / 5
 
 
 @dataclass
@@ -953,13 +959,15 @@ if blocked:
         subprocess.run([{'/bin/ln'!r}, *args], check=True)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     pathlib.Path({str(reached)!r}).touch()
-    time.sleep(60)
+    time.sleep({HUNG_MOVE_S})
 ''')
     # Exercise the actual watchdog with a shorter deadline for this 20-case matrix.
     install.script.write_text(install.script.read_text().replace('sleep 30 >/dev/null 2>&1 &', 'sleep 1 >/dev/null 2>&1 &'))
     proc = spawn(install, env)
     try:
-        output, _ = proc.communicate(timeout=8)
+        # Only the 1 s watchdog can end the installer before the hung move
+        # would: the wait is a fraction of the hang, not a guess at speed.
+        output, _ = proc.communicate(timeout=WATCHDOG_WAIT_S)
         assert reached.exists(), output
         assert proc.returncode == 1, output
         assert [identity(p) for p in install.paths] == original

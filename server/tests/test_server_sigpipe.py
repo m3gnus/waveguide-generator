@@ -19,6 +19,8 @@ from scripts import qualify_installed_cpu as gate
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="SIGPIPE is POSIX-only")
 REPO_ROOT = Path(__file__).resolve().parents[2]
+#: Upper bound for a start or stop that never finishes (see the test).
+HANG_BOUND_S = 120.0
 
 _SERVER = r'''
 import argparse
@@ -148,8 +150,14 @@ def test_imported_server_second_start_keeps_the_sigpipe_contract(
         os.environ, PYTHONPATH=str(REPO_ROOT), RESET_BOUNDARY=boundary,
         DISABLE_SIGPIPE_REARM=str(int(not rearm)),
     )
-    monkeypatch.setattr(gate, "STARTUP_TIMEOUT_S", 5.0)
-    monkeypatch.setattr(gate, "SHUTDOWN_TIMEOUT_S", 5.0)
+    # Neither deadline decides a verdict: readiness is the "health ready" line
+    # and the negative control dies on its own (-13) at shutdown. They only
+    # bound a hung run, so they leave room for a loaded machine (a 5 s startup
+    # timed out at load 13-18). A shutdown that overran would be terminated
+    # (-15) and fail the -13 match, so a short bound could only cause false
+    # failures.
+    monkeypatch.setattr(gate, "STARTUP_TIMEOUT_S", HANG_BOUND_S)
+    monkeypatch.setattr(gate, "SHUTDOWN_TIMEOUT_S", HANG_BOUND_S)
     monkeypatch.setattr(gate, "POLL_INTERVAL_S", 0.02)
     # Readiness uses the log so this test also runs in sandboxes that deny
     # binding loopback sockets. Popen's streams and stop checks stay real.
