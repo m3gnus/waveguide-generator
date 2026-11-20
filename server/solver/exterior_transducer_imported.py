@@ -36,8 +36,12 @@ from .context import SolverContext
 from .frequency_sweep import canonical_frequencies
 from .imported import imported_anchor_frame, imported_domain_planes, imported_symmetry_from_cut_planes
 from .combine import serialize_channel_bases
-from .combined_channel import package_combined_channel
-from .imported_channels import channel_source_identity, imported_validity_metadata, scale_channel_result
+from .imported_channels import (
+    channel_source_identity,
+    imported_combined_channel,
+    imported_validity_metadata,
+    scale_channel_result,
+)
 from .result_mapping import build_solver_response, json_safe_native_value
 
 
@@ -436,13 +440,12 @@ def package_sweep(
                 channel_order.append(group.id)
         if geometry.combine is not None and not sweep.cancelled:
             spec = geometry.combine
-            channels[spec.id] = package_combined_channel(
-                spec=spec, drive_channels=geometry.drive_channels, results_by_id=native_by_id,
-                member_channels=channels, per_source_validity=imported_validity_metadata(record),
-                member_roles={channel_id: item.get("role") for channel_id, item in identity.items()},
-                max_drive_voltage_v=None, frequencies_hz=frequencies, request=request,
-                quadrants=symmetry.quadrants, config_motion="normal", config=config, start_time=started,
-                sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
+            channels[spec.id] = imported_combined_channel(
+                geometry=geometry, sorted_results=native_by_id, request=request,
+                quadrants=symmetry.quadrants, config=config, config_motion="normal", started=started,
+                per_source_validity=imported_validity_metadata(record), channel_identity=identity,
+                member_channels=channels, sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
+                max_drive_voltage_v=None, frequencies_hz=frequencies,
                 backend_metadata=lambda _combined: {
                     "solver_backend": solver_engine["engine"], "solver_engine": dict(solver_engine),
                     "engine": solver_engine["package"],

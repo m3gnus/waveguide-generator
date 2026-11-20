@@ -15,11 +15,11 @@ from server.solver.base import (
     FIELD_TRACE_UNAVAILABLE_REASON_KEY,
     FIELD_TRACES_KEY,
     RADIATION_IMPEDANCE_KEY,
-    EngineSolveOutput,
+    EngineRunResult,
 )
 
 
-def test_solve_output_takes_every_artifact_out_of_the_results() -> None:
+def test_run_result_takes_every_artifact_out_of_the_solve_results() -> None:
     results = {
         "metadata": {"a": 1},
         CHANNEL_BASES_KEY: b"bases",
@@ -27,21 +27,18 @@ def test_solve_output_takes_every_artifact_out_of_the_results() -> None:
         FIELD_TRACES_KEY: "traces",
         FIELD_TRACE_UNAVAILABLE_REASON_KEY: "why",
     }
-    output = EngineSolveOutput.from_results(results)
-    assert output.results is results
+    run = EngineRunResult.from_solve_results(results, msh_text="mesh", mesh_stats={"n": 1})
+    assert run.results is results
     assert results == {"metadata": {"a": 1}}
-    assert (output.channel_bases, output.radiation_impedance) == (b"bases", b"matrix")
-    assert (output.field_traces, output.field_trace_unavailable_reason) == ("traces", "why")
-
-    run = output.run_result(msh_text="mesh", mesh_stats={"n": 1})
-    assert run.results == {"metadata": {"a": 1}}
-    assert (run.msh_text, run.mesh_stats, run.channel_bases) == ("mesh", {"n": 1}, b"bases")
+    assert (run.channel_bases, run.radiation_impedance) == (b"bases", b"matrix")
+    assert (run.field_traces, run.field_trace_unavailable_reason) == ("traces", "why")
+    assert (run.msh_text, run.mesh_stats) == ("mesh", {"n": 1})
 
 
 def test_absent_artifacts_stay_none() -> None:
-    output = EngineSolveOutput.from_results({"metadata": {}})
-    assert output.channel_bases is None and output.radiation_impedance is None
-    assert output.field_traces is None and output.field_trace_unavailable_reason is None
+    run = EngineRunResult.from_solve_results({"metadata": {}}, msh_text="m", mesh_stats={})
+    assert run.channel_bases is None and run.radiation_impedance is None
+    assert run.field_traces is None and run.field_trace_unavailable_reason is None
 
 
 def test_parametric_run_stores_the_mesh_before_it_solves(monkeypatch) -> None:

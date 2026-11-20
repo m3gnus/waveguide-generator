@@ -21,7 +21,6 @@ from .base import (
     ArtifactCallback,
     CancelCallback,
     EngineRunResult,
-    EngineSolveOutput,
     StageCallback,
 )
 from .imported import read_verified_import_mesh, verify_record_mesh_text
@@ -67,8 +66,8 @@ async def run_parametric_engine(
     metadata["mesh_stats"] = mesh["stats"]
     if annotate is not None:
         annotate(metadata)
-    return EngineSolveOutput.from_results(results).run_result(
-        msh_text=mesh["msh_text"], mesh_stats=mesh["stats"],
+    return EngineRunResult.from_solve_results(
+        results, msh_text=mesh["msh_text"], mesh_stats=mesh["stats"],
     )
 
 
@@ -103,8 +102,8 @@ async def run_imported_engine(
     metadata["mesh_stats"] = mesh_stats
     if annotate is not None:
         annotate(metadata)
-    return EngineSolveOutput.from_results(results).run_result(
-        msh_text=msh_text, mesh_stats=mesh_stats,
+    return EngineRunResult.from_solve_results(
+        results, msh_text=msh_text, mesh_stats=mesh_stats,
     )
 
 

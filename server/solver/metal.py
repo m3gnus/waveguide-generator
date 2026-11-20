@@ -52,7 +52,7 @@ from .base import (
     StageCallback,
 )
 from .context import SolverContext
-from .engine_run import run_imported_engine, run_parametric_engine
+from .engine_run import full_3d_solve_path, run_imported_engine, run_parametric_engine
 from .frequency_sweep import (
     _FREQUENCY_SHAPED_RESULT_FIELDS,
     canonical_frequencies,
@@ -2424,7 +2424,7 @@ class MetalEngine:
                 metadata["mesh_ladder"] = {"applied": False, "reason": ladder_refusal}
             elif ladder_plan is not None and isinstance(metadata.get("mesh_ladder"), dict):
                 metadata["mesh_ladder"].update(ladder_plan.as_metadata())
-            metadata["solve_path"] = "full-3d"
+            full_3d_solve_path(metadata)
             metadata["solve_path_reason"] = (
                 "solver_mode='full_3d' selected native full 3D"
                 if mode == "full_3d"

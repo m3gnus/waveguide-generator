@@ -354,6 +354,9 @@ def prescribed_entry(entry: Mapping[str, Any], frequency_hz: float,
                if hasattr(native, "excitation_normalization") else {})}
 
 
+_FROM_GEOMETRY: Any = object()
+
+
 def imported_combined_channel(
     *,
     geometry: ImportedGeometrySource,
@@ -368,12 +371,16 @@ def imported_combined_channel(
     member_channels: Mapping[str, Any],
     sound_speed_m_per_s: float,
     backend_metadata: Callable[[Any], dict[str, Any]],
+    max_drive_voltage_v: Any = _FROM_GEOMETRY,
+    frequencies_hz: Any = None,
 ) -> dict[str, Any]:
     """Package an imported request's combined channel: the filtered sum.
 
-    Every multi-RHS imported adapter (Metal, BEMPP, BEAT) combines its member
-    channels the same way; only the backend's metadata block differs, and the
-    adapter supplies it as ``backend_metadata``.
+    Every imported adapter combines its member channels the same way; only the
+    backend's metadata block differs, and the adapter supplies it as
+    ``backend_metadata``. The drive limit defaults to the geometry's and the
+    frequency axis to the first physical member's; the exterior-transducer
+    route passes its own.
     """
 
     spec = geometry.combine
@@ -385,8 +392,10 @@ def imported_combined_channel(
         member_channels=member_channels,
         per_source_validity=per_source_validity,
         member_roles={member: identity.get("role") for member, identity in channel_identity.items()},
-        max_drive_voltage_v=geometry.max_drive_voltage_v,
-        frequencies_hz=sorted_results[geometry.physical_members(spec.members)[0]].frequencies_hz,
+        max_drive_voltage_v=(geometry.max_drive_voltage_v if max_drive_voltage_v is _FROM_GEOMETRY
+                             else max_drive_voltage_v),
+        frequencies_hz=(sorted_results[geometry.physical_members(spec.members)[0]].frequencies_hz
+                        if frequencies_hz is None else frequencies_hz),
         request=request,
         quadrants=quadrants,
         config_motion=config_motion,
