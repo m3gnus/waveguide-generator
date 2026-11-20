@@ -174,7 +174,9 @@ def source_contract_from_export(manifest: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _baseline_fingerprint(outbound: Mapping[str, Any]) -> dict[str, Any] | None:
-    body = outbound.get("body")
+    # The uploaded STEP's evidence: the ``step`` section of a format 1.2
+    # Onshape bundle, or the STEP body of an earlier bundle.
+    body = outbound.get("step") if isinstance(outbound.get("step"), Mapping) else outbound.get("body")
     if not isinstance(body, Mapping):
         return None
     bbox = body.get("bbox_mm")

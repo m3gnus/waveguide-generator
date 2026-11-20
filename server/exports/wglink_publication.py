@@ -56,6 +56,21 @@ def atomic_json(path: Path, payload: Mapping[str, object]) -> None:
     )
 
 
+def bundle_body_file(manifest: Mapping[str, Any]) -> str:
+    """The file a bundle's identity (``artifact_sha256``) is the hash of.
+
+    It is the body the CAD program builds from, named by ``body.file``:
+    ``point-grid.json`` from bundle format 1.2 on, ``waveguide.step`` in the
+    1.0/1.1 bundles published before it, whose registry rows keep that hash.
+    """
+    body = manifest.get("body")
+    name = body.get("file") if isinstance(body, Mapping) else None
+    files = manifest.get("files")
+    if not isinstance(name, str) or not isinstance(files, Mapping) or name not in files:
+        raise ValueError("bundle body file is missing")
+    return name
+
+
 def bundle_products(path: Path, facts: Mapping[str, object]) -> dict[str, str]:
     """Validate identity and every checksum before reusing published bytes."""
     try:
@@ -85,8 +100,7 @@ def bundle_products(path: Path, facts: Mapping[str, object]) -> dict[str, str]:
         if "manifest_json" in facts and manifest != json.loads(str(facts["manifest_json"])):
             raise ValueError("registered manifest mismatch")
         files = manifest["files"]
-        if "waveguide.step" not in files:
-            raise ValueError("STEP is missing")
+        body_file = bundle_body_file(manifest)
         for name, entry in files.items():
             # Bundle file names are relative, with no symlink traversal.
             relative = Path(name)
@@ -103,7 +117,7 @@ def bundle_products(path: Path, facts: Mapping[str, object]) -> dict[str, str]:
         result = {
             "manifest_json": text,
             "geometry_hash": manifest["export"]["geometry_hash"],
-            "artifact_sha256": files["waveguide.step"]["sha256"],
+            "artifact_sha256": files[body_file]["sha256"],
             "bundle_path": str(path),
         }
         if facts.get("artifact_sha256") not in (None, result["artifact_sha256"]):

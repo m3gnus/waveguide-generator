@@ -16,7 +16,6 @@ import numpy as np
 from server.design.schema import DesignConfig
 from server.design.native import NATIVE_FORMULAS
 from server.exports.sizing import (
-    STEP_SURFACE_TOLERANCE_MM,
     STL_CHORD_TOLERANCE_MM,
     STL_TRIANGLE_CEILING,
     GridPlan,
@@ -24,20 +23,19 @@ from server.exports.sizing import (
     axial_band_of_column,
     facet_element_size_mm,
     measure_deviation,
-    plan_cad_resolution,
     plan_grid,
     quad_distance,
 )
 from server.exports.sizing import _point_grid
+from server.exports.cad_geometry import resolve_cad_geometry, write_cad_step
 from server.mesh.inner_grid import (
-    EXPORT_CORNER_SEGMENTS,
     _bare_grid_config,
     _inner_grid as _inner_grid,
     _prepared_design as _prepared_design,
     _prepared_mesher_config,
     validate_export_segments,
 )
-from server.mesh.builder import _solver_mesher_config, _triangles_and_tags
+from server.mesh.builder import _triangles_and_tags
 from server.mesh.child import AUX_LANE, run_mesh_build
 from server.mesh.gmsh_worker import _preserve_native_windows_path
 from server.platform.temp_session import spawned_directory_root, temporary_directory_root
@@ -648,68 +646,20 @@ def _build_step_solid_sync(design_dump: dict[str, Any], work_dir: str | None = N
     if design.formula in NATIVE_FORMULAS:
         return _native_step(design, work_dir)
     _refuse_ath_step(design)
-    try:
-        from hornlab_mesher.cad import write_step_from_config
-    except ImportError as exc:
-        raise RuntimeError(
-            "the installed hornlab-waveguide-mesher has no CAD export; "
-            "install the pinned server requirements"
-        ) from exc
-
-    # The solver's own config, so the exported part is the geometry that was
-    # solved rather than a second derivation of it. write_step_from_config
-    # reopens a reduced domain to all four quadrants: a solve may run on a
-    # quarter model, but a part cannot be a quarter of itself. It does not
-    # restore ``mesh.vertical_offset`` the same way (``hornlab_mesher/cad.py``),
-    # so the placement has to survive in the config the server hands it: this is
-    # a CAD boundary, and the solid STEP carries the placement in every domain.
-    # (The wglink bundle of the same design always did; keeping it here is what
-    # stops an ATH-imported design declaring Mesh.Quadrants = 1 or 12 from
-    # exporting an unplaced solid alongside a placed bundle.)
-    config = retain_mesher_construction(_solver_mesher_config(design, keep_placement=True))
-    # Corner arcs first, so the sampling search below measures the geometry
-    # that will actually be written. Choosing the resolution against the
-    # design's own corner count and then building with a different one would
-    # leave a morph design's measured deviation describing a grid nobody gets.
-    config["mesh"] = {
-        **(config.get("mesh") or {}),
-        "cornerSegments": EXPORT_CORNER_SEGMENTS,
-    }
-    # The solver's mm resolutions used to size the CAD point grid as well, so
-    # refining an acoustic mesh made every STEP roughly 20x slower and 10x
-    # larger while the export's own controls moved the grid by one row. The
-    # part is a CAD artifact: it is sampled to a CAD tolerance instead, and the
-    # result is the same file whatever the solve was set to.
-    plan = plan_cad_resolution(config, tolerance_mm=STEP_SURFACE_TOLERANCE_MM)
-    config["mesh"] = {
-        **config["mesh"],
-        "throatResolution": plan.resolution_mm,
-        "mouthResolution": plan.resolution_mm,
-        "rearResolution": plan.resolution_mm,
-    }
-    logger.info(
-        "STEP solid sampled at %.3g mm (measured deviation %s mm, tolerance %g mm)",
-        plan.resolution_mm,
-        "unmeasured" if plan.deviation_mm is None else f"{plan.deviation_mm:.5f}",
-        STEP_SURFACE_TOLERANCE_MM,
-    )
-    if plan.warning:
-        logger.warning("Solid STEP export sizing: %s", plan.warning)
+    # The one CAD realisation (cad_geometry.py): the geometry Send to CAD
+    # hands Fusion, written here as a solid.
+    cad = resolve_cad_geometry(design)
     with tempfile.NamedTemporaryFile(
         prefix="waveguide-solid-", suffix=".step", delete=False, dir=work_dir or temporary_directory_root()
     ) as handle:
         step_path = Path(handle.name)
     try:
-        # Public callers run this in the mesher child. Keep the synchronous
-        # helper safe as well: contract tests and maintenance tools call it
-        # directly, allowing the pinned mesher to own a native session.
-        with _preserve_native_windows_path():
-            _, cad_info = write_step_from_config(config, step_path)
+        cad_info = write_cad_step(cad, step_path)
         text = step_path.read_text(encoding="utf-8", errors="replace")
     finally:
         step_path.unlink(missing_ok=True)
     _assert_step(text)
-    return StepSolidResult(step_text=text, cad_info=cad_info, warning=plan.warning)
+    return StepSolidResult(step_text=text, cad_info=cad_info, warning=cad.plan.warning)
 
 
 async def build_step_solid(design: DesignConfig, *, cancel_cb: Any = None, progress_cb: Any = None) -> StepSolidResult:

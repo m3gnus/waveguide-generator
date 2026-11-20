@@ -867,23 +867,30 @@ class OnshapeAdapter:
 
 
 def read_bundle(bundle_path: str | Path) -> tuple[dict[str, Any], bytes]:
-    """Load one ``.wglink`` bundle's manifest and its STEP payload."""
+    """Load one ``.wglink`` bundle's manifest and its STEP payload.
+
+    An Onshape bundle carries the solid STEP (``wglink_geometry.build_bundle``
+    ``include_step``); a Fusion bundle has none, and is refused here.
+    """
 
     root = Path(bundle_path)
     manifest_path = root / "wglink.json"
-    step_path = root / "waveguide.step"
-    if not manifest_path.is_file() or not step_path.is_file():
-        raise OnshapeAdapterError(
-            "WG could not read the design it saved for CAD. Send the design to CAD again."
-        )
+    unreadable = "WG could not read the design it saved for CAD. Send the design to CAD again."
+    if not manifest_path.is_file():
+        raise OnshapeAdapterError(unreadable)
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        raise OnshapeAdapterError(
-            "WG could not read the design it saved for CAD. Send the design to CAD again."
-        ) from exc
+        raise OnshapeAdapterError(unreadable) from exc
     if not isinstance(manifest, Mapping):
-        raise OnshapeAdapterError("WG could not read the design it saved for CAD. Send the design to CAD again.")
+        raise OnshapeAdapterError(unreadable)
+    # Format 1.2 names its STEP in ``step``; earlier bundles always carried
+    # ``waveguide.step``.
+    step = manifest.get("step")
+    name = step.get("file") if isinstance(step, Mapping) else "waveguide.step"
+    step_path = root / str(name)
+    if not isinstance(name, str) or Path(name).name != name or not step_path.is_file():
+        raise OnshapeAdapterError(unreadable)
     return dict(manifest), step_path.read_bytes()
 
 

@@ -560,7 +560,7 @@ describe('Send to CAD requests', () => {
     const send = sendDesignToCad(
       hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher, 'attempt-1',
     );
-    await expect(send).rejects.toThrow(`WG saved the model in ${savedPath}, but could not notify Fusion. Open waveguide.step from that folder in Fusion.`);
+    await expect(send).rejects.toThrow(`WG saved the model in ${savedPath}, but could not notify Fusion. In Fusion, choose WGLink → Advanced → Insert and select that folder.`);
     const error = await send.catch((reason: Error) => reason);
     expectNoJargon((error as Error).message, { names: [savedPath] });
   });

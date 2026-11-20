@@ -13,8 +13,6 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
-from hornlab_mesher.config_builder import resolve_geometry
 from server.app import create_app
 from server.cadlink.api import CadReturnIngestRequest, post_ingest
 from server.cadlink.onshape.return_leg import (
@@ -32,53 +30,38 @@ from server.cadlink.intake.step_evidence import (
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import WgReturnIntegrityError, read_wgreturn
 from server.design.schema import DesignConfig
-from server.exports.core import design_to_mesher_config
+from server.exports.wglink_geometry import build_bundle
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 
 
 def _outbound(tmp_path: Path) -> tuple[dict, bytes]:
+    # The real Onshape bundle: format 1.2 grid plus the solid STEP an Onshape
+    # send uploads (build_bundle include_step).
     design = DesignConfig.model_validate({"formula": "OSSE", "L": 70, "a": 45})
-    resolved = resolve_geometry(design_to_mesher_config(design))
-    product = _run_in_gmsh_session(
-        write_wglink,
-        resolved.geometry,
-        tmp_path / "outbound.wglink",
-        identity=WgLinkIdentity(
-            bundle={"id": "wgb_01K00000000000000000000000", "created_at": "2026-08-13T10:00:00Z"},
-            generator={"app": "waveguide-generator", "app_version": "test", "mesher_version": "test", "datum_schema": 1},
-            design={
-                "id": "wgd_01K00000000000000000000000",
-                "lineage_id": "wgl_01K00000000000000000000000",
-                "edit_version": 1,
-                "design_hash": "sha256:" + "a" * 64,
-                "name": "demo",
-                "formula": "osse",
-                "config": design.model_dump(mode="json", by_alias=True),
-                "build_mode": resolved.mode,
-            },
-            export={
-                "id": "wge_01K00000000000000000000000",
-                "sequence": 1,
-                "parent_export_id": None,
-                "geometry_hash": "sha256:" + "b" * 64,
-                "domain": "full",
-                "open_throat": True,
-            },
-        ),
-        instance_slug="demo",
-        open_throat=True,
-        interface_sources=[
-            WgLinkSourceInterface(
-                id="source-hf",
-                role="HF",
-                required=True,
-                default_drive_channel_id="drive-hf",
-                patch_policy="single-connected",
-                expected_connected_components=1,
-                suggested_resolution_mm=4.0,
-            )
-        ],
+    target = tmp_path / "outbound.wglink"
+    _run_in_gmsh_session(
+        build_bundle,
+        design.model_dump(mode="json"),
+        str(target),
+        {
+            "bundleId": "wgb_01K00000000000000000000000",
+            "createdAt": "2026-08-13T10:00:00Z",
+            "designId": "wgd_01K00000000000000000000000",
+            "editVersion": 1,
+            "designHash": "sha256:" + "a" * 64,
+            "exportId": "wge_01K00000000000000000000000",
+            "sequence": 1,
+            "parentExportId": None,
+        },
+        "wgl_01K00000000000000000000000",
+        "demo",
+        "demo",
+        "test",
+        True,
     )
+    manifest = json.loads((target / "wglink.json").read_text(encoding="utf-8"))
+    product = SimpleNamespace(manifest=manifest, step_path=target / manifest["step"]["file"])
+
     def source_bearing_step(path: Path) -> bytes:
         import gmsh
 

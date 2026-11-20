@@ -31,7 +31,7 @@ from server.workspace.archive_identity import bind_design_lineage
 
 from .core import _refuse_ath_step
 from .wglink_geometry import build_bundle
-from .wglink_publication import (BUNDLE_LAYOUT, PublicationConflict, bundle_products,
+from .wglink_publication import (BUNDLE_LAYOUT, PublicationConflict, bundle_body_file, bundle_products,
     row_facts, publish_bundle, finish_publication, recover_reserved_export)
 
 logger = logging.getLogger(__name__)
@@ -271,10 +271,10 @@ def _wglink_response(
         manifest = json.loads((bundle_path / "wglink.json").read_text(encoding="utf-8"))
         manifest_bundle_id = str((manifest.get("bundle") or {}).get("id") or "")
         manifest_export_id = str((manifest.get("export") or {}).get("id") or "")
-        artifact_hash = str(
-            ((manifest.get("files") or {}).get("waveguide.step") or {}).get("sha256") or ""
-        )
-    except (OSError, AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        body_file = bundle_body_file(manifest)
+        artifact_hash = str((manifest["files"][body_file] or {}).get("sha256") or "")
+        warning = (manifest.get("cad_sampling") or {}).get("warning")
+    except (OSError, AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=409,
             detail="The files WG sent to CAD are gone. Send the design to CAD again.",
@@ -283,7 +283,7 @@ def _wglink_response(
         manifest_bundle_id != str(row["bundle_id"])
         or manifest_export_id != str(row["export_id"])
         or artifact_hash != str(row["artifact_sha256"])
-        or not (bundle_path / "waveguide.step").is_file()
+        or not (bundle_path / body_file).is_file()
     ):
         raise HTTPException(
             status_code=409,
@@ -305,6 +305,10 @@ def _wglink_response(
     }
     if bundle_path.name == f'{row["export_id"]}.wglink':
         payload["bundleLayout"] = BUNDLE_LAYOUT
+    if warning:
+        # The CAD sampling could not be fully verified (cad_geometry.py); the
+        # same note a File -> STEP of this design returns.
+        payload["warning"] = str(warning)
     if identity is not None:
         payload["identity"] = {
             "designId": identity.design_id,
@@ -329,8 +333,12 @@ def export_wglink_sync(
     cancel_cb: Callable[[], None] | None = None,
     progress_cb: Callable[[str], None] | None = None,
     commit_cb: Callable[[], None] | None = None,
+    include_step: bool = False,
 ) -> dict[str, Any]:
     """Build one identity-bearing bundle under ``workspace_root/wglink``.
+
+    ``include_step`` adds the solid STEP to the bundle; only Onshape, which
+    uploads it, asks. Fusion lofts the point grid and needs none.
 
     ``workspace_root`` is the user's selected workspace for the Fusion leg, and
     WG's own data directory for Onshape -- which has no local client, so
@@ -421,7 +429,7 @@ def export_wglink_sync(
                 asyncio.run(run_mesh_build(build_bundle,
                     request.design.model_dump(mode="json"), str(staged), dict(facts),
                     identity.lineage_id, design_name, instance_slug, _app_version(),
-                    lane=AUX_LANE, **({"cancel_cb": cancel_cb} if cancel_cb else {})))
+                    include_step, lane=AUX_LANE, **({"cancel_cb": cancel_cb} if cancel_cb else {})))
                 if progress_cb is not None:
                     progress_cb("mesh")
 

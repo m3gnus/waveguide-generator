@@ -17,7 +17,7 @@ import pytest
 
 from server.design.schema import DesignConfig
 from server.design.textcfg import parse, serialize
-from server.exports import core, sizing
+from server.exports import cad_geometry, core, sizing
 from server.preview.core import _cache_relevant_config
 from server.preview.geometry_identity import geometry_hash_for_design
 from server.preview.translate import design_to_mesher_config
@@ -70,13 +70,13 @@ def test_solid_step_planner_and_writer_keep_authored_mouth(monkeypatch):
         seen.append(_height(_grid(config)))
         return sizing.CadPlan(12, None)
 
-    def write(config, path):
-        seen.append(_height(_grid(config)))
+    def write(geometry, path):
+        seen.append(_height(np.asarray(geometry.inner_points)))
         path.write_text("STEP transport checked separately by the STEP contract tests")
         return path, None
 
-    monkeypatch.setattr(core, "plan_cad_resolution", plan)
-    monkeypatch.setattr("hornlab_mesher.cad.write_step_from_config", write)
+    monkeypatch.setattr(cad_geometry, "plan_cad_resolution", plan)
+    monkeypatch.setattr("hornlab_mesher.cad.write_step", write)
     monkeypatch.setattr(core, "_assert_step", lambda *_a, **_k: None)
     core._build_step_solid_sync(_design().model_dump(mode="json"))
     assert seen == pytest.approx([HEIGHT_MM, HEIGHT_MM])

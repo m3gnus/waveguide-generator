@@ -24,7 +24,7 @@ exported per declared channel unless the user has selected a specific one.
 | Fusion curves | Two semicolon-delimited CRLF CSVs, profiles and slices, headed in centimetres as `x_cm;y_cm;z_cm`; uses the bare uniform-ring inner surface without vertical offset. |
 | Parameter config | Canonical `.cfg` text from the design-format contract, preserving compatible raw expressions and optional CAD identity. |
 | Mesh artifact | The stored solver `.msh` bytes for that job; no export-time geometry rebuild. |
-| `.wglink` | Identity-bearing directory bundle with STEP and manifest, allocated idempotently in the selected workspace and registered server-side. |
+| `.wglink` | Identity-bearing directory bundle (format 1.2): `point-grid.json`, which Fusion lofts natively, and the `wglink.json` manifest, allocated idempotently in the selected workspace and registered server-side. Its grid is the same CAD geometry the solid STEP writes (below). It carries no STEP; bundles written before format 1.2 also hold `waveguide.step` and stay readable. |
 
 STEP solid is the normal CAD choice. STL and curve CSV remain explicit advanced formats,
 not alternate geometry authorities.
@@ -36,9 +36,8 @@ OpenCASCADE 7.8 declares the 1998 committee draft while writing an
 `APPLICATION_PROTOCOL_DEFINITION` in the same file that says `'international standard'`,
 so the default header contradicts its own data section. It is a declaration and not a
 conversion: for a geometry-only B-rep the two schemas produce the same entities.
-The solid STEP and the `.wglink` bundle are written by the pinned
-`hornlab-waveguide-mesher` and still carry the OpenCASCADE default; correcting them is
-that repository's change, not this one's.
+The solid STEP is written by the pinned `hornlab-waveguide-mesher` and still carries the
+OpenCASCADE default; correcting it is that repository's change, not this one's.
 
 ## Geometry exports size themselves
 
@@ -185,15 +184,17 @@ A grid that was measured and did meet its tolerance reports nothing. That is the
 point of the header: it means a compromise was made, so it must not fire on the ordinary
 case.
 
-**Scope: the CAD-link bundle is outside this.** *Send to CAD* does not go through the
-geometry-export planners at all — it hands the design's own resolved geometry to the
-mesher's bundle writer, so it has no fidelity plan, no reading, and nothing to warn
-about. Its manifest carries no sizing note, and that is a real gap rather than an
-oversight: a bundle is an identity-bearing CAD handoff sized by the design, not an export
-sized to a tolerance. `test_the_cad_bundle_is_built_without_the_export_sizing_planners`
-runs that path with the planners replaced by detonators, so if the bundle is ever routed
-through export sizing the gap closes loudly instead of silently shipping an unreported
-compromise.
+**The CAD-link bundle shares the solid STEP's plan.** *Send to CAD* and the solid STEP
+take their geometry from one resolver, `server/exports/cad_geometry.py`
+`resolve_cad_geometry`: the solver's config reopened to the full model, with the
+placement, export corner arcs and the 0.02 mm CAD plan. The point grid Fusion lofts is
+therefore the grid the STEP is written from, whatever the solve was set to. The plan is
+recorded in the bundle manifest's `cad_sampling` (resolution, measured deviation,
+tolerance, warning), and a plan that could not be verified returns its note as the
+send's `warning`. The bundle's `export.geometry_hash` is still the design's identity
+(`geometry_hash_for_design`), which CAD-return freshness recomputes, so it does not
+depend on the CAD sampling. `test_send_to_cad_lofts_the_grid_the_solid_step_writes`
+proves the shared grid.
 
 **The STL's triangle ceiling is a backstop, not a gate.** A design whose tolerance would
 need more than 150,000 triangles is exported anyway, coarsened to the ceiling, with the

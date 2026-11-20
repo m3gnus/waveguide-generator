@@ -285,23 +285,22 @@ def test_solid_step_carries_the_cad_placement_on_a_reduced_declared_domain(
 ) -> None:
     """The solid STEP is a CAD boundary, so it keeps mesh.vertical_offset.
 
-    The solve mesh is always recentred; ``write_step_from_config`` reopens a
-    reduced domain but never restores the placement, so the config the server
-    hands it has to carry it. An ATH-imported design declaring
-    ``Mesh.Quadrants = 1`` used to export an unplaced solid while the same
-    design's wglink bundle shipped placed.
+    The solve mesh is always recentred; the CAD geometry (``cad_geometry``)
+    reopens a reduced domain and keeps the placement. An ATH-imported design
+    declaring ``Mesh.Quadrants = 1`` used to export an unplaced solid while the
+    same design's wglink bundle shipped placed.
     """
 
     import hornlab_mesher.cad as mesher_cad
 
-    captured: list[dict] = []
+    captured: list = []
 
-    def fake_write(config, path):
-        captured.append(config)
+    def fake_write(geometry, path):
+        captured.append(geometry)
         Path(path).write_text(_STEP_SOLID_STUB, encoding="utf-8")
         return path, _step_result().cad_info
 
-    monkeypatch.setattr(mesher_cad, "write_step_from_config", fake_write)
+    monkeypatch.setattr(mesher_cad, "write_step", fake_write)
     design = DesignConfig.model_validate(
         {
             "formula": "OSSE",
@@ -315,10 +314,11 @@ def test_solid_step_carries_the_cad_placement_on_a_reduced_declared_domain(
 
     assert result.step_text.startswith("ISO-10303-21;")
     assert len(captured) == 1
-    assert captured[0]["mesh"]["quadrants"] == 1
+    # A part is never a quarter of itself, whatever domain the solve declares.
+    assert captured[0].closed
     # The design value through the global Scale, exactly as the CAD-link bundle
     # and the Onshape datums place it.
-    assert captured[0]["mesh"]["verticalOffset"] == 60.0
+    assert captured[0].vertical_offset_mm == 60.0
 
 
 def _header_positions(step_text: str) -> list[int]:

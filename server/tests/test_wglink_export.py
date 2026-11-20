@@ -59,23 +59,53 @@ def _request(
     })
 
 
+#: The body a fake bundle carries: format 1.2 is the point grid, no STEP.
+_GRID = b'{"fake": "point grid"}\n'
+_GRID_SHA = "sha256:" + hashlib.sha256(_GRID).hexdigest()
+
+
+def _stub_cad_geometry(monkeypatch) -> None:
+    """Skip the CAD planner where the bundle writer is faked anyway."""
+
+    from server.exports import wglink_geometry
+    from server.exports.cad_geometry import CadGeometry
+    from server.exports.sizing import CadPlan
+
+    monkeypatch.setattr(
+        wglink_geometry,
+        "resolve_cad_geometry",
+        lambda _design: CadGeometry(resolved=SimpleNamespace(geometry=None), plan=CadPlan(12.0, None)),
+    )
+
+    def fake_step(_cad, path):
+        Path(path).write_bytes(b"ISO-10303-21;\nEND-ISO-10303-21;\n")
+        return SimpleNamespace(body="solid", n_faces=6, volume_mm3=1.5,
+                               bounding_box_mm=((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+                               throat_opened=True)
+
+    # Only an Onshape bundle (include_step) writes a STEP.
+    monkeypatch.setattr(wglink_geometry, "write_cad_step", fake_step)
+    monkeypatch.setattr(wglink_geometry, "_assert_step", lambda _text: None)
+
+
 def _install_fake_write(monkeypatch) -> list[object]:
     """Stub the mesher so these identity contracts cost no geometry work."""
 
     writes: list[object] = []
+    _stub_cad_geometry(monkeypatch)
 
     def fake_write(geometry, output_path, *, identity, **kwargs):
         writes.append({"geometry": geometry, "kwargs": kwargs})
         target = Path(output_path)
         target.mkdir()
-        step_hash = "sha256:" + hashlib.sha256(b"STEP").hexdigest()
         manifest = {
-            "wglink_version": "1.0",
+            "wglink_version": "1.2",
             "bundle": dict(identity.bundle or {}),
             "generator": dict(identity.generator or {}),
             "design": dict(identity.design or {}),
             "export": dict(identity.export or {}),
-            "files": {"waveguide.step": {"sha256": step_hash, "size_bytes": 4}},
+            "body": {"file": "point-grid.json", "kind": "point-grid-loft"},
+            "files": {"point-grid.json": {"sha256": _GRID_SHA, "size_bytes": len(_GRID)}},
             # The one parameter the namespace is read back from, named the way
             # the mesher names it, so recovery from a stored manifest is real.
             "parameters": [
@@ -87,7 +117,7 @@ def _install_fake_write(monkeypatch) -> list[object]:
                 }
             ],
         }
-        (target / "waveguide.step").write_bytes(b"STEP")
+        (target / "point-grid.json").write_bytes(_GRID)
         manifest_path = target / "wglink.json"
         manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
         return SimpleNamespace(path=target, manifest_path=manifest_path, manifest=manifest)
@@ -126,54 +156,128 @@ def test_wglink_refuses_flush_but_keeps_previously_valid_zero_margin(
         assert len(writes) == 1
 
 
-def test_the_cad_bundle_is_built_without_the_export_sizing_planners(
+def test_send_to_cad_lofts_the_grid_the_solid_step_writes(
     monkeypatch, tmp_path: Path,
 ) -> None:
-    """Why no export-sizing warning rides on Send to CAD, proved by running it.
+    """One CAD realisation: the grid Fusion lofts is the grid File -> STEP writes.
 
-    The geometry exports size themselves against a fidelity tolerance and can
-    report that they missed it. This bundle does not: it hands the design's own
-    resolved geometry to the mesher's ``write_wglink``, so there is no plan and
-    no reading to pass on. That is a real scope gap and it is documented in the
-    export contract -- but it is only true while the call graph stays this
-    shape, so the planners are replaced with detonators rather than grepped for.
-    If a later change routes this bundle through the sizing path, this fails and
-    says the warning has to be plumbed with it.
+    Real path end to end (planner, resolver, mesher bundle writer), with only
+    the STEP writer observed: the bundle holds no STEP (format 1.2), its
+    identity hash is its point grid, and its grid is the solid STEP's grid.
     """
 
-    from server.exports import core, sizing
+    import hornlab_mesher.cad as mesher_cad
+    import numpy as np
 
-    def detonate(*_args, **_kwargs):  # pragma: no cover - only runs on failure
-        raise AssertionError(
-            "the CAD bundle reached the export sizing planners; its compromises "
-            "are no longer outside the warning path and must be plumbed"
-        )
+    from server.exports import core
+    from server.exports.cad_geometry import resolve_cad_geometry
+    from server.preview.geometry_identity import geometry_hash_for_design
 
-    for module, name in (
-        (core, "_surface_grid_plan"),
-        (core, "_stl_grid_plan"),
-        (core, "_build_step_solid_sync"),
-        (sizing, "plan_cad_resolution"),
-        (sizing, "plan_grid"),
-    ):
-        monkeypatch.setattr(module, name, detonate)
+    design = DesignConfig.model_validate(
+        {"formula": "OSSE", "L": 120, "a": 45, "mesh": {"vertical_offset": 7.5}}
+    )
+    step_grids: list[np.ndarray] = []
+    real_write_step = mesher_cad.write_step
 
-    design = _design()
+    def observed_write_step(geometry, *args, **kwargs):
+        step_grids.append(np.asarray(geometry.inner_points, dtype=float).copy())
+        return real_write_step(geometry, *args, **kwargs)
+
+    monkeypatch.setattr(mesher_cad, "write_step", observed_write_step)
+    core._build_step_solid_sync(design.model_dump(mode="json"))
+    assert len(step_grids) == 1
+
     store = CadLinkStore(tmp_path / "cadlink.db")
     saved = _saved(store, design)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    row = service.export_wglink_sync(_request(saved, design), store, workspace, "unified")
+    bundle = Path(row["bundlePath"])
+
+    assert len(step_grids) == 1  # Send to CAD wrote no STEP
+    assert sorted(path.name for path in bundle.iterdir()) == ["point-grid.json", "wglink.json"]
+    manifest = read_wglink(bundle)
+    assert manifest["wglink_version"] == "1.2"
+    assert manifest["body"]["file"] == "point-grid.json"
+    grid_bytes = (bundle / "point-grid.json").read_bytes()
+    assert row["artifactSha256"] == "sha256:" + hashlib.sha256(grid_bytes).hexdigest()
+    # The design's identity, not the CAD sampling: CAD-return freshness
+    # recomputes exactly this.
+    assert row["geometryHash"] == geometry_hash_for_design(design)
+
+    # The grid ships placed (link-local frame); the STEP writer places the
+    # same points itself.
+    placement = np.asarray([0.0, 7.5, 0.0])
+    lofted = np.asarray(json.loads(grid_bytes)["inner_points"])
+    np.testing.assert_array_equal(lofted, step_grids[0] + placement)
+    cad = resolve_cad_geometry(design)
+    np.testing.assert_array_equal(
+        lofted, np.asarray(cad.resolved.geometry.inner_points) + placement
+    )
+    assert manifest["cad_sampling"] == cad.sampling_record()
+    assert manifest["cad_sampling"]["warning"] is None
+    assert "warning" not in row
+
+
+def test_an_unverified_cad_sampling_warning_reaches_the_send(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """The planner's compromise rides with Send to CAD, as with File -> STEP."""
+
+    from server.exports import wglink_geometry
+    from server.exports.cad_geometry import CadGeometry
+    from server.exports.sizing import CadPlan
+
     _install_fake_write(monkeypatch)
+    note = "The STEP surface was sampled at 12 mm, but its accuracy could not be fully verified."
+    monkeypatch.setattr(
+        wglink_geometry,
+        "resolve_cad_geometry",
+        lambda _design: CadGeometry(
+            resolved=SimpleNamespace(geometry=None), plan=CadPlan(12.0, None, note)
+        ),
+    )
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, _design())
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
 
-    row = service.export_wglink_sync(_request(saved), store, workspace, "no-planner")
+    row = service.export_wglink_sync(_request(saved), store, workspace, "noted")
+    retry = service.export_wglink_sync(_request(saved), store, workspace, "noted")
 
-    assert row["artifactSha256"] == "sha256:" + hashlib.sha256(b"STEP").hexdigest()
+    assert row["warning"] == retry["warning"] == note
     manifest = json.loads((Path(row["bundlePath"]) / "wglink.json").read_text())
-    assert manifest["files"]["waveguide.step"]["sha256"]
-    # Nothing in the bundle response or its manifest carries a sizing warning,
-    # because nothing in the path can produce one.
-    assert not any("warning" in key.lower() for key in row)
-    assert not any("warning" in key.lower() for key in manifest)
+    assert manifest["cad_sampling"]["resolution_mm"] == 12.0
+    assert manifest["cad_sampling"]["warning"] == note
+
+
+def test_a_registered_format_1_1_bundle_keeps_its_step_identity(tmp_path: Path) -> None:
+    """Rows written before format 1.2 hash waveguide.step; they still verify."""
+
+    from server.exports import wglink_publication as publication
+
+    bundle = tmp_path / "old.wglink"
+    bundle.mkdir()
+    step = b"ISO-10303-21;\nEND-ISO-10303-21;\n"
+    (bundle / "waveguide.step").write_bytes(step)
+    (bundle / "point-grid.json").write_bytes(_GRID)
+    step_sha = "sha256:" + hashlib.sha256(step).hexdigest()
+    (bundle / "wglink.json").write_text(json.dumps({
+        "wglink_version": "1.1",
+        "bundle": {"id": "b"}, "export": {"id": "e", "sequence": 1, "geometry_hash": "g"},
+        "design": {"id": "d"},
+        "body": {"file": "waveguide.step", "kind": "solid"},
+        "files": {
+            "waveguide.step": {"sha256": step_sha, "size_bytes": len(step)},
+            "point-grid.json": {"sha256": _GRID_SHA, "size_bytes": len(_GRID)},
+        },
+    }))
+    products = publication.bundle_products(
+        bundle,
+        {"bundleId": "b", "exportId": "e", "designId": "d", "sequence": 1,
+         "artifact_sha256": step_sha},
+    )
+    assert products["artifact_sha256"] == step_sha
 
 
 def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
@@ -222,11 +326,11 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
     assert first["bundlePath"] == str(workspace / "wglink" / f'{first["exportId"]}.wglink')
     assert first["designHash"] == design_hash(design)
     assert first["geometryHash"].startswith("sha256:")
-    assert first["artifactSha256"] == "sha256:" + hashlib.sha256(b"STEP").hexdigest()
+    assert first["artifactSha256"] == _GRID_SHA
     manifest = json.loads((Path(first["bundlePath"]) / "wglink.json").read_text())
     assert read_wglink(first["bundlePath"], verify_checksums=False) == manifest
     assert manifest["bundle"]["id"] == first["bundleId"]
-    assert manifest["wglink_version"] == "1.0"
+    assert manifest["wglink_version"] == "1.2"
     assert manifest["conventions"] == {
         "frame": {
             "axes": {
@@ -639,14 +743,14 @@ def test_concurrent_designs_cannot_claim_the_same_bundle_name(
     def fake_write(_geometry, output_path, *, identity, **_kwargs):
         target = Path(output_path)
         target.mkdir()
-        step_hash = "sha256:" + hashlib.sha256(b"STEP").hexdigest()
         manifest = {
             "bundle": dict(identity.bundle or {}),
             "design": dict(identity.design or {}),
             "export": dict(identity.export or {}),
-            "files": {"waveguide.step": {"sha256": step_hash}},
+            "body": {"file": "point-grid.json"},
+            "files": {"point-grid.json": {"sha256": _GRID_SHA}},
         }
-        (target / "waveguide.step").write_text("STEP")
+        (target / "point-grid.json").write_bytes(_GRID)
         manifest_path = target / "wglink.json"
         manifest_path.write_text(json.dumps(manifest))
         return SimpleNamespace(
@@ -654,6 +758,7 @@ def test_concurrent_designs_cannot_claim_the_same_bundle_name(
         )
 
     monkeypatch.setattr("hornlab_mesher.write_wglink", fake_write)
+    _stub_cad_geometry(monkeypatch)
 
     def export(args):
         saved, key = args

@@ -220,9 +220,9 @@ def test_original_missing_or_corrupt_is_409_without_rebuild(monkeypatch, tmp_pat
     a = service.export_wglink_sync(_request(saved), store, workspace, "A")
     path = Path(a["bundlePath"])
     if damage == "missing":
-        (path / "waveguide.step").unlink()
+        (path / "point-grid.json").unlink()
     elif damage == "content":
-        (path / "waveguide.step").write_text("changed")
+        (path / "point-grid.json").write_text("changed")
     else:
         manifest = json.loads((path / "wglink.json").read_text())
         manifest["export"]["id"] = "other"

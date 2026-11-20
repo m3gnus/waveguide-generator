@@ -925,6 +925,13 @@ def test_send_uses_immutable_publisher_and_pushes_exact_retry_path(tmp_path, mon
     b = asyncio.run(onshape_api.send(newer, request, "B"))
     retry = asyncio.run(onshape_api.send(payload, request, "A"))
     assert pushed == [a["bundlePath"], b["bundlePath"], a["bundlePath"]]
+    # An Onshape bundle carries the solid STEP it uploads; a Fusion one none.
+    manifest = json.loads((Path(a["bundlePath"]) / "wglink.json").read_text())
+    assert manifest["step"]["file"] == "waveguide.step"
+    assert manifest["step"]["volume_mm3"] == 1.5
+    assert (Path(a["bundlePath"]) / "waveguide.step").is_file()
+    assert "waveguide.step" in manifest["files"]
+    assert a["artifactSha256"] == manifest["files"]["point-grid.json"]["sha256"]
     assert retry["exportId"] == a["exportId"]
     assert "identity" not in retry
     assert a["bundlePath"] != b["bundlePath"]

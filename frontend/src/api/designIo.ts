@@ -250,7 +250,7 @@ export async function sendDesignToCad(
     const result = await response.json() as WgLinkExportResponse;
     if (result.cadHandoffRequestId) bindAttention(result.cadHandoffRequestId);
     if (result.cadHandoff === 'failed') {
-      throw new Error(`WG saved the model in ${result.bundlePath}, but could not notify Fusion. Open waveguide.step from that folder in Fusion.`);
+      throw new Error(`WG saved the model in ${result.bundlePath}, but could not notify Fusion. In Fusion, choose WGLink → Advanced → Insert and select that folder.`);
     }
     return result;
   });

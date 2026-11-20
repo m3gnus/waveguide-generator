@@ -512,6 +512,9 @@ async def send(
         bundle_root,
         idempotency_key,
         "WG's own data folder is unavailable, so the CAD-link bundle could not be written.",
+        # Onshape uploads the solid STEP (import mode), and its return leg
+        # identifies the linked body by that STEP's evidence in either mode.
+        include_step=True,
     )
 
     client = _client(request)

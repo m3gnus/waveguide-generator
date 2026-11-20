@@ -186,17 +186,30 @@ def test_the_unverified_sampling_warning_reaches_the_export_result(
 
     from server.exports import core
 
-    _measure_with(monkeypatch, _reading(0.2, 0.005))
-    written: list[float] = []
+    import hornlab_mesher.config_builder as config_builder
 
-    def write(config, path):
-        written.append(config["mesh"]["mouthResolution"])
+    _measure_with(monkeypatch, _reading(0.2, 0.005))
+    resolved_at: list[float] = []
+    real_resolve = config_builder.resolve_geometry
+
+    def resolve(config, *args, **kwargs):
+        resolved_at.append(config["mesh"]["mouthResolution"])
+        return real_resolve(config, *args, **kwargs)
+
+    written: list[object] = []
+
+    def write(geometry, path):
+        written.append(geometry)
         path.write_text("STEP transport checked separately by the STEP contract tests")
         return path, None
 
-    monkeypatch.setattr("hornlab_mesher.cad.write_step_from_config", write)
+    monkeypatch.setattr(config_builder, "resolve_geometry", resolve)
+    monkeypatch.setattr("hornlab_mesher.cad.write_step", write)
     monkeypatch.setattr(core, "_assert_step", lambda *_a, **_k: None)
     result = core._build_step_solid_sync(_seed().model_dump(mode="json"))
-    assert written == [_FALLBACK_CAD_RESOLUTION_MM]
+    # The capped plan was never probed, so the written geometry is resolved
+    # once more, at the fallback sampling.
+    assert len(written) == 1
+    assert resolved_at[-1] == _FALLBACK_CAD_RESOLUTION_MM
     assert result.warning is not None
     assert "Check fine surface detail" in result.warning

@@ -1202,27 +1202,17 @@ def test_the_solid_step_reports_a_sampling_it_could_not_verify() -> None:
     though something had.
     """
 
-    from server.exports.core import EXPORT_CORNER_SEGMENTS, _solver_mesher_config
+    from server.exports.cad_geometry import cad_mesher_config
 
-    config = _solver_mesher_config(_rounded(), keep_placement=True)
-    config["mesh"] = {
-        **(config.get("mesh") or {}),
-        "cornerSegments": EXPORT_CORNER_SEGMENTS,
-    }
-    plan = plan_cad_resolution(config, tolerance_mm=0.02)
+    plan = plan_cad_resolution(cad_mesher_config(_rounded()), tolerance_mm=0.02)
     assert plan.deviation_mm is None
     assert plan.warning is not None and "unverified" in plan.warning
 
 
 def test_a_solid_step_sampling_that_was_measured_stays_quiet() -> None:
-    from server.exports.core import EXPORT_CORNER_SEGMENTS, _solver_mesher_config
+    from server.exports.cad_geometry import cad_mesher_config
 
-    config = _solver_mesher_config(_seed(), keep_placement=True)
-    config["mesh"] = {
-        **(config.get("mesh") or {}),
-        "cornerSegments": EXPORT_CORNER_SEGMENTS,
-    }
-    plan = plan_cad_resolution(config, tolerance_mm=0.02)
+    plan = plan_cad_resolution(cad_mesher_config(_seed()), tolerance_mm=0.02)
     assert plan.deviation_mm is not None
     assert plan.warning is None
 

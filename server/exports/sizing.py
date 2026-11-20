@@ -36,7 +36,7 @@ conservative side.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import math
 from typing import Any, Callable, Mapping
 
@@ -194,6 +194,11 @@ class CadPlan:
     resolution_mm: float
     deviation_mm: float | None
     warning: str | None = None
+    #: The mesher's ``ResolvedGeometry`` for the probe this plan came from, so
+    #: the writer reuses it instead of resolving the same config again. None
+    #: when the plan's sampling was never probed (the fixed fallback, or a cap
+    #: below the probe). Not part of the plan's value.
+    resolved: Any = field(default=None, compare=False, repr=False)
 
 
 #: What ``plan_grid`` asks for a candidate grid: the deviation, and the counts
@@ -1011,8 +1016,13 @@ def _unaccepted_cad_plan(tolerance_mm: float, nested: CadPlan | None) -> CadPlan
         )
     resolution = min(nested.resolution_mm, _FALLBACK_CAD_RESOLUTION_MM)
     # A capped plan was not itself measured; only the coarser probe was.
-    deviation = nested.deviation_mm if resolution == nested.resolution_mm else None
-    return CadPlan(resolution, deviation, _unconfirmed_warning(resolution, tolerance_mm))
+    probed = resolution == nested.resolution_mm
+    return CadPlan(
+        resolution,
+        nested.deviation_mm if probed else None,
+        _unconfirmed_warning(resolution, tolerance_mm),
+        resolved=nested.resolved if probed else None,
+    )
 
 
 def _search_end(stalled: bool) -> str:
@@ -1131,12 +1141,17 @@ def _ceiling_trimmed(
 def plan_cad_resolution(
     config: Mapping[str, Any], *, tolerance_mm: float = STEP_SURFACE_TOLERANCE_MM
 ) -> CadPlan:
-    """Choose the mm sampling target the solid STEP's grid refinement uses.
+    """Choose the mm sampling target the CAD geometry's grid refinement uses.
 
-    ``write_step_from_config`` owns its own curvature-driven refinement and is
-    reachable only through the millimetre resolutions, so this searches those
-    rather than segment counts. Nothing here reads the design's solver
-    resolutions: that coupling is the defect.
+    The mesher owns its own curvature-driven refinement and is reachable only
+    through the millimetre resolutions, so this searches those rather than
+    segment counts. Nothing here reads the design's solver resolutions: that
+    coupling is the defect.
+
+    Each probe resolves ``config`` at a candidate sampling, and the plan keeps
+    the resolved geometry of the probe it came from (``CadPlan.resolved``). Pass
+    the exact config the CAD writer will build (``cad_geometry``: full model,
+    export corner arcs) so that geometry is the one written.
     """
 
     from hornlab_mesher.config_builder import build_geometry_params, resolve_geometry
@@ -1170,7 +1185,7 @@ def plan_cad_resolution(
         chord = max(deviation.angular_linear, deviation.axial_linear)
         if value <= tolerance_mm and deviation.cubic_estimate_is_valid:
             if best is None or resolution > best.resolution_mm:
-                best = CadPlan(resolution, value)
+                best = CadPlan(resolution, value, resolved=resolved)
             # Once a probe is accepted, a later unmeasurable one keeps the fixed
             # fallback it always took, never an unconfirmed reading.
             nested = None
@@ -1190,7 +1205,7 @@ def plan_cad_resolution(
             # not shrink with refinement. An aliasing expression surface looks
             # the same, which is why the plan this feeds is capped. Kept only
             # for when nothing passes.
-            nested = CadPlan(resolution, deviation.nested_cubic)
+            nested = CadPlan(resolution, deviation.nested_cubic, resolved=resolved)
         if value <= 0.0 and chord <= 0.0:
             break
         # Move on whichever binds. The two terms answer to this knob very
