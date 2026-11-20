@@ -81,3 +81,17 @@ def test_a_host_with_no_backend_still_gets_a_reference(
     monkeypatch.setattr(acoustics, "_CONSTANT_PACKAGES", ("absent_backend",))
     assert acoustics.reference_air_density_kg_per_m3() == acoustics._FALLBACK_AIR_DENSITY_KG_PER_M3
     assert acoustics.reference_sound_speed_m_per_s() == acoustics._FALLBACK_SOUND_SPEED_M_PER_S
+
+
+def test_every_beat_request_writes_the_one_beat_sound_speed() -> None:
+    """BEAT publishes no constant; WG's request builders carry the value it runs."""
+
+    import inspect
+
+    from server.solver.beat_adapter.request import build_request
+    from server.solver.beat_adapter.transducers import build_transducer_request
+
+    assert acoustics.BEAT_SOUND_SPEED_M_PER_S == 343.0
+    for builder in (build_request, build_transducer_request):
+        default = inspect.signature(builder).parameters["sound_speed_m_per_s"].default
+        assert default == acoustics.BEAT_SOUND_SPEED_M_PER_S

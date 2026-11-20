@@ -17,6 +17,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from .acoustics import BEAT_SOUND_SPEED_M_PER_S
 from server.contracts.conventions import (
     ENGINEERING_PHASE_CONVENTION,
     PHASE_TIME_CONVENTION,
@@ -228,7 +229,7 @@ def _combined_channel_response(
         config_motion=config_motion,
         config=config,
         start_time=started,
-        sound_speed_m_per_s=(343.0),
+        sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
         backend_metadata=beat_metadata,
     )
 
@@ -421,7 +422,7 @@ def solve_imported_beat_from_msh_text(
                 config=_holder["config"],
                 context=_context,
                 backend="beat",
-                sound_speed_m_per_s=(343.0),
+                sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
             )
             if len(_channel.source_ids) > 1:
                 channel_response.pop("impedance", None)
@@ -509,7 +510,7 @@ def solve_imported_beat_from_msh_text(
                             **channel_identity[channel.id],
                             "observation_frame_basis": dict(frame_basis),
                         },
-                        sound_speed_m_per_s=(343.0),
+                        sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
                     )
                     if len(channel.source_ids) > 1:
                         snapshot.pop("impedance", None)
@@ -562,7 +563,7 @@ def solve_imported_beat_from_msh_text(
                     )
                 result = solve_native_adaptively(
                     context, solve_batch, distance_m=config.observation.distance_m,
-                    sound_speed=(343.0),
+                    sound_speed=BEAT_SOUND_SPEED_M_PER_S,
                     publish=publish, cancel=cancellation_callback,
                 )
             else:
@@ -688,7 +689,7 @@ def solve_imported_beat_from_msh_text(
             context=channel_context,
             start_time=started,
             metadata=channel_metadata,
-            sound_speed_m_per_s=(343.0),
+            sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
         )
         if geometry.uses_rms_velocity:
             channel_response["metadata"]["impedance_drive"] = "rms_velocity"
@@ -836,7 +837,7 @@ def solve_imported_beat_from_msh_text(
             list(artifact_results.items()),
             first_config,
             backend=BEAT_FIELD_TRACE_BACKEND,
-            sound_speed_m_per_s=(343.0),
+            sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
         )
         if retain_traces
         else None

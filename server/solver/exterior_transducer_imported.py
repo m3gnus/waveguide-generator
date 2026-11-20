@@ -16,6 +16,7 @@ import time
 
 import numpy as np
 
+from .acoustics import BEAT_SOUND_SPEED_M_PER_S
 from server.contracts.conventions import (
     SOLVER_TIME_CONVENTION,
     PHASE_TIME_CONVENTION,
@@ -282,7 +283,7 @@ def package_sweep(
                 "phase_time_convention": PHASE_TIME_CONVENTION,
                 **identity[channel.id],
             },
-            sound_speed_m_per_s=343.0,
+            sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
         )
         excitation = [compiled.wire["excitation_port_ids"][i] for i in ports]
         if channel.exterior_transducer is None:
@@ -419,7 +420,7 @@ def package_sweep(
                 electrical = diagnostics["networks"][group.id]["input_impedance_ohm"]
                 response = build_solver_response(
                     result=network_bases.results[representative], config=config, context=context,
-                    start_time=started, sound_speed_m_per_s=343.0,
+                    start_time=started, sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
                     metadata={"solver_backend": solver_engine["engine"], "solver_engine": dict(solver_engine),
                               "drive_channel_id": group.id, "label": group.label,
                               "derived_from_channels": group.driver_ids(),
@@ -440,7 +441,7 @@ def package_sweep(
                 member_roles={channel_id: item.get("role") for channel_id, item in identity.items()},
                 max_drive_voltage_v=None, frequencies_hz=frequencies, request=request,
                 quadrants=symmetry.quadrants, config_motion="normal", config=config, start_time=started,
-                sound_speed_m_per_s=343.0,
+                sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
                 backend_metadata=lambda _combined: {
                     "solver_backend": solver_engine["engine"], "solver_engine": dict(solver_engine),
                     "engine": solver_engine["package"],

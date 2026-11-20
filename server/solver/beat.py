@@ -20,6 +20,7 @@ import logging
 import time
 from typing import Any, Mapping, Sequence
 
+from .acoustics import BEAT_SOUND_SPEED_M_PER_S
 from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
@@ -315,7 +316,7 @@ def solve_beat_from_msh_text(
                     config=config,
                     context=context,
                     backend="beat",
-                    sound_speed_m_per_s=(343.0),
+                    sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
                 ),
             )
         return True
@@ -349,14 +350,14 @@ def solve_beat_from_msh_text(
                     metadata={"provisional": {
                         "completed_frequency_count": native.adaptive_sampling["solved_count"],
                         "expected_frequency_count": context.num_frequencies}},
-                    sound_speed_m_per_s=343.0,
+                    sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
                 )
                 result_callback(revision[0], snapshot)
                 revision[0] += 1
 
         result = solve_native_adaptively(
             context, solve_batch, distance_m=config.observation.distance_m,
-            sound_speed=343.0, publish=publish, cancel=cancellation_callback,
+            sound_speed=BEAT_SOUND_SPEED_M_PER_S, publish=publish, cancel=cancellation_callback,
         )
     else:
         result = solve_batch(live_execution_frequencies(context))
@@ -424,7 +425,7 @@ def solve_beat_from_msh_text(
         context=context,
         start_time=started,
         metadata=metadata,
-        sound_speed_m_per_s=(343.0),
+        sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
     )
     field_traces = (
         build_field_trace_artifact(
@@ -432,7 +433,7 @@ def solve_beat_from_msh_text(
             [("default", result)],
             config,
             backend=BEAT_FIELD_TRACE_BACKEND,
-            sound_speed_m_per_s=(343.0),
+            sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
         )
         if retain_traces
         else None

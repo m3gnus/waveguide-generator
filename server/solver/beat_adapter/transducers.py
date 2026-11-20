@@ -15,6 +15,7 @@ from urllib.parse import quote
 
 import numpy as np
 
+from server.solver.acoustics import BEAT_SOUND_SPEED_M_PER_S
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
 from .mesh import SurfaceMesh
 from .observations import ObservationLayout
@@ -298,7 +299,7 @@ def build_transducer_request(
     frame: Mapping[str, Any], frequencies_hz: Sequence[float],
     ideal_sources: Sequence[SourceBasis] = (), excitation_port_ids: Sequence[str] | None = None,
     reference_voltage_rms_v: float = 2.83, mesh_scale_to_m: float = 1.,
-    sound_speed_m_per_s: float = 343., density_kg_per_m3: float = 1.2041,
+    sound_speed_m_per_s: float = BEAT_SOUND_SPEED_M_PER_S, density_kg_per_m3: float = 1.2041,
     backend: str = "cpu", precision: str = "float64",
     symmetry: str = "full",
 ) -> TransducerRequest:
