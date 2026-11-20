@@ -910,7 +910,8 @@ export class JobsSocketManager {
     await Promise.all([...new Set(jobIds)].map(async (jobId) => {
       const inFlight = this.jobRefreshes.get(jobId);
       if (inFlight) await inFlight;
-      await this.refreshJob(jobId);
+      // As the full refetch: a gap recovery's error stands until it recovers.
+      await this.refreshJob(jobId, true);
     }));
   }
 
@@ -1395,12 +1396,12 @@ export class JobsSocketManager {
     }
   }
 
-  private refreshJob(jobId: string): Promise<void> {
+  private refreshJob(jobId: string, keepGapError = false): Promise<void> {
     const existing = this.jobRefreshes.get(jobId);
     if (existing) return existing;
 
     const generation = this.nextJobGeneration(jobId);
-    const stable = this.refreshJobUntilStable(jobId, generation);
+    const stable = this.refreshJobUntilStable(jobId, generation, keepGapError);
     const refresh = stable.then(() => undefined);
     this.jobRefreshes.set(jobId, refresh);
     const clearRefresh = () => {
@@ -1458,7 +1459,7 @@ export class JobsSocketManager {
    * events stream faster than a status read returns -- has no row for those
    * events to patch, so the last read is applied anyway and read again after.
    */
-  private async refreshJobUntilStable(jobId: string, generation: number): Promise<boolean> {
+  private async refreshJobUntilStable(jobId: string, generation: number, keepGapError = false): Promise<boolean> {
     for (let attempt = 0; attempt < MAX_JOB_REFRESH_ATTEMPTS; attempt += 1) {
       const mutationBaseline = this.jobMutationVersions.get(jobId) ?? 0;
       const superseded = () => (this.jobMutationVersions.get(jobId) ?? 0) > mutationBaseline;
@@ -1483,7 +1484,8 @@ export class JobsSocketManager {
         const followUp = superseded();
         this.markJobMutation(jobId);
         const jobs = this.snapshot.jobs.filter((item) => item.id !== job.id);
-        this.update({ jobs: this.sortJobs([...jobs, job]), error: null });
+        const error = keepGapError && this.gapTargetCursor !== null ? this.snapshot.error : null;
+        this.update({ jobs: this.sortJobs([...jobs, job]), error });
         return followUp;
       } catch (error) {
         if (this.jobGenerations.get(jobId) !== generation) return false;

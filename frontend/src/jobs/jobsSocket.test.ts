@@ -1465,6 +1465,22 @@ describe('refreshing the jobs one action changed', () => {
     full.stop(); targeted.stop();
   });
 
+  it('leaves a pending gap recovery’s error in place, as a full refetch does', async () => {
+    const socket = new MockSocket();
+    const fetcher = vi.fn(async () => json(job({ id: 'started', run_number: 2, status: 'queued' })));
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 9, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 9, cursor: 3, jobs: [job()] });
+    socket.message({ v: 1, kind: 'event', epoch: 9, cursor: 8, jobId: 'job-1', type: 'completed', payload: {} });
+    const gap = manager.getSnapshot().error;
+    expect(gap).toContain('gap');
+    await manager.refreshJobs(['started']);
+    expect(manager.getSnapshot().jobs.map(({ id }) => id)).toContain('started');
+    expect(manager.getSnapshot().error).toBe(gap);
+    manager.stop();
+  });
+
   it('reads again after a read that was already in flight', async () => {
     const socket = new MockSocket();
     const reads: Array<(response: Response) => void> = [];
