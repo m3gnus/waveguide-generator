@@ -143,9 +143,11 @@ or geometry stamps. The strong-expansion OCC triangulation failure and existing
 R-OSSE axial-table residuals at LengthSegments 12/30 remain separate limitations.
 
 The Metal pin `80a2d5e` supplies a BEAT-compatible worker using the existing
-request compiler and event/result decoder. WG routes its qualified single-source,
-normal-motion exterior Metal solves through that interface, with the existing
-explicit `complex_k` formulation and 0.005 shift. Other Metal features retain
+request compiler and event/result decoder. WG routes qualified single-source,
+normal-motion imported exterior Metal solves through that interface, with the
+existing explicit `complex_k` formulation and 0.005 shift. Parametric design
+solves always use the native interface: the worker measured 3-10% slower on
+them with the same results to within 0.0003 dB. Other Metal features retain
 the native interface. The selected engine remains Metal, and BEAT Metal stays
 a separate choice. Existing power, surface traces, drive ports and observation
 conventions are retained. Results record observed source/version/commit and

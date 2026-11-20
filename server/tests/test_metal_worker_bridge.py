@@ -162,85 +162,20 @@ def test_invalid_admission_never_builds_a_worker_request(monkeypatch, text, tole
     assert reason is not None
 
 
-def test_parametric_metal_routes_qualified_request_through_worker(monkeypatch):
-    candidate = object()
-    calls = []
-    monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(metal, "native_solve", lambda *_: pytest.fail("native path used"))
-    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "version": "test"})
-    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
-    stages = []
+def test_parametric_metal_always_solves_on_the_native_interface(monkeypatch):
+    """The compatible worker was retired for design solves: measured slower, same answers."""
 
-    def select(builder, **options):
-        original = mesh_adapter.read_surface(options["msh_text"])
-        # A reused surface reaches the existing request builder through each entry point.
-        monkeypatch.setattr(request_adapter, "read_surface", lambda *_a, **_k: pytest.fail("parsed twice"))
-        built = builder(original)
-        assert built.mesh.points_m.dtype == np.float32
-        options["stage_callback"]("setup", 0., "Preparing Metal mesh and solver request")
-        return candidate, None
-
-    monkeypatch.setattr(metal_worker, "select_worker_request", select)
-
-    def solve(selected, **kwargs):
-        calls.append((selected, kwargs["channel_id"]))
-        return native_result()
-
-    monkeypatch.setattr(metal_worker, "solve_worker", solve)
-    response = metal.solve_metal_from_msh_text(_cabinet_msh(), _context(field_plane=False),
-                                             stage_callback=lambda *values: stages.append(values))
-    assert calls == [(candidate, "source")]
-    assert ("setup", 0., "Preparing Metal mesh and solver request") in stages
-    assert response["metadata"]["metal"]["interface"] == "beat-compatible"
-    assert response["frequencies"] == [500., 1000.]
-
-
-def test_worker_route_reads_the_observation_frame_once_with_an_identical_request(monkeypatch):
-    from server.solver import result_mapping
-
-    msh, context = _cabinet_msh(), _context(field_plane=False)
-    expected = build_parametric_request(msh, context, frequencies_hz=[500., 1000.],
-                                        engine_id="beat-metal", backend="metal")
-    monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(metal, "native_solve", lambda *_: pytest.fail("native path used"))
-    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "version": "test"})
-    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(metal, "ObservationFrame", lambda **kwargs: SimpleNamespace(**kwargs))
-    frame_reads = []
-    read_frame = result_mapping._gmsh22_observation_frame_parts
-
-    def counted(*args, **kwargs):
-        frame_reads.append(1)
-        return read_frame(*args, **kwargs)
-
-    monkeypatch.setattr(result_mapping, "_gmsh22_observation_frame_parts", counted)
-    built = []
-
-    def select(builder, **options):
-        built.append(builder(mesh_adapter.read_surface(options["msh_text"])))
-        return built[-1], None
-
-    monkeypatch.setattr(metal_worker, "select_worker_request", select)
-    monkeypatch.setattr(metal_worker, "solve_worker", lambda *_a, **_k: native_result())
-    response = metal.solve_metal_from_msh_text(msh, context)
-    assert response["metadata"]["metal"]["interface"] == "beat-compatible"
-    observation_frame_reads = len(frame_reads)
-    assert json.dumps(built[0].wire, allow_nan=False) == json.dumps(expected.wire, allow_nan=False)
-    # One read for the native config and the worker request together; any
-    # further reads come from the observation points, which the change keeps.
-    frame_reads.clear()
-    metal._observation(context, msh)
-    assert observation_frame_reads == 1 + len(frame_reads)
-
-
-def test_axial_metal_keeps_native_interface(monkeypatch):
     monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(metal, "native_solve", lambda *_: native_result())
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "version": "test"})
     monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(metal_worker, "worker_available", lambda: pytest.fail("worker consulted"))
     monkeypatch.setattr(metal_worker, "select_worker_request", lambda *_, **__: pytest.fail("worker selected"))
-    response = metal.solve_metal_from_msh_text(_cabinet_msh(), _context(axial=True, field_plane=False))
-    assert response["metadata"]["metal"]["interface"] == "native"
+    monkeypatch.setattr(metal_worker, "solve_worker", lambda *_, **__: pytest.fail("worker solved"))
+    for axial in (False, True):
+        response = metal.solve_metal_from_msh_text(_cabinet_msh(), _context(axial=axial, field_plane=False))
+        assert response["metadata"]["metal"]["interface"] == "native"
+        assert "interface_reason" not in response["metadata"]["metal"]
 
 
 def test_imported_single_source_preserves_channel_live_results(monkeypatch, tmp_path):
