@@ -69,3 +69,103 @@ def test_a_probe_that_raises_does_not_fail_the_export(
     monkeypatch.setattr(builder, "resolve_geometry", boom)
     plan = plan_cad_resolution(_config())
     assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
+
+
+def _reading(full: float, nested: float | None, chord: float = 0.1):
+    """A cubic reading whose full value (nested + detuned) and nested part differ."""
+
+    from server.exports.sizing import SurfaceDeviation
+
+    return SurfaceDeviation(chord, full, chord, full, nested_cubic=nested)
+
+
+def _measure_with(monkeypatch: pytest.MonkeyPatch, *readings) -> list[float]:
+    """Serve ``readings`` in order (the last repeats); ``None`` is unmeasurable."""
+
+    import server.exports.sizing as sizing
+
+    calls: list[int] = []
+
+    def measure(_params, angular: int, length: int):
+        reading = readings[min(len(calls), len(readings) - 1)]
+        calls.append(angular)
+        return None if reading is None else (reading, angular, length)
+
+    monkeypatch.setattr(sizing, "measure_deviation", measure)
+    return calls
+
+
+def test_a_detuned_term_that_never_passes_does_not_hand_over_the_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Graded R-OSSE stations: the nested reading passes, the detuned gap never does.
+
+    The search used to walk down to the 1 mm floor and hand it to the mesher,
+    which then took minutes. The coarsest probe whose nested reading met the
+    target is the plan instead, and it says it was not fully verified.
+    """
+
+    from server.exports.sizing import _MIN_CAD_RESOLUTION_MM, _PROBE_CAD_RESOLUTION_MM
+
+    calls = _measure_with(monkeypatch, _reading(0.2, 0.005))
+    plan = plan_cad_resolution(_config(), tolerance_mm=0.02)
+    assert len(calls) > 1  # the search really did keep refining
+    assert plan.resolution_mm == _PROBE_CAD_RESOLUTION_MM
+    assert plan.resolution_mm > _MIN_CAD_RESOLUTION_MM
+    assert plan.deviation_mm == pytest.approx(0.005)
+    assert plan.warning is not None and "not fully verified" in plan.warning
+
+
+def test_no_passing_reading_at_all_takes_the_fixed_fallback_not_the_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _measure_with(monkeypatch, _reading(0.2, 0.2))
+    plan = plan_cad_resolution(_config(), tolerance_mm=0.02)
+    assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
+    assert plan.deviation_mm is None
+    assert plan.warning is not None and "unverified" in plan.warning
+
+
+def test_a_nested_pass_survives_a_later_unmeasurable_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The early-exit path and the budget-exhausted path share one rule."""
+
+    from server.exports.sizing import _PROBE_CAD_RESOLUTION_MM
+
+    _measure_with(monkeypatch, _reading(0.2, 0.005), None)
+    plan = plan_cad_resolution(_config(), tolerance_mm=0.02)
+    assert plan.resolution_mm == _PROBE_CAD_RESOLUTION_MM
+    assert plan.deviation_mm == pytest.approx(0.005)
+
+
+def test_an_accepted_probe_ignores_the_nested_reading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Designs that pass the full test today plan exactly the same resolution."""
+
+    from dataclasses import replace
+
+    import server.exports.sizing as sizing
+
+    real = plan_cad_resolution(_config(), tolerance_mm=0.02)
+    assert real.deviation_mm is not None and real.warning is None
+    measure = sizing.measure_deviation
+
+    def without_nested(params, angular: int, length: int):
+        deviation, a, ell = measure(params, angular, length)
+        return replace(deviation, nested_cubic=None), a, ell
+
+    monkeypatch.setattr(sizing, "measure_deviation", without_nested)
+    assert plan_cad_resolution(_config(), tolerance_mm=0.02) == real
+
+
+def test_an_unmeasurable_probe_after_an_accepted_one_keeps_the_fixed_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Accepted well inside the target, so the search tries coarser and then
+    # loses its reading: unchanged behaviour, the fixed fallback.
+    _measure_with(monkeypatch, _reading(0.001, 0.001), None)
+    plan = plan_cad_resolution(_config(), tolerance_mm=0.02)
+    assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
+    assert plan.deviation_mm is None

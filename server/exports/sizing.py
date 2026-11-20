@@ -126,6 +126,11 @@ class SurfaceDeviation:
     what corner-arc insertion produces. The cubic fields then repeat the linear
     ones so nothing reads as better than measured, and every cubic consumer
     must fall back rather than accept on them.
+
+    ``nested_cubic`` is the cubic reading from the nested 2x lattice alone,
+    before the detuned aliasing cross-check is folded into the cubic fields.
+    It is ``None`` when no nested lattice exists. Only the CAD planner reads
+    it, and only once no probe has passed the full test.
     """
 
     angular_linear: float
@@ -133,6 +138,7 @@ class SurfaceDeviation:
     axial_linear: float
     axial_cubic: float
     cubic_modelled: bool = True
+    nested_cubic: float | None = None
 
     def of(self, direction: str, fit: str) -> float:
         """Deviation in one direction, under one interpolation."""
@@ -708,11 +714,14 @@ def measure_deviation(
     # and is where a two-triangle facet is furthest from the surface.
     face_linear = float(linear[1::2, 1::2].max())
     face_cubic = float(cubic[1::2, 1::2].max())
+    angular_nested = max(float(cubic[1::2, ::2].max()), face_cubic)
+    axial_nested = max(float(cubic[::2, 1::2].max()), face_cubic)
     deviation = SurfaceDeviation(
         angular_linear=max(float(linear[1::2, ::2].max()), face_linear, detuned_linear),
-        angular_cubic=max(float(cubic[1::2, ::2].max()), face_cubic, detuned_cubic),
+        angular_cubic=max(angular_nested, detuned_cubic),
         axial_linear=max(float(linear[::2, 1::2].max()), face_linear, detuned_linear),
-        axial_cubic=max(float(cubic[::2, 1::2].max()), face_cubic, detuned_cubic),
+        axial_cubic=max(axial_nested, detuned_cubic),
+        nested_cubic=max(angular_nested, axial_nested),
     )
     return deviation, n_phi, n_length
 
@@ -972,6 +981,31 @@ def _unmeasured_warning(tolerance_mm: float) -> str:
     )
 
 
+def _unconfirmed_warning(deviation_mm: float, tolerance_mm: float) -> str:
+    """What to say when only the nested reading met the target."""
+
+    return (
+        f"This export met its {tolerance_mm:g} mm target on the planner's main "
+        f"check ({deviation_mm:.4g} mm), but a second check at offset sample "
+        "positions did not confirm it, so the file was written at the coarsest "
+        "sampling that passed the main check; its deviation is not fully verified."
+    )
+
+
+def _unaccepted_cad_plan(tolerance_mm: float, nested: CadPlan | None) -> CadPlan:
+    """The STEP sampling when no probe passed the full test.
+
+    ``nested`` is the coarsest probe whose nested cubic reading met the target,
+    if any; otherwise the fixed fallback. The search's last probe is never used:
+    when nothing passed it is usually the 1 mm floor, which the mesher takes
+    minutes to build.
+    """
+
+    if nested is not None:
+        return nested
+    return CadPlan(_FALLBACK_CAD_RESOLUTION_MM, None, _unmeasured_warning(tolerance_mm))
+
+
 def _search_end(stalled: bool) -> str:
     return (
         "the search could refine no further"
@@ -1101,22 +1135,22 @@ def plan_cad_resolution(
     config = retain_mesher_construction(config)
     resolution = _PROBE_CAD_RESOLUTION_MM
     best: CadPlan | None = None
+    nested: CadPlan | None = None
+    unmeasurable = False
     for _ in range(_CAD_ATTEMPTS):
         probe = _with_resolution(config, resolution)
         try:
             resolved = resolve_geometry(probe)
             params, _, _ = build_geometry_params(probe)
         except Exception:  # noqa: BLE001 - a probe must never fail the export
-            return CadPlan(
-                _FALLBACK_CAD_RESOLUTION_MM, None, _unmeasured_warning(tolerance_mm)
-            )
+            unmeasurable = True
+            break
         metadata = resolved.sampling_metadata
         angular = int(metadata.get("geometrySampleAngularSegments") or 0)
         length = int(metadata.get("geometrySampleLengthSegments") or 0)
         if angular < 4 or length < 2:
-            return CadPlan(
-                _FALLBACK_CAD_RESOLUTION_MM, None, _unmeasured_warning(tolerance_mm)
-            )
+            unmeasurable = True
+            break
         measured = measure_deviation(params, angular, length)
         # No reading at all, or a reading with no cubic model behind it: the
         # solid STEP is a degree-3 fit, and the correspondence-free chord the
@@ -1124,9 +1158,8 @@ def plan_cad_resolution(
         # conservative sampling exactly as an absent reading always has, rather
         # than accept a grid on a number that does not describe this artifact.
         if measured is None or not measured[0].cubic_modelled:
-            return CadPlan(
-                _FALLBACK_CAD_RESOLUTION_MM, None, _unmeasured_warning(tolerance_mm)
-            )
+            unmeasurable = True
+            break
         deviation, _, _ = measured
         value = deviation.for_fit("cubic", "cubic")
         chord = max(deviation.angular_linear, deviation.axial_linear)
@@ -1137,6 +1170,21 @@ def plan_cad_resolution(
                 break
         elif best is not None:
             break
+        elif (
+            deviation.nested_cubic is not None
+            and deviation.nested_cubic <= tolerance_mm
+            and deviation.cubic_estimate_is_valid
+            and (nested is None or resolution > nested.resolution_mm)
+        ):
+            # The detuned cross-check can fail at every resolution while the
+            # nested reading passes: on curvature-graded stations its samples
+            # do not land where the uniform resample assumes, and the gap does
+            # not shrink with refinement. Kept only for when nothing passes.
+            nested = CadPlan(
+                resolution,
+                deviation.nested_cubic,
+                _unconfirmed_warning(deviation.nested_cubic, tolerance_mm),
+            )
         if value <= 0.0 and chord <= 0.0:
             break
         # Move on whichever binds. The two terms answer to this knob very
@@ -1158,18 +1206,12 @@ def plan_cad_resolution(
         if math.isclose(next_resolution, resolution, rel_tol=1e-3):
             break
         resolution = next_resolution
-    if best is not None:
+    if best is not None and not unmeasurable:
         return best
-    # Nothing passed inside the attempt budget. Falling back must never be
-    # *coarser* than where the search had already got to, or a design that was
-    # being refined toward its tolerance would be handed a worse grid for
-    # running out of probes. It is still a compromise the file does not show,
-    # so it is reported rather than left to the log.
-    return CadPlan(
-        min(_FALLBACK_CAD_RESOLUTION_MM, resolution),
-        None,
-        _unmeasured_warning(tolerance_mm),
-    )
+    # Nothing passed (or a later probe could not be measured, which keeps the
+    # fixed fallback it always took). Either way the compromise is reported
+    # rather than left to the log.
+    return _unaccepted_cad_plan(tolerance_mm, nested if best is None else None)
 
 
 def _with_resolution(config: Mapping[str, Any], resolution: float) -> dict[str, Any]:
