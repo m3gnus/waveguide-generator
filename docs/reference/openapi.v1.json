@@ -2748,6 +2748,27 @@
         "title": "ChannelSolveExecution",
         "type": "object"
       },
+      "ChartSpecRenderRequest": {
+        "additionalProperties": false,
+        "description": "One chart described as data; hornlab_plots.spec documents the shape.",
+        "properties": {
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          },
+          "theme": {
+            "default": "classic",
+            "title": "Theme",
+            "type": "string"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "title": "ChartSpecRenderRequest",
+        "type": "object"
+      },
       "ChartsReferencePayload": {
         "additionalProperties": false,
         "properties": {
@@ -3081,7 +3102,7 @@
             "type": "array"
           },
           "theme": {
-            "default": "console",
+            "default": "classic",
             "title": "Theme",
             "type": "string"
           }
@@ -4137,7 +4158,7 @@
             "type": "number"
           },
           "theme": {
-            "default": "console",
+            "default": "classic",
             "title": "Theme",
             "type": "string"
           }
@@ -21003,6 +21024,51 @@
           }
         },
         "summary": "Radiation Impedance Presentation"
+      }
+    },
+    "/api/render-chart": {
+      "post": {
+        "operationId": "render_chart_api_render_chart_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChartSpecRenderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Render Chart Api Render Chart Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Render Chart",
+        "tags": [
+          "chart-export"
+        ]
       }
     },
     "/api/render-charts": {

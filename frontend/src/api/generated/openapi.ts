@@ -1984,6 +1984,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/render-chart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Render Chart */
+        post: operations["render_chart_api_render_chart_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/render-charts": {
         parameters: {
             query?: never;
@@ -3701,6 +3718,21 @@ export interface components {
             /** Formulation */
             formulation: string | null;
         };
+        /**
+         * ChartSpecRenderRequest
+         * @description One chart described as data; hornlab_plots.spec documents the shape.
+         */
+        ChartSpecRenderRequest: {
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
+            /**
+             * Theme
+             * @default classic
+             */
+            theme?: string;
+        };
         /** ChartsReferencePayload */
         ChartsReferencePayload: {
             /** Beam Shape */
@@ -3773,7 +3805,7 @@ export interface components {
             spl?: (number | null)[];
             /**
              * Theme
-             * @default console
+             * @default classic
              */
             theme?: string;
         };
@@ -4164,7 +4196,7 @@ export interface components {
             reference_level?: number;
             /**
              * Theme
-             * @default console
+             * @default classic
              */
             theme?: string;
         };
@@ -11527,6 +11559,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RadiationImpedancePresentation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    render_chart_api_render_chart_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChartSpecRenderRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */
