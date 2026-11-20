@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { buildRunReportHtml } from './runReport';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { buildRunReportHtml, renderRunReportCharts, runReportChartSpecs } from './runReport';
+import { buildDerivedAcoustics } from './derivedAcoustics';
+import { activityStore } from '../shell/activity';
 import type { ResultPayload } from './types';
 
 const channel: ResultPayload = {
@@ -24,22 +26,29 @@ const channel: ResultPayload = {
 };
 
 describe('static run report', () => {
-  it('renders every channel with inline plots, tables, and escaped evidence', () => {
+  afterEach(() => { activityStore.reset(); });
+
+  it('renders every channel with embedded hornlab-plots images, tables, and escaped evidence', () => {
     const result: ResultPayload = {
       frequencies: [],
       channel_order: ['HF', 'MF'],
       channels: { HF: channel, MF: { ...channel, spl_on_axis: { ...channel.spl_on_axis, spl: [80, 82, 81] } } },
     };
+    const image = 'data:image/png;base64,iVBORw==';
     const html = buildRunReportHtml(result, {
       title: 'Run <42>',
       generatedAt: new Date('2026-08-20T12:00:00Z'),
+      charts: { HF: { response: image, beamwidth: image }, MF: { response: image } },
     });
 
     expect(html).toContain('<!doctype html>');
     expect(html).toContain('<h1>Run &lt;42&gt;</h1>');
     expect(html).toContain('<h2>HF</h2>');
     expect(html).toContain('<h2>MF</h2>');
-    expect(html).toContain('<svg class="plot"');
+    expect(html).not.toContain('<svg');
+    expect(html.match(/<img class="plot" alt="[^"]+" src="data:image\/png;base64,iVBORw==">/g)).toHaveLength(3);
+    // A chart the caller has no image for says so rather than leaving a hole.
+    expect(html.match(/No samples available for this plot\./g)).toHaveLength(1);
     expect(html).toContain('Derived acoustics table (3 rows)');
     expect(html).toContain('Radiated-power cross-check');
     expect(html).toContain('Max |power agreement|');
@@ -66,5 +75,41 @@ describe('static run report', () => {
     expect(html).toContain('<h2>Result</h2>');
     expect(html).toContain('No samples available for this plot.');
     expect(html).toContain('No result warnings.');
+  });
+
+  it('draws each chart from the derived-acoustics rows the table lists', () => {
+    const result: ResultPayload = { frequencies: [], channel_order: ['HF'], channels: { HF: channel } };
+    const specs = runReportChartSpecs(result);
+    expect(specs.map(({ section, chart }) => `${section}:${chart}`)).toEqual(['HF:response', 'HF:beamwidth']);
+    const rows = buildDerivedAcoustics(channel).rows;
+    const [response, beamwidth] = specs.map(({ spec }) => spec);
+    expect(response).toMatchObject({ kind: 'lines', title: 'Response and power response', x: { scale: 'log' }, y: { label: 'Level [dB]' } });
+    expect(response.series.map(({ label, x, y, color }) => ({ label, x, y, color }))).toEqual([
+      { label: 'On-axis SPL', x: rows.map((row) => row.frequency_hz), y: rows.map((row) => row.on_axis_spl_db), color: 0 },
+      { label: 'Power response', x: rows.map((row) => row.frequency_hz), y: rows.map((row) => row.power_response_db_spl_avg), color: 1 },
+    ]);
+    expect(beamwidth.series.map(({ label, y }) => ({ label, y }))).toEqual([
+      { label: 'Horizontal', y: rows.map((row) => row.horizontal_beamwidth_deg) },
+      { label: 'Vertical', y: rows.map((row) => row.vertical_beamwidth_deg) },
+    ]);
+    expect(runReportChartSpecs({ frequencies: [] })).toEqual([]);
+  });
+
+  it('renders the charts in the export theme with counted status-bar progress', async () => {
+    const result: ResultPayload = { frequencies: [], channel_order: ['HF', 'MF'], channels: { HF: channel, MF: channel } };
+    const progress: Array<[number, number]> = [];
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+      const shown = activityStore.getSnapshot()[0]?.progress;
+      if (shown) progress.push([shown.done, shown.total]);
+      const { spec, theme } = JSON.parse(String(init?.body)) as { spec: { title: string }; theme: string };
+      return Response.json({ image: `data:image/png;base64,${btoa(`${spec.title}|${theme}`)}` });
+    });
+    const charts = await renderRunReportCharts(result, 'classic', fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(progress).toEqual([[0, 4], [1, 4], [2, 4], [3, 4]]);
+    expect(fetcher.mock.calls.every(([input]) => String(input) === '/api/render-chart')).toBe(true);
+    expect(atob(charts.MF.beamwidth!.split(',')[1])).toBe('-6 dB beamwidth|classic');
+    expect(atob(charts.HF.response!.split(',')[1])).toBe('Response and power response|classic');
+    expect(activityStore.getSnapshot()).toEqual([]);
   });
 });

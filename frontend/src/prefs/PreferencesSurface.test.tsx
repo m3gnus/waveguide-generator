@@ -8,7 +8,7 @@ import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from './PreferencesSurface';
-import { MATCH_INTERFACE_THEME, preferencesStore, STORAGE_VERSION } from './preferences';
+import { DEFAULT_EXPORT_THEME, MATCH_INTERFACE_THEME, preferencesStore, STORAGE_VERSION } from './preferences';
 import { initializeChartThemeDefault } from './chartThemes';
 
 function readyCadRecord(ingestId: string): CadReturnIngestRecord {
@@ -120,16 +120,17 @@ describe('preferences surfaces', () => {
       : new Response(JSON.stringify({ detail: 'not served in this test' }), { status: 404 }))));
     await act(async () => { root.render(<ResultsPreferencesSurface/>); });
     const select = host.querySelector<HTMLSelectElement>('[aria-label="Chart theme"]')!;
-    expect(select.value).toBe(MATCH_INTERFACE_THEME);
-    expect(preferencesStore.getSnapshot().chartTheme).toBe(MATCH_INTERFACE_THEME);
+    expect(select.value).toBe(DEFAULT_EXPORT_THEME);
+    expect(preferencesStore.getSnapshot().chartTheme).toBe(DEFAULT_EXPORT_THEME);
     expect([...select.options].map((option) => option.textContent)).toContain('Vellum (paper)');
   });
 
-  it('offers Match interface without a legacy theme when the server is offline', async () => {
+  it('offers Match interface and the classic default when the server is offline', async () => {
     await act(async () => { root.render(<ResultsPreferencesSurface/>); });
     const select = host.querySelector<HTMLSelectElement>('[aria-label="Chart theme"]')!;
     expect([...select.options].map((option) => [option.value, option.textContent])).toEqual([
       [MATCH_INTERFACE_THEME, 'Match interface'],
+      [DEFAULT_EXPORT_THEME, 'Classic'],
     ]);
   });
 

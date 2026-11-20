@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
-import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, loadPreferences, MAP_REFERENCES, MATCH_INTERFACE_THEME, preferencesStore, readPreferences, runDisplayName, STORAGE_VERSION } from './preferences';
+import { applyJobPreferences, CHART_TYPES, DEFAULT_EXPORT_THEME, EXPORT_FORMATS, loadPreferences, MAP_REFERENCES, MATCH_INTERFACE_THEME, preferencesStore, readPreferences, runDisplayName, STORAGE_VERSION } from './preferences';
 
 function job(id: string, rating: number | null, created: string, completed = created): JobItem {
   return { id, run_number: 1, parent_job_id: null, rating, created_at: created, completed_at: completed, label: id, status: 'complete', progress: 1, stage: null, stage_message: null, queued_at: created, started_at: created, config_summary: {}, solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: false, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
@@ -153,7 +153,7 @@ describe('client preferences', () => {
    * The durable copy is a JSON file the user can open, so every field has to
    * survive being the wrong type. `chartTheme` used to be coerced with
    * `String`, which handed the exporter the literal "[object Object]" as a
-   * theme name rather than falling back to the interface.
+   * theme name rather than falling back to the default export theme.
    */
   it('takes nothing on trust from a hand-edited payload', () => {
     const loaded = loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: {
@@ -169,7 +169,7 @@ describe('client preferences', () => {
       directivityGuideInterval: 'wide',
     } }));
     expect(loaded).toMatchObject({
-      chartTheme: 'auto',
+      chartTheme: DEFAULT_EXPORT_THEME,
       exportFormats: ['csv'],
       smoothing: 'none',
       mapReference: -6,

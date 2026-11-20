@@ -2,7 +2,7 @@ import { Notice } from '../shell/Notice';
 import { useEffect, useId, useState, type RefObject } from 'react';
 import { nextRunLabel, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
 import { useRunNameSource } from '../jobs/runNameSource';
-import { EXPORT_FORMATS, GROUP_DELAY_UNITS, IMPEDANCE_DISPLAYS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type GroupDelayUnit, type ImpedanceDisplay, type JobSort, type MapReference } from './preferences';
+import { DEFAULT_EXPORT_THEME, EXPORT_FORMATS, GROUP_DELAY_UNITS, IMPEDANCE_DISPLAYS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type GroupDelayUnit, type ImpedanceDisplay, type JobSort, type MapReference } from './preferences';
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 import { Icon } from '../shell/icons';
 import { RootFolderControls } from '../shell/RootFolderControls';
@@ -45,7 +45,7 @@ function ResultsPreferencesContent({ showFolders = true }: { showFolders?: boole
   const preferences = usePreferences();
   const themes = useThemes();
   const themeOptions = themes.some((theme) => theme.id === preferences.chartTheme)
-    ? themes : [{ id: preferences.chartTheme, label: preferences.chartTheme }, ...themes];
+    ? themes : [{ id: preferences.chartTheme, label: preferences.chartTheme === DEFAULT_EXPORT_THEME ? 'Classic' : preferences.chartTheme }, ...themes];
   return <section className="preferences-section">
     <h3 className="preferences-section-title">Results & export</h3>
     {showFolders && <div><h4>WG folder</h4><RootFolderControls/></div>}

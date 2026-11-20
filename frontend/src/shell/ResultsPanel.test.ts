@@ -867,7 +867,7 @@ describe('results chart layouts', () => {
     drawChart(target, runOption('B', 90));
     await act(async () => { answer(accept ? { token: 'chosen', directory: '/exports' } : null); });
     expect(chartImageMocks.render).toHaveBeenCalledOnce();
-    const [spec] = chartImageMocks.render.mock.calls[0] as [{ series: Array<{ label: string; y: number[] }> }];
+    const [spec] = chartImageMocks.render.mock.calls[0] as unknown as [{ series: Array<{ label: string; y: number[] }> }];
     expect(spec.series).toEqual([expect.objectContaining({ label: 'A', y: [80] })]);
     if (accept) {
       expect(chartImageMocks.save).toHaveBeenCalledWith(expect.any(Promise), '1_A_frequency_response.png', 'chosen', expect.any(Function));

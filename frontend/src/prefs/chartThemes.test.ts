@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initializeChartThemeDefault, loadChartThemes } from './chartThemes';
-import { MATCH_INTERFACE_THEME, preferencesStore, resolveChartTheme } from './preferences';
+import { DEFAULT_EXPORT_THEME, MATCH_INTERFACE_THEME, preferencesStore, resolveChartTheme } from './preferences';
 
 describe('chart theme startup', () => {
   beforeEach(() => {
@@ -23,7 +23,7 @@ describe('chart theme startup', () => {
   it('ignores a default that is absent from the available themes', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ themes: ['console'], default: 'missing' }))));
     await initializeChartThemeDefault();
-    expect(preferencesStore.getSnapshot().chartTheme).toBe(MATCH_INTERFACE_THEME);
+    expect(preferencesStore.getSnapshot().chartTheme).toBe(DEFAULT_EXPORT_THEME);
   });
 
   it.each(['vellum', MATCH_INTERFACE_THEME])('starts immediately with a durable %s choice', async (theme) => {
@@ -39,11 +39,11 @@ describe('chart theme startup', () => {
     expect(preferencesStore.getSnapshot().chartTheme).toBe(theme);
   });
 
-  it.each(['offline', 'non-OK', 'invalid JSON'])('keeps Match interface when startup gets %s', async (failure) => {
+  it.each(['offline', 'non-OK', 'invalid JSON'])('keeps the default export theme when startup gets %s', async (failure) => {
     if (failure === 'non-OK') vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 503 })));
     if (failure === 'invalid JSON') vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('invalid')));
     await initializeChartThemeDefault();
-    expect(preferencesStore.getSnapshot().chartTheme).toBe(MATCH_INTERFACE_THEME);
+    expect(preferencesStore.getSnapshot().chartTheme).toBe(DEFAULT_EXPORT_THEME);
     expect(await loadChartThemes()).toEqual({ themes: [] });
   });
 
@@ -59,9 +59,9 @@ describe('chart theme startup', () => {
     await vi.advanceTimersByTimeAsync(1_500);
     await startup;
     expect(signal.aborted).toBe(true);
-    expect(preferencesStore.getSnapshot().chartTheme).toBe(MATCH_INTERFACE_THEME);
+    expect(preferencesStore.getSnapshot().chartTheme).toBe(DEFAULT_EXPORT_THEME);
     respond(new Response(JSON.stringify({ themes: ['vellum'], default: 'vellum' })));
     await vi.advanceTimersByTimeAsync(0);
-    expect(preferencesStore.getSnapshot().chartTheme).toBe(MATCH_INTERFACE_THEME);
+    expect(preferencesStore.getSnapshot().chartTheme).toBe(DEFAULT_EXPORT_THEME);
   });
 });
