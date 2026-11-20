@@ -1,4 +1,10 @@
-"""Metal-BEM's compatible worker, mapped onto WG's existing result contract."""
+"""Metal-BEM's compatible worker, mapped onto WG's existing result contract.
+
+Two routes use it: imported single-source, normal-motion exterior solves
+(``solve_imported_metal_from_msh_text``) and the exterior-transducer network.
+Parametric design solves always run on the native interface; the worker was
+retired for them after it measured slower with the same results.
+"""
 
 from __future__ import annotations
 
@@ -55,7 +61,7 @@ def _worker_session(
 
 
 def worker_available() -> bool:
-    """A pre-switch installation still runs its existing native path."""
+    """Whether the worker exists; without it, imported solves keep the native path."""
     try:
         from hornlab_metal_bem import MetalEngineWorker, validate_compiled
 
@@ -148,7 +154,11 @@ def select_worker_request(
     builder: Callable[[SurfaceMesh], Any], *, msh_text: str, merge_tol: float,
     stage_callback: StageCallback | None = None,
 ) -> tuple[Any | None, str | None]:
-    """Select only requests the installed worker can validate before solving."""
+    """Select only requests the installed worker can validate before solving.
+
+    ``builder`` compiles the imported single-source request from the parsed
+    source mesh; a refusal leaves the solve on the native interface.
+    """
     if not worker_available():
         return None, "The installed Metal-BEM package does not expose the compatible interface"
     if stage_callback:

@@ -9,7 +9,7 @@ import pytest
 
 from server.jobs.models import DriveChannel
 from server.solver.beat_adapter import mesh as mesh_adapter, request as request_adapter
-from server.solver.beat_adapter.request import build_imported_request, build_parametric_request
+from server.solver.beat_adapter.request import build_imported_request
 from server.solver.context import SolverContext
 from server.solver import metal, metal_worker
 from server.solver.metal_worker import solve_worker
@@ -42,27 +42,35 @@ def test_mesh_cleanup_stays_on_native_path(monkeypatch, change):
     assert reason == "The native interface is required to preserve mesh loading"
 
 
-@pytest.mark.parametrize("kind", ["parametric", "imported"])
+def _imported_record(quadrants: int = 1234) -> dict:
+    """The single-source record the live imported worker route compiles."""
+
+    return {"source_tags": {"source": 2},
+            "anchor": {"throat_frame": {"origin_m": [0, 0, .05], "axis": [0, 0, 1],
+                                        "u": [1, 0, 0], "v": [0, 1, 0]}},
+            "symmetry": {"cut_planes": {1234: [], 14: ["x0"], 1: ["x0", "y0"]}[quadrants]}}
+
+
+def _imported_request(msh, context, quadrants: int = 1234, **options):
+    return build_imported_request(msh, context, _imported_record(quadrants),
+                                  [DriveChannel(id="source", source_ids=["source"])], **options)
+
+
+# The compatible worker serves only the imported single-source route now
+# (parametric solves are native), so admission is tested with that route's request.
 @pytest.mark.parametrize("quadrants", [1234, 14, 1])
 @pytest.mark.parametrize("precision", ["float32", "float64"])
-def test_admission_reuses_original_parse_with_identical_request_and_loading(monkeypatch, kind, quadrants, precision):
+def test_admission_reuses_original_parse_with_identical_request_and_loading(monkeypatch, quadrants, precision):
     msh = _cabinet_msh()
     context = SolverContext(None, (100, 1000), 2, quadrants=quadrants)
     context.polar_config.update(spherical_theta_count=3, spherical_phi_count=4)
-    record = {"source_tags": {"source": 2},
-              "anchor": {"throat_frame": {"origin_m": [0, 0, .05], "axis": [0, 0, 1],
-                                            "u": [1, 0, 0], "v": [0, 1, 0]}},
-              "symmetry": {"cut_planes": {1234: [], 14: ["x0"], 1: ["x0", "y0"]}[quadrants]}}
 
     def build(source_mesh=None):
         options = {"engine_id": "beat-metal" if precision == "float32" else "beat-cpu",
                    "precision": precision, "surface_traces": True}
         if source_mesh is not None:
             options["_source_mesh"] = source_mesh
-        if kind == "parametric":
-            return build_parametric_request(msh, context, **options)
-        return build_imported_request(msh, context, record,
-                                      [DriveChannel(id="source", source_ids=["source"])], **options)
+        return _imported_request(msh, context, quadrants, **options)
 
     expected = build()
     parsed = []
@@ -112,7 +120,7 @@ def test_admission_merge_gate_uses_original_coordinates(monkeypatch, change):
 
     def build(source_mesh=None):
         options = {} if source_mesh is None else {"_source_mesh": source_mesh}
-        return build_parametric_request(msh, context, engine_id="beat-metal", **options)
+        return _imported_request(msh, context, context.quadrants, engine_id="beat-metal", **options)
 
     expected = build()
     original = mesh_adapter.read_surface(msh)
@@ -126,13 +134,13 @@ def test_admission_merge_gate_uses_original_coordinates(monkeypatch, change):
 def test_closed_surface_keeps_provider_validation_and_route(monkeypatch):
     msh = (Path(__file__).resolve().parents[1] / "solver" / "warmup_mesh.msh").read_text()
     context = SolverContext(None, (100, 1000), 2)
-    expected = build_parametric_request(msh, context, engine_id="beat-metal")
+    expected = _imported_request(msh, context, engine_id="beat-metal")
     metal_worker.validate_worker_request(expected)
     monkeypatch.setattr(metal_worker, "worker_available", lambda: True)
 
     def build(source_mesh=None):
         options = {} if source_mesh is None else {"_source_mesh": source_mesh}
-        return build_parametric_request(msh, context, engine_id="beat-metal", **options)
+        return _imported_request(msh, context, engine_id="beat-metal", **options)
 
     stages = []
 
@@ -277,8 +285,7 @@ def test_worker_keeps_live_results_power_traces_and_source_identity(monkeypatch,
                                           "angle_range": [0, 180, 5], "distance": 2,
                                           "observation_origin": "mouth", "spherical_theta_count": 3,
                                           "spherical_phi_count": 4})
-    compiled = build_parametric_request(mesh, context, engine_id="beat-metal", backend="metal",
-                                       surface_traces=True)
+    compiled = _imported_request(mesh, context, engine_id="beat-metal", backend="metal", surface_traces=True)
     config = SimpleNamespace(complex_k_shift=.005, observation=SimpleNamespace(distance_m=2., origin="mouth"))
     published = []
     result = solve_worker(compiled, channel_id="source", context=context, config=config,
