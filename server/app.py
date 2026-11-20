@@ -34,6 +34,7 @@ from server.jobs.api import mount_jobs
 from server.integration import mount_integration
 from server.jobs.mesh_preview import mount_solver_mesh
 from server.cadlink.fusion.addin_update import shutdown_addin_refresh, start_addin_refresh
+from server.mesh.cache import SOLVER_MESH_DISK_CACHE_DIRNAME
 from server.mesh.child import begin_mesher_child_shutdown, close_mesher_child
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
@@ -528,6 +529,23 @@ def create_app(
     # The mesher imports lazily at every call site, so without this the first
     # control a user touches pays for the whole import graph.
     application.router.add_event_handler("startup", prewarm_mesher)
+
+    # Solve meshes outlive a restart: an unchanged design solved again after
+    # one reads its mesh back instead of rebuilding it (server/mesh/cache.py).
+    async def open_solver_mesh_disk_cache() -> None:
+        from server.mesh.builder import configure_solver_mesh_disk_cache
+
+        await asyncio.to_thread(
+            configure_solver_mesh_disk_cache, resolved_data_dir / SOLVER_MESH_DISK_CACHE_DIRNAME,
+        )
+
+    async def close_solver_mesh_disk_cache() -> None:
+        from server.mesh.builder import configure_solver_mesh_disk_cache
+
+        configure_solver_mesh_disk_cache(None)
+
+    application.router.add_event_handler("startup", open_solver_mesh_disk_cache)
+    application.router.add_event_handler("shutdown", close_solver_mesh_disk_cache)
 
     def _keep_sigpipe_ignored() -> None:
         # gmsh's C++ runtime installs its own signal handlers during the

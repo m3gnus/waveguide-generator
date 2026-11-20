@@ -52,7 +52,7 @@ from server.contracts.geometry import (
     symmetry_plane_axes_for_quadrants,
 )
 
-from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
+from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo, SolverMeshDiskCache
 from .errors import MesherEstimateUnavailable, MeshTooLarge, SolverMemoryTooLarge
 from .child import (
     AUX_LANE,
@@ -954,11 +954,22 @@ def _solver_mesh_cache_key(design: DesignConfig) -> str:
     """
 
     payload = {
-        "cache_format_version": SOLVER_MESH_CACHE_FORMAT_VERSION,
+        **_solver_mesh_generator(),
         "artifact_options": {
             "format": "gmsh-msh-text",
             "units": "m",
         },
+        "mesher_config": _solver_mesher_config(design),
+    }
+    canonical = canonical_ascii_strict_json(payload).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _solver_mesh_generator() -> dict[str, Any]:
+    """The part of every solver-mesh key that names what built the artifact."""
+
+    return {
+        "cache_format_version": SOLVER_MESH_CACHE_FORMAT_VERSION,
         "generator_versions": {
             "hornlab-waveguide-mesher": _distribution_version(
                 "hornlab-waveguide-mesher"
@@ -966,10 +977,31 @@ def _solver_mesh_cache_key(design: DesignConfig) -> str:
             "gmsh": _distribution_version("gmsh"),
         },
         "mesher_identity": mesher_identity(),
-        "mesher_config": _solver_mesher_config(design),
     }
-    canonical = canonical_ascii_strict_json(payload).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
+
+
+_solver_mesh_disk_cache: SolverMeshDiskCache | None = None
+
+
+def configure_solver_mesh_disk_cache(root: Path | None) -> None:
+    """Keep solver meshes under ``root`` across restarts; ``None`` turns it off.
+
+    The application points this at its data folder while it runs. Opening it
+    deletes the meshes a different mesher or gmsh built.
+    """
+
+    global _solver_mesh_disk_cache
+    if root is None:
+        _solver_mesh_disk_cache = None
+        return
+    cache = SolverMeshDiskCache(Path(root), _solver_mesh_generator())
+    try:
+        cache.open()
+    except OSError as exc:
+        logger.warning("Solver mesh disk cache unavailable at %s: %s", root, exc)
+        _solver_mesh_disk_cache = None
+        return
+    _solver_mesh_disk_cache = cache
 
 
 def clear_solver_mesh_cache() -> None:
@@ -977,6 +1009,9 @@ def clear_solver_mesh_cache() -> None:
 
     _solver_mesh_cache.clear()
     _mesh_estimate_cache.clear()
+    disk = _solver_mesh_disk_cache
+    if disk is not None:
+        disk.clear()
 
 
 def solver_mesh_cache_info() -> SolverMeshCacheInfo:
@@ -1666,6 +1701,11 @@ async def build_solver_mesh(
         # ``cancel_cb``; the parent polls it and kills the child instead.
         async with _solver_mesh_cache.build_slot(cache_key, lambda: _check_cancel(cancel_cb)):
             result = None if force_rebuild else _solver_mesh_cache.get(cache_key)
+            disk = _solver_mesh_disk_cache
+            if result is None and disk is not None and not force_rebuild:
+                result = await asyncio.to_thread(disk.get, cache_key)
+                if result is not None:
+                    _solver_mesh_cache.put(cache_key, result)
             cache_hit = result is not None
             if result is None:
                 result = await run_mesh_build(
@@ -1674,6 +1714,8 @@ async def build_solver_mesh(
                     cancel_cb=cancel_cb,
                 )
                 _solver_mesh_cache.put(cache_key, result)
+                if disk is not None:
+                    await asyncio.to_thread(disk.put, cache_key, result)
     try:
         _enforce_artifact_triangle_ceiling(
             int(result["stats"]["triangle_count"]),
