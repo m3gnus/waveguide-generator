@@ -20,8 +20,9 @@ child instead:
   a long STEP export or an estimate never queues a solve's mesh behind it. The
   second lane exists only on a host with the memory for two (or by
   ``WG2_MESH_CHILD_LANES``); otherwise everything shares the one child as
-  before. Its child is retired after a few idle minutes, so an idle server
-  holds one mesher's memory, not two.
+  before. Its child is retired after ten idle minutes, counted from its last
+  build or from its prewarm if it never built, so an idle server holds one
+  mesher's memory, not two.
 * cancelling a build that is running in the child kills the child, the only
   bounded way to stop OCC. Cancelling before the build is sent leaves it alone.
 
@@ -400,6 +401,9 @@ class MesherChildHost:
                     return
                 channel.connection.send(("warm", _WARM_ID))
                 channel.warm_pending = True
+                # A child started ahead of use and never used retires like an
+                # idle one (the export lane at boot, or after a respawn).
+                self._schedule_idle_retire()
             except MesherChildError as exc:
                 # No job could hold the child. A prewarm runs at startup and
                 # after a discard, where raising would fail app startup or

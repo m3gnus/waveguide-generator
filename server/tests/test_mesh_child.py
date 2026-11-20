@@ -1061,3 +1061,24 @@ def test_an_idle_lane_child_is_retired_and_started_again(monkeypatch) -> None:
     finally:
         host.close()
     assert host._idle_timer is None
+
+
+def test_a_prewarmed_child_that_never_builds_is_retired(monkeypatch) -> None:
+    monkeypatch.delenv("WG2_TEST_MESH_IN_PROCESS", raising=False)
+    host = MesherChildHost(idle_retire_seconds=0.3)
+    try:
+        host.prewarm()
+        assert host._channel is not None
+        deadline = time.monotonic() + 15
+        while host._channel is not None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert host._channel is None, "the prewarmed, unused child was not retired"
+        assert asyncio.run(host.run(ok_build, "after"))["value"] == "after"
+    finally:
+        host.close()
+    solve = MesherChildHost()
+    try:
+        solve.prewarm()
+        assert solve._idle_timer is None  # the solve lane stays warm
+    finally:
+        solve.close()
