@@ -2546,6 +2546,87 @@ def test_execution_uses_job_mesh_after_import_cache_is_deleted(tmp_path: Path) -
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("same_text", [True, False], ids=["read-back", "changed"])
+def test_a_run_does_not_write_back_the_mesh_it_read_from_its_own_row(
+    tmp_path: Path, same_text: bool,
+) -> None:
+    """The job row already holds the imported mesh the run read from it."""
+
+    class ReportingEngine:
+        name = "metal"
+
+        async def run(
+            self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any,
+            imported_record: dict[str, Any], artifact_cb: Any = None, **_port_kwargs,
+        ) -> EngineRunResult:
+            text = imported_record["_execution_msh_text"]
+            text = text if same_text else text + "\n"
+            await artifact_cb(text, {"triangle_count": 3})
+            return EngineRunResult(
+                results={"channels": {"left": {}, "right": {}},
+                         "channel_order": ["left", "right"], "metadata": {}},
+                msh_text=text, mesh_stats={"triangle_count": 3},
+            )
+
+    async def scenario() -> None:
+        runtime, ingest_id, _record = await _runtime_fixture(tmp_path)
+        runtime.engine_registry = _AlwaysRegistry(ReportingEngine())  # type: ignore[assignment]
+        writes: list[str | None] = []
+        store_mesh_artifact = runtime.store.store_mesh_artifact
+
+        def spy(job_id: str, msh_text: str | None) -> None:
+            writes.append(msh_text)
+            store_mesh_artifact(job_id, msh_text)
+
+        runtime.store.store_mesh_artifact = spy  # type: ignore[method-assign]
+        try:
+            job_id = await runtime.submit(_request(ingest_id))
+            submitted = runtime.store.get_mesh_artifact(job_id)
+            for _ in range(100):
+                row = runtime.store.get_job_row(job_id)
+                if row["status"] in {"complete", "error"}:
+                    break
+                await asyncio.sleep(0.01)
+            assert row["status"] == "complete", row.get("error_message")
+            assert row["has_mesh_artifact"]
+            stored = runtime.store.get_mesh_artifact(job_id)
+            if same_text:
+                assert writes == [None]
+                assert stored == submitted
+            else:
+                assert writes == [submitted + "\n"]
+                assert stored == submitted + "\n"
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_reduced_orientation_verdict_is_judged_once_per_artifact(monkeypatch) -> None:
+    from server.mesh import imported as imported_mesh
+
+    imported_mesh._artifact_orientations.clear()
+    text = _quarter_box_mesh(inverted=True)
+    expected = imported_mesh.verify_reduced_orientation(
+        *imported_mesh.gmsh22_triangle_arrays(text), cut_planes=("x0", "y0"),
+    )
+    parses = []
+    parse = imported_mesh.gmsh22_triangle_arrays
+    monkeypatch.setattr(imported_mesh, "gmsh22_triangle_arrays", lambda t: parses.append(1) or parse(t))
+    first = imported_mesh.verify_artifact_reduced_orientation(text, cut_planes=["x0", "y0"])
+    first["inverted_component_count"] = -1  # a caller's edit never reaches the next one
+    again = imported_mesh.verify_artifact_reduced_orientation(text, cut_planes=("x0", "y0"))
+    other = imported_mesh.verify_artifact_reduced_orientation(text, cut_planes=["x0"])
+    fixed = imported_mesh.verify_artifact_reduced_orientation(
+        _quarter_box_mesh(inverted=False), cut_planes=["x0", "y0"],
+    )
+    assert again == expected and again["inverted_component_count"] > 0
+    assert other == imported_mesh.verify_reduced_orientation(*parse(text), cut_planes=("x0",))
+    assert fixed["inverted_component_count"] == 0
+    assert len(parses) == 3
+    imported_mesh._artifact_orientations.clear()
+
+
 def _quarter_box_mesh(*, inverted: bool, offset_yz: bool = False) -> str:
     """A closed box's quarter, open on x = 0 and y = 0, as an ASCII Gmsh 2.2 artifact.
 

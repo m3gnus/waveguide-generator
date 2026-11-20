@@ -2,16 +2,43 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Mapping
 
+from server.contracts.canonical import canonical_ascii_strict_json
 from server.design.schema import DesignConfig
 from server.integration.mesher_identity import mesher_identity
 from server.jobs.models import MeshFreshness
+from server.mesh.cache import SolverMeshArtifactCache
 from server.preview.geometry_identity import geometry_hash_for_design, mesher_version
+from server.preview.translate import design_to_mesher_config
 
 
 _GEOMETRY_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+# Every parametric solve stamps this hash and every reopened run compares it,
+# and each answer is a full mesher geometry resolve. The hash is a function of
+# the translated mesher config and the mesher in this process, so it is kept
+# by those. Small on purpose: it absorbs a design solved and reopened
+# repeatedly, not a session's history.
+_geometry_hashes = SolverMeshArtifactCache(max_entries=64, max_bytes=64 * 64 * 1024)
+
+
+def _geometry_hash(design: DesignConfig, version: str) -> str:
+    """``geometry_hash_for_design``, computed once per config and mesher."""
+
+    try:
+        config = canonical_ascii_strict_json(design_to_mesher_config(design))
+    except Exception:  # noqa: BLE001 - an unhashable config just skips the cache
+        return geometry_hash_for_design(design, mesher_version_value=version)
+    key = f"{version}:{hashlib.sha256(config.encode('utf-8')).hexdigest()}"
+    cached = _geometry_hashes.get(key)
+    if cached is not None:
+        return cached["geometry_hash"]
+    value = geometry_hash_for_design(design, mesher_version_value=version)
+    _geometry_hashes.put(key, {"geometry_hash": value})
+    return value
 
 
 def record_for_design(design: DesignConfig) -> dict[str, str] | None:
@@ -22,7 +49,7 @@ def record_for_design(design: DesignConfig) -> dict[str, str] | None:
         return None
     record = {
         "mesher_version": version,
-        "geometry_hash": geometry_hash_for_design(design, mesher_version_value=version),
+        "geometry_hash": _geometry_hash(design, version),
     }
     source = mesher_identity()
     if not source.startswith("unmeasured:"):
@@ -55,5 +82,5 @@ def classify_open(provenance: Mapping[str, object] | None, design: DesignConfig)
             return "unknown"
         if current_source != recorded_source:
             return "stale"
-    current_hash = geometry_hash_for_design(design, mesher_version_value=current_version)
+    current_hash = _geometry_hash(design, current_version)
     return "current" if recorded_hash == current_hash else "stale"

@@ -43,6 +43,7 @@ from server.mesh.builder import (
     _enforce_premesh_memory,
     _self_intersection_warnings,
 )
+from server.mesh.cache import SolverMeshArtifactCache
 from server.mesh.integrity import (
     mesh_element_quality_report,
     mesh_integrity_report,
@@ -1543,8 +1544,25 @@ def verify_artifact_reduced_orientation(
     solver will read. Raises ``ValueError`` when they do not parse.
     """
 
+    planes = tuple(str(plane) for plane in cut_planes)
+    key = (
+        hashlib.sha256(msh_text.encode("utf-8")).hexdigest()
+        + ":" + canonical_ascii_strict_json(list(planes))
+    )
+    cached = _artifact_orientations.get(key)
+    if cached is not None:
+        return cached["orientation"]
     points, triangles = gmsh22_triangle_arrays(msh_text)
-    return verify_reduced_orientation(points, triangles, cut_planes=cut_planes)
+    orientation = verify_reduced_orientation(points, triangles, cut_planes=planes)
+    _artifact_orientations.put(key, {"orientation": orientation})
+    return orientation
+
+
+# The same imported artifact is judged by the solve plan, the submission and
+# the job's own start, usually in one process. The verdict is a pure function
+# of the bytes and the cut planes, so it is kept by their digest; a cache hit
+# returns a copy, never the stored verdict.
+_artifact_orientations = SolverMeshArtifactCache(max_entries=32, max_bytes=1024 * 1024)
 
 
 def _reduced_orientation_kwargs() -> dict[str, str]:

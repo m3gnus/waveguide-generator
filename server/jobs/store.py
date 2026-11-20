@@ -2479,19 +2479,24 @@ class JobStore:
         with self._lock, self._connection() as conn:
             return self._load_archive_snapshot(conn, job_id)
 
-    def store_mesh_artifact(self, job_id: str, msh_text: str) -> None:
-        """Upsert original MSH text as in v1 ``server/db.py:233-253``."""
+    def store_mesh_artifact(self, job_id: str, msh_text: str | None) -> None:
+        """Upsert original MSH text as in v1 ``server/db.py:233-253``.
+
+        ``None`` confirms text this job's artifact row already holds -- the
+        imported mesh its run read from that row -- without writing it again.
+        """
 
         with self._lock, self._transaction() as conn:
             if not self._job_exists(conn, job_id):
                 return
-            conn.execute(
-                """
-                INSERT INTO simulation_artifacts (job_id, msh_text) VALUES (?, ?)
-                ON CONFLICT(job_id) DO UPDATE SET msh_text = excluded.msh_text
-                """,
-                (job_id, msh_text),
-            )
+            if msh_text is not None:
+                conn.execute(
+                    """
+                    INSERT INTO simulation_artifacts (job_id, msh_text) VALUES (?, ?)
+                    ON CONFLICT(job_id) DO UPDATE SET msh_text = excluded.msh_text
+                    """,
+                    (job_id, msh_text),
+                )
             conn.execute(
                 "UPDATE simulation_jobs SET has_mesh_artifact = 1, updated_at = ? WHERE id = ?",
                 (_now_iso(), job_id),

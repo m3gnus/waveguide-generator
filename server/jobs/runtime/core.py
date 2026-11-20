@@ -4214,8 +4214,17 @@ class JobRuntime:
                 # is where the reason for a slow one has to appear.
                 for warning in mesh_stats.get("warnings") or []:
                     await self._append_log(job_id, str(warning))
+            # An imported run read its mesh from this job's own artifact row;
+            # writing the same multi-MB text back changes nothing.
+            already_stored = (
+                imported_record is not None
+                and imported_record.get("_execution_mesh_source") == "job-artifact"
+                and imported_record.get("_execution_msh_text") == msh_text
+            )
             try:
-                await asyncio.to_thread(self.store.store_mesh_artifact, job_id, msh_text)
+                await asyncio.to_thread(
+                    self.store.store_mesh_artifact, job_id, None if already_stored else msh_text,
+                )
             except Exception as exc:
                 logger.warning("Mesh artifact persistence failed for job %s: %s", job_id, exc)
                 self.store.update_job(job_id, has_mesh_artifact=False)

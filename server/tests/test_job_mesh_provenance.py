@@ -19,6 +19,14 @@ _CURRENT_HASH = "sha256:" + "a" * 64
 _OLD_HASH = "sha256:" + "b" * 64
 
 
+@pytest.fixture(autouse=True)
+def _fresh_geometry_hashes():
+    # The hashes are memoized per process; each test patches its own mesher.
+    mesh_provenance._geometry_hashes.clear()
+    yield
+    mesh_provenance._geometry_hashes.clear()
+
+
 def test_real_mesher_uses_the_same_geometry_identity_as_cad_export() -> None:
     from server.exports.geometry_identity import geometry_hash_for_design, mesher_version
 
@@ -41,7 +49,8 @@ def test_identity_uses_the_shared_geometry_hash_and_one_version(monkeypatch) -> 
     record = mesh_provenance.record_for_design(design)
     assert record == {"mesher_version": "1.2.3", "geometry_hash": _CURRENT_HASH, "mesher_source": "git:source"}
     assert mesh_provenance.classify_open(record, design) == "current"
-    assert seen == [(design, "1.2.3"), (design, "1.2.3")]
+    # Stamped once, then the reopen reuses it: one resolve per config.
+    assert seen == [(design, "1.2.3")]
     assert mesh_provenance.classify_open({**record, "mesher_version": "1.2.2"}, design) == "stale"
     assert mesh_provenance.classify_open({**record, "geometry_hash": _OLD_HASH}, design) == "stale"
     assert mesh_provenance.classify_open({**record, "mesher_source": "git:older"}, design) == "stale"
@@ -50,6 +59,32 @@ def test_identity_uses_the_shared_geometry_hash_and_one_version(monkeypatch) -> 
     monkeypatch.setattr(mesh_provenance, "mesher_identity", lambda: "unmeasured:nonce")
     assert mesh_provenance.classify_open(record, design) == "unknown"
     assert "mesher_source" not in mesh_provenance.record_for_design(design)
+
+
+def test_memoized_geometry_hash_is_the_uncached_hash(monkeypatch) -> None:
+    """The stored provenance hash must not change because it is reused."""
+
+    from hornlab_mesher import config_builder
+    from server.preview.geometry_identity import geometry_hash_for_design, mesher_version
+
+    designs = [
+        DesignConfig.model_validate({"formula": "OSSE", "L": 120}),
+        DesignConfig.model_validate({"formula": "OSSE", "L": 160}),
+        DesignConfig.model_validate({"formula": "OSSE", "L": 120, "mesh": {"quadrants": 1}}),
+    ]
+    expected = [geometry_hash_for_design(design) for design in designs]
+    resolves = []
+    resolve = config_builder.resolve_geometry
+    monkeypatch.setattr(config_builder, "resolve_geometry", lambda *a, **k: resolves.append(1) or resolve(*a, **k))
+    first = [mesh_provenance.record_for_design(design)["geometry_hash"] for design in designs]
+    again = [mesh_provenance.record_for_design(design.model_copy(deep=True))["geometry_hash"] for design in designs]
+    assert first == again == expected
+    assert all(
+        mesh_provenance.classify_open({"mesher_version": mesher_version(), "geometry_hash": value}, design) == "current"
+        for value, design in zip(expected, designs)
+    )
+    # Nine stamps and comparisons, at most one resolve per design.
+    assert len(resolves) <= len(designs)
 
 
 @pytest.mark.parametrize("provenance", [None, {}, {"mesher_version": "1"}, {"geometry_hash": "sha256:a"}, {"mesher_version": "unknown", "geometry_hash": "sha256:a"}])
@@ -151,6 +186,7 @@ def test_mesh_freshness_endpoint_handles_old_changed_and_missing_jobs(tmp_path: 
             status, _ = await _request(app, "GET", "/api/jobs/missing/mesh-freshness")
             assert status == 404
             monkeypatch.setattr(mesh_provenance, "geometry_hash_for_design", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad geometry")))
+            mesh_provenance._geometry_hashes.clear()
             status, raw = await _request(app, "GET", "/api/jobs/current/mesh-freshness")
             assert status == 200
             assert json.loads(raw) == {"freshness": "unknown"}
