@@ -101,7 +101,7 @@ describe('Show reveals the requests it counts', () => {
     cadRecoveryNoticesStore.setState({ notices: { recovery } });
     const dismissNotice = vi.spyOn(cadRecoveryNoticesStore.getState(), 'dismiss').mockResolvedValue().mockClear();
     const stopped = vi.spyOn(jobsSocket, 'stopJob').mockResolvedValue().mockClear();
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue();
     const fetcher = vi.fn(async () => json({})); vi.stubGlobal('fetch', fetcher);
     const record = { manifest_sha256: location === 'current' ? 'restart-held-snapshot' : 'other-snapshot' } as CadReturnIngestRecord;
     await act(async () => root.render(location === 'current' || location === 'earlier'
@@ -128,7 +128,7 @@ describe('Show reveals the requests it counts', () => {
   it('reports partial failure and lets the remaining row be retried', async () => {
     workspaceModeStore.setMode('cad'); workspaceModeStore.setImportedInput('file');
     const fetcher = vi.fn().mockResolvedValueOnce(json({ detail: 'offline' }, 503)).mockResolvedValue(json({}));
-    vi.stubGlobal('fetch', fetcher); vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
+    vi.stubGlobal('fetch', fetcher); vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue();
     await act(async () => root.render(<Surface/>));
     const clear = [...host.querySelectorAll('button')].find(button => button.textContent === 'Clear all')!;
     await act(async () => clear.click());

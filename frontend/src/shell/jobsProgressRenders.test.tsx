@@ -214,7 +214,7 @@ describe('a running solve\'s job events', () => {
     resetWebGLProbe();
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue(undefined);
     // Requests stay pending: what is measured is the job events, not loading.
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => undefined)));
     publishJobs([

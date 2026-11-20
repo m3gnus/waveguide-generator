@@ -83,7 +83,7 @@ describe('the needs_user_input ladder', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     reviewIds = [FINDING]; reviewApprovals = [];
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue();
     vi.spyOn(jobsSocket, 'deleteJob').mockResolvedValue();
     host = document.createElement('div');
     document.body.append(host);

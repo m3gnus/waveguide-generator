@@ -200,5 +200,8 @@ export async function dismissCadJob(job: JobItem): Promise<void> {
   // The backend deletes the refused chain in one transaction, so a reconnect
   // can never revive a parent this snapshot did not know about.
   await post(`/api/jobs/${encodeURIComponent(job.id)}/dismiss`, {});
-  await jobsSocket.refresh();
+  // That chain is every request of the same CAD operation; each read finds it gone.
+  const operationId = current.cad_intent?.operation_id;
+  await jobsSocket.refreshJobs([job.id, ...(operationId ? jobsSocket.getSnapshot().jobs
+    .filter((item) => item.id !== job.id && item.cad_intent?.operation_id === operationId).map((item) => item.id) : [])]);
 }

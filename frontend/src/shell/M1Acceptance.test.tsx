@@ -244,7 +244,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     mocks.solveModel.mockResolvedValue('job-1');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue(undefined);
     readyCad('wgi_first');
     workspaceModeStore.setMode('cad');
     host = document.createElement('div');

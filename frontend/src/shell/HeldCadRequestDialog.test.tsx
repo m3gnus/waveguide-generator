@@ -43,7 +43,7 @@ describe('held CAD request dialog owner', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     actions.continueRun.mockReset().mockResolvedValue('child');
     actions.dismiss.mockReset().mockResolvedValue(undefined);
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue(undefined);
     publishCadJobs([]);
     resetHeldRequestSessionForTests(Date.now() - 1000);
     host = document.createElement('div');

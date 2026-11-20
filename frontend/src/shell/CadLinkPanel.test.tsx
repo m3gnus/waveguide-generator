@@ -126,7 +126,7 @@ describe('CadLinkPanel', () => {
     workspaceModeStore.setMode('parametric');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue(undefined);
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);

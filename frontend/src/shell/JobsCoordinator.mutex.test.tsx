@@ -381,7 +381,7 @@ describe('solve invocation mutex', () => {
     importedMeshStore.clear();
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue(undefined);
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -1927,7 +1927,7 @@ describe('solve invocation mutex', () => {
       cad_source: { ingest_id: 'wgi_readiness', model_id: 'wgl_readiness' } as JobItem['cad_source'],
     });
     const publishChild = () => publishJobs([child, parent]);
-    if (arrival === 'during refresh') vi.mocked(jobsSocket.refresh).mockImplementationOnce(async () => publishChild());
+    if (arrival === 'during refresh') vi.mocked(jobsSocket.refreshJobs).mockImplementationOnce(async () => publishChild());
     await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
     await act(async () => host.querySelector<HTMLButtonElement>('.solve-readiness button')!.click());
     act(() => { mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability]; });
@@ -2211,7 +2211,7 @@ describe('solve invocation mutex', () => {
     const release = vi.spyOn(solveAttention, 'releaseSolve');
     const bind = vi.spyOn(solveAttention, 'bindRun');
     const blocked = path === 'retry' ? null : vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue('must-not-submit');
-    const refresh = vi.mocked(jobsSocket.refresh);
+    const refresh = vi.mocked(jobsSocket.refreshJobs);
     let refusal!: Promise<unknown>;
     await act(async () => {
       refusal = invoke().catch((error: unknown) => error);
@@ -3652,7 +3652,7 @@ describe('solve invocation mutex', () => {
     const parent = failedJob();
     const child = { ...parent, id: 'fast-child', parent_job_id: parent.id, status: 'complete' as const, has_results: true };
     vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue(child.id);
-    vi.mocked(jobsSocket.refresh).mockImplementationOnce(async () => {
+    vi.mocked(jobsSocket.refreshJobs).mockImplementationOnce(async () => {
       expect(compareSelection.getSnapshot().awaiting).toBe(child.id);
       publishJobs([child, parent]);
     });
@@ -3666,7 +3666,7 @@ describe('solve invocation mutex', () => {
 
   it('reports a refresh error without losing the accepted child and unlocks the next press', async () => {
     vi.spyOn(jobsSocket, 'retryJob').mockResolvedValueOnce('accepted-child').mockResolvedValue('next-child');
-    vi.mocked(jobsSocket.refresh).mockRejectedValueOnce(new Error('refresh failed'));
+    vi.mocked(jobsSocket.refreshJobs).mockRejectedValueOnce(new Error('refresh failed'));
     await act(async () => {
       await expect(jobsCoordinatorBridge.getSnapshot().continueRun('parent')).rejects.toThrow('refresh failed');
     });
@@ -3736,11 +3736,11 @@ describe('archive completion refresh', () => {
       has_radiation_impedance_artifact: true,
       radiation_impedance_artifact_bytes: 3_584,
     };
-    const refresh = vi.spyOn(jobsSocket, 'refresh').mockImplementation(async () => {
+    const refresh = vi.spyOn(jobsSocket, 'refreshJobs').mockImplementation(async () => {
       publishJobs([complete]);
     });
 
     await expect(refreshedArchiveJob(stale)).resolves.toBe(complete);
-    expect(refresh).toHaveBeenCalledOnce();
+    expect(refresh).toHaveBeenCalledExactlyOnceWith([stale.id]);
   });
 });

@@ -110,7 +110,7 @@ describe('Enable & rerun wiring', () => {
     workspaceModeStore.setMode('parametric');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue(undefined);
     vi.stubGlobal('fetch', vi.fn(async () => response([100])));
     publishJobs([job('parametric-run'), job('cad-run', true)]);
     host = document.createElement('div');
@@ -154,7 +154,7 @@ describe('Enable & rerun wiring', () => {
     await act(async () => { pending.resolve('job-new'); await pending.promise; });
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'parametric-run', following: true, awaiting: 'job-new' });
     expect(bind.mock.calls.map(([id]) => id)).toContain('job-new');
-    expect(jobsSocket.refresh).toHaveBeenCalledOnce();
+    expect(jobsSocket.refreshJobs).toHaveBeenCalledOnce();
     expect(solveAttention.resultsReady('job-new')).toBe('revealed');
     expect(rerun.rerunWithPatch).toHaveBeenCalledWith(
       'parametric-run', { options: { polar_config: { spherical_sampling: true } } }, expect.objectContaining({ beforeSubmit: expect.any(Function) }),
@@ -203,7 +203,7 @@ describe('Enable & rerun wiring', () => {
     expect(release).toHaveBeenCalledOnce();
     expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('rerun refused');
     expect(compareSelection.getSnapshot().awaiting).toBeNull();
-    expect(jobsSocket.refresh).not.toHaveBeenCalled();
+    expect(jobsSocket.refreshJobs).not.toHaveBeenCalled();
     solveAttention.bindRun('unrelated');
     expect(solveAttention.resultsReady('unrelated')).toBe('indicated');
     await act(async () => { button()!.click(); });

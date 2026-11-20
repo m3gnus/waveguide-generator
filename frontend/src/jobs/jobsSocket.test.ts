@@ -1415,3 +1415,73 @@ it('deduplicates a show pointer across reconnect while a second window can show 
   expect(show).toHaveBeenCalledTimes(2);
   stop(); stopSecond(); manager.stop(); second.stop();
 });
+
+describe('refreshing the jobs one action changed', () => {
+  // The server's jobs after a solve start, a finished run and a dismissal.
+  const server = new Map<string, JobItem>([
+    ['done', job({ id: 'done', run_number: 1, status: 'complete', progress: 1, has_results: true })],
+    ['started', job({ id: 'started', run_number: 3, status: 'queued' })],
+    ['kept', job({ id: 'kept', run_number: 2, status: 'complete', has_results: true })],
+  ]);
+  const before = [
+    job({ id: 'done', run_number: 1, status: 'running', progress: .5 }),
+    job({ id: 'kept', run_number: 2, status: 'complete', has_results: true }),
+    job({ id: 'dismissed', run_number: null, status: 'held' }),
+  ];
+  const serverFetch = () => vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith('/api/status/')) {
+      const row = server.get(decodeURIComponent(url.slice('/api/status/'.length)));
+      // The status reader adds `updated_at` and `message` to the list's fields.
+      return row ? json({ ...row, updated_at: '2026-08-03T10:05:00Z', message: row.error_message }) : json({ detail: 'gone' }, 404);
+    }
+    return json({ items: [...server.values()], total: server.size });
+  });
+  const started = (fetcher: ReturnType<typeof serverFetch>) => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: before });
+    return manager;
+  };
+  const listed = (jobs: readonly JobItem[]) => jobs.map((row) => {
+    const { updated_at: _updated, message: _message, ...fields } = row as JobItem & { updated_at?: string; message?: string | null };
+    return fields;
+  });
+
+  it('ends with the same list as re-paging every job, from status reads only', async () => {
+    const paged = serverFetch();
+    const full = started(paged);
+    await full.refresh();
+    const single = serverFetch();
+    const targeted = started(single);
+    await targeted.refreshJobs(['started', 'done', 'dismissed', 'started']);
+    expect(listed(targeted.getSnapshot().jobs)).toEqual(listed(full.getSnapshot().jobs));
+    expect(targeted.getSnapshot().jobs.map(({ id }) => id)).toEqual(['started', 'kept', 'done']);
+    expect(targeted.getSnapshot().error).toBeNull();
+    expect(single.mock.calls.map(([url]) => String(url)).sort())
+      .toEqual(['/api/status/dismissed', '/api/status/done', '/api/status/started']);
+    full.stop(); targeted.stop();
+  });
+
+  it('reads again after a read that was already in flight', async () => {
+    const socket = new MockSocket();
+    const reads: Array<(response: Response) => void> = [];
+    const fetcher = vi.fn(() => new Promise<Response>((resolve) => { reads.push(resolve); }));
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job({ id: 'done', status: 'running' })] });
+    // A queued event starts a status read before the action.
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'done', type: 'queued', payload: {} });
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+    const refreshed = manager.refreshJobs(['done']);
+    reads[0](json(job({ id: 'done', status: 'running' })));
+    await vi.waitFor(() => expect(reads).toHaveLength(2));
+    reads[1](json(job({ id: 'done', status: 'complete', progress: 1, has_results: true })));
+    await refreshed;
+    expect(manager.getSnapshot().jobs[0]).toMatchObject({ status: 'complete', has_results: true });
+    manager.stop();
+  });
+});

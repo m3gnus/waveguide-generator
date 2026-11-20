@@ -55,7 +55,7 @@ describe('CAD job commands and window identities', () => {
   it('records approval of the exact preparation without starting a solve', async () => {
     const fetcher = vi.fn(async (url: RequestInfo | URL) => json(String(url).endsWith('/solve-again') ? { job_id: 'child' } : {}));
     vi.stubGlobal('fetch', fetcher);
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue();
     await approveCadJob(job().id, { preparation_id: 'prep', finding_ids: ['finding'] });
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/jobs/refused/approvals']);
     const approvals = { preparation_id: 'prep', finding_ids: ['finding'] };
@@ -76,21 +76,21 @@ describe('CAD job commands and window identities', () => {
     const fetcher = vi.fn(async () => json({ deleted: true, job_id: 'refused' }));
     vi.stubGlobal('fetch', fetcher);
     const deleted = vi.spyOn(jobsSocket, 'deleteJob').mockResolvedValue();
-    const refreshed = vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
+    const refreshed = vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue();
     await dismissCadJob(child);
     expect(fetcher).toHaveBeenCalledOnce();
     const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('/api/jobs/refused/dismiss');
     expect(init.method).toBe('POST');
     expect(deleted).not.toHaveBeenCalled();
-    expect(refreshed).toHaveBeenCalled();
+    expect(refreshed).toHaveBeenCalledExactlyOnceWith(['refused', 'parent']);
   });
 
   it.each(['preparing', 'queued', 'running'] as const)('never dismisses or stops a %s intent', async (status) => {
     const stopped = vi.spyOn(jobsSocket, 'stopJob').mockResolvedValue();
     const fetcher = vi.fn(async () => json({}));
     vi.stubGlobal('fetch', fetcher);
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue();
     await expect(dismissCadJob({ ...job(), status })).rejects.toThrow('This solve cannot be dismissed yet');
     expect(stopped).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();

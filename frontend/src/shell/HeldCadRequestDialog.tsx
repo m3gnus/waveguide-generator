@@ -176,11 +176,11 @@ export function HeldCadRequestDialog() {
       else if (option === 'solve_anyway' || option === 'retry') {
         const child = await jobsCoordinatorBridge.getSnapshot().continueRun(job.id, { mesh_limit_override: option === 'solve_anyway' });
         if (!child) throw new Error('Request could not continue');
-        await jobsSocket.refresh();
+        await jobsSocket.refreshJobs([job.id, child]);
       } else if (option === 'approve') {
         const child = await jobsCoordinatorBridge.getSnapshot().continueRun(job.id, { approvals: reviewed! });
         if (!child) throw new Error('Request could not continue');
-        await jobsSocket.refresh();
+        await jobsSocket.refreshJobs([job.id, child]);
       } else if (option === 'review') {
         workspaceNavigation.reveal('cad-requests', job.id);
       }

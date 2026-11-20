@@ -333,7 +333,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     mocks.solveModel.mockResolvedValue('job-1');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue(undefined);
     readyCad();
     workspaceModeStore.setMode('cad');
     host = document.createElement('div');

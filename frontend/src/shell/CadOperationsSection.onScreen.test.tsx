@@ -87,7 +87,7 @@ describe('operation cards for the model on screen', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     reviewIds = [FINDING]; reviewApprovals = [];
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue();
     dismissed = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       dismissed.push(url);

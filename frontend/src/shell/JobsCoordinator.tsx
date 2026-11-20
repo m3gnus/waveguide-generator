@@ -314,11 +314,11 @@ const systemNow = () => new Date();
  * before the following metadata event advertises retained pressure bases,
  * radiation impedance, final timings, and artifact byte counts. Archiving the
  * event snapshot makes that ordering permanent: the archive is marked done
- * without files that already exist on the server. A list refresh is the
- * server's canonical, fully serialized job view and closes that race.
+ * without files that already exist on the server. A status read is the
+ * server's canonical, fully serialized view of that job and closes that race.
  */
 export async function refreshedArchiveJob(job: JobItem): Promise<JobItem> {
-  await jobsSocket.refresh();
+  await jobsSocket.refreshJobs([job.id]);
   return jobsSocket.getSnapshot().jobs.find((candidate) => candidate.id === job.id) ?? job;
 }
 
@@ -480,7 +480,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       opts.onAccepted?.(jobId);
       compareSelection.awaitRun(jobId);
       solveAttention.bindRun(jobId, undefined, token);
-      await jobsSocket.refresh();
+      await jobsSocket.refreshJobs([jobId]);
       return jobId;
     } catch (error) {
       solveAttention.releaseSolve();
@@ -685,7 +685,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       solveAttention.followJob(key, jobId);
       solveAttention.bindRun(jobId, key, continuation?.attention ?? null);
       if (frameAxis && view?.frame?.confirmed?.axis !== frameAxis) void useCadSolverFrameStore.getState().load(ingestId);
-      await jobsSocket.refresh();
+      await jobsSocket.refreshJobs([jobId]);
       const job = jobsSocket.getSnapshot().jobs.find((candidate) => candidate.id === jobId);
       if (job) completeCadSolve(job);
       return 'submitted' as const;

@@ -49,7 +49,7 @@ beforeEach(() => {
     feedback: {}, newestSequence: 0, newestSentAt: 0, intakeRefusals: [], displayRetries: {}, recoveryError: null, loadedAt: null });
   returns = []; receipts = []; channels = [];
   vi.spyOn(jobsSocket, 'subscribeCadOperations').mockImplementation((listener) => { channels.push(listener); return () => undefined; });
-  vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
+  vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined); vi.spyOn(jobsSocket, 'refreshJobs').mockResolvedValue(undefined);
   fetcher = vi.fn(async (input, init) => {
     const path = String(input);
     if (path.endsWith('/workspace')) return json(workspaceFor());

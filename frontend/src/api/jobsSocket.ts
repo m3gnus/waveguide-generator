@@ -897,6 +897,23 @@ export class JobsSocketManager {
     await this.refetchJobs();
   }
 
+  /**
+   * Re-read the jobs a local action changed (`GET /api/status/{id}` each),
+   * instead of re-paging the whole list: the socket keeps every other row
+   * current. A job the server no longer has leaves the list.
+   *
+   * A read already in flight may have been sent before the action, so it is
+   * awaited and the job read once more: the row reflects the server as it was
+   * after this call began.
+   */
+  async refreshJobs(jobIds: readonly string[]): Promise<void> {
+    await Promise.all([...new Set(jobIds)].map(async (jobId) => {
+      const inFlight = this.jobRefreshes.get(jobId);
+      if (inFlight) await inFlight;
+      await this.refreshJob(jobId);
+    }));
+  }
+
   async stopJob(jobId: string): Promise<void> {
     const response = await this.fetcher(`/api/stop/${encodeURIComponent(jobId)}`, { method: 'POST' });
     if (!response.ok) throw await responseError(response);
