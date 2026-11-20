@@ -101,19 +101,34 @@ def test_a_detuned_term_that_never_passes_does_not_hand_over_the_floor(
     """Graded R-OSSE stations: the nested reading passes, the detuned gap never does.
 
     The search used to walk down to the 1 mm floor and hand it to the mesher,
-    which then took minutes. The coarsest probe whose nested reading met the
-    target is the plan instead, and it says it was not fully verified.
+    which then took minutes. The coarsest nested pass is the plan instead,
+    capped at the fixed fallback because an aliasing expression surface reads
+    the same way, and it says it was not fully verified.
     """
 
-    from server.exports.sizing import _MIN_CAD_RESOLUTION_MM, _PROBE_CAD_RESOLUTION_MM
+    from server.exports.sizing import _MIN_CAD_RESOLUTION_MM
 
     calls = _measure_with(monkeypatch, _reading(0.2, 0.005))
     plan = plan_cad_resolution(_config(), tolerance_mm=0.02)
     assert len(calls) > 1  # the search really did keep refining
-    assert plan.resolution_mm == _PROBE_CAD_RESOLUTION_MM
+    assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
     assert plan.resolution_mm > _MIN_CAD_RESOLUTION_MM
+    # The nested pass was at the 24 mm probe; 12 mm itself was never measured.
+    assert plan.deviation_mm is None
+    assert plan.warning is not None
+    assert "12 mm" in plan.warning and "Check fine surface detail" in plan.warning
+
+
+def test_a_nested_pass_finer_than_the_fallback_keeps_its_reading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A large chord drives the 24 mm probe down by the 0.4 step limit to 9.6 mm,
+    # where the nested reading passes and the detuned one still does not.
+    _measure_with(monkeypatch, _reading(0.2, 0.2, chord=0.9), _reading(0.2, 0.005))
+    plan = plan_cad_resolution(_config(), tolerance_mm=0.02)
+    assert plan.resolution_mm == pytest.approx(9.6)
     assert plan.deviation_mm == pytest.approx(0.005)
-    assert plan.warning is not None and "not fully verified" in plan.warning
+    assert plan.warning is not None and "9.6 mm" in plan.warning
 
 
 def test_no_passing_reading_at_all_takes_the_fixed_fallback_not_the_floor(
@@ -131,33 +146,26 @@ def test_a_nested_pass_survives_a_later_unmeasurable_probe(
 ) -> None:
     """The early-exit path and the budget-exhausted path share one rule."""
 
-    from server.exports.sizing import _PROBE_CAD_RESOLUTION_MM
-
-    _measure_with(monkeypatch, _reading(0.2, 0.005), None)
+    _measure_with(monkeypatch, _reading(0.2, 0.2, chord=0.9), _reading(0.2, 0.005), None)
     plan = plan_cad_resolution(_config(), tolerance_mm=0.02)
-    assert plan.resolution_mm == _PROBE_CAD_RESOLUTION_MM
+    assert plan.resolution_mm == pytest.approx(9.6)
     assert plan.deviation_mm == pytest.approx(0.005)
+    assert plan.warning is not None and "fully verified" in plan.warning
 
 
-def test_an_accepted_probe_ignores_the_nested_reading(
+def test_an_accepted_probe_wins_over_an_earlier_nested_pass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Designs that pass the full test today plan exactly the same resolution."""
+    """Designs that pass the full test plan as before: no warning, no nested plan."""
 
-    from dataclasses import replace
+    from server.exports.sizing import _PROBE_CAD_RESOLUTION_MM
 
-    import server.exports.sizing as sizing
-
-    real = plan_cad_resolution(_config(), tolerance_mm=0.02)
-    assert real.deviation_mm is not None and real.warning is None
-    measure = sizing.measure_deviation
-
-    def without_nested(params, angular: int, length: int):
-        deviation, a, ell = measure(params, angular, length)
-        return replace(deviation, nested_cubic=None), a, ell
-
-    monkeypatch.setattr(sizing, "measure_deviation", without_nested)
-    assert plan_cad_resolution(_config(), tolerance_mm=0.02) == real
+    calls = _measure_with(monkeypatch, _reading(0.2, 0.005), _reading(0.01, 0.005))
+    plan = plan_cad_resolution(_config(), tolerance_mm=0.02)
+    assert len(calls) == 2
+    assert plan.resolution_mm < _PROBE_CAD_RESOLUTION_MM
+    assert plan.deviation_mm == pytest.approx(0.01)
+    assert plan.warning is None
 
 
 def test_an_unmeasurable_probe_after_an_accepted_one_keeps_the_fixed_fallback(
@@ -169,3 +177,26 @@ def test_an_unmeasurable_probe_after_an_accepted_one_keeps_the_fixed_fallback(
     plan = plan_cad_resolution(_config(), tolerance_mm=0.02)
     assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
     assert plan.deviation_mm is None
+
+
+def test_the_unverified_sampling_warning_reaches_the_export_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The user sees the note on the STEP result, not just in the log."""
+
+    from server.exports import core
+
+    _measure_with(monkeypatch, _reading(0.2, 0.005))
+    written: list[float] = []
+
+    def write(config, path):
+        written.append(config["mesh"]["mouthResolution"])
+        path.write_text("STEP transport checked separately by the STEP contract tests")
+        return path, None
+
+    monkeypatch.setattr("hornlab_mesher.cad.write_step_from_config", write)
+    monkeypatch.setattr(core, "_assert_step", lambda *_a, **_k: None)
+    result = core._build_step_solid_sync(_seed().model_dump(mode="json"))
+    assert written == [_FALLBACK_CAD_RESOLUTION_MM]
+    assert result.warning is not None
+    assert "Check fine surface detail" in result.warning
