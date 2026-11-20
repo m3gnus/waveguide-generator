@@ -1426,6 +1426,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/archive-holds/{hold}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Release Archive Hold
+         * @description Drop the server's copy of an archive snapshot's members once written.
+         *
+         *     Idempotent: a hold that already expired, or another run's, releases
+         *     nothing and still answers 200.
+         */
+        delete: operations["release_archive_hold_api_jobs__job_id__archive_holds__hold__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/archive-snapshot": {
         parameters: {
             query?: never;
@@ -2715,6 +2738,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ArchiveHoldReleaseResponse */
+        ArchiveHoldReleaseResponse: {
+            /** Released */
+            released: boolean;
+        };
         /**
          * ArchiveRunDocumentRequest
          * @description The run already owns its archive location; the caller supplies only its id.
@@ -10237,6 +10265,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_archive_hold_api_jobs__job_id__archive_holds__hold__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                hold: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveHoldReleaseResponse"];
                 };
             };
             /** @description Validation Error */

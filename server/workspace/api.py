@@ -269,7 +269,13 @@ def _parse_server_member(value: str) -> ServerMember:
 def _resolve_server_members(
     runtime: Any, job_id: str | None, members: list[tuple[str, bytes | ServerMember]]
 ) -> list[tuple[str, bytes]]:
-    """Replace each server member with its bytes, from a worker thread."""
+    """Replace each server member with its bytes, from a worker thread.
+
+    Runs before anything else the write does, the run-folder claim included,
+    so a refusal leaves no trace.
+    """
+
+    from server.jobs.archive_holds import HoldUnavailable
 
     resolved: list[tuple[str, bytes]] = []
     for relative_path, content in members:
@@ -277,17 +283,23 @@ def _resolve_server_members(
             if job_id is None:
                 raise ValueError("A server member needs the run it belongs to (job_id).")
             if content.hold is None:
+                # As the mesh download: an empty stored mesh is no mesh.
                 text = runtime.store.get_mesh_artifact(job_id)
-                if text is None:
+                if not text:
                     raise ServerMemberUnavailable("This run did not keep its mesh.")
                 content = text.encode("utf-8")
             else:
-                held = runtime.archive_holds.get(content.hold, job_id, content.member)
-                if held is None:
+                try:
+                    content = runtime.archive_holds.lookup(content.hold, job_id, content.member)
+                except HoldUnavailable as exc:
                     raise ServerMemberUnavailable(
-                        "WG no longer holds this run’s copied files. Archive the run again."
-                    )
-                content = held
+                        "WG’s copy of this run’s files expired before they were written."
+                    ) from exc
+                except KeyError as exc:
+                    # Only a client fault names a member its snapshot never had.
+                    raise ValueError(
+                        f"The archive snapshot holds no member {content.member!r}."
+                    ) from exc
         resolved.append((relative_path, content))
     return resolved
 
@@ -1509,6 +1521,16 @@ def create_workspace_router(
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+        if any(isinstance(content, ServerMember) for _path, content in members):
+            try:
+                members = await asyncio.to_thread(
+                    _resolve_server_members, request.app.state.jobs_runtime, job_id, members
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except ServerMemberUnavailable as exc:
+                return _server_member_unavailable_response(exc)
+
         if destination is None and job_id is not None:
             jobs = request.app.state.jobs_runtime
             row = await asyncio.to_thread(jobs.store.get_job_row, job_id)
@@ -1544,16 +1566,6 @@ def create_workspace_router(
                 raise HTTPException(status_code=409, detail=exc.args[0]) from exc
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-        if any(isinstance(content, ServerMember) for _path, content in members):
-            try:
-                members = await asyncio.to_thread(
-                    _resolve_server_members, request.app.state.jobs_runtime, job_id, members
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
-            except ServerMemberUnavailable as exc:
-                return _server_member_unavailable_response(exc)
 
         try:
             written = await asyncio.to_thread(

@@ -1294,6 +1294,7 @@ describe('result exporters', () => {
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'export', label: 'Archiving the run' }]);
       const path = String(input);
+      if (init?.method === 'DELETE') return new Response(JSON.stringify({ released: true }));
       if (path === '/api/jobs/archive-cardioid/archive-snapshot?members=held') return new Response(JSON.stringify({
         schema_version: 1,
         results: finalResult,
@@ -1340,9 +1341,13 @@ describe('result exporters', () => {
     ]);
     const record = JSON.parse(await writes.at(-1)!.members[0].blob.text());
     expect(record.artifacts.radiationImpedance.bytes).toBe(3);
-    expect(fetcher.mock.calls.map(([input]) => String(input)).filter((path) => (
-      path.includes('archive-cardioid')
-    ))).toEqual(['/api/jobs/archive-cardioid/archive-snapshot?members=held']);
+    // The snapshot is read once, and its held copy released after the last write.
+    const calls = fetcher.mock.calls.map(([input, init]) => `${init?.method ?? 'GET'} ${String(input)}`);
+    expect(calls.filter((call) => call.includes('archive-cardioid'))).toEqual([
+      'GET /api/jobs/archive-cardioid/archive-snapshot?members=held',
+      'DELETE /api/jobs/archive-cardioid/archive-holds/held-cardioid',
+    ]);
+    expect(calls.at(-1)).toBe('DELETE /api/jobs/archive-cardioid/archive-holds/held-cardioid');
   });
 
   it.each(['missing', 'pinned', 'legacy-record', 'retryable'])('preserves the CAD reference before publishing run.json (%s)', async (outcome) => {
@@ -1367,6 +1372,7 @@ describe('result exporters', () => {
     const records: Record<string, unknown>[] = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
+      if (init?.method === 'DELETE') return new Response(JSON.stringify({ released: true }));
       if (path === '/api/jobs/archive-cad/archive-snapshot?members=held') return new Response(JSON.stringify({
         schema_version: 1, results: finalResult, results_sha256: 'c'.repeat(64), hold: 'held-cad',
         mesh_artifact: null, pressure_bases: [], radiation_impedance: null,
@@ -1423,6 +1429,7 @@ describe('result exporters', () => {
     } satisfies JobItem;
     const writes: ReturnType<typeof workspacePayload>[] = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (init?.method === 'DELETE') return new Response(JSON.stringify({ released: true }));
       if (String(input) === '/api/jobs/archive-mesh/archive-snapshot?members=held') return new Response(JSON.stringify({
         schema_version: 1, results: finalResult, results_sha256: 'b'.repeat(64), hold: 'held-mesh',
         mesh_artifact: { member: 'mesh', bytes: 16 }, pressure_bases: [], radiation_impedance: null,
@@ -1437,13 +1444,66 @@ describe('result exporters', () => {
 
     await archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher);
 
-    expect(writes[1].members.map(({ relative_path }) => relative_path)).toEqual([
-      '9_Mesh_Run.msh',
+    // One write carries every held member, after the files built here, so a
+    // lost hold writes nothing; run.json follows in its own write.
+    expect(writes).toHaveLength(2);
+    expect(writes[0].members.map(({ relative_path }) => relative_path)).toEqual([
+      '9_Mesh_Run.json', '9_Mesh_Run.csv', '9_Mesh_Run_derived_acoustics.csv',
+      '9_Mesh_Run_derived_acoustics.json', '9_Mesh_Run_report.html', '9_Mesh_Run.msh',
     ]);
     // The exact mesh the snapshot copied, written by the server from its hold.
-    expect(writes[1].members[0].server).toEqual({ hold: 'held-mesh', member: 'mesh' });
-    expect(JSON.parse(await writes[2].members[0].blob.text()).artifacts.mesh)
+    expect(writes[0].members.at(-1)!.server).toEqual({ hold: 'held-mesh', member: 'mesh' });
+    expect(JSON.parse(await writes[1].members[0].blob.text()).artifacts.mesh)
       .toBe('9_Mesh_Run.msh');
+  });
+
+  it.each([1, 2])('takes a fresh snapshot when a held copy is lost (%s time(s)), leaving nothing partial', async (losses) => {
+    const job = {
+      id: 'archive-lost', archive_folder: 'OSSE', archive_run: '9_OSSE', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
+      stage: null, stage_message: null, created_at: '2026-08-20T10:00:00Z', queued_at: '2026-08-20T10:00:00Z',
+      started_at: '2026-08-20T10:00:01Z', completed_at: '2026-08-20T10:02:00Z', config_summary: {},
+      solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: false,
+      label: 'Mesh Run', error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null,
+      design_revision: 1, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null,
+      auto_export_formats: {}, archived_at: null, raw_results_file: null, mesh_artifact_file: null, log_tail: [],
+    } satisfies JobItem;
+    let snapshots = 0;
+    let refusals = 0;
+    const written: ReturnType<typeof workspacePayload>[] = [];
+    const released: string[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (init?.method === 'DELETE') { released.push(String(input)); return new Response(JSON.stringify({ released: false })); }
+      if (String(input).endsWith('/archive-snapshot?members=held')) return new Response(JSON.stringify({
+        schema_version: 1, results: finalResult, results_sha256: 'b'.repeat(64), hold: `hold-${++snapshots}`,
+        mesh_artifact: { member: 'mesh', bytes: 16 }, pressure_bases: [], radiation_impedance: null,
+      }));
+      const payload = workspacePayload(init);
+      if (payload.members.some(({ server }) => server) && refusals < losses) {
+        refusals += 1;
+        // The server resolves held members before writing anything.
+        return new Response(JSON.stringify({ code: 'server_member_unavailable', detail: 'WG’s copy of this run’s files expired before they were written.' }), { status: 409 });
+      }
+      written.push(payload);
+      return new Response(JSON.stringify({
+        directory: `/workspace/${payload.subdirectory}`,
+        files: payload.members.map(({ relative_path }) => `/workspace/${payload.subdirectory}/${relative_path}`),
+      }));
+    });
+    const archived = archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher);
+    if (losses === 2) {
+      await expect(archived).rejects.toThrow('WG’s copy of this run’s files expired twice before it could write them. WG tries the archive again automatically.');
+      expect(written).toEqual([]);
+    } else {
+      await archived;
+      expect(written.map(({ existing, members }) => [existing, members.map(({ relative_path }) => relative_path)])).toEqual([
+        ['confirm', ['9_Mesh_Run.json', '9_Mesh_Run.csv', '9_Mesh_Run_derived_acoustics.csv',
+          '9_Mesh_Run_derived_acoustics.json', '9_Mesh_Run_report.html', '9_Mesh_Run.msh']],
+        ['confirm', ['run.json']],
+      ]);
+      expect(written[0].members.at(-1)!.server).toEqual({ hold: 'hold-2', member: 'mesh' });
+    }
+    expect(snapshots).toBe(2);
+    expect(released).toEqual(['/api/jobs/archive-lost/archive-holds/hold-1', '/api/jobs/archive-lost/archive-holds/hold-2']);
   });
 
   it.each([['mesh-file', 200], ['mesh-file', 409], ['mesh-file', 503], ['cad', 200], ['cad', 409], ['native', 409], ['design-assembly', 409]] as const)('archives %s replay bytes or an explicit refusal (%s)', async (origin, status) => {
@@ -1459,6 +1519,7 @@ describe('result exporters', () => {
     } satisfies JobItem;
     const writes: ReturnType<typeof workspacePayload>[] = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (init?.method === 'DELETE') return new Response(JSON.stringify({ released: true }));
       if (String(input).endsWith('/archive-snapshot?members=held')) return new Response(JSON.stringify({
         schema_version: 1, results: finalResult, results_sha256: 'b'.repeat(64), hold: 'held-replay',
         mesh_artifact: { member: 'mesh', bytes: 16 }, pressure_bases: [], radiation_impedance: null,

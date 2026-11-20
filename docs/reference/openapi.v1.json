@@ -1,6 +1,19 @@
 {
   "components": {
     "schemas": {
+      "ArchiveHoldReleaseResponse": {
+        "properties": {
+          "released": {
+            "title": "Released",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "released"
+        ],
+        "title": "ArchiveHoldReleaseResponse",
+        "type": "object"
+      },
       "ArchiveRunDocumentRequest": {
         "additionalProperties": false,
         "description": "The run already owns its archive location; the caller supplies only its id.",
@@ -19250,6 +19263,55 @@
           }
         },
         "summary": "Cad Approvals"
+      }
+    },
+    "/api/jobs/{job_id}/archive-holds/{hold}": {
+      "delete": {
+        "description": "Drop the server's copy of an archive snapshot's members once written.\n\nIdempotent: a hold that already expired, or another run's, releases\nnothing and still answers 200.",
+        "operationId": "release_archive_hold_api_jobs__job_id__archive_holds__hold__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "hold",
+            "required": true,
+            "schema": {
+              "title": "Hold",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveHoldReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Archive Hold"
       }
     },
     "/api/jobs/{job_id}/archive-snapshot": {

@@ -16,10 +16,11 @@ import json
 import json as _json
 from pathlib import Path
 import shutil
+import time
 
 import pytest
 
-from server.jobs.archive_holds import ArchiveSnapshotHolds
+from server.jobs.archive_holds import ArchiveSnapshotHolds, HoldTooLarge, HoldUnavailable
 
 
 def _tree(root: Path) -> dict[str, bytes]:
@@ -55,36 +56,111 @@ def test_held_snapshot_holds_exactly_the_inline_bytes(monkeypatch):
 
     assert held["results"] == inline["results"]
     assert held["results_sha256"] == inline["results_sha256"]
-    mesh = holds.get(held["hold"], "run", held["mesh_artifact"]["member"])
+    mesh = holds.lookup(held["hold"], "run", held["mesh_artifact"]["member"])
     assert mesh == inline["mesh_artifact"].encode("utf-8")
     assert held["mesh_artifact"]["bytes"] == len(mesh)
     assert [base["channel_id"] for base in held["pressure_bases"]] == [
         base["channel_id"] for base in inline["pressure_bases"]
     ] == ["normal", "axial", "request"]
     for held_base, inline_base in zip(held["pressure_bases"], inline["pressure_bases"], strict=True):
-        content = holds.get(held["hold"], "run", held_base["member"])
+        content = holds.lookup(held["hold"], "run", held_base["member"])
         assert content == base64.b64decode(inline_base["content_base64"])
         assert held_base["bytes"] == len(content)
-    radiation = holds.get(held["hold"], "run", held["radiation_impedance"]["member"])
+    radiation = holds.lookup(held["hold"], "run", held["radiation_impedance"]["member"])
     assert radiation == base64.b64decode(inline["radiation_impedance"]["content_base64"])
     assert held["radiation_impedance"]["bytes"] == len(radiation)
     assert held["radiation_impedance"]["presentation"] == inline["radiation_impedance"]["presentation"]
-    # A hold belongs to its run only.
-    assert holds.get(held["hold"], "other-run", "mesh") is None
+    # A hold belongs to its run only, and names only the members it copied.
+    with pytest.raises(HoldUnavailable):
+        holds.lookup(held["hold"], "other-run", "mesh")
+    with pytest.raises(KeyError):
+        holds.lookup(held["hold"], "run", "nonsense")
+    assert holds.release(held["hold"], "run") is True
+    assert holds.release(held["hold"], "run") is False
+    with pytest.raises(HoldUnavailable):
+        holds.lookup(held["hold"], "run", "mesh")
+
+
+def test_an_empty_stored_mesh_is_no_mesh(monkeypatch):
+    from server.jobs.runtime import core
+
+    snapshot, motions = _snapshot_fixture()
+    monkeypatch.setattr(core, "_request_motions", lambda _job: motions)
+    snapshot = {**snapshot, "mesh_text": ""}
+    holds = ArchiveSnapshotHolds()
+    assert core._archive_snapshot_presentation("run", snapshot)["mesh_artifact"] == ""
+    held = core._held_archive_snapshot_presentation("run", snapshot, holds)
+    assert held["mesh_artifact"] is None
+    with pytest.raises(KeyError):
+        holds.lookup(held["hold"], "run", "mesh")
+
+
+class _Timers:
+    """Scheduled expiries, fired by the test instead of a clock."""
+
+    def __init__(self):
+        self.pending = []
+
+    def __call__(self, seconds, callback):
+        entry = {"seconds": seconds, "callback": callback, "cancelled": False}
+        self.pending.append(entry)
+        return type("Timer", (), {"cancel": lambda _self: entry.update(cancelled=True)})()
+
+    def fire(self, index):
+        entry = self.pending[index]
+        if not entry["cancelled"]:
+            entry["callback"]()
 
 
 def test_holds_expire_and_the_oldest_go_first():
     now = [0.0]
-    holds = ArchiveSnapshotHolds(ttl_seconds=10, max_holds=2, max_bytes=10, clock=lambda: now[0])
+    timers = _Timers()
+    holds = ArchiveSnapshotHolds(ttl_seconds=10, max_holds=2, max_bytes=10, clock=lambda: now[0], schedule=timers)
     first = holds.hold("a", {"mesh": b"12345"})
     second = holds.hold("b", {"mesh": b"12345"})
-    assert holds.get(first, "a", "mesh") == b"12345"
+    assert holds.lookup(first, "a", "mesh") == b"12345"
     third = holds.hold("c", {"mesh": b"1"})
-    assert holds.get(first, "a", "mesh") is None  # over two holds, and over ten bytes
-    assert holds.get(second, "b", "mesh") == b"12345"
+    with pytest.raises(HoldUnavailable):  # over two holds, and over ten bytes
+        holds.lookup(first, "a", "mesh")
+    assert timers.pending[0]["cancelled"] is True
+    assert holds.lookup(second, "b", "mesh") == b"12345"
     now[0] = 10.0
-    assert holds.get(second, "b", "mesh") is None
-    assert holds.get(third, "c", "mesh") is None
+    with pytest.raises(HoldUnavailable):
+        holds.lookup(second, "b", "mesh")
+    with pytest.raises(HoldUnavailable):
+        holds.lookup(third, "c", "mesh")
+
+
+def test_a_hold_expires_on_its_timer_with_nothing_else_touching_the_store():
+    timers = _Timers()
+    holds = ArchiveSnapshotHolds(ttl_seconds=10, schedule=timers)
+    holds.hold("a", {"mesh": b"bytes"})
+    assert len(holds) == 1 and timers.pending[0]["seconds"] == 10
+    timers.fire(0)
+    assert len(holds) == 0
+
+
+def test_a_released_hold_cancels_its_timer():
+    timers = _Timers()
+    holds = ArchiveSnapshotHolds(schedule=timers)
+    token = holds.hold("a", {"mesh": b"bytes"})
+    assert holds.release(token, "a") and timers.pending[0]["cancelled"]
+
+
+def test_the_default_timer_really_expires(monkeypatch):
+    holds = ArchiveSnapshotHolds(ttl_seconds=0.05)
+    holds.hold("a", {"mesh": b"bytes"})
+    deadline = time.monotonic() + 5
+    while len(holds) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(holds) == 0
+
+
+def test_one_hold_over_the_byte_cap_is_refused():
+    holds = ArchiveSnapshotHolds(max_bytes=4, schedule=_Timers())
+    with pytest.raises(HoldTooLarge, match="Use Export on the run"):
+        holds.hold("a", {"mesh": b"12345"})
+    assert len(holds) == 0
 
 
 @dataclass
@@ -161,6 +237,9 @@ class _Client:
     async def get(self, path: str, params: dict | None = None) -> _Response:
         query = "&".join(f"{key}={value}" for key, value in (params or {}).items())
         return await self._call("GET", path, query=query)
+
+    async def delete(self, path: str) -> _Response:
+        return await self._call("DELETE", path)
 
     async def post(self, path: str, *, json: dict | None = None, data: dict | None = None,
                    files=None) -> _Response:
@@ -285,7 +364,10 @@ async def _retained_mesh(client, job_id, workspace, job):
     assert Path(written.json()["files"][0]).read_bytes() == downloaded.content
 
 
-@pytest.mark.parametrize("case", ["expired", "other-run", "no-job", "traversal", "unknown-mesh-name", "count"])
+@pytest.mark.parametrize("case", [
+    "expired", "released", "other-run", "unknown-held-member", "no-job", "traversal", "unknown-mesh-name",
+    "empty-mesh", "count",
+])
 def test_server_members_are_refused_safely(tmp_path, monkeypatch, case):
     async def scenario(client, job_id, workspace, job):
         await _refused(client, job_id, workspace, job, case)
@@ -302,6 +384,16 @@ async def _refused(client, job_id, workspace, job, case):
     }
     if case == "expired":
         data["member_source"] = json.dumps({"hold": "not-a-hold", "member": "mesh"})
+    elif case == "released":
+        released = await client.delete(f"/api/jobs/{job_id}/archive-holds/{hold}")
+        assert released.status_code == 200 and released.json() == {"released": True}
+        again = await client.delete(f"/api/jobs/{job_id}/archive-holds/{hold}")
+        assert again.status_code == 200 and again.json() == {"released": False}
+    elif case == "unknown-held-member":
+        data["member_source"] = json.dumps({"hold": hold, "member": "nonsense"})
+    elif case == "empty-mesh":
+        client.app.state.jobs_runtime.store.store_mesh_artifact(job_id, "")
+        data["member_source"] = json.dumps({"member": "mesh"})
     elif case == "other-run":
         other = client.app.state.jobs_runtime.archive_holds.hold("another-run", {"mesh": b"x"})
         data["member_source"] = json.dumps({"hold": other, "member": "mesh"})
@@ -315,9 +407,13 @@ async def _refused(client, job_id, workspace, job, case):
     elif case == "count":
         data["relative_path"] = ["one.msh", "two.msh"]
     response = await _write(client, data)
-    if case in {"expired", "other-run"}:
+    if case in {"expired", "released", "other-run", "empty-mesh"}:
         assert response.status_code == 409
         assert response.json()["code"] == "server_member_unavailable"
     else:
         assert response.status_code == 422, response.text
     assert _tree(workspace) == {}
+    if case != "traversal":
+        # Refused before the run's folder was claimed: nothing recorded.
+        row = client.app.state.jobs_runtime.store.get_job_row(job_id)
+        assert "archived_path" not in (row.get("task_metadata") or {})

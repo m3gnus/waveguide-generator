@@ -39,14 +39,20 @@ new record at `archive/run.json` and leaves the older one in place.
 Files the server already holds do not travel through the browser. The archive reads
 `GET /api/jobs/{id}/archive-snapshot?members=held`: the same one-transaction snapshot,
 with the mesh, pressure bases and radiation matrix kept on the server under a `hold`
-id (30 minutes) instead of returned as base64. Its `write-export` requests name them
-with `member_source` (`{"hold": …, "member": …}`, one entry per `relative_path`;
-`"upload"` takes the next file part), so the server writes the very bytes the
-snapshot copied. The automatic mesh save names the run's retained mesh
-(`{"member": "mesh"}`) the same way, and downloads and sends a mesh only when the
-server no longer holds one (`409`, `code: "server_member_unavailable"`), as when it
-must rebuild it. An expired hold refuses the write with that code; the archive is
-retried. The inline (base64) snapshot and plain uploads still work. A release after `finish`, or by any token that no
+id instead of returned as base64. Its first `write-export` request carries every held
+member, after the files built in the browser, by `member_source`
+(`{"hold": …, "member": …}`, one entry per `relative_path`; `"upload"` takes the next
+file part), so the server writes the very bytes the snapshot copied, all of them or
+none. The archive then releases the hold (`DELETE /api/jobs/{id}/archive-holds/{hold}`);
+an unreleased hold expires on a timer after 30 minutes, the oldest go first beyond 16
+holds or 1 GiB, and one snapshot over 1 GiB is refused (422). A write naming a hold
+that is gone writes nothing and answers `409`, `code: "server_member_unavailable"`; the
+archive then takes a fresh snapshot and tries once more, and after a second loss it
+fails like any archive and is tried again automatically. The automatic mesh save
+names the run's retained mesh (`{"member": "mesh"}`) the same way, and downloads and
+sends a mesh only when the server no longer holds one (an empty stored mesh counts as
+none), as when it must rebuild it. Server members are resolved before the run's folder
+is claimed, so a refusal leaves no trace. The inline (base64) snapshot and plain uploads still work. A release after `finish`, or by any token that no
 longer owns the lane, is an idempotent success.
 
 Capability requests have a ten-second client timeout. Pending qualification, refresh

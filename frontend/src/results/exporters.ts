@@ -15,7 +15,7 @@ import {
 } from '../api/workspace';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 import { pinRunCadDocument } from '../api/cadProjects';
-import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation, type ServerMember } from '../api/results';
+import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, releaseJobArchiveHold, type RadiationImpedancePresentation, type ServerMember } from '../api/results';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildRunRecord } from '../jobs/runArchive';
 import { jobDesignForRebuild } from '../jobs/jobDesign';
@@ -1151,102 +1151,136 @@ export async function archiveRunToWorkspace(
   fetcher: typeof fetch = fetch,
 ): Promise<string[]> {
   return activityOperation({ kind: 'export', label: 'Archiving the run' }, fetcher, async (fetcher) => {
-    const snapshot = await fetchJobArchiveSnapshot(job.id, fetcher);
-    // The mesh, pressure bases and radiation matrix stay on the server, in the
-    // copy this snapshot's transaction made; the archive names them.
-    const held = (member: string): ServerMember => ({ hold: snapshot.hold, member });
-    const radiationImpedance = snapshot.radiation_impedance ?? undefined;
-    // Availability in the archive record must describe the transaction snapshot,
-    // not a jobs-socket item that may predate a retention event.
-    const archiveJob: JobItem = {
-      ...job,
-      has_mesh_artifact: Boolean(snapshot.mesh_artifact),
-      has_pressure_basis_artifact: snapshot.pressure_bases.length > 0,
-      has_radiation_impedance_artifact: Boolean(radiationImpedance),
-      radiation_impedance_artifact_bytes: radiationImpedance?.bytes,
-    };
-    const subdirectory = exportSubdirectoryForJob(archiveJob);
-    const pressureBases = Object.fromEntries(snapshot.pressure_bases.map(({ channel_id, member }) => {
-      const stem = channel_id.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+|[.-]+$/g, '') || 'channel';
-      return [channel_id, {
-        filename: `${stem}_pressure_basis.npz`,
-        server: held(member),
-      }];
-    }));
-    const formats: ExportFormat[] = [
-      ...ARCHIVE_FORMATS,
-      ...(snapshot.pressure_bases.length ? ['pressure_basis' as const] : []),
-      ...(snapshot.radiation_impedance
-        ? RADIATION_IMPEDANCE_ARCHIVE_FORMATS
-        : []),
-    ];
-    const { bundle, prepared } = await prepareWorkspaceBundle({
-      result: snapshot.results as ResultPayload,
-      ...resultExportSnapshot(archiveJob),
-      jobId: archiveJob.id,
-      jobStem: exportStemForJob(archiveJob),
-      hasRadiationImpedanceArtifact: Boolean(snapshot.radiation_impedance),
-      archiveSnapshot: {
-        pressureBases,
-        radiationImpedance: radiationImpedance && held(radiationImpedance.member),
-        radiationPresentation: snapshot.radiation_impedance?.presentation,
-      },
-      workspaceSubdirectory: subdirectory,
-      designName: archiveJob.label ?? undefined,
-      preferences,
-      fetcher,
-      // Archive retries must reproduce identical JSON/report bytes. A wall-clock
-      // timestamp makes a completed run differ every time the metadata write is
-      // retried after an app restart; the run's completion time is its timestamp.
-      now: new Date(job.completed_at ?? job.created_at),
-    }, formats);
-    if (bundle.failures.length) {
-      throw new Error([...new Set(bundle.failures.map(({ reason }) => reason))].join(' '));
+    // A held copy can be lost before it is written (it expired, or the server
+    // restarted). The write that names it then writes nothing, so a fresh
+    // snapshot and one more attempt leave no partial archive and move nothing.
+    try {
+      return await archiveFromSnapshot(job, preferences, fetcher);
+    } catch (error) {
+      if (!(error as { serverMemberUnavailable?: boolean }).serverMemberUnavailable) throw error;
     }
-    let replay: { filename: string | null; reason?: string } | undefined;
-    if (job.config_summary.geometry_type === 'imported') {
-      const filename = `${exportStemForJob(archiveJob)}.wgreplay`;
-      try {
-        const blob = await fetchMeshReplay(job.id, fetcher);
-        prepared.set(filename, { filename, blob });
-        replay = { filename };
-      } catch (error) {
-        // An unavailable old input must not discard the run's result archive.
-        // Transient failures retry the archive instead of becoming durable facts.
-        if (!(error instanceof MeshReplayRefusal) || ![404, 409, 410, 422].includes(error.status)) throw error;
-        replay = { filename: null, reason: error.message };
-      }
+    try {
+      return await archiveFromSnapshot(job, preferences, fetcher);
+    } catch (error) {
+      if (!(error as { serverMemberUnavailable?: boolean }).serverMemberUnavailable) throw error;
+      throw new Error('WG’s copy of this run’s files expired twice before it could write them. WG tries the archive again automatically.');
     }
-    const results = prepared.size
-      ? await writeArchiveMembers(subdirectory, [...prepared.values()], fetcher, job.id)
-      : { files: [], moved: new Map<string, string>() };
-    const mesh = snapshot.mesh_artifact
-      ? await writeArchiveMembers(subdirectory, [{
-        filename: `${exportStemForJob(archiveJob)}.msh`,
-        server: held(snapshot.mesh_artifact.member),
-      }], fetcher, job.id)
-      : { files: [], moved: new Map<string, string>() };
-    // The record names the artifacts it sits beside, wherever they landed.
-    const moved = new Map([...results.moved, ...mesh.moved]);
-    const written = [
-      ...[...prepared.values()].map(({ filename }) => filename),
-      ...(snapshot.mesh_artifact ? [`${exportStemForJob(archiveJob)}.msh`] : []),
-    ];
-    // Pin before publishing run.json so every successful reference is permanent.
-    let modelFile: string | undefined;
-    const pin = await pinRunCadDocument(archiveJob, fetcher);
-    if (pin.requested && !pin.placed) {
-      const reason = pin.reason ?? 'the server did not say why';
-      if (pin.retryable) throw new Error(reason);
-      console.warn(`Could not keep the run’s CAD document for ${exportStemForJob(archiveJob)}: ${reason}`);
-    }
-    modelFile = pin.modelFile === undefined ? pin.relativePath ?? undefined : pin.modelFile ?? undefined;
-    const record = await writeArchiveMembers(
-      subdirectory,
-      [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename, written, replay, modelFile))],
-      fetcher,
-      job.id,
-    );
-    return [...results.files, ...mesh.files, ...record.files];
   });
+}
+
+/** One archive attempt from one snapshot; its held copy is released afterwards. */
+async function archiveFromSnapshot(job: JobItem, preferences: Preferences, fetcher: typeof fetch): Promise<string[]> {
+  const snapshot = await fetchJobArchiveSnapshot(job.id, fetcher);
+  try {
+    return await writeArchiveFromSnapshot(job, preferences, fetcher, snapshot);
+  } finally {
+    await releaseJobArchiveHold(job.id, snapshot.hold, fetcher);
+  }
+}
+
+async function writeArchiveFromSnapshot(
+  job: JobItem,
+  preferences: Preferences,
+  fetcher: typeof fetch,
+  snapshot: Awaited<ReturnType<typeof fetchJobArchiveSnapshot>>,
+): Promise<string[]> {
+  // The mesh, pressure bases and radiation matrix stay on the server, in the
+  // copy this snapshot's transaction made; the archive names them.
+  const held = (member: string): ServerMember => ({ hold: snapshot.hold, member });
+  const radiationImpedance = snapshot.radiation_impedance ?? undefined;
+  // Availability in the archive record must describe the transaction snapshot,
+  // not a jobs-socket item that may predate a retention event.
+  const archiveJob: JobItem = {
+    ...job,
+    has_mesh_artifact: Boolean(snapshot.mesh_artifact),
+    has_pressure_basis_artifact: snapshot.pressure_bases.length > 0,
+    has_radiation_impedance_artifact: Boolean(radiationImpedance),
+    radiation_impedance_artifact_bytes: radiationImpedance?.bytes,
+  };
+  const subdirectory = exportSubdirectoryForJob(archiveJob);
+  const pressureBases = Object.fromEntries(snapshot.pressure_bases.map(({ channel_id, member }) => {
+    const stem = channel_id.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+|[.-]+$/g, '') || 'channel';
+    return [channel_id, {
+      filename: `${stem}_pressure_basis.npz`,
+      server: held(member),
+    }];
+  }));
+  const formats: ExportFormat[] = [
+    ...ARCHIVE_FORMATS,
+    ...(snapshot.pressure_bases.length ? ['pressure_basis' as const] : []),
+    ...(snapshot.radiation_impedance
+      ? RADIATION_IMPEDANCE_ARCHIVE_FORMATS
+      : []),
+  ];
+  const { bundle, prepared } = await prepareWorkspaceBundle({
+    result: snapshot.results as ResultPayload,
+    ...resultExportSnapshot(archiveJob),
+    jobId: archiveJob.id,
+    jobStem: exportStemForJob(archiveJob),
+    hasRadiationImpedanceArtifact: Boolean(snapshot.radiation_impedance),
+    archiveSnapshot: {
+      pressureBases,
+      radiationImpedance: radiationImpedance && held(radiationImpedance.member),
+      radiationPresentation: snapshot.radiation_impedance?.presentation,
+    },
+    workspaceSubdirectory: subdirectory,
+    designName: archiveJob.label ?? undefined,
+    preferences,
+    fetcher,
+    // Archive retries must reproduce identical JSON/report bytes. A wall-clock
+    // timestamp makes a completed run differ every time the metadata write is
+    // retried after an app restart; the run's completion time is its timestamp.
+    now: new Date(job.completed_at ?? job.created_at),
+  }, formats);
+  if (bundle.failures.length) {
+    throw new Error([...new Set(bundle.failures.map(({ reason }) => reason))].join(' '));
+  }
+  let replay: { filename: string | null; reason?: string } | undefined;
+  if (job.config_summary.geometry_type === 'imported') {
+    const filename = `${exportStemForJob(archiveJob)}.wgreplay`;
+    try {
+      const blob = await fetchMeshReplay(job.id, fetcher);
+      prepared.set(filename, { filename, blob });
+      replay = { filename };
+    } catch (error) {
+      // An unavailable old input must not discard the run's result archive.
+      // Transient failures retry the archive instead of becoming durable facts.
+      if (!(error instanceof MeshReplayRefusal) || ![404, 409, 410, 422].includes(error.status)) throw error;
+      replay = { filename: null, reason: error.message };
+    }
+  }
+  // Every member the server holds goes in this one write, after the files
+  // built here: it writes all of them or, when a held copy is gone, nothing.
+  const members: WorkspaceFile[] = [
+    ...prepared.values(),
+    ...(snapshot.mesh_artifact ? [{
+      filename: `${exportStemForJob(archiveJob)}.msh`,
+      server: held(snapshot.mesh_artifact.member),
+    }] : []),
+  ];
+  const results = members.length
+    ? await writeArchiveMembers(subdirectory, members, fetcher, job.id)
+    : { files: [], moved: new Map<string, string>() };
+  // The record names the artifacts it sits beside, wherever they landed.
+  const moved = results.moved;
+  const written = [
+    ...[...prepared.values()].map(({ filename }) => filename),
+    ...(snapshot.mesh_artifact ? [`${exportStemForJob(archiveJob)}.msh`] : []),
+  ];
+  // Pin before publishing run.json so every successful reference is permanent.
+  let modelFile: string | undefined;
+  const pin = await pinRunCadDocument(archiveJob, fetcher);
+  if (pin.requested && !pin.placed) {
+    const reason = pin.reason ?? 'the server did not say why';
+    if (pin.retryable) throw new Error(reason);
+    console.warn(`Could not keep the run’s CAD document for ${exportStemForJob(archiveJob)}: ${reason}`);
+  }
+  modelFile = pin.modelFile === undefined ? pin.relativePath ?? undefined : pin.modelFile ?? undefined;
+  const record = await writeArchiveMembers(
+    subdirectory,
+    [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename, written, replay, modelFile))],
+    fetcher,
+    job.id,
+  );
+  return [...results.files, ...record.files];
 }

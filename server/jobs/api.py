@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
+from server.jobs.archive_holds import HoldTooLarge
 from server.jobs.design_reader import SavedSolveRequest
 from server.jobs.fem_field import FemFieldCorrupt, FemFieldInvalidSelection
 from server.jobs.operation_progress import request_operation
@@ -170,6 +171,11 @@ class FemPlanePresentation(BaseModel):
     region_class: str
     crosses_body: str
     mask_reason: str = Field(description="Base64 uint8 per point: 0 valid, 1 solid or outside selected domain, 2 too close to a surface for a reliable velocity")
+
+
+class ArchiveHoldReleaseResponse(BaseModel):
+    #: False when the hold had already expired or names another run.
+    released: bool
 
 
 class JobRequestsResponse(BaseModel):
@@ -746,6 +752,8 @@ def create_jobs_router(
                 if members == "held"
                 else runtime.get_archive_snapshot(job_id)
             )
+        except HoldTooLarge as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
@@ -760,6 +768,16 @@ def create_jobs_router(
                 "X-WG-Archive-Snapshot-Version": "1",
             },
         )
+
+    @router.delete("/api/jobs/{job_id}/archive-holds/{hold}", response_model=ArchiveHoldReleaseResponse)
+    async def release_archive_hold(job_id: str, hold: str) -> ArchiveHoldReleaseResponse:
+        """Drop the server's copy of an archive snapshot's members once written.
+
+        Idempotent: a hold that already expired, or another run's, releases
+        nothing and still answers 200.
+        """
+
+        return ArchiveHoldReleaseResponse(released=runtime.archive_holds.release(hold, job_id))
 
     @router.post("/api/results/{job_id}/combine", response_model=None)
     async def recombine_job_results(job_id: str, body: ChannelCombineSpec) -> Response:

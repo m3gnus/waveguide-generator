@@ -458,6 +458,22 @@ export async function fetchJobArchiveSnapshot(
   }
 }
 
+/**
+ * Let the server drop an archive snapshot's held copy once the archive is
+ * written. Best effort: a hold the server cannot release expires on its own.
+ */
+export async function releaseJobArchiveHold(
+  jobId: string,
+  hold: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  try {
+    await fetcher(`/api/jobs/${encodeURIComponent(jobId)}/archive-holds/${encodeURIComponent(hold)}`, { method: 'DELETE' });
+  } catch {
+    // The hold's own timer releases it.
+  }
+}
+
 /** The optional matrix artifact is stored separately from the result JSON.
  * A 404 means the job simply has no retained matrix; other failures remain
  * visible to callers that are explicitly exporting it. */

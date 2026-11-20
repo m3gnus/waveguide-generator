@@ -579,7 +579,8 @@ def _held_archive_snapshot_presentation(
     members = _archive_snapshot_members(job_id, snapshot)
     radiation = members["radiation"]
     held: dict[str, bytes] = {}
-    mesh_text = members["mesh_text"]
+    # An empty stored mesh is no mesh, as the inline form's "" always read.
+    mesh_text = members["mesh_text"] or None
     if mesh_text is not None:
         held[MESH_MEMBER] = mesh_text.encode("utf-8")
     for channel_id, content in members["pressure_bases"]:
