@@ -1,4 +1,10 @@
-"""Theme-aware PNG export backed exclusively by the pinned hornlab-plots package."""
+"""Chart images, rendered only by the pinned hornlab-plots package.
+
+Every saved or exported chart image the application makes comes through here:
+the per-chart PNG (copy and export on a result card), the ``png`` export
+format, and the charts embedded in the HTML run report. The screen keeps its
+own interactive charts; this module is the one place their images are drawn.
+"""
 
 from __future__ import annotations
 
@@ -18,13 +24,11 @@ from server.contracts.canonical import canonical_ascii_json
 from .directivity import render_directivity_heatmap_b64
 
 
-# Matches the live chart palette in frontend/src/results/EChart.tsx; the two
-# are a pair and must move together.
-#
-# The default is the interface's own dark theme, and the frontend resolves its
-# "Match interface" setting to console or vellum before it gets here, so an
-# export lands on the same surfaces as the window it was taken from.
-DEFAULT_CHART_THEME = "console"
+# Exported images default to the classic HornLab report look (white page,
+# near-black ink). The export theme preference can still choose any theme here;
+# its "Match interface" setting resolves to console or vellum in the frontend,
+# whose live charts mirror those two palettes (frontend/src/results/EChart.tsx).
+DEFAULT_CHART_THEME = "classic"
 THEME_LABELS = {
     "classic": "Classic",
     "hornlab": "Arctic Night",
@@ -144,6 +148,18 @@ class DirectivityRenderRequest(ChartModel):
         return _theme(value)
 
 
+class ChartSpecRenderRequest(ChartModel):
+    """One chart described as data; hornlab_plots.spec documents the shape."""
+
+    spec: dict[str, Any]
+    theme: str = DEFAULT_CHART_THEME
+
+    @field_validator("theme", mode="before")
+    @classmethod
+    def validate_theme(cls, value: Any) -> str:
+        return _theme(value)
+
+
 router = APIRouter(tags=["chart-export"])
 _render_lock = threading.Lock()
 _cache_lock = threading.Lock()
@@ -210,6 +226,11 @@ def _render_directivity(payload: dict[str, Any]) -> str | None:
         )
 
 
+def _render_chart_spec(payload: dict[str, Any]) -> str | None:
+    with _render_lock:
+        return _plots().chart_spec_b64(payload["spec"], theme=payload["theme"])
+
+
 @router.get("/api/themes")
 async def themes() -> dict[str, Any]:
     return {
@@ -260,11 +281,32 @@ async def render_directivity(request: DirectivityRenderRequest) -> dict[str, str
     return {"image": image}
 
 
+@router.post("/api/render-chart")
+async def render_chart(request: ChartSpecRenderRequest) -> dict[str, str]:
+    payload = request.model_dump(mode="json")
+    key = _key("spec", payload)
+    cached = _cached(key)
+    if cached is not None:
+        return {"image": cached}
+    try:
+        rendered = await asyncio.to_thread(_render_chart_spec, payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (TypeError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if rendered is None:
+        raise HTTPException(status_code=422, detail="This chart has no values to draw. Choose a chart with data, then export again.")
+    image = f"data:image/png;base64,{rendered}"
+    _store(key, image)
+    return {"image": image}
+
+
 def mount_charts(application: FastAPI) -> None:
     application.include_router(router)
 
 
 __all__ = [
+    "ChartSpecRenderRequest",
     "ChartsReferencePayload",
     "ChartsRenderRequest",
     "DEFAULT_CHART_THEME",

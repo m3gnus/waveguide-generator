@@ -59,3 +59,70 @@ def test_directivity_request_passes_display_range_to_renderer_and_cache(
 def test_directivity_request_rejects_invalid_display_ranges(display_range_db) -> None:
     with pytest.raises(ValidationError):
         charts_api.DirectivityRenderRequest(frequencies=[], directivity={}, display_range_db=display_range_db)
+
+
+def _spec() -> dict:
+    return {
+        "title": "Group delay",
+        "x": {"label": "Frequency [Hz]", "scale": "log"},
+        "y": {"label": "Group delay [ms]"},
+        "series": [{"label": "Run", "x": [100.0, 1000.0, 10000.0], "y": [1.0, None, 0.5], "color": 0}],
+    }
+
+
+def test_chart_spec_route_renders_once_per_spec_and_theme(monkeypatch) -> None:
+    calls = []
+
+    class Plots:
+        @staticmethod
+        def chart_spec_b64(spec, *, theme):
+            calls.append((spec, theme))
+            return "YQ=="
+
+    monkeypatch.setattr(charts_api, "_plots", lambda: Plots)
+    _clear_chart_cache()
+    request = charts_api.ChartSpecRenderRequest(spec=_spec())
+    assert request.theme == "classic"
+    first = asyncio.run(charts_api.render_chart(request))
+    assert first == {"image": "data:image/png;base64,YQ=="}
+    # The same chart asked for again (copy, then export) is not drawn again.
+    assert asyncio.run(charts_api.render_chart(request)) == first
+    assert len(calls) == 1
+    asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec=_spec(), theme="vellum")))
+    assert [theme for _spec_, theme in calls] == ["classic", "vellum"]
+    assert calls[0][0] == _spec()
+    _clear_chart_cache()
+
+
+def test_chart_spec_route_refuses_bad_specs_and_empty_charts(monkeypatch) -> None:
+    class Plots:
+        @staticmethod
+        def chart_spec_b64(spec, *, theme):
+            if spec.get("kind") == "pie":
+                raise ValueError("chart kind must be one of: lines, polar")
+            return None
+
+    monkeypatch.setattr(charts_api, "_plots", lambda: Plots)
+    _clear_chart_cache()
+    with pytest.raises(charts_api.HTTPException) as refused:
+        asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec={"kind": "pie"})))
+    assert refused.value.status_code == 422
+    with pytest.raises(charts_api.HTTPException) as empty:
+        asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec={"series": []})))
+    assert empty.value.status_code == 422
+    assert "no values to draw" in empty.value.detail
+    with pytest.raises(ValidationError):
+        charts_api.ChartSpecRenderRequest(spec=_spec(), theme="no-such-theme")
+    with pytest.raises(ValidationError, match="finite"):
+        charts_api.ChartSpecRenderRequest(spec={"series": [{"x": [float("nan")], "y": [1.0]}]})
+    _clear_chart_cache()
+
+
+def test_chart_spec_route_draws_with_the_pinned_renderer() -> None:
+    plots = pytest.importorskip("hornlab_plots")
+    if not hasattr(plots, "chart_spec_b64"):
+        pytest.fail("the pinned hornlab-plots has no chart_spec_b64; install the pin in pins.json")
+    _clear_chart_cache()
+    image = asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec=_spec())))["image"]
+    assert image.startswith("data:image/png;base64,iVBORw0KGgo")
+    _clear_chart_cache()

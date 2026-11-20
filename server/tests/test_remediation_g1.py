@@ -506,11 +506,11 @@ def test_chart_routes_expose_every_theme_and_use_hornlab_plots(monkeypatch) -> N
     async def scenario() -> None:
         listed = await charts_api.themes()
         assert len(listed["themes"]) == 12
-        # The default is the interface's own dark theme; the frontend resolves
-        # its "Match interface" setting to console or vellum before the request
-        # reaches here, so an export lands on the window's own surfaces.
-        assert listed["default"] == "console"
-        assert charts_api.ChartsRenderRequest().theme == "console"
+        # Exported images default to the classic HornLab report look; the
+        # frontend resolves its "Match interface" setting to console or vellum
+        # before a request reaches here.
+        assert listed["default"] == "classic"
+        assert charts_api.ChartsRenderRequest().theme == "classic"
         charts = await charts_api.render_charts(
             charts_api.ChartsRenderRequest(
                 frequencies=[100], spl=[90], theme="blueprint"
