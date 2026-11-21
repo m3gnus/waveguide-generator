@@ -6,7 +6,9 @@ import type { EChartsOption } from 'echarts';
 const setOption = vi.fn();
 const dispose = vi.fn();
 const resize = vi.fn();
-const init = vi.fn(() => ({ setOption, dispose, resize }));
+const handlers = new Map<string, (event: unknown) => void>();
+const on = vi.fn((name: string, handler: (event: unknown) => void) => { handlers.set(name, handler); });
+const init = vi.fn(() => ({ setOption, dispose, resize, on }));
 
 vi.mock('echarts/core', () => ({
   use: () => undefined,
@@ -20,6 +22,7 @@ vi.mock('echarts/components', () => ({
 vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }));
 
 const { EChartRenderer, chartPixelRatio } = await import('./EChartRenderer');
+const { drawnChartIn } = await import('./drawnCharts');
 
 describe('interactive chart updates', () => {
   let host: HTMLDivElement;
@@ -96,5 +99,17 @@ describe('interactive chart updates', () => {
     act(() => root.unmount());
     expect(dispose).toHaveBeenCalledTimes(1);
     root = createRoot(host);
+  });
+
+  it('reports the series switched off in the legend until the chart is redrawn', () => {
+    const option = { series: [{ type: 'line', name: 'A', data: [[100, 1]] }, { type: 'line', name: 'B', data: [[100, 2]] }] } as EChartsOption;
+    render(option);
+    const drawn = () => drawnChartIn(host)!;
+    expect(drawn().option).toBe(option);
+    act(() => { handlers.get('legendselectchanged')!({ selected: { A: true, B: false } }); });
+    expect([...drawn().hidden()]).toEqual(['B']);
+    // The same option redrawn live (notMerge) resets the legend on screen.
+    render(option, true);
+    expect([...drawn().hidden()]).toEqual([]);
   });
 });

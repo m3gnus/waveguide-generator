@@ -113,6 +113,8 @@ export function EChartRenderer({ option, label, live = false }: { option: EChart
     // The completed snapshot retains the normal transition.
     const renderedOption = live ? { ...displayed, animation: false, animationDuration: 0 } : displayed;
     chart.current?.setOption(renderedOption, { notMerge: true, lazyUpdate: true });
+    // notMerge resets the legend, so every series is shown again.
+    hidden.current = new Set();
   }, [live, displayed]);
 
   // The gutter ruler. `convertFromPixel` is the chart's own axis mapping, so a

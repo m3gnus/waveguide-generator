@@ -176,6 +176,9 @@ function lineChartSpec(option: EChartsOption, tokens: ChartTokens, title: string
   const series: LineSeriesSpec[] = [];
   seriesList(option).forEach((entry, index) => {
     const axis: 0 | 1 = entry.yAxisIndex === 1 ? 1 : 0;
+    // A series switched off in the legend takes its bands and zero line with
+    // it, as ECharts does on screen.
+    if (entry.name !== undefined && hidden.has(entry.name)) return;
     for (const [from, to] of entry.markArea?.data ?? []) {
       if (finite(from?.xAxis) && finite(to?.xAxis)) bands.push({ x0: from.xAxis, x1: to.xAxis, ...(from.name ? { label: from.name } : {}) });
     }
@@ -183,7 +186,6 @@ function lineChartSpec(option: EChartsOption, tokens: ChartTokens, title: string
       if (finite(line?.yAxis)) hlines.push({ y: line.yAxis, axis });
     }
     if (entry.type !== 'line' || !Array.isArray(entry.data) || entry.lineStyle?.opacity === 0) return;
-    if (entry.name !== undefined && hidden.has(entry.name)) return;
     const points = entry.data.map(pointOf);
     const markers = markedPoints(entry);
     series.push({

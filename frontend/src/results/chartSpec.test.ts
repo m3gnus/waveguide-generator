@@ -85,6 +85,14 @@ describe('chart images take the series the card drew', () => {
     expect(spec.series.map(({ label }) => label)).toEqual(['A']);
   });
 
+  it('drops the bands and zero line riding on a series switched off in the legend', () => {
+    const option = withUnqualifiedBands(phaseOption([named('A', fixture, true)], tokens, 'full'), [{ fromHz: 400, toHz: 800, label: 'HF' }], tokens);
+    const spec = chartSpecFromOption(option, tokens, { title: 'Phase', hidden: new Set(['A']) }) as LineChartSpec;
+    expect(spec.series).toEqual([]);
+    expect(spec.bands).toBeUndefined();
+    expect(spec.hlines).toBeUndefined();
+  });
+
   it('marks the reconstructed points the card marks', () => {
     const adaptive = { ...fixture, frequency_status: fixture.frequencies.map((_, index) => (index % 5 === 2 ? 'interpolated' : 'solved')) } as ResultPayload;
     const spec = chartSpecFromOption(splOption([named('A', adaptive, true)], tokens, 'none', 'full'), tokens, { title: 'SPL' }) as LineChartSpec;

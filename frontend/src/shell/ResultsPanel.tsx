@@ -64,7 +64,7 @@ import { powerAgreementHealth, powerCheckMessage } from '../results/radiatedPowe
 import { channelLabel } from '../results/channelLabel';
 import { unqualifiedMessage, channelQualificationSummary, chartUnqualifiedBands, powerChipLabel, powerQualificationDetail, powerQualificationOf, unqualifiedCaption, withUnqualifiedBands, type UnqualifiedBand } from '../results/powerQualification';
 import { solveAttention } from './solveAttention';
-import { failureWords } from '../api/httpError';
+import { failureWords, isAbortError } from '../api/httpError';
 import { splFrequencies } from '../results/series';
 
 export function newRunBadgeLabel(runNumber: number | null): string {
@@ -2318,8 +2318,11 @@ function useChartImage({ capture, chartType, job, channelId, result, named, toke
         // a cancelled dialog stops the drawing.
         const drawing = new AbortController();
         const image = drawChartPng(draw, drawing.signal);
+        let stopped = false;
         image.catch((reason) => {
           if (drawing.signal.aborted) return;
+          // Stopped from the status bar: the export is cancelled, not failed.
+          if (isAbortError(reason)) { stopped = true; setImageStatus('Export cancelled'); return; }
           failed = true;
           setImageStatus(failureWords(reason, CHART_IMAGE_FAILED, 'draw chart PNG'));
         });
@@ -2336,15 +2339,17 @@ function useChartImage({ capture, chartType, job, channelId, result, named, toke
           if (!failed) setImageStatus('Export cancelled');
           return;
         }
+        if (stopped) return;
         await saveChartPng(
           image, filename, destination.token, askToReplaceExports,
         );
         setImageStatus('Saved PNG');
       }
     } catch (reason) {
-      failed = !(reason instanceof ExportCancelledError);
-      setImageStatus(reason instanceof ExportCancelledError
-        ? 'Export cancelled'
+      const cancelled = reason instanceof ExportCancelledError || isAbortError(reason);
+      failed = !cancelled;
+      setImageStatus(cancelled
+        ? (operation === 'copy' ? 'Copy cancelled' : 'Export cancelled')
         : failureWords(reason, operation === 'copy'
           ? 'WG could not copy this chart. Use Export PNG instead.'
           : 'WG could not export this chart. Choose a writable folder, then export again.',

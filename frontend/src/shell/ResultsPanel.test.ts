@@ -8,6 +8,7 @@ import { preferencesStore, usePreferences, type ChartType } from '../prefs/prefe
 import type { ChartTokens } from '../results/EChart';
 import type { EChartsOption } from 'echarts';
 import { DRAWN_CHART_CLASS, registerDrawnChart } from '../results/drawnCharts';
+import { activityStore } from './activity';
 import type { NamedResult } from '../results/mappers';
 import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
@@ -921,6 +922,30 @@ describe('results chart layouts', () => {
     expect(signal?.aborted).toBe(false);
     await act(async () => { answer(null); });
     expect(signal?.aborted).toBe(true);
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('Export cancelled');
+  });
+
+  it('ends as cancelled, not failed, when the drawing is stopped from the status bar', async () => {
+    const chartResult: ResultPayload = { frequencies: [500], spl_on_axis: { frequencies: [500], spl: [80] } };
+    act(() => root.render(createElement(ResultsChartGrid, { chartTypes: ['frequency_response'], result: chartResult, named: [], tokens })));
+    const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
+    await act(async () => { drawChart(target, splOption([{ id: 'primary', label: 'Run', result: chartResult, primary: true }], tokens, 'none', 'regular')); });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    }));
+    chartImageMocks.render.mockImplementation(async (_spec, _theme, fetcher) => {
+      await (fetcher as typeof fetch)('/api/render-chart', { method: 'POST' });
+      return 'data:image/png;base64,iVBORw==';
+    });
+    let answer!: (choice: { token: string; directory: string } | null) => void;
+    provideExportDestinationPrompt(() => new Promise((resolve) => { answer = resolve; }));
+    await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Export panel 1 as PNG"]')!.click(); });
+    const drawing = activityStore.getSnapshot().find(({ label }) => label === 'Drawing chart PNG');
+    expect(drawing?.cancel).toBeTypeOf('function');
+    await act(async () => { drawing!.cancel!(); await Promise.resolve(); await Promise.resolve(); });
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('Export cancelled');
+    await act(async () => { answer({ token: 'chosen', directory: '/exports' }); });
+    expect(chartImageMocks.save).not.toHaveBeenCalled();
     expect(host.querySelector('.result-image-status')?.textContent).toBe('Export cancelled');
   });
 
