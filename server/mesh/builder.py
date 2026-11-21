@@ -989,32 +989,98 @@ def _solver_mesh_generator() -> dict[str, Any]:
     }
 
 
+def _in_repo_import_closure(package_root: Path, start: list[Path]) -> list[Path]:
+    """Every module under ``package_root`` that ``start`` imports, transitively.
+
+    Read from the source (module-level and deferred imports alike), so it
+    covers code a build reaches lazily. ``package_root`` is the folder of the
+    top-level package (``server``); imports of anything else are ignored.
+    """
+
+    import ast
+
+    package = package_root.name
+    seen: set[Path] = set()
+    queue = [path.resolve() for path in start]
+
+    def module_file(dotted: str) -> Path | None:
+        parts = dotted.split(".")
+        if parts[0] != package:
+            return None
+        base = package_root.joinpath(*parts[1:])
+        for candidate in (base.with_suffix(".py"), base / "__init__.py"):
+            if candidate.is_file():
+                return candidate.resolve()
+        return None
+
+    while queue:
+        path = queue.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        relative = path.relative_to(package_root.resolve()).with_suffix("")
+        module_parts = [package, *relative.parts]
+        if module_parts[-1] == "__init__":
+            module_parts.pop()
+        # Each package's __init__ runs on import too.
+        for depth in range(1, len(module_parts)):
+            init = module_file(".".join(module_parts[:depth]))
+            if init is not None:
+                queue.append(init)
+        tree = ast.parse(path.read_bytes(), filename=str(path))
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    is_package = path.name == "__init__.py"
+                    anchor = module_parts if is_package else module_parts[:-1]
+                    anchor = anchor[: len(anchor) - (node.level - 1)]
+                    base = ".".join([*anchor, *([node.module] if node.module else [])])
+                else:
+                    base = node.module or ""
+                names = [base, *(f"{base}.{alias.name}" for alias in node.names)]
+            for name in names:
+                found = module_file(name)
+                if found is not None:
+                    queue.append(found)
+    return sorted(seen)
+
+
+def _source_digest(package_root: Path, files: list[Path]) -> str:
+    digest = hashlib.sha256()
+    root = package_root.resolve()
+    for path in files:
+        name = path.relative_to(root).as_posix().encode("utf-8")
+        content = path.read_bytes()
+        digest.update(len(name).to_bytes(4, "big"))
+        digest.update(name)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return f"sha256:{digest.hexdigest()}"
+
+
 @functools.lru_cache(maxsize=1)
 def _wg_mesh_code_identity() -> str | None:
-    """Digest of WG's own mesh code, which shapes every artifact after its key.
+    """Digest of the WG code that shapes every artifact after its key.
 
-    ``server/mesh`` turns the mesher's output into the artifact: the policy
+    ``server/mesh`` and everything in ``server`` it imports, transitively
+    (warnings text, the domain tables, the formula families, ...): the policy
     config, the memory stop, stats, warnings and integrity reports. A disk
     artifact from other code (a WG update, another branch on the same data
     folder) must not be served. None when the sources cannot be read.
     """
 
-    root = Path(__file__).resolve().parent
+    mesh = Path(__file__).resolve().parent
+    package_root = mesh.parent
     try:
-        files = sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
-        if not files:
+        start = sorted(path for path in mesh.rglob("*.py") if "__pycache__" not in path.parts)
+        if not start:
             return None
-        digest = hashlib.sha256()
-        for path in files:
-            name = path.relative_to(root).as_posix().encode("utf-8")
-            content = path.read_bytes()
-            digest.update(len(name).to_bytes(4, "big"))
-            digest.update(name)
-            digest.update(len(content).to_bytes(8, "big"))
-            digest.update(content)
-    except OSError:
+        return _source_digest(package_root, _in_repo_import_closure(package_root, start))
+    except (OSError, SyntaxError, ValueError):
         return None
-    return f"sha256:{digest.hexdigest()}"
 
 
 def _solver_mesh_disk_generator() -> dict[str, Any] | None:
@@ -1033,6 +1099,8 @@ def _solver_mesh_disk_generator() -> dict[str, Any] | None:
         return None
     return {
         **generator,
+        # They parse the mesh into the artifact's stats.
+        "parser_versions": {name: _distribution_version(name) for name in ("meshio", "numpy")},
         "wg_mesh_code": code,
         "dense_solver_memory": _dense_solver_memory_limit_stats(dense_solver_memory_limit()),
     }
@@ -1804,6 +1872,9 @@ async def build_solver_mesh(
                 _solver_mesh_cache.put(cache_key, result)
                 if disk is not None:
                     disk.put_later(cache_key, result)
+    in_use = _solver_mesh_disk_cache
+    if in_use is not None:
+        in_use.touch()  # hourly at most: keeps this build's folder from another's tidy
     try:
         _enforce_artifact_triangle_ceiling(
             int(result["stats"]["triangle_count"]),

@@ -36,6 +36,8 @@ DEFAULT_MAX_CACHE_ENTRIES = 8
 SOLVER_MESH_DISK_CACHE_DIRNAME = "solver-mesh-cache"
 DEFAULT_MAX_DISK_CACHE_BYTES = 1024 * 1024 * 1024
 DEFAULT_MAX_DISK_CACHE_ENTRIES = 256
+#: All generators' folders together; the oldest other folders go first.
+DEFAULT_MAX_DISK_CACHE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 _DISK_FORMAT = 1
 
 log = logging.getLogger("wg.mesh")
@@ -191,7 +193,9 @@ class SolverMeshDiskCache:
     another key or generator, or fails its digest is deleted and read as a
     miss, so the mesh is rebuilt. The folder, unfinished writes included, is
     held under ``max_bytes`` and ``max_entries`` by evicting the least
-    recently used entries; the one just written is never the one evicted.
+    recently used entries; the one just written is never the one evicted. All generators' folders
+    together are held under ``max_total_bytes``, the least recently used other
+    folders deleted first.
 
     An artifact is written only when its non-text part reads back from JSON
     identical, types and key order included; anything else stays memory-only.
@@ -204,6 +208,8 @@ class SolverMeshDiskCache:
     ORPHAN_SECONDS = 10 * 60.0
     #: Another generator's folder unused this long is deleted.
     stale_seconds = 7 * 24 * 60 * 60.0
+    #: How often use (a hit, memory or disk) refreshes this folder's mtime.
+    TOUCH_SECONDS = 60 * 60.0
 
     def __init__(
         self,
@@ -212,6 +218,7 @@ class SolverMeshDiskCache:
         *,
         max_entries: int = DEFAULT_MAX_DISK_CACHE_ENTRIES,
         max_bytes: int = DEFAULT_MAX_DISK_CACHE_BYTES,
+        max_total_bytes: int = DEFAULT_MAX_DISK_CACHE_TOTAL_BYTES,
     ) -> None:
         from server.contracts.canonical import canonical_ascii_strict_json
 
@@ -221,9 +228,13 @@ class SolverMeshDiskCache:
         self._folder = self._root / hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
         self._max_entries = int(max_entries)
         self._max_bytes = int(max_bytes)
-        self._lock = threading.Lock()
+        self._max_total_bytes = int(max_total_bytes)
+        self._lock = threading.Lock()  # the folder's files; held across a write
         self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wg2-solver-mesh-disk")
+        # Its own lock, so queueing a write never waits on one being written.
+        self._pending_lock = threading.Lock()
         self._pending: set[Future[bool]] = set()
+        self._touched = 0.0
 
     @property
     def folder(self) -> Path:
@@ -237,13 +248,28 @@ class SolverMeshDiskCache:
         """Create this generator's folder; tidy the rest in the background."""
 
         self._folder.mkdir(parents=True, exist_ok=True)
-        os.utime(self._folder)
+        self.touch(force=True)
         self._submit(self._tidy)
+
+    def touch(self, *, force: bool = False) -> None:
+        """Mark this generator's folder in use, at most once per TOUCH_SECONDS.
+
+        Another process deletes a folder unused for ``stale_seconds``; a
+        long-running one serving memory hits calls this to keep its own.
+        """
+
+        now = time.monotonic()
+        if not force and now - self._touched < self.TOUCH_SECONDS:
+            return
+        self._touched = now
+        with contextlib.suppress(OSError):
+            os.utime(self._folder)
 
     def _tidy(self) -> bool:
         """Delete stale generators' folders and this folder's crash leftovers."""
 
         now = time.time()
+        others = []
         with contextlib.suppress(OSError):
             for entry in self._root.iterdir():
                 if (
@@ -254,10 +280,21 @@ class SolverMeshDiskCache:
                 ):
                     continue
                 with contextlib.suppress(OSError):
-                    if now - entry.stat().st_mtime > self.stale_seconds:
+                    modified = entry.stat().st_mtime
+                    if now - modified > self.stale_seconds:
                         shutil.rmtree(entry, ignore_errors=True)
+                    else:
+                        others.append((modified, entry.name, _folder_bytes(entry), entry))
         with self._lock:
             self._evict(keep=None)
+        # Every build that ever ran here keeps a folder for a week: hold all
+        # of them together under the total, the least recently used first.
+        total = _folder_bytes(self._folder) + sum(size for _, _, size, _ in others)
+        others.sort()
+        while others and total > self._max_total_bytes:
+            _, _, size, entry = others.pop(0)
+            shutil.rmtree(entry, ignore_errors=True)
+            total -= size
         return True
 
     def _path(self, key: str) -> Path:
@@ -301,7 +338,7 @@ class SolverMeshDiskCache:
             return None
         with contextlib.suppress(OSError):
             os.utime(path)
-            os.utime(self._folder)  # this generator is in use
+        self.touch()
         return result
 
     def put_later(self, key: str, result: dict[str, Any]) -> None:
@@ -405,18 +442,18 @@ class SolverMeshDiskCache:
             future = self._writer.submit(run)
         except RuntimeError:  # shut down
             return
-        with self._lock:
+        with self._pending_lock:
             self._pending.add(future)
         future.add_done_callback(self._forget)
 
     def _forget(self, future: Future[bool]) -> None:
-        with self._lock:
+        with self._pending_lock:
             self._pending.discard(future)
 
     def flush(self, timeout: float | None = None) -> None:
         """Wait for queued background writes (tests, shutdown)."""
 
-        with self._lock:
+        with self._pending_lock:
             pending = list(self._pending)
         wait(pending, timeout=timeout)
 
@@ -433,6 +470,16 @@ class SolverMeshDiskCache:
                     path.unlink()
 
 
+def _folder_bytes(folder: Path) -> int:
+    total = 0
+    with contextlib.suppress(OSError):
+        for path in folder.iterdir():
+            with contextlib.suppress(OSError):
+                if path.is_file() and not path.is_symlink():
+                    total += path.stat().st_size
+    return total
+
+
 def _is_hex(text: str, length: int) -> bool:
     return len(text) == length and all(character in "0123456789abcdef" for character in text)
 
@@ -442,6 +489,7 @@ __all__ = [
     "DEFAULT_MAX_CACHE_ENTRIES",
     "DEFAULT_MAX_DISK_CACHE_BYTES",
     "DEFAULT_MAX_DISK_CACHE_ENTRIES",
+    "DEFAULT_MAX_DISK_CACHE_TOTAL_BYTES",
     "SOLVER_MESH_DISK_CACHE_DIRNAME",
     "SolverMeshArtifactCache",
     "SolverMeshCacheInfo",

@@ -31,7 +31,6 @@ def root(tmp_path):
     builder.configure_solver_mesh_disk_cache(None)
     builder.clear_solver_mesh_cache()
     builder.dense_solver_memory_limit.cache_clear()
-    builder._wg_mesh_code_identity.cache_clear()
 
 
 @pytest.fixture()
@@ -285,3 +284,122 @@ def test_an_unmeasured_identity_keeps_the_disk_cache_off(tmp_path, monkeypatch) 
     monkeypatch.setattr(builder, "_wg_mesh_code_identity", lambda: None)
     assert builder.configure_solver_mesh_disk_cache(tmp_path) is None
     assert builder._solver_mesh_disk_cache is None
+
+
+def test_the_code_fingerprint_follows_in_repo_imports(tmp_path) -> None:
+    package = tmp_path / "server"
+    for folder in ("mesh", "preview", "design", "other"):
+        (package / folder).mkdir(parents=True)
+        (package / folder / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "mesh" / "builder.py").write_text(
+        "import numpy\nfrom server.preview import errors\n\n"
+        "def later():\n    from ..design.native import FORMULAS\n    return FORMULAS\n",
+        encoding="utf-8",
+    )
+    (package / "preview" / "errors.py").write_text("TEXT = 'old warning'\n", encoding="utf-8")
+    (package / "design" / "native.py").write_text("FORMULAS = {'OSSE'}\n", encoding="utf-8")
+    (package / "other" / "unused.py").write_text("X = 1\n", encoding="utf-8")
+
+    def fingerprint() -> str:
+        start = [package / "mesh" / "builder.py"]
+        return builder._source_digest(package, builder._in_repo_import_closure(package, start))
+
+    first = fingerprint()
+    (package / "other" / "unused.py").write_text("X = 2\n", encoding="utf-8")
+    assert fingerprint() == first
+    (package / "preview" / "errors.py").write_text("TEXT = 'reworded warning'\n", encoding="utf-8")
+    second = fingerprint()
+    assert second != first
+    (package / "design" / "native.py").write_text("FORMULAS = {'OSSE', 'R-OSSE'}\n", encoding="utf-8")
+    assert fingerprint() != second
+
+
+def test_the_real_fingerprint_covers_the_modules_that_shape_an_artifact() -> None:
+    from pathlib import Path
+
+    package = Path(builder.__file__).resolve().parents[1]
+    start = sorted(path for path in (package / "mesh").rglob("*.py") if "__pycache__" not in path.parts)
+    covered = {path.relative_to(package).as_posix() for path in builder._in_repo_import_closure(package, start)}
+    assert {"preview/errors.py", "contracts/geometry.py", "design/native.py", "preview/translate.py"} <= covered
+    generator = builder._solver_mesh_disk_generator()
+    assert generator is not None
+    assert set(generator["parser_versions"]) == {"meshio", "numpy"}
+
+
+def test_all_generators_together_are_held_under_a_total(tmp_path) -> None:
+    sizes = {"1": 3000, "2": 3000, "3": 3000}
+    caches = []
+    for index, name in enumerate(sizes):
+        cache = SolverMeshDiskCache(tmp_path, {"mesher": name}, max_total_bytes=7000)
+        cache.open()
+        cache.flush()
+        (cache.folder / ("f" * 64 + cache.ENTRY_SUFFIX)).write_bytes(b"x" * sizes[name])
+        moment = time.time() - 3600 * (10 - index)
+        os.utime(cache.folder, (moment, moment))
+        caches.append(cache)
+    newest = SolverMeshDiskCache(tmp_path, {"mesher": "4"}, max_total_bytes=7000)
+    newest.open()
+    newest.flush()
+    # 9000 bytes in three older folders: the oldest goes, the rest fit.
+    assert not caches[0].folder.exists()
+    assert caches[1].folder.exists() and caches[2].folder.exists() and newest.folder.exists()
+    for cache in (*caches, newest):
+        cache.close()
+
+
+def test_use_refreshes_the_folder_at_most_hourly(tmp_path) -> None:
+    cache = SolverMeshDiskCache(tmp_path, {"mesher": "1"})
+    cache.open()
+    cache.flush()
+    old = time.time() - 3 * 24 * 3600
+    os.utime(cache.folder, (old, old))
+    cache.touch()  # opened moments ago: not yet
+    assert cache.folder.stat().st_mtime == pytest.approx(old)
+    cache._touched -= cache.TOUCH_SECONDS + 1
+    cache.touch()
+    assert time.time() - cache.folder.stat().st_mtime < 60
+    cache.close()
+
+
+def test_a_memory_hit_marks_the_folder_in_use(disk, monkeypatch) -> None:
+    async def worker(_fn, _dump, **_kwargs):
+        return {"msh_text": "$MeshFormat\nmesh\n", "stats": {"warnings": [], "triangle_count": 4},
+                "integrity": {"valid": True}, "metadata": {}}
+
+    monkeypatch.setattr(builder, "run_mesh_build", worker)
+    _build(_design())
+    old = time.time() - 6 * 24 * 3600
+    os.utime(disk.folder, (old, old))
+    disk._touched -= disk.TOUCH_SECONDS + 1
+    assert _build(_design())["stats"]["mesh_cache_hit"] is True
+    assert time.time() - disk.folder.stat().st_mtime < 60
+
+
+def test_queueing_a_write_never_waits_on_one_being_written(tmp_path) -> None:
+    import threading
+
+    cache = SolverMeshDiskCache(tmp_path, {"mesher": "1"})
+    cache.open()
+    cache.flush()
+    holding = threading.Event()
+    release = threading.Event()
+
+    def hold() -> None:
+        with cache._lock:  # what a long write or eviction holds
+            holding.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        assert holding.wait(5)
+        began = time.monotonic()
+        cache.put_later("a" * 64, {"msh_text": "a"})
+        assert time.monotonic() - began < 1.0
+    finally:
+        release.set()
+        holder.join(5)
+    cache.flush()
+    assert cache.get("a" * 64) == {"msh_text": "a"}
+    cache.close()
