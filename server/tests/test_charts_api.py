@@ -247,3 +247,35 @@ def test_the_multi_chart_route_is_retired() -> None:
     paths = {route.path for route in charts_api.router.routes}
     assert "/api/render-charts" not in paths
     assert {"/api/render-chart", "/api/render-directivity", "/api/themes"} <= paths
+
+
+def test_route_bounds_match_the_pinned_renderer() -> None:
+    """The route and hornlab-plots bound the same counts; a drift would refuse
+    in one place what the other accepts."""
+    spec = pytest.importorskip("hornlab_plots.spec")
+    assert (spec.MAX_SERIES, spec.MAX_POINTS_PER_SERIES, spec.MAX_POINTS) == (
+        charts_api.MAX_SPEC_SERIES, charts_api.MAX_SPEC_POINTS, charts_api.MAX_SPEC_TOTAL_POINTS)
+    assert (spec.MAX_BANDS, spec.MAX_HLINES, spec.MAX_SHADE) == (
+        charts_api.MAX_SPEC_BANDS, charts_api.MAX_SPEC_HLINES, charts_api.MAX_SPEC_SHADE)
+    assert (spec.MAX_GRID_THETA, spec.MAX_GRID_PHI, spec.MAX_POLAR_RINGS) == (
+        charts_api.MAX_GRID_THETA, charts_api.MAX_GRID_PHI, charts_api.MAX_POLAR_RINGS)
+
+
+def test_a_balloon_at_the_route_limit_draws_in_seconds() -> None:
+    import time
+
+    pytest.importorskip("hornlab_plots.spec")
+    theta = [180.0 * index / 360 for index in range(charts_api.MAX_GRID_THETA)]
+    columns = charts_api.MAX_SPEC_TOTAL_POINTS // len(theta)
+    phi = [360.0 * index / columns for index in range(columns)]
+    request = charts_api.ChartSpecRenderRequest(spec={
+        "kind": "balloon", "theta_deg": theta, "phi_deg": phi,
+        "levels_db": [[-value / 6.0] * columns for value in theta],
+    })
+    _clear_chart_cache()
+    started = time.perf_counter()
+    image = asyncio.run(charts_api.render_chart(request))["image"]
+    # It held the shared render lock for about 13 s before the face budget.
+    assert time.perf_counter() - started < 8.0
+    assert image.startswith("data:image/png;base64,")
+    _clear_chart_cache()
