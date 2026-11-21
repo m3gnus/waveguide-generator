@@ -1,9 +1,10 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
-import InteractiveBalloon, { buildBalloonGeometry } from './Balloon3D';
+import { buildBalloonGeometry } from './Balloon3D';
 import { BalloonRenderer, balloonMissingReason, closestFrequencyIndex, ForwardBeamRenderer, hasBalloonData, sampleBalloonGrid } from './balloon';
 import type { ResultPayload } from './types';
+import { drawnViewIn } from './drawnCharts';
 
 const fiberMocks = vi.hoisted(() => ({ canvas: vi.fn() }));
 vi.mock('@react-three/fiber', () => ({
@@ -17,16 +18,24 @@ function createImageData(width: number, height: number) {
 }
 
 describe('spherical result renderers', () => {
-  it('retains the 3D drawing buffer for Copy PNG and Download PNG', () => {
-    const result: ResultPayload = { frequencies: [1_000], balloon: { frequencies: [1_000], theta_deg: [0, 90], phi_deg: [0, 120, 240], spl_norm_db: [[[0, 0, 0], [-10, -12, -14]]] } };
+  it('hands Copy and Export the balloon grid at the frequency the slider shows', () => {
+    const result: ResultPayload = { frequencies: [500, 1_000], balloon: { frequencies: [500, 1_000], theta_deg: [0, 90], phi_deg: [0, 120, 240], spl_norm_db: [[[0, 0, 0], [-10, -12, -14]], [[0, 0, 0], [-20, -22, -24]]] } };
     const host = document.createElement('div'); document.body.append(host);
     const root = createRoot(host);
-    fiberMocks.canvas.mockClear();
-    act(() => root.render(<InteractiveBalloon result={result} frequencyIndex={0}/>));
-    expect(fiberMocks.canvas).toHaveBeenCalledWith(expect.objectContaining({
-      gl: expect.objectContaining({ preserveDrawingBuffer: true }),
-    }));
-    act(() => root.unmount()); host.remove();
+    act(() => root.render(<BalloonRenderer result={result}/>));
+    const view = () => drawnViewIn(host)!.spec('3D Balloon');
+    // It opens nearest 1 kHz.
+    expect(view()).toMatchObject({ kind: 'balloon', title: '3D Balloon', levels_db: [[0, 0, 0], [-20, -22, -24]], range_db: 30 });
+    const slider = host.querySelector<HTMLInputElement>('[aria-label="Balloon frequency"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(slider, '0');
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(view()).toMatchObject({ levels_db: [[0, 0, 0], [-10, -12, -14]] });
+    expect(view()?.subtitle).toContain('500');
+    act(() => root.unmount());
+    expect(drawnViewIn(host)).toBeNull();
+    host.remove();
   });
 
   it('interpolates the wrapped regular balloon grid', () => {

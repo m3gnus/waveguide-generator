@@ -1,5 +1,5 @@
 import type { EChartsOption } from 'echarts';
-import type { AxisExtent } from './chartSpec';
+import type { AxisExtent, ChartSpec } from './chartSpec';
 
 /**
  * The charts on screen, by the element that holds each one.
@@ -65,4 +65,32 @@ export function screenAxisExtent(instance: ChartInstanceLike | null, option: ECh
     const [from, to] = ends as number[];
     return from < to ? [from, to] : null;
   };
+}
+
+/**
+ * A view drawn from data rather than an ECharts option (the 3D balloon and
+ * the forward beam map): it hands the image its spec at its current frequency.
+ */
+export interface DrawnView {
+  spec(title: string): ChartSpec | null;
+}
+
+const views = new WeakMap<Element, DrawnView>();
+
+export const DRAWN_VIEW_ATTRIBUTE = 'data-drawn-view';
+
+export function registerDrawnView(element: Element, view: DrawnView): () => void {
+  views.set(element, view);
+  return () => {
+    if (views.get(element) === view) views.delete(element);
+  };
+}
+
+/** The first view drawn inside `container`, if any. */
+export function drawnViewIn(container: Element): DrawnView | null {
+  for (const element of container.querySelectorAll(`[${DRAWN_VIEW_ATTRIBUTE}]`)) {
+    const view = views.get(element);
+    if (view) return view;
+  }
+  return null;
 }

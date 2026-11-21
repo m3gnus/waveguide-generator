@@ -7,7 +7,8 @@ import type { JobItem } from '../api/jobsSocket';
 import { preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import type { ChartTokens } from '../results/EChart';
 import type { EChartsOption } from 'echarts';
-import { DRAWN_CHART_CLASS, registerDrawnChart } from '../results/drawnCharts';
+import { DRAWN_CHART_CLASS, DRAWN_VIEW_ATTRIBUTE, registerDrawnChart, registerDrawnView } from '../results/drawnCharts';
+import { sphericalViewSpec } from '../results/chartSpec';
 import { activityStore } from './activity';
 import type { NamedResult } from '../results/mappers';
 import type { SummaryContext, SummaryGroup } from '../results/summary';
@@ -24,7 +25,6 @@ const chartImageMocks = vi.hoisted(() => ({
   save: vi.fn<(image: Promise<Blob>, filename: string, destination: string, confirm?: unknown) => Promise<string>>(),
   render: vi.fn<(spec: unknown, theme: string, fetcher?: typeof fetch) => Promise<string>>(),
   map: vi.fn<(payload: Record<string, unknown>) => Promise<string>>(),
-  compose: vi.fn<(target: HTMLElement, background?: string) => HTMLCanvasElement>(),
 }));
 vi.mock('../results/chartImage', async (importOriginal) => ({
   ...await importOriginal<typeof import('../results/chartImage')>(),
@@ -32,7 +32,6 @@ vi.mock('../results/chartImage', async (importOriginal) => ({
   saveChartPng: chartImageMocks.save,
   renderChartSpec: chartImageMocks.render,
   renderDirectivityMap: chartImageMocks.map,
-  composeChartCanvases: chartImageMocks.compose,
 }));
 
 /** Stand in for EChartRenderer: a drawn chart frame with a canvas, registered with its option. */
@@ -1307,7 +1306,6 @@ describe('chart image sources', () => {
   beforeEach(() => {
     preferencesStore.resetForTests();
     chartImageMocks.map.mockReset().mockResolvedValue('data:image/png;base64,iVBORw==');
-    chartImageMocks.compose.mockReset();
   });
 
   it('draws a directivity map with the contour run the card draws, never one it withholds', async () => {
@@ -1339,16 +1337,29 @@ describe('chart image sources', () => {
     expect(chartImageMocks.map).not.toHaveBeenCalled();
   });
 
-  it('saves the 3D balloon as the view on screen, captured at the click', async () => {
+  it.each([['balloon', 'balloon'], ['beam_map', 'beam_map']] as const)('draws the %s view with hornlab-plots at the frequency the card shows', async (chartType, kind) => {
+    chartImageMocks.render.mockReset().mockResolvedValue('data:image/png;base64,iVBORw==');
+    const balloon = {
+      frequencies: [500, 1_000],
+      theta_deg: [0, 90, 180],
+      phi_deg: [0, 120, 240],
+      spl_norm_db: [[[0, 0, 0], [-6, -9, null], [-20, -20, -20]], [[0, 0, 0], [-3, -3, -3], [-12, -12, -12]]],
+    };
     const target = document.createElement('div');
-    const canvas = document.createElement('canvas');
-    const png = new Blob(['balloon'], { type: 'image/png' });
-    vi.spyOn(canvas, 'toBlob').mockImplementation((callback) => { callback(png); });
-    chartImageMocks.compose.mockReturnValue(canvas);
-    const draw = chartImageSource(target, { chartType: 'balloon', result, named: [], tokens, title: 'Balloon', normAngle: 0 });
-    expect(chartImageMocks.compose).toHaveBeenCalledWith(target, tokens.background);
-    await expect(draw(fetch)).resolves.toBe(png);
-    expect(chartImageMocks.render).not.toHaveBeenCalled();
+    const view = document.createElement('div');
+    view.setAttribute(DRAWN_VIEW_ATTRIBUTE, '');
+    target.append(view);
+    const release = registerDrawnView(view, { spec: (title) => sphericalViewSpec(kind, balloon, 0, title, '500 Hz') });
+    const draw = chartImageSource(target, { chartType, result, named: [], tokens, title: 'View', normAngle: 0 });
+    await expect(draw(fetch)).resolves.toBeInstanceOf(Blob);
+    const [spec, theme] = chartImageMocks.render.mock.calls[0] as unknown as [Record<string, unknown>, string];
+    expect(theme).toBe('classic');
+    expect(spec).toEqual({
+      kind, title: 'View', subtitle: '500 Hz', theta_deg: [0, 90, 180], phi_deg: [0, 120, 240],
+      levels_db: [[0, 0, 0], [-6, -9, null], [-20, -20, -20]], range_db: 30,
+    });
+    release();
+    expect(() => chartImageSource(target, { chartType, result, named: [], tokens, title: 'View', normAngle: 0 })).toThrow('has not been drawn yet');
   });
 
   it('says a chart that has not been drawn yet cannot be saved, without blaming copy', () => {

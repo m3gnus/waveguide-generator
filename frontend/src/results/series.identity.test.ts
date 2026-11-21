@@ -54,7 +54,7 @@ const screenOracle = {
   },
 };
 
-/** exporters.ts `smoothedSeries` (CSV, summary and PNG payload). */
+/** exporters.ts `smoothedSeries` (CSV and summary). */
 function exportOracle(result: ResultPayload, smoothing: SmoothingMode) {
   const frequencies = result.spl_on_axis?.frequencies?.length ? result.spl_on_axis.frequencies : result.frequencies;
   const impedanceFrequencies = result.impedance?.frequencies?.length ? result.impedance.frequencies : frequencies;
@@ -92,7 +92,7 @@ describe('one series layer keeps every consumer’s values', () => {
 
   it('every consumer reproduces the outputs captured from the old code', async () => {
     // series.capture.json: captureSeriesOutputs() run at WG dev ef17eccb1,
-    // before the series layer existed. Covers the CSV, summary, PNG payload,
+    // before the series layer existed. Covers the CSV, summary,
     // derived CSV/JSON, report, screen series, phase, group delay, beam, drive
     // power, FRD, ZMA and measurement-angle outputs. Numbers are hashed at
     // ten significant digits (canonicalNumbers), so a last-bit Math.*

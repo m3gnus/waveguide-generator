@@ -1,6 +1,6 @@
 import { SMOOTHING_MODES } from './smoothing';
 import { SERIES_FIXTURES } from './series.fixtures';
-import { buildChartRenderPayload, buildFrequencyCsv, buildSummaryText } from './exporters';
+import { buildFrequencyCsv, buildSummaryText } from './exporters';
 import { buildDerivedAcousticsCsv, buildDerivedAcousticsJson } from './derivedAcoustics';
 import { buildRunReportHtml } from './runReport';
 import {
@@ -36,7 +36,6 @@ export async function captureSeriesOutputs(): Promise<Record<string, string>> {
     texts.push([key, text]);
   };
   const now = new Date('2026-11-20T12:00:00Z');
-  const reference = { result: SERIES_FIXTURES['shared grid, plane DI'], label: 'ref' };
   for (const [name, result] of Object.entries(SERIES_FIXTURES)) {
     const item = [{ id: 'a', label: 'A', result }];
     put(`${name}|derivedCsv`, () => buildDerivedAcousticsCsv(result));
@@ -61,13 +60,10 @@ export async function captureSeriesOutputs(): Promise<Record<string, string>> {
       }
     }
     for (const [mode] of SMOOTHING_MODES) {
-      // The export theme is not a series value; pin the one the old default
-      // resolved to so the PNG payload compares values only.
-      const preferences = { ...preferencesStore.getSnapshot(), smoothing: mode, chartTheme: 'auto' };
+      const preferences = { ...preferencesStore.getSnapshot(), smoothing: mode };
       const key = `${name}|${mode}`;
       put(`${key}|csv`, () => buildFrequencyCsv(result, preferences));
       put(`${key}|summary`, () => buildSummaryText(result, preferences, now));
-      put(`${key}|png`, () => buildChartRenderPayload(result, preferences, reference));
       put(`${key}|spl`, () => splSeries(item, mode).map((series) => series.data));
       put(`${key}|impC`, () => impedanceSeries(result, 'cartesian', mode).map((series) => series.data));
       put(`${key}|impP`, () => impedanceSeries(result, 'polar', mode).map((series) => series.data));

@@ -10,9 +10,7 @@ import type { ChartSpec } from './chartSpec';
  *
  * A card's Copy and Export PNG, the `png` export format and the HTML report all
  * get their images here, in the export theme, from the same series the screen
- * draws. The 3D balloon and the forward beam map are views rather than charts:
- * hornlab-plots has no renderer for them, so their image is still the canvas on
- * screen (`composeChartCanvases`).
+ * draws, the 3D balloon and the forward beam map included.
  */
 export const CHART_IMAGE_FAILED = 'WG could not draw this chart image. Try again.';
 
@@ -45,66 +43,6 @@ export function renderDirectivityMap(payload: Record<string, unknown>, fetcher: 
   return postRender(fetcher, '/api/render-directivity', payload, fallback);
 }
 
-const DEFAULT_PIXEL_RATIO = 2;
-const MAX_PIXEL_RATIO = 3;
-
-function visibleCanvases(container: HTMLElement): HTMLCanvasElement[] {
-  return [...container.querySelectorAll<HTMLCanvasElement>('canvas')].filter((canvas) => {
-    const rect = canvas.getBoundingClientRect();
-    const style = getComputedStyle(canvas);
-    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-  });
-}
-
-function layerPixelRatio(canvas: HTMLCanvasElement): number {
-  const rect = canvas.getBoundingClientRect();
-  if (!rect.width || !rect.height) return 1;
-  return Math.max(canvas.width / rect.width, canvas.height / rect.height);
-}
-
-/**
- * Flatten the visible canvases of a view (the 3D balloon, the beam map) into
- * one bitmap: the current camera and frequency, as they are on screen.
- */
-export function composeChartCanvases(
-  container: HTMLElement,
-  background?: string,
-  createCanvas: () => HTMLCanvasElement = () => document.createElement('canvas'),
-): HTMLCanvasElement {
-  const layers = visibleCanvases(container);
-  if (!layers.length) throw new Error('This chart is empty, so there is no image to copy. Choose a chart with data.');
-
-  const bounds = container.getBoundingClientRect();
-  if (!bounds.width || !bounds.height) throw new Error('Open this chart, then copy or export it.');
-  const pixelRatio = Math.min(MAX_PIXEL_RATIO, Math.max(
-    DEFAULT_PIXEL_RATIO,
-    ...layers.map(layerPixelRatio).filter(Number.isFinite),
-  ));
-  const output = createCanvas();
-  output.width = Math.max(1, Math.round(bounds.width * pixelRatio));
-  output.height = Math.max(1, Math.round(bounds.height * pixelRatio));
-  const context = output.getContext('2d');
-  if (!context) throw new Error('WG could not make an image of this chart. Try again.');
-
-  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  context.fillStyle = background || getComputedStyle(container).backgroundColor || '#fff';
-  context.fillRect(0, 0, bounds.width, bounds.height);
-  for (const layer of layers) {
-    const rect = layer.getBoundingClientRect();
-    context.drawImage(layer, rect.left - bounds.left, rect.top - bounds.top, rect.width, rect.height);
-  }
-  return output;
-}
-
-export function canvasPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) resolve(blob);
-      else reject(new Error('WG could not make an image of this chart. Try again.'));
-    }, 'image/png');
-  });
-}
-
 /**
  * Copy a chart image. `image` is called inside the click gesture and its
  * pending blob handed to the clipboard at once, because WebKit refuses a
@@ -116,6 +54,34 @@ export async function copyChartPng(image: (fetcher: typeof fetch) => Promise<Blo
   }
   await activityOperation({ kind: 'export', label: 'Copying chart PNG' }, fetch, async (scoped) => {
     await writePendingClipboardItem('image/png', image(scoped));
+  });
+}
+
+/**
+ * Draw several chart images one after another, counted on the status bar.
+ * Inside an export this joins the export's activity, which keeps its own
+ * label unless told: say what the counted steps are, then hand it back.
+ */
+export async function drawCounted<T>(
+  label: string,
+  fetcher: typeof fetch,
+  items: readonly T[],
+  draw: (item: T, fetcher: typeof fetch) => Promise<string>,
+): Promise<string[]> {
+  return activityOperation({ kind: 'export', label }, fetcher, async (scoped, activity) => {
+    const outer = activity.currentLabel();
+    activity.label(label);
+    try {
+      const images: string[] = [];
+      activity.progress(0, items.length);
+      for (const [index, item] of items.entries()) {
+        images.push(await draw(item, scoped));
+        activity.progress(index + 1, items.length);
+      }
+      return images;
+    } finally {
+      activity.label(outer);
+    }
   });
 }
 

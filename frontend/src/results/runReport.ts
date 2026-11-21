@@ -4,8 +4,7 @@ import { groupDelayValue } from './mappers';
 import { radiatedPowerMetadata } from './radiatedPower';
 import { resultChannels, type ResultPayload } from './types';
 import type { GroupDelayUnit } from '../prefs/preferences';
-import { activityOperation } from '../shell/activityOperation';
-import { renderChartSpec } from './chartImage';
+import { drawCounted, renderChartSpec } from './chartImage';
 import type { LineChartSpec } from './chartSpec';
 
 interface RunReportOptions {
@@ -131,23 +130,12 @@ export function runReportChartSpecs(result: ResultPayload): Array<{ section: str
  */
 export async function renderRunReportCharts(result: ResultPayload, theme: string, fetcher: typeof fetch): Promise<RunReportCharts> {
   const specs = runReportChartSpecs(result);
-  return activityOperation({ kind: 'export', label: 'Drawing report charts' }, fetcher, async (scoped, activity) => {
-    // Inside an export this joins the export's activity, which keeps its own
-    // label unless told: say what the counted steps are, then hand it back.
-    const outer = activity.currentLabel();
-    activity.label('Drawing report charts');
-    try {
-      const charts: RunReportCharts = {};
-      activity.progress(0, specs.length);
-      for (const [index, { section, chart, spec }] of specs.entries()) {
-        (charts[section] ??= {})[chart] = await renderChartSpec(spec, theme, scoped, 'WG could not draw the charts for this report. Try the export again.');
-        activity.progress(index + 1, specs.length);
-      }
-      return charts;
-    } finally {
-      activity.label(outer);
-    }
-  });
+  const images = await drawCounted('Drawing report charts', fetcher, specs, ({ spec }, scoped) => (
+    renderChartSpec(spec, theme, scoped, 'WG could not draw the charts for this report. Try the export again.')
+  ));
+  const charts: RunReportCharts = {};
+  specs.forEach(({ section, chart }, index) => { (charts[section] ??= {})[chart] = images[index]; });
+  return charts;
 }
 
 function plotImage(image: string | undefined, heading: string, sampled: boolean): string {
@@ -211,7 +199,9 @@ function reportSections(result: ResultPayload): Array<{ id: string; result: Resu
 
 /**
  * A single-file report: inline CSS and embedded PNG charts, with no network
- * dependencies, so it opens offline as one file.
+ * dependencies, so it opens offline as one file. The page is the classic
+ * HornLab report look (white page, near-black ink), the same as the charts'
+ * default export theme.
  */
 export function buildRunReportHtml(result: ResultPayload, options: RunReportOptions): string {
   const groupDelayUnit = options.groupDelayUnit ?? 'ms';
@@ -223,6 +213,6 @@ export function buildRunReportHtml(result: ResultPayload, options: RunReportOpti
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
 <title>${escapeHtml(options.title)} · HornLab run report</title>
 <style>
-:root{color-scheme:dark;font:14px/1.5 ui-sans-serif,system-ui,sans-serif;background:#0b0f14;color:#e7edf4}body{max-width:1100px;margin:auto;padding:40px 24px}header{border-bottom:1px solid #29323d;margin-bottom:30px}h1{font-size:30px;margin-bottom:4px}h2{font-size:23px;margin-top:36px}h3{color:#bac7d5;margin-top:24px}.quiet,time,summary{color:#91a0af}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.cards div{background:#151c25;border:1px solid #29323d;border-radius:8px;padding:12px}.cards span{display:block;color:#91a0af}.cards strong{font-size:18px}.plot{display:block;width:100%;height:auto;border-radius:8px}.warnings{border-left:3px solid #ffbf69;padding-left:24px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{text-align:right;border-bottom:1px solid #29323d;padding:7px}th{position:sticky;top:0;background:#151c25}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#10151d;padding:14px;border-radius:8px}details{margin-top:16px}summary{cursor:pointer}.empty{padding:40px;background:#10151d;border-radius:8px;text-align:center}
+:root{color-scheme:light;font:14px/1.5 ui-sans-serif,system-ui,sans-serif;background:#ffffff;color:#1a1a1a}body{max-width:1100px;margin:auto;padding:40px 24px}header{border-bottom:1px solid #cfcfcf;margin-bottom:30px}h1{font-size:30px;margin-bottom:4px}h2{font-size:23px;margin-top:36px}h3{color:#333333;margin-top:24px}.quiet,time,summary{color:#5a5a5a}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.cards div{background:#f6f6f6;border:1px solid #cfcfcf;border-radius:8px;padding:12px}.cards span{display:block;color:#5a5a5a}.cards strong{font-size:18px}.plot{display:block;width:100%;height:auto;border:1px solid #e2e2e2;border-radius:8px}.warnings{border-left:3px solid #e07b10;padding-left:24px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{text-align:right;border-bottom:1px solid #e2e2e2;padding:7px}th{position:sticky;top:0;background:#f6f6f6}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f6;padding:14px;border-radius:8px}details{margin-top:16px}summary{cursor:pointer}.empty{padding:40px;background:#f6f6f6;border-radius:8px;text-align:center;color:#5a5a5a}
 </style></head><body><header><h1>${escapeHtml(options.title)}</h1><p>HornLab static run report · generated <time datetime="${escapeHtml(options.generatedAt.toISOString())}">${escapeHtml(options.generatedAt.toISOString())}</time></p></header>${sections}</body></html>\n`;
 }

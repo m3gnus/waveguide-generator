@@ -23,9 +23,9 @@ import {
   askToReplaceExports,
 } from './exportDestinationPrompt';
 import { ExportCancelledError } from '../api/exportDestination';
-import { canvasPngBlob, CHART_IMAGE_FAILED, composeChartCanvases, copyChartPng, drawChartPng, pngBlobFromDataUri, renderChartSpec, renderDirectivityMap, saveChartPng } from '../results/chartImage';
-import { chartSpecFromOption, withImageLabels } from '../results/chartSpec';
-import { drawnChartIn } from '../results/drawnCharts';
+import { CHART_IMAGE_FAILED, copyChartPng, drawChartPng, pngBlobFromDataUri, renderChartSpec, renderDirectivityMap, saveChartPng } from '../results/chartImage';
+import { chartSpecFromOption, withImageLabels, type ChartSpec } from '../results/chartSpec';
+import { drawnChartIn, drawnViewIn } from '../results/drawnCharts';
 import { buildDirectivityRenderPayload } from '../results/exporters';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { latestCombine } from '../results/latestCombine';
@@ -41,7 +41,7 @@ import { hydrateJobDesign } from '../jobs/jobDesign';
 import { workspaceNavigation } from './workspaceNavigation';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
-import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, resolveChartTheme, runDisplayName, useDeveloperDetails, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
+import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, resolveChartTheme, runDisplayName, useDeveloperDetails, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane, type Preferences } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyLabelIndices, directivityFrequencyTickLabel, directivityFrequencyTickLabels, logFrequencyTicks } from '../results/directivityFrequencyAxis';
 import { directivityMapCanvas, solvedSampleSpan } from '../results/mapBitmap';
@@ -1986,6 +1986,80 @@ export function chartOverlays(chartType: ChartType, named: NamedResult[], result
   return COMPARABLE_CHARTS.has(chartType) ? [{ id: 'primary', label: 'Primary', result, primary: true }] : NO_NAMED_RESULTS;
 }
 
+/** The cards the `png` export draws, by file name; the directivity map is added by the bundle. */
+export const BUNDLE_CHARTS = ['frequency_response', 'directivity_index', 'impedance', 'beam_shape'] as const;
+type BundleChart = typeof BUNDLE_CHARTS[number];
+
+export interface CardOptionInputs {
+  result: ResultPayload;
+  overlays: NamedResult[];
+  /** `overlays` at the measurement angles the SPL card reads. */
+  angled: NamedResult[];
+  tokens: ChartTokens;
+  density: ChartDensity;
+  preferences: Pick<Preferences, 'smoothing' | 'splPhase' | 'impedanceDisplay'>;
+  measured: MeasuredOverlay[];
+  reverseNull: ReverseNullTrace[];
+  unqualified: UnqualifiedBand[];
+}
+
+/**
+ * The option a card draws for a chart the `png` export also writes. One
+ * builder for the card on screen and for the exported file, so the two show
+ * the same curves.
+ */
+export function cardOption(chartType: BundleChart, inputs: CardOptionInputs): EChartsOption {
+  const { result, overlays, angled, tokens, density, preferences, measured, reverseNull, unqualified } = inputs;
+  const mark = (option: EChartsOption) => withUnqualifiedBands(option, unqualified, tokens);
+  if (chartType === 'frequency_response') return mark(splOption(angled, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull));
+  if (chartType === 'directivity_index') return mark(directivityIndexOption(overlays, tokens, preferences.smoothing, density));
+  if (chartType === 'impedance') return mark(impedanceOption(overlays, tokens, preferences.smoothing, density, preferences.impedanceDisplay));
+  return mark(lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density));
+}
+
+function hasSeries(option: EChartsOption): boolean {
+  return Array.isArray(option.series) && option.series.length > 0;
+}
+
+export interface BundleChartImages {
+  /** Spec per file stem, for /api/render-chart. */
+  charts: Array<{ name: BundleChart; spec: ChartSpec }>;
+  /** The directivity map's request, for /api/render-directivity; null with no directivity. */
+  map: Record<string, unknown> | null;
+}
+
+/**
+ * The `png` export's charts, drawn the way the cards draw them: the run alone
+ * (no comparison runs and no loaded measurements, which are not part of a
+ * run), at the measurement angles and smoothing the preferences hold. `result`
+ * is already referenced to the run's normalisation angle by the export.
+ */
+export function bundleChartImages(result: ResultPayload, preferences: Preferences, tokens: ChartTokens): BundleChartImages {
+  const charts = BUNDLE_CHARTS.flatMap((name) => {
+    if (name === 'beam_shape' && !result.beam_shape?.frequencies?.length) return [];
+    const overlays = chartOverlays(name, NO_NAMED_RESULTS, result, preferences.showMembersUnderCombined);
+    const selection = resolveMeasurementSelection(result, preferences.measurementPlane, preferences.measurementAngles);
+    const option = cardOption(name, {
+      result,
+      overlays,
+      angled: ANGLED_CHARTS.has(name) ? measurementAngleEntries(overlays, selection) : overlays,
+      tokens,
+      density: 'full',
+      preferences,
+      measured: NO_MEASURED_OVERLAYS,
+      reverseNull: NO_REVERSE_NULL,
+      unqualified: chartUnqualifiedBands(overlays.length ? overlays : [{ id: 'primary', label: 'Primary', result }]),
+    });
+    if (!hasSeries(option)) return [];
+    const subtitle = chartSubtitle(name, result, NO_NAMED_RESULTS, preferences, 0);
+    return [{ name, spec: chartSpecFromOption(option, tokens, { title: chartTitle(name, true), subtitle }) }];
+  });
+  const map = Object.keys(result.directivity ?? {}).length
+    ? directivityMapRenderPayload('directivity_map', result, NO_NAMED_RESULTS, preferences)
+    : null;
+  return { charts, map };
+}
+
 function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, radiationArtifact, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction; radiationArtifact?: RadiationArtifactView } & SummarySourceProps) {
   const preferences = usePreferences();
   // The shown run owns its display reference, independently of live drafts.
@@ -2037,11 +2111,12 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
   // result snapshot has not changed.
   const plot = useMemo(() => {
     const mark = (option: EChartsOption) => withUnqualifiedBands(option, unqualified, tokens);
+    const cardInputs: CardOptionInputs = { result, overlays, angled, tokens, density, preferences, measured, reverseNull, unqualified };
     // The angle strip is drawn only when there is more than one angle to offer.
     const railed = (option: EChartsOption) => (measurementSelection.available.length >= 2 ? clearingRail(option, density) : option);
     if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length
       ? <div className="frequency-canvas">
-        <EChart option={railed(withCompactLegend(mark(splOption(angled, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull)), angled.length + measured.length, density))} label="Interactive HornLab sound pressure frequency response" live={live}/>
+        <EChart option={railed(withCompactLegend(cardOption('frequency_response', cardInputs), angled.length + measured.length, density))} label="Interactive HornLab sound pressure frequency response" live={live}/>
         <MeasurementAngleControls selection={measurementSelection} onChange={(next) => preferencesStore.update({
           ...(next.plane === undefined ? {} : { measurementPlane: next.plane }),
           ...(next.angles === undefined ? {} : { measurementAngles: next.angles }),
@@ -2050,7 +2125,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       : <ChartStub reason="This run has no on-axis response yet. Wait for it to finish, or choose a completed run."/>;
     if (isDirectivityMap(chartType)) return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} normAngle={normAngle} angleGuideInterval={preferences.directivityGuideInterval} showContourNames={preferences.showContourNames} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
-      const option = withCompactLegend(mark(directivityIndexOption(overlays, tokens, preferences.smoothing, density)), overlays.length, density);
+      const option = withCompactLegend(cardOption('directivity_index', cardInputs), overlays.length, density);
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field. Choose an engine that provides one, then solve again."/>;
     }
     if (chartType === 'power_response') {
@@ -2060,7 +2135,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="Power Response needs a complete spherical field. Choose an engine that provides one, then solve again."/>;
     }
     if (chartType === 'beam_shape') {
-      if (result.beam_shape?.frequencies?.length) return <EChart option={mark(lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density))} label="Interactive HornLab horizontal and vertical forward beam width" live={live}/>;
+      if (result.beam_shape?.frequencies?.length) return <EChart option={cardOption('beam_shape', cardInputs)} label="Interactive HornLab horizontal and vertical forward beam width" live={live}/>;
       const missing = beamShapeMissingReason(result);
       return <ChartStub reason={missing.reason} action={missing.canEnable ? beamShapeAction : undefined}/>;
     }
@@ -2122,7 +2197,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     }
     if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
     if (chartType === 'impedance') {
-      const option = withCompactLegend(mark(impedanceOption(overlays, tokens, preferences.smoothing, density, preferences.impedanceDisplay)), overlays.length, density);
+      const option = withCompactLegend(cardOption('impedance', cardInputs), overlays.length, density);
       // The spoken label follows the units for the same reason the axis does:
       // a driver-coupled run's ohms announced as "acoustic impedance" is the
       // screen-reader version of the mislabelled axis. The stub cannot follow
@@ -2196,9 +2271,17 @@ function useChartDescription({ chartType, result, named, job }: { chartType: Cha
     .flatMap(({ label, result: entry }) => samplingNotes(entry).length
       ? [`${label}: ${samplingNotes(entry)[1]}. ${samplingNotes(entry)[0]}`] : [])
     .join('\n');
-  const polarStep = chartType.startsWith('directivity_map') ? resolvedPolarStepNotice(result) : null;
   // The same list ResultChart overlays, so the chip and the subtitle describe
   // the chart that is actually drawn rather than the primary run alone.
+  const impedanceItems = chartType === 'impedance' ? (named.length ? named : [{ id: 'primary', label: 'Primary', result, primary: true }]) : undefined;
+  const subtitle = chartSubtitle(chartType, result, named, preferences, normAngle);
+  const unit = chartUnit(chartType, result, impedanceItems, preferencesStore.getSnapshot().groupDelayUnit);
+  return { samplingDisclosure, subtitle, unit };
+}
+
+/** What a chart says under its title, on its card and in its image alike. */
+export function chartSubtitle(chartType: ChartType, result: ResultPayload, named: NamedResult[], preferences: Preferences, normAngle: number): string | null {
+  const polarStep = chartType.startsWith('directivity_map') ? resolvedPolarStepNotice(result) : null;
   const impedanceItems = chartType === 'impedance' ? (named.length ? named : [{ id: 'primary', label: 'Primary', result, primary: true }]) : undefined;
   // Naming the angle the map is referenced to is what makes the field on the
   // design side legible: the shift is a constant per row, so a heatmap gives no
@@ -2208,8 +2291,8 @@ function useChartDescription({ chartType, result, named, job }: { chartType: Cha
   const mapNorm = chartType.startsWith('directivity_map')
     ? resolveNormalizationAngle(result, normAngle)
     : null;
-  const subtitle = chartType.startsWith('directivity_map')
-    ? `ref ${preferencesStore.getSnapshot().mapReference} dB · 0 dB at ${Number(mapNorm!.angle.toFixed(3))}°${mapNorm!.clamped ? ' (nearest measured)' : ''}${polarStep ? ` · ${polarStep}` : ''}`
+  return chartType.startsWith('directivity_map')
+    ? `ref ${preferences.mapReference} dB · 0 dB at ${Number(mapNorm!.angle.toFixed(3))}°${mapNorm!.clamped ? ' (nearest measured)' : ''}${polarStep ? ` · ${polarStep}` : ''}`
     : chartType === 'frequency_response'
       ? splSubtitle(result, resolveMeasurementSelection(result, preferences.measurementPlane, preferences.measurementAngles))
     : chartType === 'power_response' ? powerResponseMethodCaption(result)
@@ -2220,15 +2303,36 @@ function useChartDescription({ chartType, result, named, job }: { chartType: Cha
     // reader to infer from a ceiling drawn as a confident line.
     : chartType === 'max_output' ? limitingSummary(maxOutputOf(result), memberLabelOf(result))
     : null;
-  const unit = chartUnit(chartType, result, impedanceItems, preferencesStore.getSnapshot().groupDelayUnit);
-  return { samplingDisclosure, subtitle, unit };
 }
 
-/** Views whose image is their canvas: hornlab-plots has no renderer for a 3D balloon or a beam map. */
-const CANVAS_VIEWS = new Set<ChartType>(['balloon', 'beam_map']);
+/** Views drawn from the balloon grid at the card's frequency, not from an ECharts option. */
+const SPHERICAL_VIEWS = new Set<ChartType>(['balloon', 'beam_map']);
 
 function isDirectivityMap(chartType: ChartType): chartType is DirectivityMapChartType {
   return chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map';
+}
+
+/**
+ * A directivity map's request to hornlab-plots, from the card's own runs and
+ * panels: the image never shows a contour the card withholds. `normAngle`
+ * re-references the runs as the card does; leave it out for a result the
+ * caller has already referenced.
+ */
+export function directivityMapRenderPayload(chartType: DirectivityMapChartType, result: ResultPayload, named: NamedResult[], preferences: Preferences, normAngle?: number): Record<string, unknown> {
+  const overlays = chartOverlays(chartType, named, result, preferences.showMembersUnderCombined);
+  const referenced = normAngle === undefined
+    ? overlays
+    : overlays.map((item) => ({ ...item, result: withNormalizationAngle(item.result, normAngle) }));
+  const panels = directivityMapPanels(referenced, chartType).filter((panel) => panel.hasData);
+  if (!panels.length) throw new Error('This run has no directivity to draw. Turn on a polar plane under Directivity map in Simulation, then solve again.');
+  // hornlab-plots draws one contour run; it is the first one the card draws.
+  const reference = panels.flatMap((panel) => panel.references)[0];
+  return buildDirectivityRenderPayload(
+    panels[0].result,
+    preferences,
+    directivityPlaneForChart(chartType) ?? undefined,
+    reference ? { result: reference.result, label: reference.label } : undefined,
+  );
 }
 
 interface ChartImageSource {
@@ -2245,40 +2349,28 @@ interface ChartImageSource {
 /**
  * What a chart's image is drawn from, captured when Copy or Export is pressed.
  *
- * Charts go to hornlab-plots in the export theme: a directivity map as its own
- * canonical heatmap (the primary run, normalised as on screen, with the first
- * compared run as its contour), every other chart as the spec of what the card
- * drew. Everything is read now and drawn later, so a run that lands while the
- * user picks a folder does not change the picture they asked for.
+ * Every chart goes to hornlab-plots in the export theme: a directivity map as
+ * its own canonical heatmap, the balloon and the beam map as their grid at the
+ * card's frequency, and every other chart as the spec of what the card drew.
+ * Everything is read now and drawn later, so a run that lands while the user
+ * picks a folder does not change the picture they asked for.
  */
 export function chartImageSource(target: HTMLElement, source: ChartImageSource): (fetcher: typeof fetch) => Promise<Blob> {
   const { chartType, result, named, tokens, title, subtitle, normAngle } = source;
-  if (CANVAS_VIEWS.has(chartType)) {
-    const canvas = composeChartCanvases(target, tokens.background);
-    return () => canvasPngBlob(canvas);
-  }
   const preferences = preferencesStore.getSnapshot();
+  const theme = resolveChartTheme(preferences.chartTheme);
   if (isDirectivityMap(chartType)) {
-    // The card's own runs and panels, normalised as the card draws them: the
-    // image never shows a contour the card withholds.
-    const overlays = result ? chartOverlays(chartType, named, result, preferences.showMembersUnderCombined) : [];
-    const referenced = overlays.map((item) => ({ ...item, result: withNormalizationAngle(item.result, normAngle) }));
-    const panels = directivityMapPanels(referenced, chartType).filter((panel) => panel.hasData);
-    if (!panels.length) throw new Error('This run has no directivity to draw. Turn on a polar plane under Directivity map in Simulation, then solve again.');
-    // hornlab-plots draws one contour run; it is the first one the card draws.
-    const reference = panels.flatMap((panel) => panel.references)[0];
-    const payload = buildDirectivityRenderPayload(
-      panels[0].result,
-      preferences,
-      directivityPlaneForChart(chartType) ?? undefined,
-      reference ? { result: reference.result, label: reference.label } : undefined,
-    );
+    if (!result) throw new Error('This run has no directivity to draw. Choose a completed run.');
+    const payload = directivityMapRenderPayload(chartType, result, named, preferences, normAngle);
     return async (fetcher) => pngBlobFromDataUri(await renderDirectivityMap(payload, fetcher));
   }
-  const drawn = drawnChartIn(target);
-  if (!drawn) throw new Error('This chart has not been drawn yet. Wait for it to appear, then try again.');
-  const spec = chartSpecFromOption(drawn.option, tokens, { title, subtitle, extent: drawn.extent, hidden: drawn.hidden() });
-  const theme = resolveChartTheme(preferences.chartTheme);
+  const spec = SPHERICAL_VIEWS.has(chartType)
+    ? drawnViewIn(target)?.spec(title)
+    : (() => {
+      const drawn = drawnChartIn(target);
+      return drawn && chartSpecFromOption(drawn.option, tokens, { title, subtitle, extent: drawn.extent, hidden: drawn.hidden() });
+    })();
+  if (!spec) throw new Error('This chart has not been drawn yet. Wait for it to appear, then try again.');
   return async (fetcher) => pngBlobFromDataUri(await renderChartSpec(spec, theme, fetcher));
 }
 

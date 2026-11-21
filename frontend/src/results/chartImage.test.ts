@@ -1,54 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { composeChartCanvases, copyChartPng, drawChartPng, pngBlobFromDataUri, renderChartSpec, saveChartPng } from './chartImage';
+import { copyChartPng, drawChartPng, pngBlobFromDataUri, renderChartSpec, saveChartPng } from './chartImage';
 import { activityStore } from '../shell/activity';
 
 const workspace = vi.hoisted(() => ({ write: vi.fn() }));
 vi.mock('../api/workspace', () => ({ writeToOutputFolder: workspace.write }));
 
-function rect(left: number, top: number, width: number, height: number): DOMRect {
-  return {
-    x: left, y: top, left, top, width, height,
-    right: left + width, bottom: top + height,
-    toJSON: () => ({}),
-  } as DOMRect;
-}
-
-describe('chart PNG composition', () => {
+describe('chart images', () => {
   afterEach(() => { vi.restoreAllMocks(); workspace.write.mockReset(); activityStore.reset(); });
-  it('flattens every positioned canvas layer at the highest bounded pixel ratio', () => {
-    const container = document.createElement('div');
-    const base = document.createElement('canvas');
-    const overlay = document.createElement('canvas');
-    container.append(base, overlay);
-    base.width = 200; base.height = 100;
-    overlay.width = 150; overlay.height = 150;
-    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(rect(10, 20, 100, 50));
-    vi.spyOn(base, 'getBoundingClientRect').mockReturnValue(rect(10, 20, 100, 50));
-    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue(rect(60, 20, 50, 50));
-
-    const context = {
-      setTransform: vi.fn(), fillRect: vi.fn(), drawImage: vi.fn(), fillStyle: '',
-    };
-    const output = document.createElement('canvas');
-    vi.spyOn(output, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
-
-    expect(composeChartCanvases(container, '#211f1d', () => output)).toBe(output);
-    expect(output.width).toBe(300);
-    expect(output.height).toBe(150);
-    expect(context.setTransform).toHaveBeenCalledWith(3, 0, 0, 3, 0, 0);
-    expect(context.fillStyle).toBe('#211f1d');
-    expect(context.fillRect).toHaveBeenCalledWith(0, 0, 100, 50);
-    expect(context.drawImage.mock.calls).toEqual([
-      [base, 0, 0, 100, 50],
-      [overlay, 50, 0, 50, 50],
-    ]);
-  });
-
-  it('refuses to manufacture an empty PNG for a chart stub', () => {
-    const container = document.createElement('div');
-    expect(() => composeChartCanvases(container)).toThrow('no image');
-  });
-
   it('writes the drawn blob under one export activity', async () => {
     let finishDrawing!: (blob: Blob) => void;
     const image = new Promise<Blob>((resolve) => { finishDrawing = resolve; });

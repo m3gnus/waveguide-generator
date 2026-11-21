@@ -5,8 +5,9 @@ import { BufferAttribute, BufferGeometry, Color, DoubleSide, SRGBColorSpace } fr
 import { colorOffset, colorTable } from './colorTable';
 import { readChartTokens, useChartTokens } from './EChart';
 import type { ResultPayload } from './types';
+import { SPHERICAL_RANGE_DB } from './chartSpec';
 
-const RANGE_DB = 30;
+const RANGE_DB = SPHERICAL_RANGE_DB;
 const BALLOON_CAMERA = [2.35, 1.55, 2.75] as const;
 
 
@@ -126,10 +127,7 @@ export default function InteractiveBalloon({ result, frequencyIndex }: { result:
       camera={{ position: [...BALLOON_CAMERA], fov: 38, near: .05, far: 50 }}
       dpr={[1, 2]}
       frameloop="demand"
-      // Image actions copy this canvas after the demand-rendered frame has
-      // already been composited. Retaining the small result view's buffer is
-      // what makes that capture contain the current camera view.
-      gl={{ antialias: true, alpha: true, preserveDrawingBuffer: true }}
+      gl={{ antialias: true, alpha: true }}
     >
       <BalloonScene result={result} frequencyIndex={frequencyIndex} resetNonce={resetNonce}/>
     </Canvas>

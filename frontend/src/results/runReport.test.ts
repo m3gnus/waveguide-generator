@@ -47,6 +47,9 @@ describe('static run report', () => {
     expect(html).toContain('<h2>HF</h2>');
     expect(html).toContain('<h2>MF</h2>');
     expect(html).not.toContain('<svg');
+    // A light page, to match the classic chart images.
+    expect(html).toContain('color-scheme:light');
+    expect(html).not.toContain('color-scheme:dark');
     expect(html.match(/<img class="plot" alt="[^"]+" src="data:image\/png;base64,iVBORw==">/g)).toHaveLength(3);
     // A chart with samples but no image says it was not drawn, not that the
     // run has no samples.

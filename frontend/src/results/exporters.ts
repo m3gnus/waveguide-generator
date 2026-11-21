@@ -32,10 +32,10 @@ import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
 import { withNormalizationAngle } from './normalization';
 import { impedanceUnits, isModalImpedance } from './mappers';
 import { polarValueDb } from './values';
-import { engineeringDisplayPhase } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
 import { buildRunReportHtml, renderRunReportCharts } from './runReport';
-import { pngBlobFromDataUri, renderDirectivityMap } from './chartImage';
+import { drawCounted, pngBlobFromDataUri, renderChartSpec, renderDirectivityMap } from './chartImage';
+import { readChartTokens } from './EChart';
 import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './vituixcad';
 import { reportCaughtError } from '../shell/clientErrors';
 import { failureWords, httpErrorMessage, isAbortError, ProgramFault } from '../api/httpError';
@@ -447,114 +447,34 @@ const CHART_EXPORT_FAILED = 'WG could not render the charts for this export. Try
 async function chartPng(context: ExportContext): Promise<string[]> {
   const result = requireResult(context);
   const fetcher = context.fetcher ?? fetch;
-  // Validate both canonical renderer responses before saving the first image.
-  // This keeps PNG a single retryable format rather than leaving half a chart
-  // set behind when the directivity renderer fails.
-  const directivityImage = await renderDirectivityMap(
-    buildDirectivityRenderPayload(result, context.preferences), fetcher, CHART_EXPORT_FAILED,
-  );
-  // The dedicated renderer owns the map settings. Keep the combined request
-  // to line charts so the map is rendered once, and ignore any legacy map key
-  // in its response before filenames are staged by the bundle.
-  const chartPayload = { ...buildChartRenderPayload(result, context.preferences), directivity: {} };
-  const response = await fetcher('/api/render-charts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(chartPayload) });
-  if (!response.ok) throw await responseError(response, CHART_EXPORT_FAILED);
-  const body = await response.json() as { charts?: Record<string, string> };
-  const entries = Object.entries(body.charts ?? {}).filter(([chart]) => chart !== 'directivity_map');
-  if (!entries.length) throw new ProgramFault('Chart renderer returned no images.');
+  // The cards' own builders: the files show what the cards show. Loaded
+  // lazily, because the results panel itself imports this module.
+  const { bundleChartImages } = await import('../shell/ResultsPanel');
+  const { charts, map } = bundleChartImages(result, context.preferences, readChartTokens());
   const baseName = exportContextBaseName(context);
+  const theme = resolveChartTheme(context.preferences.chartTheme);
+  const jobs: Array<{ filename: string; draw: (scoped: typeof fetch) => Promise<string> }> = [
+    ...charts.map(({ name, spec }) => ({
+      filename: `${baseName}_${name}.png`,
+      draw: (scoped: typeof fetch) => renderChartSpec(spec, theme, scoped, CHART_EXPORT_FAILED),
+    })),
+    ...(map ? [{
+      filename: `${baseName}_directivity_map.png`,
+      draw: (scoped: typeof fetch) => renderDirectivityMap(map, scoped, CHART_EXPORT_FAILED),
+    }] : []),
+  ];
+  if (!jobs.length) throw new Error('This run has no charts to export yet. Wait for it to finish, or choose a completed run.');
+  // Every image is drawn before the first is saved, so PNG stays a single
+  // retryable format rather than leaving half a chart set behind.
+  const images = await drawCounted('Drawing chart images', fetcher, jobs, ({ draw }, scoped) => draw(scoped));
   const saveBlob = context.saveBlob ?? downloadBlob;
-  const files = entries.map(([chart, data]) => {
-    const filename = `${baseName}_${chart}.png`;
-    saveBlob(pngBlobFromDataUri(data), filename);
-    return filename;
-  });
-  const directivityFilename = `${baseName}_directivity_map.png`;
-  saveBlob(pngBlobFromDataUri(directivityImage), directivityFilename);
-  return [...files, directivityFilename];
+  jobs.forEach(({ filename }, index) => saveBlob(pngBlobFromDataUri(images[index]), filename));
+  return jobs.map(({ filename }) => filename);
 }
 
 export interface ChartReference {
   result: ResultPayload;
   label?: string;
-}
-
-/**
- * The impedance tags the renderer gets, in hornlab-plots' own vocabulary.
- *
- * Both were hardcoded to the normalized pair, so a driver-coupled run drew an Ω
- * axis on screen and shipped a Z/ρc label in the PNG — the exact screen-against-
- * file disagreement the on-screen unit fix exists to remove. The predicate is
- * `impedanceUnits`, deliberately the same one the chart axis reads, because two
- * predicates are how they drifted apart in the first place.
- *
- * `impedance_normalization` is the more consequential of the two: hornlab-plots
- * compares it between primary and reference and *skips the overlay* on a
- * mismatch. With both pinned to `rho_c` an ohms primary silently accepted a
- * Z/ρc reference curve onto its own scale, where a 0..2 acoustic trace
- * flatlines along the bottom of a 4..60 Ω axis and reads as a dead run.
- *
- * The axis label follows the same tag: hornlab-plots' `_impedance_ylabel` (in
- * the pinned revision, `pins.json`) labels `ohms` "Z [Ω]" and the normalized
- * pair "Z / ρc", so the exported PNG names the same quantity as the screen.
- */
-function impedanceRenderTags(result: ResultPayload): Record<string, string> {
-  return impedanceUnits(result).electrical
-    ? { impedance_units: 'ohms', impedance_normalization: 'absolute' }
-    : { impedance_units: 'Z/(rho*c)', impedance_normalization: 'rho_c' };
-}
-
-function buildChartReferencePayload(reference: ChartReference, preferences: Preferences): Record<string, unknown> {
-  const series = smoothedSeries(reference.result, preferences);
-  const observation = reference.result.metadata?.observation;
-  const observationRecord = observation && typeof observation === 'object' ? observation as Record<string, unknown> : {};
-  return {
-    label: reference.label ?? null,
-    frequencies: series.frequencies,
-    spl: series.spl,
-    sound_speed_m_per_s: finite(observationRecord.sound_speed_m_per_s),
-    di: series.di,
-    di_frequencies: series.diFrequencies,
-    impedance_frequencies: series.impedanceFrequencies,
-    impedance_real: series.impedanceReal,
-    impedance_imaginary: series.impedanceImaginary,
-    ...impedanceRenderTags(reference.result),
-    beam_shape: reference.result.beam_shape ?? null,
-  };
-}
-
-export function buildChartRenderPayload(
-  result: ResultPayload,
-  preferences: Preferences,
-  reference?: ChartReference,
-): Record<string, unknown> {
-  const series = smoothedSeries(result, preferences);
-  // Resolve these as one validity unit. Sending a distance with no sound speed
-  // makes hornlab-plots assume 343 m/s while the browser correctly declines to
-  // de-embed, so partially valid legacy metadata would produce two phase plots.
-  // The PNG draws the same engineering phase as the screen and the FRD. The
-  // converted samples are tagged exp(-ikr), which hornlab-plots de-embeds with
-  // the matching sign; an unsupported tag sends raw phase and no reference.
-  const shown = engineeringDisplayPhase(result);
-  const phaseReference = shown.reference;
-  return {
-    frequencies: series.frequencies,
-    spl: series.spl,
-    phase_degrees: preferences.splPhase ? shown.phaseDegrees : [],
-    phase_reference_distance_m: phaseReference?.distanceM ?? null,
-    phase_time_convention: phaseReference ? shown.convention : null,
-    sound_speed_m_per_s: phaseReference?.speedOfSoundMps ?? null,
-    di: series.di,
-    di_frequencies: series.diFrequencies,
-    impedance_frequencies: series.impedanceFrequencies,
-    impedance_real: series.impedanceReal,
-    impedance_imaginary: series.impedanceImaginary,
-    ...impedanceRenderTags(result),
-    directivity: result.directivity ?? {},
-    beam_shape: result.beam_shape ?? null,
-    reference: reference ? buildChartReferencePayload(reference, preferences) : null,
-    theme: resolveChartTheme(preferences.chartTheme),
-  };
 }
 
 export function buildDirectivityRenderPayload(

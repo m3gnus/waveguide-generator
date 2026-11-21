@@ -4,8 +4,10 @@ import { colorOffset, colorTable } from './colorTable';
 import { useChartTokens, type ChartTokens } from './EChart';
 import type { ResultPayload } from './types';
 import { formatFrequencyHz } from './validity';
+import { SPHERICAL_RANGE_DB, sphericalViewSpec } from './chartSpec';
+import { DRAWN_VIEW_ATTRIBUTE, registerDrawnView } from './drawnCharts';
 
-const RANGE_DB = 30;
+const RANGE_DB = SPHERICAL_RANGE_DB;
 /** The beam map is computed per pixel; above this it is drawn smaller and scaled up. */
 const MAX_BEAM_MAP_PIXELS = 1_000_000;
 
@@ -127,6 +129,7 @@ function FrequencyCanvas({ result, kind }: { result: ResultPayload; kind: 'ballo
   const frequencies = result.balloon?.frequencies ?? [];
   const [index, setIndex] = useState(() => closestFrequencyIndex(frequencies));
   const canvas = useRef<HTMLCanvasElement>(null);
+  const view = useRef<HTMLDivElement>(null);
   const tokens = useChartTokens();
   const beam = result.beam_shape;
   useEffect(() => setIndex(closestFrequencyIndex(frequencies)), [result.balloon]);
@@ -150,9 +153,16 @@ function FrequencyCanvas({ result, kind }: { result: ResultPayload; kind: 'ballo
     }
     return parts.join(' · ');
   }, [beam, frequencies, index, kind]);
+  // Copy and Export draw this view with hornlab-plots at the frequency shown.
+  useEffect(() => {
+    if (!view.current) return;
+    return registerDrawnView(view.current, {
+      spec: (title) => sphericalViewSpec(kind === 'beam' ? 'beam_map' : 'balloon', result.balloon, index, title, readout),
+    });
+  }, [index, kind, readout, result.balloon]);
   // The scrubber floats over the render rather than taking a row from it, so a
   // short card spends all of its height on the plot.
-  return <div className="frequency-canvas">
+  return <div className="frequency-canvas" ref={view} {...{ [DRAWN_VIEW_ATTRIBUTE]: '' }}>
     {kind === 'balloon'
       ? <Suspense fallback={<div className="balloon-3d-loading" role="status">Loading 3D view…</div>}><InteractiveBalloon result={result} frequencyIndex={index}/></Suspense>
       : <canvas ref={canvas} role="img" aria-label="Front-facing directivity map"/>}

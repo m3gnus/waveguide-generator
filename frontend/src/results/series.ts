@@ -4,7 +4,7 @@ import type { ResultPayload } from './types';
 /**
  * The curves every consumer derives from a result, defined once.
  *
- * The screen (`mappers.ts`), the CSV/summary/PNG-payload exports
+ * The screen (`mappers.ts`, which every chart image is drawn from), the CSV/summary exports
  * (`exporters.ts`) and the derived-acoustics sidecar the HTML report reads
  * (`derivedAcoustics.ts`) all need the same four rules: which frequency grid
  * a quantity is on, which DI curve a flat chart or column shows, how the power

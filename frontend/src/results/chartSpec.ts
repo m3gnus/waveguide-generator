@@ -69,7 +69,43 @@ export interface PolarChartSpec {
   shade?: Array<{ from: number; to: number; label?: string }>;
 }
 
-export type ChartSpec = LineChartSpec | PolarChartSpec;
+/** One frequency of the solved balloon grid: the forward beam map or the 3D balloon. */
+export interface SphericalChartSpec {
+  kind: 'beam_map' | 'balloon';
+  title: string;
+  subtitle?: string;
+  theta_deg: number[];
+  phi_deg: number[];
+  /** dB re max, one row per theta, one value per phi. */
+  levels_db: Array<Array<number | null>>;
+  range_db: number;
+}
+
+export type ChartSpec = LineChartSpec | PolarChartSpec | SphericalChartSpec;
+
+/** The display span of the balloon and beam map, as on screen. */
+export const SPHERICAL_RANGE_DB = 30;
+
+/** A balloon view's spec at one frequency index; null when the run has no balloon there. */
+export function sphericalViewSpec(
+  kind: SphericalChartSpec['kind'],
+  balloon: { theta_deg: number[]; phi_deg: number[]; spl_norm_db: Array<Array<Array<number | null>>> } | undefined,
+  frequencyIndex: number,
+  title: string,
+  subtitle?: string,
+): SphericalChartSpec | null {
+  const grid = balloon?.spl_norm_db[frequencyIndex];
+  if (!balloon || !grid?.length) return null;
+  return {
+    kind,
+    title,
+    ...(subtitle ? { subtitle } : {}),
+    theta_deg: balloon.theta_deg,
+    phi_deg: balloon.phi_deg,
+    levels_db: grid.map((row) => row.map((value) => (finite(value) ? value : null))),
+    range_db: SPHERICAL_RANGE_DB,
+  };
+}
 
 /**
  * Axis titles and a subtitle an option carries for its image only.

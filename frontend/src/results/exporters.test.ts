@@ -10,7 +10,7 @@ import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
 import type { RadiationImpedancePresentation } from '../api/results';
 import { writeToOutputFolder } from '../api/workspace';
-import { runAutomaticWorkspaceExport, archiveRunToWorkspace, buildChartRenderPayload, buildDirectivityRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
+import { runAutomaticWorkspaceExport, archiveRunToWorkspace, buildDirectivityRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 
 /**
@@ -18,7 +18,10 @@ import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
  * exercise what the exports write around them, so the drawing is stubbed here
  * and checked in runReport.test.ts and chartImage.test.ts.
  */
-const reportChart = vi.hoisted(() => ({ render: vi.fn(async () => 'data:image/png;base64,iVBORw==') }));
+const reportChart = vi.hoisted(() => ({ render: vi.fn(async () => 'data:image/png;base64,iVBORw==') }));// The png format loads the results panel lazily (it imports this module);
+// load it once here so its first import is not timed inside a test.
+await import('../shell/ResultsPanel');
+
 vi.mock('./chartImage', async (importOriginal) => ({
   ...await importOriginal<typeof import('./chartImage')>(),
   renderChartSpec: reportChart.render,
@@ -770,109 +773,38 @@ describe('result exporters', () => {
     expect(JSON.stringify(result)).toBe(before);
   });
 
-  it('keeps only the dedicated PNG map with the selected settings', async () => {
+  it('writes the png format from the cards\' own charts and the dedicated map, in the export theme', async () => {
+    reportChart.render.mockClear();
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => String(input) === '/api/render-directivity'
       ? new Response(JSON.stringify({ image: 'data:image/png;base64,Ag==' }), { status: 200 })
-      : new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQ==', directivity_map: 'data:image/png;base64,Aw==' } }), { status: 200 }));
+      : new Response('not served', { status: 404 }));
     const saveBlob = vi.fn();
-    const context = { jobStem: 'horn_1', preferences: { ...preferencesStore.getSnapshot(), chartTheme: 'paper', mapReference: -12 as const, directivityGuideInterval: 15 as const }, result, fetcher, saveBlob };
-    expect(await runExportFormat('png', context)).toEqual(['horn_1_spl.png', 'horn_1_directivity_map.png']);
-    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/render-directivity', '/api/render-charts']);
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).theme).toBe('paper');
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({ reference_level: -12, angle_guide_step: 15 });
-    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body)).theme).toBe('paper');
-    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body)).directivity).toEqual({});
-    expect(saveBlob.mock.calls.map(([, filename]) => filename)).toEqual(['horn_1_spl.png', 'horn_1_directivity_map.png']);
-    expect(Array.from(new Uint8Array(await saveBlob.mock.calls[1][0].arrayBuffer()))).toEqual([2]);
-    expect(buildChartRenderPayload(result, context.preferences).directivity).toEqual(result.directivity);
-    expect(buildChartRenderPayload({
-      ...result,
-      metadata: {
-        observation: { effective_distance_m: 1.5, sound_speed_m_per_s: 343 },
-        phase_time_convention: 'exp(+ikr)',
-      },
-    }, context.preferences)).toMatchObject({
-      phase_reference_distance_m: 1.5,
-      // The PNG receives engineering phase, tagged as engineering pressure.
-      phase_time_convention: 'exp(-ikr)',
-      sound_speed_m_per_s: 343,
-      impedance_units: 'Z/(rho*c)',
-    });
-    expect(buildChartRenderPayload(result, context.preferences, { result, label: 'reference horn' })).toMatchObject({ reference: { label: 'reference horn', frequencies: [100, 200], spl: [90, null], impedance_normalization: 'rho_c' } });
+    const context = { jobStem: 'horn_1', preferences: { ...preferencesStore.getSnapshot(), chartTheme: 'paper', mapReference: -12 as const, directivityGuideInterval: 15 as const, smoothing: 'none' as const }, result, fetcher, saveBlob };
+    expect(await runExportFormat('png', context)).toEqual([
+      'horn_1_frequency_response.png', 'horn_1_directivity_index.png', 'horn_1_impedance.png', 'horn_1_directivity_map.png',
+    ]);
+    // /api/render-charts is gone: the line charts are card specs, the map its own request.
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/render-directivity']);
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({ theme: 'paper', reference_level: -12, angle_guide_step: 15 });
+    const drawn = reportChart.render.mock.calls.map((call) => (call as unknown as [{ title: string; series: Array<{ label: string; x: number[]; y: Array<number | null> }> }, string]));
+    expect(drawn.map(([spec, theme]) => [spec.title, theme])).toEqual([
+      ['Sound pressure level', 'paper'], ['Directivity index', 'paper'], ['Impedance', 'paper'],
+    ]);
+    // The SPL file is the SPL card's own series: the run's on-axis samples.
+    expect(drawn[0][0].series[0]).toMatchObject({ x: [100, 200], y: [90, null] });
+    expect(saveBlob.mock.calls.map(([, filename]) => filename)).toEqual([
+      'horn_1_frequency_response.png', 'horn_1_directivity_index.png', 'horn_1_impedance.png', 'horn_1_directivity_map.png',
+    ]);
+    expect(Array.from(new Uint8Array(await saveBlob.mock.calls[3][0].arrayBuffer()))).toEqual([2]);
   });
 
-  it('preserves primary and reference sound speeds in rendered phase payloads', () => {
-    const primary: ResultPayload = {
-      ...result,
-      metadata: {
-        observation: { effective_distance_m: 2, sound_speed_m_per_s: 346 },
-        phase_time_convention: 'exp(+ikr)',
-      },
-    };
-    const reference: ResultPayload = {
-      ...result,
-      metadata: { observation: { sound_speed_m_per_s: 341 } },
-    };
-
-    expect(buildChartRenderPayload(
-      primary,
-      preferencesStore.getSnapshot(),
-      { result: reference, label: 'reference horn' },
-    )).toMatchObject({
-      sound_speed_m_per_s: 346,
-      reference: { sound_speed_m_per_s: 341 },
-    });
-  });
-
-  it('omits all PNG propagation fields when the shared reference is incomplete', () => {
-    const legacy: ResultPayload = {
-      ...result,
-      metadata: {
-        observation: { effective_distance_m: 2 },
-        phase_time_convention: 'exp(+ikr)',
-      },
-    };
-
-    expect(buildChartRenderPayload(legacy, preferencesStore.getSnapshot())).toMatchObject({
-      phase_reference_distance_m: null,
-      phase_time_convention: null,
-      sound_speed_m_per_s: null,
-    });
-  });
-
-  it('omits phase samples from the PNG payload when the SPL phase preference is off', () => {
-    expect(buildChartRenderPayload(result, {
-      ...preferencesStore.getSnapshot(), splPhase: false,
-    })).toMatchObject({ phase_degrees: [] });
-  });
-
-  describe('the rendered PNG is tagged with the unit the result declares', () => {
-    const electrical: ResultPayload = {
-      ...result,
-      metadata: { impedance_units: 'ohms', impedance_quantity: 'electrical_input_impedance' },
-    };
-
-    it('sends ohms for a driver-coupled run rather than the normalized pair', () => {
-      // Hardcoding Z/(rho*c) here put an ohms axis on screen and an acoustic
-      // label in the file -- the disagreement the on-screen unit fix removes.
-      expect(buildChartRenderPayload(electrical, preferencesStore.getSnapshot()))
-        .toMatchObject({ impedance_units: 'ohms', impedance_normalization: 'absolute' });
-    });
-
-    it('keeps the normalized pair for an unloaded waveguide solve', () => {
-      expect(buildChartRenderPayload(result, preferencesStore.getSnapshot()))
-        .toMatchObject({ impedance_units: 'Z/(rho*c)', impedance_normalization: 'rho_c' });
-    });
-
-    it('tags the reference from the reference, so hornlab-plots can refuse the overlay', () => {
-      // hornlab-plots skips a reference whose normalization differs. With both
-      // pinned to rho_c an ohms primary silently accepted a Z/rho-c curve onto
-      // its own scale, where it flatlines along the bottom and reads as a dead
-      // run.
-      const payload = buildChartRenderPayload(electrical, preferencesStore.getSnapshot(), { result, label: 'waveguide' });
-      expect(payload).toMatchObject({ impedance_normalization: 'absolute' });
-      expect(payload.reference).toMatchObject({ impedance_units: 'Z/(rho*c)', impedance_normalization: 'rho_c' });
-    });
+  it('draws no map file for a run without directivity', async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const saveBlob = vi.fn();
+    const { directivity: _directivity, ...flat } = result;
+    expect(await runExportFormat('png', { jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), result: flat, fetcher, saveBlob }))
+      .toEqual(['horn_1_frequency_response.png', 'horn_1_directivity_index.png', 'horn_1_impedance.png']);
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it('dispatches one on-axis FRD download per result channel', async () => {
@@ -1210,16 +1142,13 @@ describe('result exporters', () => {
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
       requests.push({ path, init });
-      if (path === '/api/render-charts') {
-        return new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQID', directivity_map: 'data:image/png;base64,BwgJ' } }), { status: 200 });
-      }
       if (path === '/api/render-directivity') {
         return new Response(JSON.stringify({ image: 'data:image/png;base64,BAUG' }), { status: 200 });
       }
       if (path === '/api/workspace/write-export') {
         return new Response(JSON.stringify({
           directory: 'C:/output/horn_1',
-          files: ['C:/output/horn_1/horn_1.csv', 'C:/output/horn_1/horn_1_spl.png', 'C:/output/horn_1/horn_1_directivity_map.png'],
+          files: ['C:/output/horn_1/horn_1.csv', 'C:/output/horn_1/horn_1_directivity_map.png'],
         }), { status: 200 });
       }
       return new Response('not found', { status: 404 });
@@ -1232,22 +1161,16 @@ describe('result exporters', () => {
       fetcher,
     }, ['csv', 'png']);
 
-    expect(bundle).toEqual({
-      directory: 'C:/output/horn_1',
-      files: ['C:/output/horn_1/horn_1.csv', 'C:/output/horn_1/horn_1_spl.png', 'C:/output/horn_1/horn_1_directivity_map.png'],
-      failures: [],
-      replaced: [],
-    });
+    expect(bundle).toMatchObject({ directory: 'C:/output/horn_1', failures: [] });
     const write = requests.find(({ path }) => path === '/api/workspace/write-export')!;
     const payload = workspacePayload(write.init);
     expect(payload).toMatchObject({ subdirectory: 'horn_1', existing: 'merge_identical' });
     expect(payload.members.map((member: { relative_path: string }) => member.relative_path)).toEqual([
-      'horn_1.csv', 'horn_1_spl.png', 'horn_1_directivity_map.png',
+      'horn_1.csv', 'horn_1_frequency_response.png', 'horn_1_directivity_index.png', 'horn_1_impedance.png', 'horn_1_directivity_map.png',
     ]);
-    expect(Array.from(new Uint8Array(await payload.members[1].blob.arrayBuffer()))).toEqual([1, 2, 3]);
-    expect(Array.from(new Uint8Array(await payload.members[2].blob.arrayBuffer()))).toEqual([4, 5, 6]);
+    expect(Array.from(new Uint8Array(await payload.members[4].blob.arrayBuffer()))).toEqual([4, 5, 6]);
     expect(requests.filter(({ path }) => path === '/api/render-directivity')).toHaveLength(1);
-    expect(JSON.parse(String(requests.find(({ path }) => path === '/api/render-charts')!.init?.body)).directivity).toEqual({});
+    expect(requests.map(({ path }) => path)).not.toContain('/api/render-charts');
   });
 
   it('auto-saves a retained mesh by reference: the server copies it, nothing is downloaded', async () => {
