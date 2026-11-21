@@ -206,7 +206,7 @@ densified.)
 
 | Format | Contract |
 |---|---|
-| Chart PNGs | Canonical HornLab response charts plus a separately rendered directivity map, using the selected theme/smoothing. |
+| Chart PNGs | The run's SPL, directivity index, impedance and beam width charts drawn by hornlab-plots from the same option builders as their result cards (the run alone: no comparison runs or loaded measurements), plus the directivity map, in the selected export theme and smoothing. Files: `<stem>_frequency_response.png`, `_directivity_index.png`, `_impedance.png`, `_beam_shape.png` (when the run has a beam shape) and `_directivity_map.png` (when it has directivity). |
 | On-axis FRD | Tab-delimited frequency, SPL, phase triples readable by REW and VituixCAD; phase is engineering `exp(+jωt)` (delay = phase lag), like the ZMA; always unsmoothed whatever the charts show; includes propagation-reference notes. |
 | Polar FRD set | Horizontal/vertical per-angle files under `hor`/`ver`, written into a selected workspace subdirectory; only angles with phase coverage are emitted. |
 | Electrical ZMA | Per driver-modelled channel, tab-delimited frequency, magnitude in ohms, and engineering `exp(+jωt)` phase. Refused unless `impedance_units` is `ohms`; unit-drive acoustic impedance is never coerced. |
@@ -215,7 +215,7 @@ densified.)
 | Full JSON | Timestamp, smoothing selection, and the complete stored result contract. |
 | Complex pressure basis | One NPZ per imported drive channel, from Metal or BEAT · CPU. `pressure_complex` and optional sphere pressure are lossless engineering `exp(+jωt)` phasors converted from the retained solver basis; the file tags its drive normalization, motion, source ids, and any retained tags/areas. Surface-average pressure is explicitly unavailable rather than reconstructed from result JSON. Jobs predating retention, parametric jobs, and unsupported engines refuse clearly. |
 | Derived acoustics | Per-channel CSV and schema-versioned JSON sidecars joining on-axis SPL, full-sphere DI, power-response level (`SPL - DI`), de-embedded excess group delay when the phase grid is resolvable, and the retained beam-shape/beamwidth metrics. Missing values remain empty/null and are never interpolated. |
-| Static HTML report | One self-contained run report across every channel, with inline CSS and response and beamwidth plots embedded as PNG data URIs (drawn by hornlab-plots from the derived-acoustics rows, in the export theme), summaries, warnings, derived-data tables, and result metadata. It has no scripts or network dependencies and escapes result/user text before rendering. |
+| Static HTML report | One self-contained run report across every channel, with inline CSS (a light page) and response and beamwidth plots embedded as PNG data URIs (drawn by hornlab-plots from the derived-acoustics rows, in the export theme), summaries, warnings, derived-data tables, and result metadata. It has no scripts or network dependencies and escapes result/user text before rendering. |
 | Summary text | Human summary and the same union-grid detailed rows as the frequency CSV. |
 | Polar CSV | Frequency, plane, measured theta, normalized SPL. Every plane's frame count must equal the frequency axis and every angle must be finite; a mismatch refuses the export rather than mislabeling a frame with a clamped frequency. |
 | Impedance CSV | Frequency plus real/imaginary `Z/(rho*c)`. |
@@ -230,7 +230,7 @@ add a safe channel suffix.
 
 The bundle dispatcher runs selected formats sequentially and returns both successful
 filenames and per-format failures. This includes on-axis FRD, polar FRD, and both
-canonical PNG render requests; they do not have separate run-menu implementations.
+PNG chart images (every chart drawn before any is saved); they do not have separate run-menu implementations.
 One failure does not erase earlier successes, and a retry can target the failed format.
 The Fusion curve pair is fetched completely before either browser download begins so a
 half-format cannot appear successful.

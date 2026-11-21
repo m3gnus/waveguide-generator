@@ -352,8 +352,12 @@ diagnostics.
 
 Every saved chart image is drawn by HornLab plots: a card's **Copy** and **Export
 PNG**, the **Chart Images (PNG)** export and the charts in the HTML report. The image
-carries the card's own curves, axis range (including a zoom) and labels; the 3D
-balloon and the forward beam map are the exception and save the view on screen.
+carries the card's own curves, axis range (including a zoom) and labels. The 3D
+balloon and the forward beam map are drawn at the frequency the card shows; the
+balloon is seen from the default viewpoint, whichever way it is turned on screen.
+**Chart Images (PNG)** writes the run's SPL, directivity index, impedance and beam
+width charts as their cards draw them (without comparison runs or loaded
+measurements), plus the directivity map. The HTML report is a light page.
 **Settings → Results → Export theme** chooses the images' theme; the results
 preferences popover offers the same choice. The default is **Classic**, the white
 HornLab report look. **Match interface** follows the light or dark interface when
