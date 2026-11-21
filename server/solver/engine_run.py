@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from typing import Any, Protocol
 
+from server.design.schema import DesignConfig
 from server.mesh.builder import build_solver_mesh
-from server.jobs.models import SolveRequest
 
 from .base import (
     ArtifactCallback,
@@ -28,6 +28,19 @@ from .imported import read_verified_import_mesh, verify_record_mesh_text
 MetadataHook = Callable[[dict[str, Any]], None]
 
 
+class ParametricRunRequest(Protocol):
+    """What a parametric run reads from its ``SolveRequest``.
+
+    Structural, so the solver layer need not import the jobs layer's model.
+    """
+
+    @property
+    def design(self) -> DesignConfig: ...
+
+    @property
+    def options(self) -> Any: ...
+
+
 def full_3d_solve_path(metadata: dict[str, Any]) -> None:
     """The BEAT and BEMPP design solves' only metadata of their own."""
 
@@ -35,7 +48,7 @@ def full_3d_solve_path(metadata: dict[str, Any]) -> None:
 
 
 async def run_parametric_engine(
-    request: SolveRequest,
+    request: ParametricRunRequest,
     *,
     cancel_cb: CancelCallback,
     stage_cb: StageCallback,
