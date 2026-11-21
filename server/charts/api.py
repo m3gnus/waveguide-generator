@@ -1,8 +1,10 @@
 """Chart images, rendered only by the pinned hornlab-plots package.
 
 Every saved or exported chart image the application makes comes through here:
-the per-chart PNG (copy and export on a result card), the ``png`` export
-format, and the charts embedded in the HTML run report. The screen keeps its
+the per-chart PNG (copy and export on a result card, the balloon and beam map
+included), the ``png`` export format, and the charts embedded in the HTML run
+report. ``/api/render-chart`` draws a chart described as data;
+``/api/render-directivity`` draws a directivity map on the canonical heatmap. The screen keeps its
 own interactive charts; this module is the one place their images are drawn.
 """
 
@@ -79,46 +81,6 @@ class ChartModel(BaseModel):
                     seen.add(marker)
                     stack.extend(item)
         return value
-
-
-class ChartsReferencePayload(ChartModel):
-    label: str | None = None
-    frequencies: list[float] = Field(default_factory=list)
-    spl: list[float | None] = Field(default_factory=list)
-    sound_speed_m_per_s: float | None = None
-    di: list[float | None] | dict[str, Any] = Field(default_factory=list)
-    di_frequencies: list[float] = Field(default_factory=list)
-    impedance_frequencies: list[float] = Field(default_factory=list)
-    impedance_real: list[float | None] = Field(default_factory=list)
-    impedance_imaginary: list[float | None] = Field(default_factory=list)
-    impedance_units: str | None = None
-    impedance_normalization: str | None = None
-    beam_shape: dict[str, Any] | None = None
-
-
-class ChartsRenderRequest(ChartModel):
-    frequencies: list[float] = Field(default_factory=list)
-    spl: list[float | None] = Field(default_factory=list)
-    phase_degrees: list[float | None] = Field(default_factory=list)
-    phase_reference_distance_m: float | None = None
-    phase_time_convention: str | None = None
-    sound_speed_m_per_s: float | None = None
-    di: list[float | None] | dict[str, Any] = Field(default_factory=list)
-    di_frequencies: list[float] = Field(default_factory=list)
-    impedance_frequencies: list[float] = Field(default_factory=list)
-    impedance_real: list[float | None] = Field(default_factory=list)
-    impedance_imaginary: list[float | None] = Field(default_factory=list)
-    impedance_units: str | None = None
-    impedance_normalization: str | None = None
-    directivity: dict[str, Any] = Field(default_factory=dict)
-    beam_shape: dict[str, Any] | None = None
-    reference: ChartsReferencePayload | None = None
-    theme: str = DEFAULT_CHART_THEME
-
-    @field_validator("theme", mode="before")
-    @classmethod
-    def validate_theme(cls, value: Any) -> str:
-        return _theme(value)
 
 
 class DirectivityRenderRequest(ChartModel):
@@ -290,6 +252,30 @@ class PolarChartSpec(ChartModel):
     shade: Annotated[list[ChartSpecShade], Field(max_length=MAX_SPEC_SHADE)] | None = None
 
 
+MAX_GRID_THETA = 361
+MAX_GRID_PHI = 721
+
+
+class SphericalChartSpec(ChartModel):
+    """One frequency of a solved balloon grid: the forward beam map or the 3D balloon."""
+
+    kind: Literal["beam_map", "balloon"]
+    title: _Text = ""
+    subtitle: _Text | None = None
+    theta_deg: Annotated[list[Annotated[float, Field(ge=0.0, le=180.0)]], Field(min_length=2, max_length=MAX_GRID_THETA)]
+    phi_deg: Annotated[list[Annotated[float, Field(ge=-360.0, le=720.0)]], Field(min_length=3, max_length=MAX_GRID_PHI)]
+    levels_db: Annotated[list[Annotated[list[_Value | None], Field(max_length=MAX_GRID_PHI)]], Field(max_length=MAX_GRID_THETA)]
+    range_db: Annotated[float, Field(gt=0.0, le=120.0)] = 30.0
+
+    @model_validator(mode="after")
+    def grid_shape(self) -> "SphericalChartSpec":
+        if len(self.levels_db) != len(self.theta_deg) or any(len(row) != len(self.phi_deg) for row in self.levels_db):
+            raise ValueError("levels_db must have one row per theta angle and one value per phi angle")
+        if len(self.theta_deg) * len(self.phi_deg) > MAX_SPEC_TOTAL_POINTS:
+            raise ValueError(f"a spherical grid may have at most {MAX_SPEC_TOTAL_POINTS} samples")
+        return self
+
+
 class ChartSpecRenderRequest(ChartModel):
     """One chart described as data; hornlab_plots.spec documents the shape.
 
@@ -297,7 +283,7 @@ class ChartSpecRenderRequest(ChartModel):
     the field, never a renderer exception or minutes under the render lock.
     """
 
-    spec: Annotated[Union[LineChartSpec, PolarChartSpec], Field(discriminator="kind")]
+    spec: Annotated[Union[LineChartSpec, PolarChartSpec, SphericalChartSpec], Field(discriminator="kind")]
     theme: str = DEFAULT_CHART_THEME
 
     @field_validator("theme", mode="before")
@@ -345,16 +331,6 @@ def _store(key: str, value: Any) -> None:
             _cache.popitem(last=False)
 
 
-def _render_charts(payload: dict[str, Any]) -> dict[str, str]:
-    with _render_lock:
-        rendered = _plots().render_all_charts_b64(payload, theme=payload["theme"])
-    return {
-        name: f"data:image/png;base64,{image}"
-        for name, image in rendered.items()
-        if image is not None
-    }
-
-
 def _render_directivity(payload: dict[str, Any]) -> str | None:
     kwargs: dict[str, Any] = {
         "reference_level": payload["reference_level"],
@@ -388,23 +364,6 @@ async def themes() -> dict[str, Any]:
         ],
         "default": DEFAULT_CHART_THEME,
     }
-
-
-@router.post("/api/render-charts")
-async def render_charts(request: ChartsRenderRequest) -> dict[str, Any]:
-    payload = request.model_dump(mode="json")
-    key = _key("charts", payload)
-    cached = _cached(key)
-    if cached is not None:
-        return {"charts": cached}
-    try:
-        result = await asyncio.to_thread(_render_charts, payload)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _store(key, result)
-    return {"charts": result}
 
 
 @router.post("/api/render-directivity")
@@ -462,8 +421,7 @@ __all__ = [
     "ChartSpecRenderRequest",
     "LineChartSpec",
     "PolarChartSpec",
-    "ChartsReferencePayload",
-    "ChartsRenderRequest",
+    "SphericalChartSpec",
     "DEFAULT_CHART_THEME",
     "DirectivityRenderRequest",
     "THEME_NAMES",

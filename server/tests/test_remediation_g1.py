@@ -485,8 +485,7 @@ def test_chart_routes_expose_every_theme_and_use_hornlab_plots(monkeypatch) -> N
     calls: list[tuple[str, Any]] = []
 
     fake = SimpleNamespace(
-        render_all_charts_b64=lambda payload, theme: calls.append(("charts", theme))
-        or {"frequency_response": "YQ=="},
+        chart_spec_b64=lambda spec, *, theme: calls.append(("spec", theme)) or "YQ==",
         directivity_heatmap_from_legacy_dict=lambda frequencies, directivity, **kwargs: calls.append(
             ("directivity", kwargs["theme"])
         )
@@ -510,15 +509,12 @@ def test_chart_routes_expose_every_theme_and_use_hornlab_plots(monkeypatch) -> N
         # frontend resolves its "Match interface" setting to console or vellum
         # before a request reaches here.
         assert listed["default"] == "classic"
-        assert charts_api.ChartsRenderRequest().theme == "classic"
-        charts = await charts_api.render_charts(
-            charts_api.ChartsRenderRequest(
-                frequencies=[100], spl=[90], theme="blueprint"
-            )
+        spec = {"kind": "lines", "series": [{"x": [100.0], "y": [90.0]}]}
+        assert charts_api.ChartSpecRenderRequest(spec=spec).theme == "classic"
+        chart = await charts_api.render_chart(
+            charts_api.ChartSpecRenderRequest(spec=spec, theme="blueprint")
         )
-        assert charts == {
-            "charts": {"frequency_response": "data:image/png;base64,YQ=="}
-        }
+        assert chart == {"image": "data:image/png;base64,YQ=="}
         directivity = await charts_api.render_directivity(
             charts_api.DirectivityRenderRequest(
                 frequencies=[100],
@@ -530,7 +526,7 @@ def test_chart_routes_expose_every_theme_and_use_hornlab_plots(monkeypatch) -> N
 
     asyncio.run(scenario())
     assert calls == [
-        ("charts", "blueprint"),
+        ("spec", "blueprint"),
         ("directivity", "sepia"),
     ]
 
@@ -538,7 +534,7 @@ def test_chart_routes_expose_every_theme_and_use_hornlab_plots(monkeypatch) -> N
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
 def test_chart_requests_reject_nonfinite_typed_and_legacy_values(value: float) -> None:
     with pytest.raises(ValidationError, match="finite"):
-        charts_api.ChartsRenderRequest(frequencies=[value])
+        charts_api.ChartSpecRenderRequest(spec={"kind": "lines", "series": [{"x": [value], "y": [1.0]}]})
     with pytest.raises(ValidationError, match="finite"):
         charts_api.DirectivityRenderRequest(
             frequencies=[100.0],

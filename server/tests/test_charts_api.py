@@ -13,17 +13,6 @@ def _clear_chart_cache() -> None:
         charts_api._cache.clear()
 
 
-def test_chart_request_accepts_primary_and_reference_sound_speeds() -> None:
-    request = charts_api.ChartsRenderRequest(
-        sound_speed_m_per_s=346.0,
-        reference={"sound_speed_m_per_s": 341.0},
-    )
-
-    assert request.sound_speed_m_per_s == 346.0
-    assert request.reference is not None
-    assert request.reference.sound_speed_m_per_s == 341.0
-
-
 @pytest.mark.parametrize("reference_level", [-3.0, -6.0, -9.0, -12.0])
 def test_directivity_request_passes_display_range_to_renderer_and_cache(
     monkeypatch, reference_level: float,
@@ -213,3 +202,48 @@ def test_long_chart_text_is_shortened_not_refused() -> None:
     assert short.spec.title == "Group delay"
     with pytest.raises(ValidationError, match="at most 10000 characters"):
         charts_api.ChartSpecRenderRequest(spec={**_spec(), "title": "x" * 10_001})
+
+
+def _sphere(kind: str = "balloon", **overrides) -> dict:
+    spec = {"kind": kind, "title": "View", "theta_deg": [0.0, 90.0, 180.0], "phi_deg": [0.0, 120.0, 240.0],
+            "levels_db": [[0.0, 0.0, 0.0], [-6.0, None, -9.0], [-20.0, -20.0, -20.0]]}
+    spec.update(overrides)
+    return spec
+
+
+@pytest.mark.parametrize("kind", ["balloon", "beam_map"])
+def test_spherical_view_specs_reach_the_renderer(monkeypatch, kind) -> None:
+    calls = []
+
+    class Plots:
+        @staticmethod
+        def chart_spec_b64(spec, *, theme):
+            calls.append(spec)
+            return "YQ=="
+
+    monkeypatch.setattr(charts_api, "_plots", lambda: Plots)
+    _clear_chart_cache()
+    asyncio.run(charts_api.render_chart(charts_api.ChartSpecRenderRequest(spec=_sphere(kind))))
+    assert calls[0]["kind"] == kind
+    assert calls[0]["levels_db"][1] == [-6.0, None, -9.0]
+    assert calls[0]["range_db"] == 30.0
+    _clear_chart_cache()
+
+
+@pytest.mark.parametrize(("spec", "field"), [
+    (_sphere(theta_deg=[0.0]), "at least 2"),
+    (_sphere(phi_deg=[float(i) for i in range(722)]), "at most 721"),
+    (_sphere(levels_db=[[0.0]]), "one row per theta"),
+    (_sphere(range_db=0.0), "greater than 0"),
+    (_sphere(theta_deg=[0.0, 90.0, 200.0]), "less than or equal"),
+])
+def test_spherical_view_specs_are_bounded(spec, field) -> None:
+    with pytest.raises(ValidationError) as refused:
+        charts_api.ChartSpecRenderRequest(spec=spec)
+    assert field in str(refused.value)
+
+
+def test_the_multi_chart_route_is_retired() -> None:
+    paths = {route.path for route in charts_api.router.routes}
+    assert "/api/render-charts" not in paths
+    assert {"/api/render-chart", "/api/render-directivity", "/api/themes"} <= paths

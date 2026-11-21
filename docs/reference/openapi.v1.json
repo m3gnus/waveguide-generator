@@ -3143,6 +3143,8 @@
           "spec": {
             "discriminator": {
               "mapping": {
+                "balloon": "#/components/schemas/SphericalChartSpec",
+                "beam_map": "#/components/schemas/SphericalChartSpec",
                 "lines": "#/components/schemas/LineChartSpec",
                 "polar": "#/components/schemas/PolarChartSpec"
               },
@@ -3154,6 +3156,9 @@
               },
               {
                 "$ref": "#/components/schemas/PolarChartSpec"
+              },
+              {
+                "$ref": "#/components/schemas/SphericalChartSpec"
               }
             ],
             "title": "Spec"
@@ -3203,347 +3208,6 @@
           "to"
         ],
         "title": "ChartSpecShade",
-        "type": "object"
-      },
-      "ChartsReferencePayload": {
-        "additionalProperties": false,
-        "properties": {
-          "beam_shape": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Beam Shape"
-          },
-          "di": {
-            "anyOf": [
-              {
-                "items": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "type": "array"
-              },
-              {
-                "additionalProperties": true,
-                "type": "object"
-              }
-            ],
-            "title": "Di"
-          },
-          "di_frequencies": {
-            "items": {
-              "type": "number"
-            },
-            "title": "Di Frequencies",
-            "type": "array"
-          },
-          "frequencies": {
-            "items": {
-              "type": "number"
-            },
-            "title": "Frequencies",
-            "type": "array"
-          },
-          "impedance_frequencies": {
-            "items": {
-              "type": "number"
-            },
-            "title": "Impedance Frequencies",
-            "type": "array"
-          },
-          "impedance_imaginary": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Impedance Imaginary",
-            "type": "array"
-          },
-          "impedance_normalization": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Impedance Normalization"
-          },
-          "impedance_real": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Impedance Real",
-            "type": "array"
-          },
-          "impedance_units": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Impedance Units"
-          },
-          "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Label"
-          },
-          "sound_speed_m_per_s": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sound Speed M Per S"
-          },
-          "spl": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Spl",
-            "type": "array"
-          }
-        },
-        "title": "ChartsReferencePayload",
-        "type": "object"
-      },
-      "ChartsRenderRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "beam_shape": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Beam Shape"
-          },
-          "di": {
-            "anyOf": [
-              {
-                "items": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "type": "array"
-              },
-              {
-                "additionalProperties": true,
-                "type": "object"
-              }
-            ],
-            "title": "Di"
-          },
-          "di_frequencies": {
-            "items": {
-              "type": "number"
-            },
-            "title": "Di Frequencies",
-            "type": "array"
-          },
-          "directivity": {
-            "additionalProperties": true,
-            "title": "Directivity",
-            "type": "object"
-          },
-          "frequencies": {
-            "items": {
-              "type": "number"
-            },
-            "title": "Frequencies",
-            "type": "array"
-          },
-          "impedance_frequencies": {
-            "items": {
-              "type": "number"
-            },
-            "title": "Impedance Frequencies",
-            "type": "array"
-          },
-          "impedance_imaginary": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Impedance Imaginary",
-            "type": "array"
-          },
-          "impedance_normalization": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Impedance Normalization"
-          },
-          "impedance_real": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Impedance Real",
-            "type": "array"
-          },
-          "impedance_units": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Impedance Units"
-          },
-          "phase_degrees": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Phase Degrees",
-            "type": "array"
-          },
-          "phase_reference_distance_m": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Phase Reference Distance M"
-          },
-          "phase_time_convention": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Phase Time Convention"
-          },
-          "reference": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ChartsReferencePayload"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "sound_speed_m_per_s": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sound Speed M Per S"
-          },
-          "spl": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Spl",
-            "type": "array"
-          },
-          "theme": {
-            "default": "classic",
-            "title": "Theme",
-            "type": "string"
-          }
-        },
-        "title": "ChartsRenderRequest",
         "type": "object"
       },
       "ChooseExportDestinationRequest": {
@@ -16001,6 +15665,96 @@
         "title": "SourceInventoryItem",
         "type": "object"
       },
+      "SphericalChartSpec": {
+        "additionalProperties": false,
+        "description": "One frequency of a solved balloon grid: the forward beam map or the 3D balloon.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "beam_map",
+              "balloon"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "levels_db": {
+            "items": {
+              "items": {
+                "anyOf": [
+                  {
+                    "maximum": 1000000000.0,
+                    "minimum": -1000000000.0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "maxItems": 721,
+              "type": "array"
+            },
+            "maxItems": 361,
+            "title": "Levels Db",
+            "type": "array"
+          },
+          "phi_deg": {
+            "items": {
+              "maximum": 720.0,
+              "minimum": -360.0,
+              "type": "number"
+            },
+            "maxItems": 721,
+            "minItems": 3,
+            "title": "Phi Deg",
+            "type": "array"
+          },
+          "range_db": {
+            "default": 30.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 120.0,
+            "title": "Range Db",
+            "type": "number"
+          },
+          "subtitle": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtitle"
+          },
+          "theta_deg": {
+            "items": {
+              "maximum": 180.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 361,
+            "minItems": 2,
+            "title": "Theta Deg",
+            "type": "array"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 10000,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "theta_deg",
+          "phi_deg",
+          "levels_db"
+        ],
+        "title": "SphericalChartSpec",
+        "type": "object"
+      },
       "SplitRequest": {
         "additionalProperties": false,
         "properties": {
@@ -21651,49 +21405,6 @@
           }
         },
         "summary": "Render Chart",
-        "tags": [
-          "chart-export"
-        ]
-      }
-    },
-    "/api/render-charts": {
-      "post": {
-        "operationId": "render_charts_api_render_charts_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChartsRenderRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Render Charts Api Render Charts Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Render Charts",
         "tags": [
           "chart-export"
         ]

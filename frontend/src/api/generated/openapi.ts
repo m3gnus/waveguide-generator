@@ -2001,23 +2001,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/render-charts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Render Charts */
-        post: operations["render_charts_api_render_charts_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/render-directivity": {
         parameters: {
             query?: never;
@@ -3849,7 +3832,7 @@ export interface components {
          */
         ChartSpecRenderRequest: {
             /** Spec */
-            spec: components["schemas"]["LineChartSpec"] | components["schemas"]["PolarChartSpec"];
+            spec: components["schemas"]["LineChartSpec"] | components["schemas"]["PolarChartSpec"] | components["schemas"]["SphericalChartSpec"];
             /**
              * Theme
              * @default classic
@@ -3864,82 +3847,6 @@ export interface components {
             label?: string | null;
             /** To */
             to: number;
-        };
-        /** ChartsReferencePayload */
-        ChartsReferencePayload: {
-            /** Beam Shape */
-            beam_shape?: {
-                [key: string]: unknown;
-            } | null;
-            /** Di */
-            di?: (number | null)[] | {
-                [key: string]: unknown;
-            };
-            /** Di Frequencies */
-            di_frequencies?: number[];
-            /** Frequencies */
-            frequencies?: number[];
-            /** Impedance Frequencies */
-            impedance_frequencies?: number[];
-            /** Impedance Imaginary */
-            impedance_imaginary?: (number | null)[];
-            /** Impedance Normalization */
-            impedance_normalization?: string | null;
-            /** Impedance Real */
-            impedance_real?: (number | null)[];
-            /** Impedance Units */
-            impedance_units?: string | null;
-            /** Label */
-            label?: string | null;
-            /** Sound Speed M Per S */
-            sound_speed_m_per_s?: number | null;
-            /** Spl */
-            spl?: (number | null)[];
-        };
-        /** ChartsRenderRequest */
-        ChartsRenderRequest: {
-            /** Beam Shape */
-            beam_shape?: {
-                [key: string]: unknown;
-            } | null;
-            /** Di */
-            di?: (number | null)[] | {
-                [key: string]: unknown;
-            };
-            /** Di Frequencies */
-            di_frequencies?: number[];
-            /** Directivity */
-            directivity?: {
-                [key: string]: unknown;
-            };
-            /** Frequencies */
-            frequencies?: number[];
-            /** Impedance Frequencies */
-            impedance_frequencies?: number[];
-            /** Impedance Imaginary */
-            impedance_imaginary?: (number | null)[];
-            /** Impedance Normalization */
-            impedance_normalization?: string | null;
-            /** Impedance Real */
-            impedance_real?: (number | null)[];
-            /** Impedance Units */
-            impedance_units?: string | null;
-            /** Phase Degrees */
-            phase_degrees?: (number | null)[];
-            /** Phase Reference Distance M */
-            phase_reference_distance_m?: number | null;
-            /** Phase Time Convention */
-            phase_time_convention?: string | null;
-            reference?: components["schemas"]["ChartsReferencePayload"] | null;
-            /** Sound Speed M Per S */
-            sound_speed_m_per_s?: number | null;
-            /** Spl */
-            spl?: (number | null)[];
-            /**
-             * Theme
-             * @default classic
-             */
-            theme?: string;
         };
         /**
          * ChooseExportDestinationRequest
@@ -7811,6 +7718,35 @@ export interface components {
             required: boolean;
             /** Role */
             role: string;
+        };
+        /**
+         * SphericalChartSpec
+         * @description One frequency of a solved balloon grid: the forward beam map or the 3D balloon.
+         */
+        SphericalChartSpec: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "balloon" | "beam_map";
+            /** Levels Db */
+            levels_db: (number | null)[][];
+            /** Phi Deg */
+            phi_deg: number[];
+            /**
+             * Range Db
+             * @default 30
+             */
+            range_db?: number;
+            /** Subtitle */
+            subtitle?: string | null;
+            /** Theta Deg */
+            theta_deg: number[];
+            /**
+             * Title
+             * @default
+             */
+            title?: string;
         };
         /** SplitRequest */
         SplitRequest: {
@@ -11769,41 +11705,6 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: string;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    render_charts_api_render_charts_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChartsRenderRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
                     };
                 };
             };
