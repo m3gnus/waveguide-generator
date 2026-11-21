@@ -17,25 +17,38 @@ export interface DrawnChart {
   hidden: () => ReadonlySet<string>;
 }
 
-const drawn = new WeakMap<Element, DrawnChart>();
-
-export const DRAWN_CHART_CLASS = 'chart-frame';
-
-export function registerDrawnChart(element: Element, chart: DrawnChart): () => void {
-  drawn.set(element, chart);
-  return () => {
-    if (drawn.get(element) === chart) drawn.delete(element);
+/**
+ * Things drawn on screen, keyed by the element that holds each: `register`
+ * returns its own unregister, and `findIn` returns the first one inside a
+ * container (matched by `selector`). One registry serves both the option-based
+ * charts and the data-drawn views.
+ */
+function drawnRegistry<T extends object>(selector: string) {
+  const entries = new WeakMap<Element, T>();
+  return {
+    register(element: Element, entry: T): () => void {
+      entries.set(element, entry);
+      return () => {
+        if (entries.get(element) === entry) entries.delete(element);
+      };
+    },
+    findIn(container: Element): T | null {
+      for (const element of container.querySelectorAll(selector)) {
+        const entry = entries.get(element);
+        if (entry) return entry;
+      }
+      return null;
+    },
   };
 }
 
+export const DRAWN_CHART_CLASS = 'chart-frame';
+
+const charts = drawnRegistry<DrawnChart>(`.${DRAWN_CHART_CLASS}`);
+
+export const registerDrawnChart = charts.register;
 /** The first chart drawn inside `container`, if any. */
-export function drawnChartIn(container: Element): DrawnChart | null {
-  for (const element of container.querySelectorAll(`.${DRAWN_CHART_CLASS}`)) {
-    const chart = drawn.get(element);
-    if (chart) return chart;
-  }
-  return null;
-}
+export const drawnChartIn = charts.findIn;
 
 /** The subset of an ECharts instance the extent reading needs. */
 export interface ChartInstanceLike {
@@ -75,22 +88,10 @@ export interface DrawnView {
   spec(title: string): ChartSpec | null;
 }
 
-const views = new WeakMap<Element, DrawnView>();
-
 export const DRAWN_VIEW_ATTRIBUTE = 'data-drawn-view';
 
-export function registerDrawnView(element: Element, view: DrawnView): () => void {
-  views.set(element, view);
-  return () => {
-    if (views.get(element) === view) views.delete(element);
-  };
-}
+const views = drawnRegistry<DrawnView>(`[${DRAWN_VIEW_ATTRIBUTE}]`);
 
+export const registerDrawnView = views.register;
 /** The first view drawn inside `container`, if any. */
-export function drawnViewIn(container: Element): DrawnView | null {
-  for (const element of container.querySelectorAll(`[${DRAWN_VIEW_ATTRIBUTE}]`)) {
-    const view = views.get(element);
-    if (view) return view;
-  }
-  return null;
-}
+export const drawnViewIn = views.findIn;
