@@ -13,6 +13,8 @@ export interface DrawnChart {
   /** The option as built, before display smoothing: the solved points. */
   option: EChartsOption;
   extent: AxisExtent;
+  /** Series the user switched off in the legend; the image leaves them out too. */
+  hidden: () => ReadonlySet<string>;
 }
 
 const drawn = new WeakMap<Element, DrawnChart>();

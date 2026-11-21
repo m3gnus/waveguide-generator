@@ -1,6 +1,6 @@
 import { writeToOutputFolder } from '../api/workspace';
 import type { ConfirmReplacements } from '../api/exportDestination';
-import { activityOperation } from '../shell/activityOperation';
+import { abortableActivity, activityOperation } from '../shell/activityOperation';
 import { writePendingClipboardItem } from '../api/clipboard';
 import { httpErrorMessage, ProgramFault } from '../api/httpError';
 import type { ChartSpec } from './chartSpec';
@@ -120,11 +120,21 @@ export async function copyChartPng(image: (fetcher: typeof fetch) => Promise<Blo
 }
 
 /**
+ * Draw a chart image as its own status-bar activity, abortable by `signal`
+ * (an export whose folder dialog was cancelled) or from the status bar.
+ */
+export function drawChartPng(draw: (fetcher: typeof fetch) => Promise<Blob>, signal?: AbortSignal): Promise<Blob> {
+  return abortableActivity({ kind: 'export', label: 'Drawing chart PNG' }, fetch, signal, (scoped, aborted) => (
+    draw((input, init) => scoped(input, { ...init, signal: aborted }))
+  ));
+}
+
+/**
  * Write one chart image into the folder the user chose for it.
  *
- * The image is started before the folder is asked for and handed in as a
- * promise, so it is drawn while the user picks a folder and describes the
- * chart as it was when Export was pressed, not after a later run replaced it.
+ * The image is started before the folder is asked for (`drawChartPng`) and
+ * handed in as a promise, so it is drawn while the user picks a folder and
+ * describes the chart as it was when Export was pressed.
  */
 export async function saveChartPng(
   image: Promise<Blob>,
@@ -132,9 +142,8 @@ export async function saveChartPng(
   destination: string,
   confirmReplacements?: ConfirmReplacements,
 ): Promise<string> {
-  return activityOperation({ kind: 'export', label: 'Drawing chart PNG' }, fetch, async (scoped, activity) => {
+  return activityOperation({ kind: 'export', label: 'Writing chart PNG' }, fetch, async (scoped) => {
     const blob = await image;
-    activity.label('Writing chart PNG');
     const written = await writeToOutputFolder(
       '', [{ filename, blob }], scoped, 'confirm', destination, confirmReplacements,
     );

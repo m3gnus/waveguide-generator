@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildRunReportHtml, renderRunReportCharts, runReportChartSpecs } from './runReport';
 import { buildDerivedAcoustics } from './derivedAcoustics';
 import { activityStore } from '../shell/activity';
+import { activityOperation } from '../shell/activityOperation';
 import type { ResultPayload } from './types';
 
 const channel: ResultPayload = {
@@ -47,8 +48,10 @@ describe('static run report', () => {
     expect(html).toContain('<h2>MF</h2>');
     expect(html).not.toContain('<svg');
     expect(html.match(/<img class="plot" alt="[^"]+" src="data:image\/png;base64,iVBORw==">/g)).toHaveLength(3);
-    // A chart the caller has no image for says so rather than leaving a hole.
-    expect(html.match(/No samples available for this plot\./g)).toHaveLength(1);
+    // A chart with samples but no image says it was not drawn, not that the
+    // run has no samples.
+    expect(html.match(/This chart was not drawn for this report\./g)).toHaveLength(1);
+    expect(html).not.toContain('No samples available');
     expect(html).toContain('Derived acoustics table (3 rows)');
     expect(html).toContain('Radiated-power cross-check');
     expect(html).toContain('Max |power agreement|');
@@ -104,7 +107,16 @@ describe('static run report', () => {
       const { spec, theme } = JSON.parse(String(init?.body)) as { spec: { title: string }; theme: string };
       return Response.json({ image: `data:image/png;base64,${btoa(`${spec.title}|${theme}`)}` });
     });
-    const charts = await renderRunReportCharts(result, 'classic', fetcher);
+    const labels: string[] = [];
+    const unsubscribe = activityStore.subscribe(() => {
+      const label = activityStore.getSnapshot()[0]?.label;
+      if (label && labels.at(-1) !== label) labels.push(label);
+    });
+    // Inside an export, the chart drawing joins the export's activity and
+    // must still say what it is doing.
+    const charts = await activityOperation({ kind: 'export', label: 'Exporting HTML report' }, fetcher, (scoped) => renderRunReportCharts(result, 'classic', scoped));
+    unsubscribe();
+    expect(labels).toEqual(['Exporting HTML report', 'Drawing report charts', 'Exporting HTML report']);
     expect(fetcher).toHaveBeenCalledTimes(4);
     expect(progress).toEqual([[0, 4], [1, 4], [2, 4], [3, 4]]);
     expect(fetcher.mock.calls.every(([input]) => String(input) === '/api/render-chart')).toBe(true);

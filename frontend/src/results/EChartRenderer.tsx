@@ -44,6 +44,9 @@ export function EChartRenderer({ option, label, live = false }: { option: EChart
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const chart = useRef<echarts.ECharts | null>(null);
+  // Series switched off in the legend. A new option resets the legend, so it
+  // resets this too.
+  const hidden = useRef<ReadonlySet<string>>(new Set());
   const [ruler, setRuler] = useState<AxisRuler | null>(null);
   // What is drawn: the same option, with each line series as a smooth display
   // curve over its solved points. Everything that reads the chart's data (the
@@ -64,6 +67,10 @@ export function EChartRenderer({ option, label, live = false }: { option: EChart
     // A ruler drawn for the old card size would keep its pixel row while the
     // axis under it moves, which is worse than no ruler: the next pointer move
     // restores it against the axis it actually belongs to.
+    chart.current.on?.('legendselectchanged', (event) => {
+      const { selected } = event as { selected?: Record<string, boolean> };
+      hidden.current = new Set(Object.entries(selected ?? {}).filter(([, shown]) => !shown).map(([name]) => name));
+    });
     const observer = new ResizeObserver(() => {
       chart.current?.resize();
       setRuler(null);
@@ -81,9 +88,11 @@ export function EChartRenderer({ option, label, live = false }: { option: EChart
   useEffect(() => {
     const element = frame.current;
     if (!element) return;
+    hidden.current = new Set();
     return registerDrawnChart(element, {
       option,
       extent: (axis, index) => screenAxisExtent(chart.current, option)(axis, index),
+      hidden: () => hidden.current,
     });
   }, [option]);
 

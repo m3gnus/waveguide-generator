@@ -78,6 +78,31 @@ describe('chart images take the series the card drew', () => {
     expect(spec.series[0].r[6]).toBe(0);
   });
 
+  it('leaves out a series switched off in the legend', () => {
+    const items = [named('A', fixture, true), named('B', SERIES_FIXTURES['separate grids, flat DI with gaps'])];
+    const option = splOption(items, tokens, 'none', 'full');
+    const spec = chartSpecFromOption(option, tokens, { title: 'SPL', hidden: new Set(['B']) }) as LineChartSpec;
+    expect(spec.series.map(({ label }) => label)).toEqual(['A']);
+  });
+
+  it('marks the reconstructed points the card marks', () => {
+    const adaptive = { ...fixture, frequency_status: fixture.frequencies.map((_, index) => (index % 5 === 2 ? 'interpolated' : 'solved')) } as ResultPayload;
+    const spec = chartSpecFromOption(splOption([named('A', adaptive, true)], tokens, 'none', 'full'), tokens, { title: 'SPL' }) as LineChartSpec;
+    expect(spec.series[0].markers).toEqual(fixture.frequencies.flatMap((_, index) => (index % 5 === 2 ? [index] : [])));
+    const solved = chartSpecFromOption(splOption([named('A', fixture, true)], tokens, 'none', 'full'), tokens, { title: 'SPL' }) as LineChartSpec;
+    expect(solved.series[0].markers).toBeUndefined();
+  });
+
+  it('sends a missing polar angle as a gap, not as on-axis', () => {
+    const option = {
+      polar: {},
+      radiusAxis: { min: -30, max: 0 },
+      series: [{ name: 'A', type: 'line', coordinateSystem: 'polar', data: [[-6, -30], [-3, null], [0, 0]] }],
+    } as unknown as EChartsOption;
+    const spec = chartSpecFromOption(option, tokens, { title: 'Polar' }) as PolarChartSpec;
+    expect(spec.series[0].angle).toEqual([-30, null, 0]);
+  });
+
   it('names colours by role so the export theme owns the hue', () => {
     expect(colorRole(tokens.series[3], tokens, 0)).toBe(3);
     expect(colorRole(tokens.muted, tokens, 0)).toBe('muted');

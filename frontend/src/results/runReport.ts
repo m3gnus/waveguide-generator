@@ -132,19 +132,28 @@ export function runReportChartSpecs(result: ResultPayload): Array<{ section: str
 export async function renderRunReportCharts(result: ResultPayload, theme: string, fetcher: typeof fetch): Promise<RunReportCharts> {
   const specs = runReportChartSpecs(result);
   return activityOperation({ kind: 'export', label: 'Drawing report charts' }, fetcher, async (scoped, activity) => {
-    const charts: RunReportCharts = {};
-    activity.progress(0, specs.length);
-    for (const [index, { section, chart, spec }] of specs.entries()) {
-      (charts[section] ??= {})[chart] = await renderChartSpec(spec, theme, scoped, 'WG could not draw the charts for this report. Try the export again.');
-      activity.progress(index + 1, specs.length);
+    // Inside an export this joins the export's activity, which keeps its own
+    // label unless told: say what the counted steps are, then hand it back.
+    const outer = activity.currentLabel();
+    activity.label('Drawing report charts');
+    try {
+      const charts: RunReportCharts = {};
+      activity.progress(0, specs.length);
+      for (const [index, { section, chart, spec }] of specs.entries()) {
+        (charts[section] ??= {})[chart] = await renderChartSpec(spec, theme, scoped, 'WG could not draw the charts for this report. Try the export again.');
+        activity.progress(index + 1, specs.length);
+      }
+      return charts;
+    } finally {
+      activity.label(outer);
     }
-    return charts;
   });
 }
 
-function plotImage(image: string | undefined, heading: string): string {
-  return image
-    ? `<img class="plot" alt="${escapeHtml(heading)} by frequency" src="${escapeHtml(image)}">`
+function plotImage(image: string | undefined, heading: string, sampled: boolean): string {
+  if (image) return `<img class="plot" alt="${escapeHtml(heading)} by frequency" src="${escapeHtml(image)}">`;
+  return sampled
+    ? '<p class="empty">This chart was not drawn for this report. Export the report again to include it.</p>'
     : '<p class="empty">No samples available for this plot.</p>';
 }
 
@@ -180,8 +189,8 @@ function channelSection(id: string, result: ResultPayload, groupDelayUnit: Group
       <div><span>Mean DI</span><strong>${format(mean(rows.map((row) => row.directivity_index_db)))} dB</strong></div>
       ${radiatedPower ? `<div><span>Max |power agreement|</span><strong>${format(maximumAbsolute(rows.map((row) => row.power_agreement_db)), 3)} dB</strong></div>` : ''}
     </div>
-    ${REPORT_PLOTS.map(({ chart, heading }) => `<h3>${escapeHtml(heading)}</h3>
-    ${plotImage(charts[chart], heading)}`).join('\n    ')}
+    ${REPORT_PLOTS.map((plot) => `<h3>${escapeHtml(plot.heading)}</h3>
+    ${plotImage(charts[plot.chart], plot.heading, reportPlotSpec(rows, plot) !== null)}`).join('\n    ')}
     <h3>Warnings</h3>${warningList(result)}
     ${radiatedPower ? `<details><summary>Radiated-power cross-check</summary>
       <p class="quiet">${escapeHtml(radiatedPower.definition)}</p>

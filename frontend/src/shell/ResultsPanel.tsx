@@ -23,7 +23,7 @@ import {
   askToReplaceExports,
 } from './exportDestinationPrompt';
 import { ExportCancelledError } from '../api/exportDestination';
-import { canvasPngBlob, composeChartCanvases, copyChartPng, pngBlobFromDataUri, renderChartSpec, renderDirectivityMap, saveChartPng } from '../results/chartImage';
+import { canvasPngBlob, CHART_IMAGE_FAILED, composeChartCanvases, copyChartPng, drawChartPng, pngBlobFromDataUri, renderChartSpec, renderDirectivityMap, saveChartPng } from '../results/chartImage';
 import { chartSpecFromOption, withImageLabels } from '../results/chartSpec';
 import { drawnChartIn } from '../results/drawnCharts';
 import { buildDirectivityRenderPayload } from '../results/exporters';
@@ -1975,6 +1975,17 @@ function excitationComparisonNote(entry: NamedResult, chartType: ChartType): str
   return undefined;
 }
 
+/**
+ * The runs a card draws: the comparison selection less the runs this chart
+ * cannot compare, or the shown run alone. One rule for the card and its image.
+ */
+export function chartOverlays(chartType: ChartType, named: NamedResult[], result: ResultPayload, showMembers: boolean): NamedResult[] {
+  if (!COMPARABLE_CHARTS.has(chartType) && !MEMBER_CHARTS.has(chartType)) return NO_NAMED_RESULTS;
+  const entries = chartEntries(chartType, named.filter(entry => !excitationComparisonNote(entry, chartType)), showMembers);
+  if (entries.length) return entries;
+  return COMPARABLE_CHARTS.has(chartType) ? [{ id: 'primary', label: 'Primary', result, primary: true }] : NO_NAMED_RESULTS;
+}
+
 function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, radiationArtifact, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction; radiationArtifact?: RadiationArtifactView } & SummarySourceProps) {
   const preferences = usePreferences();
   // The shown run owns its display reference, independently of live drafts.
@@ -1982,12 +1993,10 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
   // Only comparable and driver charts read the cross-job list. Keeping it in the
   // dependency array for every chart would rebuild expensive single-run
   // surfaces whenever the comparison selection changes.
-  const overlays = useMemo(() => {
-    if (!COMPARABLE_CHARTS.has(chartType) && !MEMBER_CHARTS.has(chartType)) return NO_NAMED_RESULTS;
-    const entries = chartEntries(chartType, named.filter(entry => !excitationComparisonNote(entry, chartType)), preferences.showMembersUnderCombined);
-    if (entries.length) return entries;
-    return COMPARABLE_CHARTS.has(chartType) ? [{ id: 'primary', label: 'Primary', result, primary: true }] : NO_NAMED_RESULTS;
-  }, [chartType, named, preferences.showMembersUnderCombined, result]);
+  const overlays = useMemo(
+    () => chartOverlays(chartType, named, result, preferences.showMembersUnderCombined),
+    [chartType, named, preferences.showMembersUnderCombined, result],
+  );
   // Which angles the SPL and phase cards read, resolved against this run.
   const measurementSelection = useMemo(
     () => resolveMeasurementSelection(result, preferences.measurementPlane, preferences.measurementAngles),
@@ -2039,7 +2048,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         })}/>
       </div>
       : <ChartStub reason="This run has no on-axis response yet. Wait for it to finish, or choose a completed run."/>;
-    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} normAngle={normAngle} angleGuideInterval={preferences.directivityGuideInterval} showContourNames={preferences.showContourNames} density={density} live={live}/>;
+    if (isDirectivityMap(chartType)) return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} normAngle={normAngle} angleGuideInterval={preferences.directivityGuideInterval} showContourNames={preferences.showContourNames} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = withCompactLegend(mark(directivityIndexOption(overlays, tokens, preferences.smoothing, density)), overlays.length, density);
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field. Choose an engine that provides one, then solve again."/>;
@@ -2250,19 +2259,25 @@ export function chartImageSource(target: HTMLElement, source: ChartImageSource):
   }
   const preferences = preferencesStore.getSnapshot();
   if (isDirectivityMap(chartType)) {
-    if (!result) throw new Error('This run has no directivity to draw. Choose a completed run.');
-    const compared = named.find((entry) => !entry.secondary && !entry.notComparable && entry.result !== result);
+    // The card's own runs and panels, normalised as the card draws them: the
+    // image never shows a contour the card withholds.
+    const overlays = result ? chartOverlays(chartType, named, result, preferences.showMembersUnderCombined) : [];
+    const referenced = overlays.map((item) => ({ ...item, result: withNormalizationAngle(item.result, normAngle) }));
+    const panels = directivityMapPanels(referenced, chartType).filter((panel) => panel.hasData);
+    if (!panels.length) throw new Error('This run has no directivity to draw. Turn on a polar plane under Directivity map in Simulation, then solve again.');
+    // hornlab-plots draws one contour run; it is the first one the card draws.
+    const reference = panels.flatMap((panel) => panel.references)[0];
     const payload = buildDirectivityRenderPayload(
-      withNormalizationAngle(result, normAngle),
+      panels[0].result,
       preferences,
       directivityPlaneForChart(chartType) ?? undefined,
-      compared ? { result: withNormalizationAngle(compared.result as ResultPayload, normAngle), label: compared.label } : undefined,
+      reference ? { result: reference.result, label: reference.label } : undefined,
     );
     return async (fetcher) => pngBlobFromDataUri(await renderDirectivityMap(payload, fetcher));
   }
   const drawn = drawnChartIn(target);
-  if (!drawn) throw new Error('This chart is empty, so there is no image to copy. Choose a chart with data.');
-  const spec = chartSpecFromOption(drawn.option, tokens, { title, subtitle, extent: drawn.extent });
+  if (!drawn) throw new Error('This chart has not been drawn yet. Wait for it to appear, then try again.');
+  const spec = chartSpecFromOption(drawn.option, tokens, { title, subtitle, extent: drawn.extent, hidden: drawn.hidden() });
   const theme = resolveChartTheme(preferences.chartTheme);
   return async (fetcher) => pngBlobFromDataUri(await renderChartSpec(spec, theme, fetcher));
 }
@@ -2298,11 +2313,29 @@ function useChartImage({ capture, chartType, job, channelId, result, named, toke
         setImageStatus('Copied PNG');
       } else {
         const filename = chartImageFilename(chartType, job, channelId);
-        // Drawn while the user picks a folder; a cancelled export drops it.
-        const image = draw(fetch);
-        image.catch(() => undefined);
-        const destination = await askForExportDestination({ title: 'Export chart PNG', detail: filename });
-        if (!destination) { setImageStatus('Export cancelled'); return; }
+        // Drawn while the user picks a folder, on the status bar. A failure is
+        // said at once, under the card, rather than after a folder is chosen;
+        // a cancelled dialog stops the drawing.
+        const drawing = new AbortController();
+        const image = drawChartPng(draw, drawing.signal);
+        image.catch((reason) => {
+          if (drawing.signal.aborted) return;
+          failed = true;
+          setImageStatus(failureWords(reason, CHART_IMAGE_FAILED, 'draw chart PNG'));
+        });
+        let destination: Awaited<ReturnType<typeof askForExportDestination>>;
+        try {
+          destination = await askForExportDestination({ title: 'Export chart PNG', detail: filename });
+        } catch (reason) {
+          drawing.abort();
+          throw reason;
+        }
+        if (!destination) {
+          drawing.abort();
+          // A drawing that already failed keeps its message.
+          if (!failed) setImageStatus('Export cancelled');
+          return;
+        }
         await saveChartPng(
           image, filename, destination.token, askToReplaceExports,
         );

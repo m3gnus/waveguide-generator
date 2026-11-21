@@ -60,6 +60,8 @@ export interface ActivityHandle {
   setCancel(cancel: (() => void) | null): void;
   progress(done: number, total: number): void;
   label(text: string): void;
+  /** What the status bar says now, so a step that relabels a shared activity can put it back. */
+  currentLabel(): string;
   /** `completed` false (cancelled, failed) keeps the duration out of the
    * remembered history, so a quick failure never shortens "usually". */
   end(completed?: boolean): void;
@@ -147,6 +149,7 @@ class ActivityStore {
         patch({ progress: { done, total }, ...(gained ? { progressAt: Date.now() } : {}) });
       },
       label: (text) => patch({ label: text }),
+      currentLabel: () => this.activities.find((item) => item.id === activity.id)?.label ?? label,
       end: (completed = true) => {
         if (ended) return;
         ended = true;

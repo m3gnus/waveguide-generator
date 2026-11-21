@@ -34,6 +34,8 @@ export interface LineSeriesSpec {
   width?: number;
   opacity?: number;
   z?: number;
+  /** Indices of points drawn with a hollow marker (reconstructed, not solved). */
+  markers?: number[];
 }
 
 export interface LineChartSpec {
@@ -50,7 +52,7 @@ export interface LineChartSpec {
 
 export interface PolarSeriesSpec {
   label: string | null;
-  angle: number[];
+  angle: Array<number | null>;
   r: Array<number | null>;
   color: ChartColorRole;
   style?: ChartLineStyle;
@@ -104,6 +106,8 @@ interface SeriesLike {
   yAxisIndex?: number;
   z?: number;
   data?: unknown[];
+  showSymbol?: boolean;
+  symbolSize?: unknown;
   lineStyle?: { color?: unknown; width?: number; type?: unknown; opacity?: number };
   itemStyle?: { color?: unknown };
   areaStyle?: unknown;
@@ -155,7 +159,14 @@ function axisRange(extent: [number, number] | null, axis: unknown): Pick<ChartAx
   return { min: numberOrNull(min), max: numberOrNull(max) };
 }
 
-function lineChartSpec(option: EChartsOption, tokens: ChartTokens, title: string, subtitle: string | undefined, extent: AxisExtent | undefined): LineChartSpec {
+/** The points a series marks: where its symbol size function gives a visible symbol. */
+function markedPoints(entry: SeriesLike): number[] {
+  if (!entry.showSymbol || typeof entry.symbolSize !== 'function' || !Array.isArray(entry.data)) return [];
+  const size = entry.symbolSize as (value: unknown, params: { dataIndex: number }) => unknown;
+  return entry.data.flatMap((value, dataIndex) => (Number(size(value, { dataIndex })) > 0 ? [dataIndex] : []));
+}
+
+function lineChartSpec(option: EChartsOption, tokens: ChartTokens, title: string, subtitle: string | undefined, extent: AxisExtent | undefined, hidden: ReadonlySet<string>): LineChartSpec {
   const labels = imageLabelsOf(option);
   const xAxis = firstOf(option.xAxis as unknown) as { type?: string; min?: unknown; max?: unknown } | undefined;
   const yAxes = (Array.isArray(option.yAxis) ? option.yAxis : [option.yAxis]) as unknown[];
@@ -172,7 +183,9 @@ function lineChartSpec(option: EChartsOption, tokens: ChartTokens, title: string
       if (finite(line?.yAxis)) hlines.push({ y: line.yAxis, axis });
     }
     if (entry.type !== 'line' || !Array.isArray(entry.data) || entry.lineStyle?.opacity === 0) return;
+    if (entry.name !== undefined && hidden.has(entry.name)) return;
     const points = entry.data.map(pointOf);
+    const markers = markedPoints(entry);
     series.push({
       label: entry.name ?? null,
       x: points.map(([x]) => numberOrNull(x)),
@@ -183,6 +196,7 @@ function lineChartSpec(option: EChartsOption, tokens: ChartTokens, title: string
       width: entry.lineStyle?.width ?? 2,
       opacity: entry.lineStyle?.opacity ?? 1,
       ...(finite(entry.z) ? { z: entry.z + 2 } : {}),
+      ...(markers.length ? { markers } : {}),
     });
   });
   const secondary = series.some(({ axis }) => axis === 1);
@@ -199,7 +213,7 @@ function lineChartSpec(option: EChartsOption, tokens: ChartTokens, title: string
   };
 }
 
-function polarChartSpec(option: EChartsOption, tokens: ChartTokens, title: string, subtitle: string | undefined): PolarChartSpec {
+function polarChartSpec(option: EChartsOption, tokens: ChartTokens, title: string, subtitle: string | undefined, hidden: ReadonlySet<string>): PolarChartSpec {
   const radius = (firstOf(option.radiusAxis as unknown) ?? {}) as { min?: unknown; max?: unknown; interval?: unknown };
   const shade: NonNullable<PolarChartSpec['shade']> = [];
   const series: PolarSeriesSpec[] = [];
@@ -212,9 +226,10 @@ function polarChartSpec(option: EChartsOption, tokens: ChartTokens, title: strin
       if (angles.length) shade.push({ from: Math.min(...angles), to: Math.max(...angles), ...(entry.name ? { label: entry.name } : {}) });
       return;
     }
+    if (entry.name !== undefined && hidden.has(entry.name)) return;
     series.push({
       label: entry.name ?? null,
-      angle: points.map(([, angle]) => numberOrNull(angle) ?? 0),
+      angle: points.map(([, angle]) => numberOrNull(angle)),
       r: points.map(([level]) => numberOrNull(level)),
       color: colorRole(entry.lineStyle?.color ?? entry.itemStyle?.color, tokens, index),
       style: lineStyleOf(entry.lineStyle?.type),
@@ -245,11 +260,11 @@ function polarChartSpec(option: EChartsOption, tokens: ChartTokens, title: strin
 export function chartSpecFromOption(
   option: EChartsOption,
   tokens: ChartTokens,
-  { title, subtitle, extent }: { title: string; subtitle?: string | null; extent?: AxisExtent },
+  { title, subtitle, extent, hidden = new Set() }: { title: string; subtitle?: string | null; extent?: AxisExtent; hidden?: ReadonlySet<string> },
 ): ChartSpec {
   const own = imageLabelsOf(option).subtitle;
   const caption = [own, subtitle].filter(Boolean).join(' · ') || undefined;
   return option.polar
-    ? polarChartSpec(option, tokens, title, caption)
-    : lineChartSpec(option, tokens, title, caption, extent);
+    ? polarChartSpec(option, tokens, title, caption, hidden)
+    : lineChartSpec(option, tokens, title, caption, extent, hidden);
 }

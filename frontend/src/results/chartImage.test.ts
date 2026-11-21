@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { composeChartCanvases, copyChartPng, pngBlobFromDataUri, renderChartSpec, saveChartPng } from './chartImage';
+import { composeChartCanvases, copyChartPng, drawChartPng, pngBlobFromDataUri, renderChartSpec, saveChartPng } from './chartImage';
 import { activityStore } from '../shell/activity';
 
 const workspace = vi.hoisted(() => ({ write: vi.fn() }));
@@ -56,19 +56,38 @@ describe('chart PNG composition', () => {
     workspace.write.mockImplementation(() => new Promise((resolve) => { finishWriting = resolve; }));
     const confirm = vi.fn(async () => true);
     const saving = saveChartPng(image, 'A.png', 'chosen', confirm);
-    const [drawing] = activityStore.getSnapshot();
-    expect(drawing).toMatchObject({ kind: 'export', label: 'Drawing chart PNG' });
+    const [writing] = activityStore.getSnapshot();
+    expect(writing).toMatchObject({ kind: 'export', label: 'Writing chart PNG' });
     expect(workspace.write).not.toHaveBeenCalled();
     const blob = new Blob(['drawn A pixels'], { type: 'image/png' });
     finishDrawing(blob);
     await Promise.resolve();
     await Promise.resolve();
-    expect(activityStore.getSnapshot()).toMatchObject([{ id: drawing.id, label: 'Writing chart PNG' }]);
+    expect(activityStore.getSnapshot()).toMatchObject([{ id: writing.id, label: 'Writing chart PNG' }]);
     expect(workspace.write).toHaveBeenCalledWith('', [{ filename: 'A.png', blob }], expect.any(Function), 'confirm', 'chosen', confirm);
     expect(workspace.write.mock.calls[0][1][0].blob).toBe(blob);
     finishWriting({ directory: 'chosen directory' });
     await expect(saving).resolves.toBe('chosen directory');
     expect(activityStore.getSnapshot()).toEqual([]);
+  });
+
+  it('draws on the status bar and stops the request when its export is abandoned', async () => {
+    const seen: Array<AbortSignal | undefined> = [];
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      seen.push(init?.signal ?? undefined);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      });
+    });
+    const cancel = new AbortController();
+    const image = drawChartPng((scoped) => scoped('/api/render-chart', { method: 'POST' }).then(() => new Blob()), cancel.signal);
+    expect(activityStore.getSnapshot()).toMatchObject([{ kind: 'export', label: 'Drawing chart PNG' }]);
+    expect(seen[0]?.aborted).toBe(false);
+    cancel.abort();
+    await expect(image).rejects.toThrow();
+    expect(seen[0]?.aborted).toBe(true);
+    expect(activityStore.getSnapshot()).toEqual([]);
+    fetcher.mockRestore();
   });
 
   it('ends a failed drawing activity without writing a file', async () => {

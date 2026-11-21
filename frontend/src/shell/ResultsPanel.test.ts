@@ -16,18 +16,22 @@ import { provideExportDestinationPrompt } from './exportDestinationPrompt';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { newRunBadgeLabel } from './ResultsPanel';
 import { resultExportSnapshot } from '../results/exportContext';
-import { beamShapeMissingReason, ChartDetailDialog, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, measurementAngleEntries, phaseOption, polarOption, powerResponseOption, resolveMeasurementSelection, ResultsChartGrid, resolvedPolarStepNotice, resultLayoutClass, splOption, splSubtitle } from './ResultsPanel';
+import { beamShapeMissingReason, ChartDetailDialog, chartImageSource, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, measurementAngleEntries, phaseOption, polarOption, powerResponseOption, resolveMeasurementSelection, ResultsChartGrid, resolvedPolarStepNotice, resultLayoutClass, splOption, splSubtitle } from './ResultsPanel';
 
 const chartImageMocks = vi.hoisted(() => ({
   copy: vi.fn<(image: (fetcher: typeof fetch) => Promise<Blob>) => Promise<void>>(),
   save: vi.fn<(image: Promise<Blob>, filename: string, destination: string, confirm?: unknown) => Promise<string>>(),
-  render: vi.fn<(spec: unknown, theme: string) => Promise<string>>(),
+  render: vi.fn<(spec: unknown, theme: string, fetcher?: typeof fetch) => Promise<string>>(),
+  map: vi.fn<(payload: Record<string, unknown>) => Promise<string>>(),
+  compose: vi.fn<(target: HTMLElement, background?: string) => HTMLCanvasElement>(),
 }));
 vi.mock('../results/chartImage', async (importOriginal) => ({
   ...await importOriginal<typeof import('../results/chartImage')>(),
   copyChartPng: chartImageMocks.copy,
   saveChartPng: chartImageMocks.save,
   renderChartSpec: chartImageMocks.render,
+  renderDirectivityMap: chartImageMocks.map,
+  composeChartCanvases: chartImageMocks.compose,
 }));
 
 /** Stand in for EChartRenderer: a drawn chart frame with a canvas, registered with its option. */
@@ -40,7 +44,7 @@ function drawChart(target: HTMLElement, option: EChartsOption): () => void {
     frame.append(document.createElement('canvas'));
     target.prepend(frame);
   }
-  return registerDrawnChart(frame, { option, extent: () => null });
+  return registerDrawnChart(frame, { option, extent: () => null, hidden: () => new Set() });
 }
 
 const summaryMocks = vi.hoisted(() => ({
@@ -877,6 +881,49 @@ describe('results chart layouts', () => {
     }
   });
 
+  it('shows a failed drawing while the folder dialog is open and keeps it past a cancel', async () => {
+    const chartResult: ResultPayload = { frequencies: [500], spl_on_axis: { frequencies: [500], spl: [80] } };
+    act(() => root.render(createElement(ResultsChartGrid, { chartTypes: ['frequency_response'], result: chartResult, named: [], tokens })));
+    const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
+    await act(async () => { drawChart(target, splOption([{ id: 'primary', label: 'Run', result: chartResult, primary: true }], tokens, 'none', 'regular')); });
+    chartImageMocks.render.mockRejectedValue(new Error('WG could not draw this chart image. Try again.'));
+    let answer!: (choice: { token: string; directory: string } | null) => void;
+    provideExportDestinationPrompt(() => new Promise((resolve) => { answer = resolve; }));
+    await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Export panel 1 as PNG"]')!.click(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    // Said while the dialog is still open, not after a folder is picked.
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('WG could not draw this chart image. Try again.');
+    await act(async () => { answer(null); });
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('WG could not draw this chart image. Try again.');
+    expect(chartImageMocks.save).not.toHaveBeenCalled();
+  });
+
+  it('stops drawing when the export folder dialog is cancelled', async () => {
+    const chartResult: ResultPayload = { frequencies: [500], spl_on_axis: { frequencies: [500], spl: [80] } };
+    act(() => root.render(createElement(ResultsChartGrid, { chartTypes: ['frequency_response'], result: chartResult, named: [], tokens })));
+    const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
+    await act(async () => { drawChart(target, splOption([{ id: 'primary', label: 'Run', result: chartResult, primary: true }], tokens, 'none', 'regular')); });
+    let signal: AbortSignal | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      });
+    });
+    chartImageMocks.render.mockImplementation(async (_spec, _theme, fetcher) => {
+      await (fetcher as typeof fetch)('/api/render-chart', { method: 'POST' });
+      return 'data:image/png;base64,iVBORw==';
+    });
+    let answer!: (choice: { token: string; directory: string } | null) => void;
+    provideExportDestinationPrompt(() => new Promise((resolve) => { answer = resolve; }));
+    await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Export panel 1 as PNG"]')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(signal?.aborted).toBe(false);
+    await act(async () => { answer(null); });
+    expect(signal?.aborted).toBe(true);
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('Export cancelled');
+  });
+
   it.each(['copy', 'export'])('keeps the %s remedy until another attempt, including past a previous success timer', async (operation) => {
     vi.useFakeTimers();
     const chartResult: ResultPayload = { frequencies: [500], spl_on_axis: { frequencies: [500], spl: [80] } };
@@ -1223,5 +1270,65 @@ describe('missing run labels', () => {
   it('uses shared run naming when a result arrives before its job', () => {
     expect(labelFor('missing-id', [])).toBe('Run');
     expect(labelFor('known', [{ id: 'known', run_number: 12, label: 'Horn' } as never])).toBe('#12 · Horn');
+  });
+});
+
+describe('chart image sources', () => {
+  const pattern = (angles: number[]) => angles.map((angle) => [angle, -Math.abs(angle) / 10]);
+  const field = (planes: string[]): ResultPayload => ({
+    frequencies: [1_000, 2_000],
+    directivity: Object.fromEntries(planes.map((plane) => [plane, [pattern([-90, 0, 90]), pattern([-90, 0, 90])]])),
+  } as unknown as ResultPayload);
+  beforeEach(() => {
+    preferencesStore.resetForTests();
+    chartImageMocks.map.mockReset().mockResolvedValue('data:image/png;base64,iVBORw==');
+    chartImageMocks.compose.mockReset();
+  });
+
+  it('draws a directivity map with the contour run the card draws, never one it withholds', async () => {
+    const primary = field(['horizontal', 'vertical']);
+    const onAxisOnly = { ...field(['vertical']), metadata: { excitation_comparison_on_axis_only: true } } as unknown as ResultPayload;
+    const noVertical = field(['horizontal']);
+    const comparable = field(['vertical']);
+    const named: NamedResult[] = [
+      { id: 'p', label: 'Primary', result: primary, primary: true },
+      { id: 'x', label: 'On-axis only', result: onAxisOnly },
+      { id: 'h', label: 'No vertical', result: noVertical },
+      { id: 'c', label: 'Comparable', result: comparable },
+    ];
+    const draw = chartImageSource(document.createElement('div'), {
+      chartType: 'directivity_map_v', result: primary, named, tokens, title: 'Directivity V', normAngle: 0,
+    });
+    const blob = await draw(fetch);
+    expect(blob.type).toBe('image/png');
+    const payload = chartImageMocks.map.mock.calls[0][0] as { directivity: Record<string, unknown>; reference_label: string | null };
+    expect(Object.keys(payload.directivity)).toEqual(['vertical']);
+    expect(payload.reference_label).toBe('Comparable');
+  });
+
+  it('refuses a map image when no run has the plane', () => {
+    const primary = field(['horizontal']);
+    expect(() => chartImageSource(document.createElement('div'), {
+      chartType: 'directivity_map_v', result: primary, named: [], tokens, title: 'Directivity V', normAngle: 0,
+    })).toThrow('no directivity to draw');
+    expect(chartImageMocks.map).not.toHaveBeenCalled();
+  });
+
+  it('saves the 3D balloon as the view on screen, captured at the click', async () => {
+    const target = document.createElement('div');
+    const canvas = document.createElement('canvas');
+    const png = new Blob(['balloon'], { type: 'image/png' });
+    vi.spyOn(canvas, 'toBlob').mockImplementation((callback) => { callback(png); });
+    chartImageMocks.compose.mockReturnValue(canvas);
+    const draw = chartImageSource(target, { chartType: 'balloon', result, named: [], tokens, title: 'Balloon', normAngle: 0 });
+    expect(chartImageMocks.compose).toHaveBeenCalledWith(target, tokens.background);
+    await expect(draw(fetch)).resolves.toBe(png);
+    expect(chartImageMocks.render).not.toHaveBeenCalled();
+  });
+
+  it('says a chart that has not been drawn yet cannot be saved, without blaming copy', () => {
+    expect(() => chartImageSource(document.createElement('div'), {
+      chartType: 'frequency_response', result, named: [], tokens, title: 'SPL', normAngle: 0,
+    })).toThrow('This chart has not been drawn yet. Wait for it to appear, then try again.');
   });
 });
