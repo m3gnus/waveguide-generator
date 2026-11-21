@@ -2034,10 +2034,12 @@ export interface BundleChartImages {
  * run), at the measurement angles and smoothing the preferences hold. `result`
  * is already referenced to the run's normalisation angle by the export.
  */
-export function bundleChartImages(result: ResultPayload, preferences: Preferences, tokens: ChartTokens): BundleChartImages {
+export function bundleChartImages(result: ResultPayload, preferences: Preferences, tokens: ChartTokens, label: string): BundleChartImages {
+  // The run, named as the export names it, is the card's only entry.
+  const run: NamedResult[] = [{ id: 'primary', label, result, primary: true }];
   const charts = BUNDLE_CHARTS.flatMap((name) => {
     if (name === 'beam_shape' && !result.beam_shape?.frequencies?.length) return [];
-    const overlays = chartOverlays(name, NO_NAMED_RESULTS, result, preferences.showMembersUnderCombined);
+    const overlays = chartOverlays(name, run, result, preferences.showMembersUnderCombined);
     const selection = resolveMeasurementSelection(result, preferences.measurementPlane, preferences.measurementAngles);
     const option = cardOption(name, {
       result,
@@ -2051,7 +2053,7 @@ export function bundleChartImages(result: ResultPayload, preferences: Preference
       unqualified: chartUnqualifiedBands(overlays.length ? overlays : [{ id: 'primary', label: 'Primary', result }]),
     });
     if (!hasSeries(option)) return [];
-    const subtitle = chartSubtitle(name, result, NO_NAMED_RESULTS, preferences, 0);
+    const subtitle = chartSubtitle(name, result, run, preferences, 0);
     return [{ name, spec: chartSpecFromOption(option, tokens, { title: chartTitle(name, true), subtitle }) }];
   });
   const map = Object.keys(result.directivity ?? {}).length

@@ -791,7 +791,7 @@ describe('result exporters', () => {
       ['Sound pressure level', 'paper'], ['Directivity index', 'paper'], ['Impedance', 'paper'],
     ]);
     // The SPL file is the SPL card's own series: the run's on-axis samples.
-    expect(drawn[0][0].series[0]).toMatchObject({ x: [100, 200], y: [90, null] });
+    expect(drawn[0][0].series[0]).toMatchObject({ label: 'horn_1', x: [100, 200], y: [90, null] });
     expect(saveBlob.mock.calls.map(([, filename]) => filename)).toEqual([
       'horn_1_frequency_response.png', 'horn_1_directivity_index.png', 'horn_1_impedance.png', 'horn_1_directivity_map.png',
     ]);
