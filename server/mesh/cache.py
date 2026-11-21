@@ -20,7 +20,8 @@ import shutil
 import sys
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor, wait
+from concurrent.futures import Future, wait
+import queue
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
 import contextlib
@@ -199,7 +200,8 @@ class SolverMeshDiskCache:
 
     An artifact is written only when its non-text part reads back from JSON
     identical, types and key order included; anything else stays memory-only.
-    Writes run on one background thread, after the caller has its artifact.
+    Writes run on one background daemon thread, after the caller has its
+    artifact; closing never waits for them.
     """
 
     ENTRY_SUFFIX = ".mesh"
@@ -230,7 +232,11 @@ class SolverMeshDiskCache:
         self._max_bytes = int(max_bytes)
         self._max_total_bytes = int(max_total_bytes)
         self._lock = threading.Lock()  # the folder's files; held across a write
-        self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wg2-solver-mesh-disk")
+        # One daemon thread, never joined: a write cut short by process exit
+        # leaves only a stage file, swept later, and never holds the exit.
+        self._work: queue.SimpleQueue[tuple[Callable[[], bool], Future[bool]] | None] = queue.SimpleQueue()
+        self._worker: threading.Thread | None = None
+        self._stopped = False
         # Its own lock, so queueing a write never waits on one being written.
         self._pending_lock = threading.Lock()
         self._pending: set[Future[bool]] = set()
@@ -431,36 +437,48 @@ class SolverMeshDiskCache:
             count -= 1
 
     def _submit(self, work: Callable[[], bool]) -> None:
-        def run() -> bool:
+        future: Future[bool] = Future()
+        with self._pending_lock:
+            if self._stopped:
+                return
+            self._pending.add(future)
+            if self._worker is None:
+                self._worker = threading.Thread(
+                    target=self._serve, name="wg2-solver-mesh-disk", daemon=True,
+                )
+                self._worker.start()
+        self._work.put((work, future))
+
+    def _serve(self) -> None:
+        while True:
+            item = self._work.get()
+            if item is None:
+                return
+            work, future = item
             try:
-                return work()
+                future.set_result(work())
             except Exception:  # noqa: BLE001 - a cache write never fails a build
                 log.warning("solver mesh disk cache: background work failed", exc_info=True)
-                return False
-
-        try:
-            future = self._writer.submit(run)
-        except RuntimeError:  # shut down
-            return
-        with self._pending_lock:
-            self._pending.add(future)
-        future.add_done_callback(self._forget)
-
-    def _forget(self, future: Future[bool]) -> None:
-        with self._pending_lock:
-            self._pending.discard(future)
+                future.set_result(False)
+            finally:
+                with self._pending_lock:
+                    self._pending.discard(future)
 
     def flush(self, timeout: float | None = None) -> None:
-        """Wait for queued background writes (tests, shutdown)."""
+        """Wait for queued background writes (tests)."""
 
         with self._pending_lock:
             pending = list(self._pending)
         wait(pending, timeout=timeout)
 
     def close(self) -> None:
-        """Finish queued writes, then stop the writer thread."""
+        """Accept no more work. Never waits: queued writes finish if time allows."""
 
-        self._writer.shutdown(wait=True)
+        with self._pending_lock:
+            if self._stopped:
+                return
+            self._stopped = True
+        self._work.put(None)
 
     def clear(self) -> None:
         self.flush()

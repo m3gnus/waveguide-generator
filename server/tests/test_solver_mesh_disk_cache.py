@@ -405,13 +405,17 @@ def test_queueing_a_write_never_waits_on_one_being_written(tmp_path) -> None:
     cache.close()
 
 
-def test_app_startup_does_not_wait_for_the_disk_cache(tmp_path, monkeypatch) -> None:
+def test_neither_startup_nor_a_stop_waits_for_the_disk_cache(tmp_path, monkeypatch) -> None:
+    """Opening measures WG's code, which takes seconds under load: a stop
+    arriving meanwhile must keep its shutdown budget."""
+
     import threading
 
     from server.app import create_app
 
     release = threading.Event()
     opened = []
+    closed = []
 
     def slow_configure(root):
         assert release.wait(10)
@@ -420,21 +424,52 @@ def test_app_startup_does_not_wait_for_the_disk_cache(tmp_path, monkeypatch) -> 
         opened.append(cache)
         return cache
 
-    closed = []
     monkeypatch.setattr(builder, "configure_solver_mesh_disk_cache", slow_configure)
     monkeypatch.setattr(builder, "close_solver_mesh_disk_cache", closed.append)
     app = create_app(data_dir=tmp_path / "data", solver_warmup=False)
 
-    async def scenario() -> None:
+    async def scenario():
         async with app.router.lifespan_context(app):
             assert not opened, "startup waited for the disk cache"
-            release.set()
-            await app.state.solver_mesh_disk_cache_opening
-        assert closed == opened and len(opened) == 1
+            opening = app.state.solver_mesh_disk_cache_opening
+        return opening
 
     try:
-        asyncio.run(scenario())
+        began = time.monotonic()
+        opening = asyncio.run(scenario())
+        assert not opened, "the stop waited for the disk cache"
+        assert time.monotonic() - began < 30
+        release.set()
+        cache = opening.wait(10)
+        # Opened after the stop: closed at once, never left in use.
+        assert len(opened) == 1 and closed == [None, opened[0]]
+        assert cache is None
     finally:
         release.set()
         for cache in opened:
             cache.close()
+
+
+def test_closing_the_cache_never_waits_for_a_write(tmp_path) -> None:
+    import threading
+
+    cache = SolverMeshDiskCache(tmp_path, {"mesher": "1"})
+    cache.open()
+    cache.flush()
+    holding = threading.Event()
+    release = threading.Event()
+
+    def stuck() -> bool:
+        holding.set()
+        return release.wait(10)
+
+    cache._submit(stuck)
+    assert holding.wait(5)
+    began = time.monotonic()
+    cache.close()
+    assert time.monotonic() - began < 1.0
+    assert cache._worker is not None and cache._worker.daemon
+    cache.put_later("a" * 64, {"msh_text": "a"})  # after close: dropped
+    release.set()
+    cache.flush(5)
+    assert cache.get("a" * 64) is None

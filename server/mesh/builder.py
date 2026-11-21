@@ -1156,6 +1156,54 @@ def close_solver_mesh_disk_cache(cache: SolverMeshDiskCache | None) -> None:
     cache.close()
 
 
+class SolverMeshDiskCacheOpening:
+    """Open the disk cache on a daemon thread; close it without waiting.
+
+    Opening measures WG's mesh code (seconds under load). The application
+    starts it at startup and closes it at shutdown: neither waits, so a stop
+    that arrives mid-measurement keeps its budget. Solves build as if the
+    cache were cold until it is open; a cache that opens after the close is
+    closed at once.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self._lock = threading.Lock()
+        self._closed = False
+        self._cache: SolverMeshDiskCache | None = None
+        self._done = threading.Event()
+        threading.Thread(
+            target=self._open, args=(Path(root),), name="wg2-solver-mesh-disk-open", daemon=True,
+        ).start()
+
+    def _open(self, root: Path) -> None:
+        try:
+            try:
+                cache = configure_solver_mesh_disk_cache(root)
+            except Exception:  # noqa: BLE001 - no cache is a cold cache
+                logger.warning("Solver mesh disk cache did not open", exc_info=True)
+                cache = None
+            with self._lock:
+                late = self._closed
+                if not late:
+                    self._cache = cache
+            if late:
+                close_solver_mesh_disk_cache(cache)
+        finally:
+            self._done.set()
+
+    def wait(self, timeout: float | None = None) -> SolverMeshDiskCache | None:
+        """The opened cache once opening ends (tests)."""
+
+        self._done.wait(timeout)
+        return self._cache
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            cache, self._cache = self._cache, None
+        close_solver_mesh_disk_cache(cache)
+
+
 def clear_solver_mesh_cache() -> None:
     """Drop all reusable artifacts, for recovery or explicit recomputation."""
 
