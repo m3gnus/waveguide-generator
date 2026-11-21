@@ -8,7 +8,7 @@ import * as chartImage from './chartImage';
  * notices when it calls an API that has gone: this does.
  */
 describe('the WebKit clipboard smoke script', () => {
-  const script = readFileSync('../scripts/smoke_chart_clipboard.mjs', 'utf8');
+  const script = new TextDecoder().decode(readFileSync('../scripts/smoke_chart_clipboard.mjs'));
   const called = [...new Set([...script.matchAll(/chartImage\.(\w+)\(/g)].map(([, name]) => name))];
 
   it('calls only chartImage functions that exist', () => {
