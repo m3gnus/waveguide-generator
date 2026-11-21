@@ -191,7 +191,13 @@ placement, export corner arcs and the 0.02 mm CAD plan. The point grid Fusion lo
 therefore the grid the STEP is written from, whatever the solve was set to. The plan is
 recorded in the bundle manifest's `cad_sampling` (resolution, measured deviation,
 tolerance, warning), and a plan that could not be verified returns its note as the
-send's `warning`. The bundle's `export.geometry_hash` is still the design's identity
+send's `warning`, which the app shows after the send's status. Send also proves the solid
+builds, with the STEP writer's own OCC build stopped before the write, so a solid File → STEP
+would refuse is refused at Send with the same message. The mesher child remembers the
+geometries it has built (by planned config and mesher version), so a Send after a File → STEP
+or a repeat Send of an unchanged design skips that check. The CAD refusals of the solver config
+(Source contours, non-numeric Enclosure depth, quadrants or vertical offset) are checked before
+the send starts, each naming the control to change. The bundle's `export.geometry_hash` is still the design's identity
 (`geometry_hash_for_design`), which CAD-return freshness recomputes, so it does not
 depend on the CAD sampling. `test_send_to_cad_lofts_the_grid_the_solid_step_writes`
 proves the shared grid.

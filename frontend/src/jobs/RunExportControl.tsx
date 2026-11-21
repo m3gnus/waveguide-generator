@@ -11,7 +11,7 @@ import { writeToOutputFolder } from '../api/workspace';
 import { fetchJobResults } from '../api/results';
 import { sendDesignToCad } from '../api/designIo';
 import { ActionMenu, type ActionMenuItem } from '../design/ActionMenu';
-import { followCadSend, fusionSendOf, sentToCadMessage, showCadSendOutcome } from '../design/useSendToCad';
+import { followCadSend, fusionSendOf, sendNote, sentToCadMessage, showCadSendOutcome } from '../design/useSendToCad';
 import { usePreferences, type ExportFormat } from '../prefs/preferences';
 import { runExportReason, resultExportSelection, resultExportSnapshot } from '../results/exportContext';
 import {
@@ -318,7 +318,7 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
     );
     // The floating status line owns what becomes of it, whichever run stays on screen.
     const send = fusionSendOf(result);
-    if (send) followCadSend(send);
+    if (send) followCadSend(send, sendNote(result));
     else showCadSendOutcome({ tone: 'status', text: sentToCadMessage(result) }, true);
     return { notice: '' };
   });

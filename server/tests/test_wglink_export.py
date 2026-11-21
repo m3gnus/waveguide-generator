@@ -74,7 +74,7 @@ def _stub_cad_geometry(monkeypatch) -> None:
     monkeypatch.setattr(
         wglink_geometry,
         "resolve_cad_geometry",
-        lambda _design: CadGeometry(resolved=SimpleNamespace(geometry=None), plan=CadPlan(12.0, None)),
+        lambda _design: CadGeometry(resolved=SimpleNamespace(geometry=None, mode="freestanding"), plan=CadPlan(12.0, None)),
     )
 
     def fake_step(_cad, path):
@@ -219,6 +219,87 @@ def test_send_to_cad_lofts_the_grid_the_solid_step_writes(
     assert "warning" not in row
 
 
+def test_send_to_cad_checks_the_solid_builds_unless_this_child_built_it(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """A Send proves the solid builds (the STEP writer's OCC check, no file),
+    once per unchanged design: a File -> STEP or Send that already built it in
+    this child is trusted. A solid that cannot be built refuses the Send."""
+
+    import hornlab_mesher.cad as mesher_cad
+
+    from server.exports import core
+    from server.exports.cad_geometry import forget_built_solids
+
+    stops: list = []
+    real_once = mesher_cad._write_step_once
+
+    def observed(*args, **kwargs):
+        stops.append(kwargs.get("stop"))
+        return real_once(*args, **kwargs)
+
+    monkeypatch.setattr(mesher_cad, "_write_step_once", observed)
+    forget_built_solids()
+    design = _design()
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, design)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    service.export_wglink_sync(_request(saved), store, workspace, "first")
+    assert stops == ["solid"]  # checked, nothing written
+    stops.clear()
+    service.export_wglink_sync(_request(saved), store, workspace, "second")
+    assert stops == []  # the same geometry already built in this child
+
+    forget_built_solids()
+    core._build_step_solid_sync(design.model_dump(mode="json"))
+    assert stops == [None]  # File -> STEP writes, and records the build
+    stops.clear()
+    service.export_wglink_sync(_request(saved), store, workspace, "third")
+    assert stops == []
+
+    def broken(*_args, stop=None, **_kwargs):
+        from hornlab_mesher.errors import UserRefusal
+
+        raise UserRefusal("Wall thickness", "The waveguide solid could not be built.",
+                          "Reduce the wall thickness, then send again.")
+
+    monkeypatch.setattr(mesher_cad, "_write_step_once", broken)
+    forget_built_solids()
+    with pytest.raises(HTTPException) as refused:
+        service.export_wglink_sync(_request(saved), store, workspace, "broken")
+    assert refused.value.status_code == 422
+    assert "could not be built" in refused.value.detail
+    assert "Reduce the wall thickness" in refused.value.detail
+    forget_built_solids()
+
+
+def test_cad_refusals_come_before_any_send_work_and_say_how_to_fix(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    from server.exports import wglink_geometry
+
+    monkeypatch.setattr(
+        wglink_geometry, "resolve_cad_geometry",
+        lambda _design: pytest.fail("the planner started before the CAD refusal"),
+    )
+    design = DesignConfig.model_validate(
+        {"formula": "OSSE", "L": 120, "a": 45, "source": {"contours": "1 0 0"}}
+    )
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, design)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with pytest.raises(HTTPException) as refused:
+        service.export_wglink_sync(_request(saved, design), store, workspace, "contours")
+    assert refused.value.status_code == 422
+    assert "Source contours" in refused.value.detail
+    assert "Clear Source contours" in refused.value.detail
+    assert store.find_export_by_idempotency_key("contours") is None
+
+
 def test_an_unverified_cad_sampling_warning_reaches_the_send(
     monkeypatch, tmp_path: Path,
 ) -> None:
@@ -234,7 +315,7 @@ def test_an_unverified_cad_sampling_warning_reaches_the_send(
         wglink_geometry,
         "resolve_cad_geometry",
         lambda _design: CadGeometry(
-            resolved=SimpleNamespace(geometry=None), plan=CadPlan(12.0, None, note)
+            resolved=SimpleNamespace(geometry=None, mode="freestanding"), plan=CadPlan(12.0, None, note)
         ),
     )
     store = CadLinkStore(tmp_path / "cadlink.db")

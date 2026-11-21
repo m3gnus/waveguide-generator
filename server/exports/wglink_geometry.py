@@ -1,15 +1,15 @@
 """Build a staged bundle in the killable mesher child; never publish it."""
 
 from pathlib import Path
-import hashlib
 import json
 from typing import Any
 from server.design.schema import DesignConfig
 from server.design.conventions import artifact_conventions
-from server.preview.translate import design_to_mesher_config
-from .cad_geometry import resolve_cad_geometry, write_cad_step
+from server.preview.geometry_identity import resolve_design_identity
+from .cad_geometry import remember_solid_built, resolve_cad_geometry, solid_known_to_build, write_cad_step
 from .core import _assert_step
-from .geometry_identity import geometry_hash as _geometry_hash, mesher_version as _mesher_version
+from .geometry_identity import mesher_version as _mesher_version
+from .wglink_publication import bundle_file_record
 
 
 #: The solid STEP an Onshape bundle carries (``build_bundle(include_step=True)``).
@@ -38,15 +38,13 @@ def build_bundle(
     if cancel_cb is not None:
         cancel_cb()
     from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
-    from hornlab_mesher.config_builder import resolve_geometry
 
     design = DesignConfig.model_validate(design_dump)
     # The design's identity resolve: its geometry hash is what CAD-return
     # freshness recomputes (geometry_hash_for_design), and its density is the
     # design's own source resolution. Neither depends on how CAD samples it.
-    resolved = resolve_geometry(design_to_mesher_config(design))
     mesher_version = _mesher_version()
-    geometry_hash = _geometry_hash(resolved.geometry, mesher_version)
+    resolved, geometry_hash = resolve_design_identity(design, mesher_version_value=mesher_version)
     # The body Fusion lofts: the same CAD geometry File -> STEP writes.
     cad = resolve_cad_geometry(design)
     staged = Path(staged_path)
@@ -71,7 +69,8 @@ def build_bundle(
             # audits, and round trips do not have to reverse-engineer a
             # formula from the body or from the smaller CAD parameter set.
             "config": design.model_dump(mode="json", by_alias=True),
-            "build_mode": resolved.mode,
+            # The grid's own mode: WGLink refuses a grid whose mode differs.
+            "build_mode": cad.resolved.mode,
         },
         export={
             "id": facts["exportId"],
@@ -79,14 +78,24 @@ def build_bundle(
             "parent_export_id": facts["parentExportId"],
             "geometry_hash": geometry_hash,
             "domain": "full",
+            # Also part of geometry_hash's canonical input (geometry_identity);
+            # it states the solid the bundle stands for.
             "open_throat": True,
         },
     )
+    # The solid must be buildable, or Send would hand Fusion a part that File
+    # -> STEP refuses. The check is the STEP writer's own OCC build, skipped
+    # when this child already built this exact geometry (a File -> STEP or a
+    # Send of the unchanged design), and when an Onshape bundle writes the
+    # STEP itself below.
+    verify_solid = not (include_step or solid_known_to_build(cad))
     product = write_wglink(
         cad.resolved.geometry,
         staged,
         identity=bundle_identity,
         instance_slug=instance_slug,
+        open_throat=True,
+        verify_solid=verify_solid,
         # The current design schema owns exactly one horn throat. Give
         # it an explicit acoustic identity at export time so the
         # return leg never guesses HF from anonymous CAD geometry.
@@ -115,14 +124,9 @@ def build_bundle(
         step_path = staged / ONSHAPE_STEP_FILE
         info = write_cad_step(cad, step_path)
         _assert_step(step_path.read_text(encoding="utf-8", errors="replace"))
-        data = step_path.read_bytes()
         manifest["files"] = {
             **manifest["files"],
-            ONSHAPE_STEP_FILE: {
-                "sha256": "sha256:" + hashlib.sha256(data).hexdigest(),
-                "size_bytes": len(data),
-                "media_type": "model/step",
-            },
+            ONSHAPE_STEP_FILE: bundle_file_record(step_path, "model/step"),
         }
         manifest["step"] = {
             "file": ONSHAPE_STEP_FILE,
@@ -136,3 +140,4 @@ def build_bundle(
         json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    remember_solid_built(cad)

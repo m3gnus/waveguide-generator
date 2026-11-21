@@ -9,9 +9,13 @@ part a user exports and the body Fusion builds are the same sampled surface.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
+import hashlib
 import logging
 from pathlib import Path
+import re
+import threading
 from typing import TYPE_CHECKING, Any
 
 from server.design.schema import DesignConfig
@@ -38,6 +42,9 @@ class CadGeometry:
     #: The mesher's ``ResolvedGeometry``: full model, placed, CAD-sampled.
     resolved: Any
     plan: CadPlan
+    #: What determines the geometry: the planned config and the mesher. Two
+    #: designs with one key build one solid (see ``solid_known_to_build``).
+    build_key: str = ""
 
     def sampling_record(self) -> dict[str, Any]:
         """The plan as an artifact records it (the WGLink manifest's ``cad_sampling``)."""
@@ -48,6 +55,37 @@ class CadGeometry:
             "tolerance_mm": STEP_SURFACE_TOLERANCE_MM,
             "warning": self.plan.warning,
         }
+
+
+_STRICT_SCALAR = re.compile(r"^(\S+) must be a finite scalar expression$")
+
+
+def _cad_base_config(design: DesignConfig) -> dict[str, Any]:
+    """``_solver_mesher_config`` with placement, its refusals told as a CAD fix.
+
+    Its plain ``ValueError`` refusals speak of the solver; a CAD export or send
+    is refused with the control to change and how.
+    """
+
+    from hornlab_mesher.errors import UserRefusal, numeric_refusal
+
+    try:
+        return _solver_mesher_config(design, keep_placement=True)
+    except UserRefusal:
+        raise
+    except ValueError as exc:
+        text = str(exc)
+        if text.startswith("source contours"):
+            raise UserRefusal(
+                "Source contours",
+                "Designs with Source contours cannot be exported to CAD yet.",
+                "Clear Source contours (the CAD part does not use them), then try again.",
+                diagnostic=text,
+            ) from exc
+        match = _STRICT_SCALAR.match(text)
+        if match:
+            raise numeric_refusal(match[1], text) from exc
+        raise
 
 
 def cad_mesher_config(design: DesignConfig) -> dict[str, Any]:
@@ -69,7 +107,7 @@ def cad_mesher_config(design: DesignConfig) -> dict[str, Any]:
       count.
     """
 
-    config = retain_mesher_construction(_solver_mesher_config(design, keep_placement=True))
+    config = retain_mesher_construction(_cad_base_config(design))
     config["mesh"] = {
         **(config.get("mesh") or {}),
         "cornerSegments": EXPORT_CORNER_SEGMENTS,
@@ -95,9 +133,10 @@ def resolve_cad_geometry(design: DesignConfig) -> CadGeometry:
 
     config = cad_mesher_config(design)
     plan = plan_cad_resolution(config, tolerance_mm=STEP_SURFACE_TOLERANCE_MM)
+    written = _with_resolution(config, plan.resolution_mm)
     resolved = plan.resolved
     if resolved is None:
-        resolved = resolve_geometry(_with_resolution(config, plan.resolution_mm))
+        resolved = resolve_geometry(written)
     logger.info(
         "CAD geometry sampled at %.3g mm (measured deviation %s mm, tolerance %g mm)",
         plan.resolution_mm,
@@ -106,7 +145,52 @@ def resolve_cad_geometry(design: DesignConfig) -> CadGeometry:
     )
     if plan.warning:
         logger.warning("CAD geometry sizing: %s", plan.warning)
-    return CadGeometry(resolved=resolved, plan=plan)
+    return CadGeometry(resolved=resolved, plan=plan, build_key=_build_key(written))
+
+
+def _build_key(config: dict[str, Any]) -> str:
+    from server.contracts.canonical import canonical_ascii_strict_json, normalize_json_value
+    from server.preview.geometry_identity import mesher_version
+
+    text = canonical_ascii_strict_json(
+        {"config": normalize_json_value(config), "mesher": mesher_version(), "open_throat": True}
+    )
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# Solids this process has built: File -> STEP wrote them, or a Send checked
+# them. Both run in the mesher child, which outlives single requests, so a
+# Send after a File -> STEP (or a repeat Send) of an unchanged design skips the
+# OCC check. A restarted child forgets and checks again. Bounded; a miss only
+# costs the check.
+_BUILT: OrderedDict[str, None] = OrderedDict()
+_BUILT_LIMIT = 256
+_BUILT_LOCK = threading.Lock()
+
+
+def solid_known_to_build(cad: CadGeometry) -> bool:
+    with _BUILT_LOCK:
+        if cad.build_key and cad.build_key in _BUILT:
+            _BUILT.move_to_end(cad.build_key)
+            return True
+    return False
+
+
+def remember_solid_built(cad: CadGeometry) -> None:
+    if not cad.build_key:
+        return
+    with _BUILT_LOCK:
+        _BUILT[cad.build_key] = None
+        _BUILT.move_to_end(cad.build_key)
+        while len(_BUILT) > _BUILT_LIMIT:
+            _BUILT.popitem(last=False)
+
+
+def forget_built_solids() -> None:
+    """Tests: start from a child that has built nothing."""
+
+    with _BUILT_LOCK:
+        _BUILT.clear()
 
 
 def write_cad_step(cad: CadGeometry, path: Path) -> CadInfo:
@@ -134,4 +218,12 @@ def write_cad_step(cad: CadGeometry, path: Path) -> CadInfo:
     return info
 
 
-__all__ = ["CadGeometry", "cad_mesher_config", "resolve_cad_geometry", "write_cad_step"]
+__all__ = [
+    "CadGeometry",
+    "cad_mesher_config",
+    "forget_built_solids",
+    "remember_solid_built",
+    "resolve_cad_geometry",
+    "solid_known_to_build",
+    "write_cad_step",
+]

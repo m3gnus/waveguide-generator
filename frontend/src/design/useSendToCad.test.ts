@@ -4,7 +4,7 @@ import { expectNoJargon } from '../testing/expectNoJargon';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import type { CadOperationSummary } from '../api/cadOperations';
-import { followCadSend, fusionDeliveryWords, PICKUP_WAIT_MS, SEND_OUTCOME_SHOWN_MS, sentToCadMessage, showCadSendOutcome, useCadSendOutcome, watchFusionDelivery, type FusionDeliveryFacts } from './useSendToCad';
+import { followCadSend, fusionDeliveryWords, PICKUP_WAIT_MS, SEND_OUTCOME_SHOWN_MS, sendNote, sentToCadMessage, showCadSendOutcome, useCadSendOutcome, watchFusionDelivery, type FusionDeliveryFacts } from './useSendToCad';
 
 const operation = (fusionDelivery: CadOperationSummary['fusionDelivery'], kind = 'insert_link') => ({ kind, fusionDelivery });
 
@@ -60,6 +60,18 @@ describe('fusionDeliveryWords', () => {
   it('tells the user how to finish a send no request was published for', () => {
     expect(sentToCadMessage({ bundlePath: '/x' } as Parameters<typeof sentToCadMessage>[0]))
       .toBe('The model is ready. In Fusion, choose WGLink → Advanced → Insert.');
+  });
+
+  it('carries the send\'s CAD sampling note, as File → STEP does', () => {
+    const warning = 'The STEP surface was sampled at 12 mm, but its accuracy could not be fully verified.';
+    const result = { bundlePath: '/x', warning } as Parameters<typeof sentToCadMessage>[0];
+    expect(sendNote(result)).toBe(` ${warning}`);
+    expect(sendNote({ bundlePath: '/x' } as Parameters<typeof sendNote>[0])).toBe('');
+    expect(sentToCadMessage(result))
+      .toBe(`The model is ready. In Fusion, choose WGLink → Advanced → Insert. ${warning}`);
+    const stop = followCadSend({ requestId: 'r9' }, sendNote(result));
+    expect(useCadSendOutcome.getState().outcome?.text).toContain(warning);
+    stop();
   });
 });
 

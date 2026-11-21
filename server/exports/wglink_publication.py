@@ -56,6 +56,17 @@ def atomic_json(path: Path, payload: Mapping[str, object]) -> None:
     )
 
 
+def bundle_digest(data: bytes) -> str:
+    """A bundle files-table checksum, as the mesher's ``write_wglink`` writes it."""
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def bundle_file_record(path: Path, media_type: str) -> dict[str, object]:
+    """A files-table entry for a file WG adds to a bundle (the Onshape STEP)."""
+    data = path.read_bytes()
+    return {"sha256": bundle_digest(data), "size_bytes": len(data), "media_type": media_type}
+
+
 def bundle_body_file(manifest: Mapping[str, Any]) -> str:
     """The file a bundle's identity (``artifact_sha256``) is the hash of.
 
@@ -111,7 +122,7 @@ def bundle_products(path: Path, facts: Mapping[str, object]) -> dict[str, str]:
                 (path / parent).is_symlink() for parent in relative.parents
             ):
                 raise ValueError("bundle file is a symlink")
-            digest = "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest()
+            digest = bundle_digest(artifact.read_bytes())
             if digest != entry["sha256"]:
                 raise ValueError("bundle checksum mismatch")
         result = {

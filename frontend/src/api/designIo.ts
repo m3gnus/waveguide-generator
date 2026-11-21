@@ -89,6 +89,8 @@ export interface WgLinkExportResponse {
   /** Set when the add-in Fusion runs is too old to take it yet: the remedy. */
   cadHandoffWaiting?: string;
   cadLaunch?: boolean;
+  /** The CAD sampling could not be fully verified: the same note File → STEP gives. */
+  warning?: string;
   /** The committed identity; absent when the design has moved on since the export. */
   identity?: DesignIdentity;
 }

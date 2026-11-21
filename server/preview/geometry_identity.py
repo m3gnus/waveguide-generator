@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from typing import Any
 from importlib.metadata import PackageNotFoundError, version
 
 from server.contracts.canonical import canonical_ascii_strict_json
@@ -33,19 +34,31 @@ def mesher_version() -> str:
         return "unknown"
 
 
-def geometry_hash_for_design(design: DesignConfig, *, mesher_version_value: str | None = None) -> str:
-    """Run the exact outbound translation and geometry-resolution chain."""
+def resolve_design_identity(
+    design: DesignConfig, *, mesher_version_value: str | None = None
+) -> tuple[Any, str]:
+    """The design's own resolved geometry and its identity hash.
+
+    The exact outbound translation and geometry-resolution chain that CAD-link
+    bundles stamp and CAD-return freshness recomputes; one copy of it.
+    """
 
     from hornlab_mesher.config_builder import resolve_geometry
 
-    config = design_to_mesher_config(design)
-    resolved = resolve_geometry(config)
-    return geometry_hash(resolved.geometry, mesher_version_value or mesher_version())
+    resolved = resolve_geometry(design_to_mesher_config(design))
+    return resolved, geometry_hash(resolved.geometry, mesher_version_value or mesher_version())
+
+
+def geometry_hash_for_design(design: DesignConfig, *, mesher_version_value: str | None = None) -> str:
+    """Run the exact outbound translation and geometry-resolution chain."""
+
+    return resolve_design_identity(design, mesher_version_value=mesher_version_value)[1]
 
 
 __all__ = [
     "geometry_hash",
     "geometry_hash_for_design",
+    "resolve_design_identity",
     "mesher_version",
     "normalize_json_value",
 ]

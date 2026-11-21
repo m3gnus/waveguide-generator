@@ -27,7 +27,7 @@ from server.exports.sizing import (
     quad_distance,
 )
 from server.exports.sizing import _point_grid
-from server.exports.cad_geometry import resolve_cad_geometry, write_cad_step
+from server.exports.cad_geometry import remember_solid_built, resolve_cad_geometry, write_cad_step
 from server.mesh.inner_grid import (
     _bare_grid_config,
     _inner_grid as _inner_grid,
@@ -659,6 +659,7 @@ def _build_step_solid_sync(design_dump: dict[str, Any], work_dir: str | None = N
     finally:
         step_path.unlink(missing_ok=True)
     _assert_step(text)
+    remember_solid_built(cad)
     return StepSolidResult(step_text=text, cad_info=cad_info, warning=cad.plan.warning)
 
 

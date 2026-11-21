@@ -16,7 +16,7 @@ import { designNameSlug } from '../../stores/designName';
 import { polarConfigFromUi, useSolveOptionsStore } from '../../stores/solveOptions';
 import { runGuardedFusionSend } from './send';
 import { reportCadAutomationError } from './caughtErrors';
-import { followCadSend, fusionSendOf, sentToCadMessage, showCadSendOutcome } from '../../design/useSendToCad';
+import { followCadSend, fusionSendOf, sendNote, sentToCadMessage, showCadSendOutcome } from '../../design/useSendToCad';
 import { useCadDeliveryHealthStore } from '../../stores/cadDeliveryHealth';
 import { failureWords, isAbortError } from '../../api/httpError';
 
@@ -165,7 +165,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
             ? ' It replaced an earlier update Fusion had not started yet.' : '';
           const send = fusionSendOf(result, Boolean(target));
           if (send) {
-            stopWatching = followCadSend(send, superseded);
+            stopWatching = followCadSend(send, superseded + sendNote(result));
           } else showCadSendOutcome({ tone: 'status', text: sentToCadMessage(result) }, true);
           await options.refresh?.();
           return result;

@@ -78,12 +78,18 @@ export function watchFusionDelivery(send: FusionSend, report: (words: FusionDeli
   return () => { clearTimeout(timer); stops.forEach((stop) => stop()); };
 }
 
+/** The send's own note (its CAD sampling could not be fully verified), to
+ * follow the delivery words; empty when there is none. */
+export function sendNote(result: WgLinkExportResponse): string {
+  return result.warning ? ` ${result.warning}` : '';
+}
+
 /** The first line for every surface, before any answer from Fusion. */
 export function sentToCadMessage(result: WgLinkExportResponse): string {
   const send = fusionSendOf(result);
-  return send
+  return (send
     ? fusionDeliveryWords(send).text
-    : 'The model is ready. In Fusion, choose WGLink → Advanced → Insert.';
+    : 'The model is ready. In Fusion, choose WGLink → Advanced → Insert.') + sendNote(result);
 }
 
 /** The latest send's words, wherever it was sent from: the one outcome state
