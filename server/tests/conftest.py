@@ -307,3 +307,22 @@ def _no_test_inherits_an_incident_store():
     reset_incidents()
     yield
     reset_incidents()
+
+
+@pytest.fixture(autouse=True)
+def _forget_built_cad_solids():
+    """Each test starts from a mesher child that has built no CAD solid.
+
+    ``cad_geometry`` remembers solids File -> STEP or Send built, so Send can
+    skip its OCC check; a test that stubs the STEP writer would otherwise
+    teach later tests in the worker a solid nobody built. Only touched when a
+    test already imported the module.
+    """
+    def forget() -> None:
+        module = sys.modules.get("server.exports.cad_geometry")
+        if module is not None:
+            module.forget_built_solids()
+
+    forget()
+    yield
+    forget()

@@ -356,10 +356,12 @@ def export_wglink_sync(
 
     try:
         _refuse_ath_step(request.design)
-        # The CAD geometry's own refusals (cad_geometry.cad_mesher_config), here
-        # before any identity or geometry work, each with its fix.
-        from .cad_geometry import cad_mesher_config
-        cad_mesher_config(request.design)
+        # The CAD geometry's own refusals, here before any identity or geometry
+        # work, each with its fix. Only the refusals: the full CAD config also
+        # retains ATH construction, which can cost a full grid and belongs in
+        # the killable child.
+        from .cad_geometry import _cad_base_config
+        _cad_base_config(request.design)
         from hornlab_mesher.config_builder import resolve_enclosure_bounds
 
         config = design_to_mesher_config(request.design)
