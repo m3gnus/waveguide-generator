@@ -53,6 +53,7 @@ from .base import (
 )
 from .context import SolverContext
 from .engine_run import full_3d_solve_path, run_imported_engine, run_parametric_engine
+from .metal_worker import PREPARING_METAL_STAGE_MESSAGE
 from .frequency_sweep import (
     _FREQUENCY_SHAPED_RESULT_FIELDS,
     canonical_frequencies,
@@ -150,7 +151,6 @@ IMPORTED_FEATURES: tuple[str, ...] = ("passive-cardioid",)
 # Recorded as ``interface_reason`` whenever a Metal solve runs on the native
 # interface for want of a worker route. Parametric solves always do.
 NATIVE_INTERFACE_REASON = "This Metal solve requires the native interface"
-PREPARING_METAL_STAGE_MESSAGE = "Preparing Metal mesh and solver request"
 
 
 class MetalUnavailable(RuntimeError):

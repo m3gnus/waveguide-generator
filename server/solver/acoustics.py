@@ -29,12 +29,13 @@ _FALLBACK_AIR_DENSITY_KG_PER_M3 = 1.2041
 # The BEAT engine (``beat_engine``) publishes no medium: it solves with the
 # sound speed and density WG writes into each compiled request region, and every
 # BEAT request WG builds -- parametric, imported, transducer and the readiness
-# probe -- writes these values.  They are the same air the native packages run,
-# so they are named from the shared values rather than typed again.  The
+# probe -- writes these values.  They are WG's own choice of BEAT medium, kept
+# separate from the no-backend fallbacks above so that a native package changing
+# its air never silently changes BEAT's; a test checks the two agree today.  The
 # reference phase, group delay and acceleration scale of BEAT results use the
 # speed too.
-BEAT_SOUND_SPEED_M_PER_S = _FALLBACK_SOUND_SPEED_M_PER_S
-BEAT_AIR_DENSITY_KG_PER_M3 = _FALLBACK_AIR_DENSITY_KG_PER_M3
+BEAT_SOUND_SPEED_M_PER_S = 343.0
+BEAT_AIR_DENSITY_KG_PER_M3 = 1.2041
 
 
 def _solver_constant(package_name: str, attribute: str) -> float:
