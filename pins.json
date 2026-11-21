@@ -14,7 +14,7 @@
     },
     "hornlab-plots": {
       "repo": "https://github.com/m3gnus/hornlab-plots.git",
-      "sha": "81b3e1d5b344052d1814d0176cb06134fd48bd0b"
+      "sha": "720dbf2057cc80cfeb8bab38b628010bd4f4f273"
     },
     "hornlab-sim": {
       "repo": "https://github.com/m3gnus/hornlab-sim.git",
