@@ -450,7 +450,7 @@ async function chartPng(context: ExportContext): Promise<string[]> {
   // The cards' own builders: the files show what the cards show. Loaded
   // lazily, because the results panel itself imports this module.
   const { bundleChartImages } = await import('../shell/ResultsPanel');
-  const { charts, map } = bundleChartImages(result, context.preferences, readChartTokens(), context.designName ?? context.jobStem);
+  const { charts, map } = bundleChartImages(result, context.preferences, readChartTokens(), context.designName ?? context.jobStem, context.result);
   const baseName = exportContextBaseName(context);
   const theme = resolveChartTheme(context.preferences.chartTheme);
   const jobs: Array<{ filename: string; draw: (scoped: typeof fetch) => Promise<string> }> = [

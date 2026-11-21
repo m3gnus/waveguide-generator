@@ -2034,9 +2034,11 @@ export interface BundleChartImages {
  * run), at the measurement angles and smoothing the preferences hold. `result`
  * is already referenced to the run's normalisation angle by the export.
  */
-export function bundleChartImages(result: ResultPayload, preferences: Preferences, tokens: ChartTokens, label: string): BundleChartImages {
-  // The run, named as the export names it, is the card's only entry.
-  const run: NamedResult[] = [{ id: 'primary', label, result, primary: true }];
+export function bundleChartImages(result: ResultPayload, preferences: Preferences, tokens: ChartTokens, label: string, wrapper?: ResultPayload): BundleChartImages {
+  // The run, named as the export names it, is the card's only entry. A channel
+  // of a multi-channel run carries its envelope as the card's entry does: the
+  // power check of a combined channel reads its members from it.
+  const run: NamedResult[] = [{ id: 'primary', label, result, primary: true, ...(wrapper && wrapper !== result ? { wrapper } : {}) }];
   const charts = BUNDLE_CHARTS.flatMap((name) => {
     if (name === 'beam_shape' && !result.beam_shape?.frequencies?.length) return [];
     const overlays = chartOverlays(name, run, result, preferences.showMembersUnderCombined);
@@ -2049,15 +2051,18 @@ export function bundleChartImages(result: ResultPayload, preferences: Preference
       density: 'full',
       preferences,
       measured: NO_MEASURED_OVERLAYS,
-      reverseNull: NO_REVERSE_NULL,
-      unqualified: chartUnqualifiedBands(overlays.length ? overlays : [{ id: 'primary', label: 'Primary', result }]),
+      reverseNull: name === 'frequency_response' && preferences.showReverseNull
+        ? reverseNullTraces(wrapper, result, combineMetadataOf(result))
+        : NO_REVERSE_NULL,
+      unqualified: chartUnqualifiedBands(overlays.length ? overlays : run),
     });
     if (!hasSeries(option)) return [];
     const subtitle = chartSubtitle(name, result, run, preferences, 0);
     return [{ name, spec: chartSpecFromOption(option, tokens, { title: chartTitle(name, true), subtitle }) }];
   });
-  const map = Object.keys(result.directivity ?? {}).length
-    ? directivityMapRenderPayload('directivity_map', result, NO_NAMED_RESULTS, preferences)
+  // The same test the map card makes: some plane has samples.
+  const map = orderedPlanes(run).length
+    ? directivityMapRenderPayload('directivity_map', result, run, preferences)
     : null;
   return { charts, map };
 }

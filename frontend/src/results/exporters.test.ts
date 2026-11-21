@@ -8,6 +8,8 @@ import { resultExportSnapshot } from './exportContext';
 import { runReportChartSpecs } from './runReport';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
+import { chartUnqualifiedBands } from './powerQualification';
+import { readFileSync } from 'node:fs';
 import type { RadiationImpedancePresentation } from '../api/results';
 import { writeToOutputFolder } from '../api/workspace';
 import { runAutomaticWorkspaceExport, archiveRunToWorkspace, buildDirectivityRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
@@ -805,6 +807,103 @@ describe('result exporters', () => {
     expect(await runExportFormat('png', { jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), result: flat, fetcher, saveBlob }))
       .toEqual(['horn_1_frequency_response.png', 'horn_1_directivity_index.png', 'horn_1_impedance.png']);
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('draws no map file when every directivity plane is empty, as the map card shows none', async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const saveBlob = vi.fn();
+    const empty = { ...result, directivity: { horizontal: [], vertical: [] } } as unknown as ResultPayload;
+    expect(await runExportFormat('png', { jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), result: empty, fetcher, saveBlob }))
+      .toEqual(['horn_1_frequency_response.png', 'horn_1_directivity_index.png', 'horn_1_impedance.png']);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(['map', 'last chart'] as const)('saves nothing when the %s fails to draw', async (failing) => {
+    reportChart.render.mockClear();
+    if (failing === 'last chart') {
+      reportChart.render
+        .mockResolvedValueOnce('data:image/png;base64,iVBORw==')
+        .mockResolvedValueOnce('data:image/png;base64,iVBORw==')
+        .mockRejectedValueOnce(new Error('WG could not render the charts for this export. Try the export again.'));
+    }
+    const fetcher = vi.fn<typeof fetch>(async () => failing === 'map'
+      ? new Response(JSON.stringify({ detail: 'renderer down' }), { status: 500 })
+      : new Response(JSON.stringify({ image: 'data:image/png;base64,Ag==' }), { status: 200 }));
+    const saveBlob = vi.fn();
+    await expect(runExportFormat('png', { jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), result, fetcher, saveBlob }))
+      .rejects.toThrow(failing === 'map' ? 'renderer down' : 'WG could not render the charts for this export');
+    expect(saveBlob).not.toHaveBeenCalled();
+    reportChart.render.mockReset().mockImplementation(async () => 'data:image/png;base64,iVBORw==');
+  });
+
+  it.each(['map', 'last chart'] as const)('publishes no png file in a Workspace bundle when the %s fails', async (failing) => {
+    if (failing === 'last chart') {
+      reportChart.render
+        .mockResolvedValueOnce('data:image/png;base64,iVBORw==')
+        .mockResolvedValueOnce('data:image/png;base64,iVBORw==')
+        .mockRejectedValueOnce(new Error('WG could not render the charts for this export. Try the export again.'));
+    }
+    const written: string[][] = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path === '/api/render-directivity') {
+        return failing === 'map'
+          ? new Response(JSON.stringify({ detail: 'renderer down' }), { status: 500 })
+          : new Response(JSON.stringify({ image: 'data:image/png;base64,Ag==' }), { status: 200 });
+      }
+      if (path === '/api/workspace/write-export') {
+        const members = workspacePayload(init).members.map((member: { relative_path: string }) => member.relative_path);
+        written.push(members);
+        return new Response(JSON.stringify({ directory: 'C:/output/horn_1', files: members.map((name: string) => `C:/output/horn_1/${name}`) }), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    const bundle = await runWorkspaceExportBundle({ result, jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), fetcher }, ['csv', 'png']);
+    expect(bundle.failures).toHaveLength(1);
+    expect(bundle.failures[0]).toMatchObject({ format: 'png' });
+    expect(written.flat().filter((name) => name.endsWith('.png'))).toEqual([]);
+    expect(written.flat()).toContain('horn_1.csv');
+    reportChart.render.mockReset().mockImplementation(async () => 'data:image/png;base64,iVBORw==');
+  });
+
+  it('hatches a combined channel\'s unqualified bands from its members, as the SPL card does', async () => {
+    reportChart.render.mockClear();
+    // Stored before qualification existed: the combined channel has no flags of
+    // its own, so only its members (read through the envelope) can mark it.
+    const wrapper = JSON.parse(new TextDecoder().decode(readFileSync('../server/tests/data/power-qualification-speaker2-v4.json'))) as ResultPayload;
+    const combined = wrapper.channels!.combined as ResultPayload;
+    expect(chartUnqualifiedBands([{ id: 'p', label: 'Combined', result: combined, primary: true }])).toEqual([]);
+    const card = chartUnqualifiedBands([{ id: 'p', label: 'Combined', result: combined, wrapper, primary: true }]);
+    expect(card.length).toBeGreaterThan(0);
+    await runExportFormat('png', { jobStem: 'spk', channelId: 'combined', preferences: preferencesStore.getSnapshot(), result: wrapper, fetcher: vi.fn<typeof fetch>(), saveBlob: vi.fn() });
+    const [spec] = reportChart.render.mock.calls[0] as unknown as [{ title: string; bands?: Array<{ x0: number; x1: number }> }];
+    expect(spec.title).toBe('Sound pressure level');
+    expect(spec.bands?.map(({ x0, x1 }) => [x0, x1])).toEqual(card.map(({ fromHz, toHz }) => [fromHz, toHz]));
+  });
+
+  it('draws the bundle charts the preferences choose, as the cards do', async () => {
+    reportChart.render.mockClear();
+    const angled: ResultPayload = {
+      ...result,
+      directivity: { horizontal: [[[-30, -3], [0, 0], [30, -4]], [[-30, -6], [0, 0], [30, -7]]] },
+      directivity_phase: { horizontal: [[[-30, 5], [0, 0], [30, 6]], [[-30, 8], [0, 0], [30, 9]]] },
+      beam_shape: { frequencies: [100, 200], horizontal_beamwidth_deg: [120, 90], vertical_beamwidth_deg: [100, 80] },
+    } as unknown as ResultPayload;
+    const preferences = { ...preferencesStore.getSnapshot(), smoothing: 'none' as const, splPhase: true, impedanceDisplay: 'magnitude_phase' as const, measurementPlane: 'horizontal' as const, measurementAngles: [30] };
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ image: 'data:image/png;base64,Ag==' }), { status: 200 }));
+    expect(await runExportFormat('png', { jobStem: 'horn_1', preferences, result: angled, fetcher, saveBlob: vi.fn() })).toEqual([
+      'horn_1_frequency_response.png', 'horn_1_directivity_index.png', 'horn_1_impedance.png', 'horn_1_beam_shape.png', 'horn_1_directivity_map.png',
+    ]);
+    const specs = reportChart.render.mock.calls.map((call) => (call as unknown as [{ title: string; y2?: { label: string }; series: Array<{ label: string; axis?: number; y: Array<number | null> }> }])[0]);
+    const [spl, , impedance, beam] = specs;
+    // SPL at the chosen angle, with its phase on the right-hand axis.
+    expect(spl.series.some(({ label }) => label.includes('30'))).toBe(true);
+    expect(spl.y2?.label).toBe('Phase [°]');
+    // Impedance as magnitude and phase.
+    expect(impedance.y2?.label).toBe('Phase [°]');
+    // beam_shape.png is the H/V beam width.
+    expect(beam).toMatchObject({ title: 'Beam width' });
+    expect(beam.series.map(({ y }) => y)).toEqual([[120, 90], [100, 80]]);
   });
 
   it('dispatches one on-axis FRD download per result channel', async () => {
