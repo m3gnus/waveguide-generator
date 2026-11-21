@@ -808,12 +808,26 @@ def test_blocked_recovery_has_a_deadline_and_names_the_real_backup(tmp_path: Pat
         family.assert_gone()
 
 
+#: How long a move waiting on an overwrite prompt would hang in the test below
+#: (the installer's move watchdog, stretched); the test waits a fifth of it.
+PROMPT_HANG_S = 600
+
+
 def test_real_mv_never_waits_for_a_read_only_overwrite_prompt(tmp_path: Path, env: dict[str, str]) -> None:
     import pty
 
     assert run(make_tarball(tmp_path / "v1", "one"), env, "--no-launch").returncode == 0
     new = make_tarball(tmp_path / "v2", "two")
     script = new / "install.sh"
+    # A move that waits for a prompt is killed by the installer's own move
+    # watchdog (5 s while cleaning, 30 s forward). Stretch both so such a
+    # regression hangs far past the bounded wait below, which then leaves a
+    # loaded machine room without letting the regression pass in time.
+    body = script.read_text()
+    for clock in ("sleep 5 >/dev/null 2>&1 &", "sleep 30 >/dev/null 2>&1 &"):
+        assert body.count(clock) == 1, f"the installer's move watchdog changed ({clock!r}); update this test"
+        body = body.replace(clock, f"sleep {PROMPT_HANG_S} >/dev/null 2>&1 &")
+    script.write_text(body)
     target = installed_dir(env)
     command = ["/bin/bash", str(script), "--skip-checks", "--update"]
     process_env = env
@@ -841,14 +855,15 @@ def test_real_mv_never_waits_for_a_read_only_overwrite_prompt(tmp_path: Path, en
                             start_new_session=True)
     os.close(slave)
     try:
-        output, _ = proc.communicate(timeout=10)
+        output, _ = proc.communicate(timeout=PROMPT_HANG_S / 5)
         assert proc.returncode == 3, output
         assert (target / "version.txt").read_text() == "one"
         assert reached.exists() and displaced.exists(), output
         assert desktop.read_bytes() == b"racer"
         backups = list(desktop.parent.glob(".waveguide-generator.desktop.backup.*"))
         assert len(backups) == 1 and backups[0].read_bytes() == old_desktop
-        assert "override" not in output.lower()
+        # BSD mv asks "override ...?", GNU mv "replace ..., overriding mode ...?".
+        assert "overrid" not in output.lower()
     finally:
         try:
             os.killpg(proc.pid, signal.SIGKILL)

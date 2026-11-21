@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,8 @@ ROLLBACK_BATCHES = 10 if STRESS else 1
 # watchdog still fails (the move would outlast the wait).
 HUNG_MOVE_S = 600
 WATCHDOG_WAIT_S = HUNG_MOVE_S / 5
+#: Bound for the FIFO-owner run; the FIFO open itself is detected as an event.
+FIFO_WAIT_S = 60
 
 
 @dataclass
@@ -2199,9 +2202,35 @@ os.execv({real_cat!r}, [{real_cat!r}, *sys.argv[1:]])
 ''')
     wrapper.chmod(0o755)
     env = {**install.env, 'PATH': str(directory) + os.pathsep + install.env['PATH']}
+    # Any reader opening the FIFO (cat or otherwise) is seen as it happens: a
+    # non-blocking write-open succeeds only while a reader holds it. That event,
+    # not a 3 s wall-clock wait, is what catches a blocking open; the wait only
+    # bounds the run (a blocked read would otherwise end at the installer's own
+    # 30 s output bound), so a loaded machine has room.
+    reader_seen = threading.Event()
+    done = threading.Event()
+
+    def watch_for_reader() -> None:
+        while not done.is_set():
+            try:
+                fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError:
+                time.sleep(0.005)
+                continue
+            reader_seen.set()
+            os.close(fd)
+            return
+
+    watcher = threading.Thread(target=watch_for_reader, daemon=True)
+    watcher.start()
     proc = spawn(install, env)
     try:
-        output, _ = proc.communicate(timeout=3)
+        try:
+            output, _ = proc.communicate(timeout=FIFO_WAIT_S)
+        finally:
+            done.set()
+            watcher.join()
+        assert not reader_seen.is_set(), 'the installer opened the FIFO for reading'
         assert proc.returncode == 4 and 'unreadable or missing' in output, output
         assert not opened.exists(), 'diagnostic attempted to open the FIFO'
         assert (identity(install.lock), identity(fifo), fifo.lstat().st_mode) == before
