@@ -18,7 +18,7 @@ import logging
 from typing import Annotated, Any, Literal, Union
 
 from fastapi import APIRouter, FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from server.contracts.canonical import canonical_ascii_json
 
@@ -162,7 +162,18 @@ MAX_SPEC_SHADE = 8
 MAX_POLAR_RINGS = 60
 MAX_FREQUENCY_HZ = 1.0e6
 MAX_LOG_DECADES = 8
-_Text = Annotated[str, Field(max_length=200)]
+MAX_SPEC_TEXT = 200
+MAX_SPEC_TEXT_SENT = 10_000
+
+
+def _shortened(text: str) -> str:
+    """A long title or label is shortened, not refused: the screen shows it fine."""
+    return text if len(text) <= MAX_SPEC_TEXT else f"{text[:MAX_SPEC_TEXT - 1].rstrip()}…"
+
+
+# Up to MAX_SPEC_TEXT_SENT characters are accepted (a hard bound against
+# abuse) and drawn as at most MAX_SPEC_TEXT.
+_Text = Annotated[str, Field(max_length=MAX_SPEC_TEXT_SENT), AfterValidator(_shortened)]
 _Value = Annotated[float, Field(ge=-1.0e9, le=1.0e9)]
 _Values = Annotated[list[_Value | None], Field(max_length=MAX_SPEC_POINTS)]
 _ColorRole = Annotated[int, Field(ge=0, le=63)] | Literal["accent", "ink", "muted"]

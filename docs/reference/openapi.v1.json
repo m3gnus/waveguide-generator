@@ -2753,7 +2753,7 @@
         "properties": {
           "label": {
             "default": "",
-            "maxLength": 200,
+            "maxLength": 10000,
             "title": "Label",
             "type": "string"
           },
@@ -2802,7 +2802,7 @@
           "label": {
             "anyOf": [
               {
-                "maxLength": 200,
+                "maxLength": 10000,
                 "type": "string"
               },
               {
@@ -2890,7 +2890,7 @@
           "label": {
             "anyOf": [
               {
-                "maxLength": 200,
+                "maxLength": 10000,
                 "type": "string"
               },
               {
@@ -3037,7 +3037,7 @@
           "label": {
             "anyOf": [
               {
-                "maxLength": 200,
+                "maxLength": 10000,
                 "type": "string"
               },
               {
@@ -3124,7 +3124,7 @@
           },
           "unit": {
             "default": "dB",
-            "maxLength": 200,
+            "maxLength": 10000,
             "title": "Unit",
             "type": "string"
           }
@@ -3182,7 +3182,7 @@
           "label": {
             "anyOf": [
               {
-                "maxLength": 200,
+                "maxLength": 10000,
                 "type": "string"
               },
               {
@@ -10396,7 +10396,7 @@
           "subtitle": {
             "anyOf": [
               {
-                "maxLength": 200,
+                "maxLength": 10000,
                 "type": "string"
               },
               {
@@ -10407,7 +10407,7 @@
           },
           "title": {
             "default": "",
-            "maxLength": 200,
+            "maxLength": 10000,
             "title": "Title",
             "type": "string"
           },
@@ -13061,7 +13061,7 @@
           "subtitle": {
             "anyOf": [
               {
-                "maxLength": 200,
+                "maxLength": 10000,
                 "type": "string"
               },
               {
@@ -13072,7 +13072,7 @@
           },
           "title": {
             "default": "",
-            "maxLength": 200,
+            "maxLength": 10000,
             "title": "Title",
             "type": "string"
           }

@@ -197,3 +197,19 @@ def test_valid_polar_spec_reaches_the_renderer_with_its_wire_names(monkeypatch) 
     assert calls[0]["shade"] == [{"from": 90.0, "to": 180.0, "label": "rear"}]
     assert calls[0]["series"][0]["r"] == [-6.0, 0.0, None]
     _clear_chart_cache()
+
+
+def test_long_chart_text_is_shortened_not_refused() -> None:
+    long = "Spatial average from " + "a solver definition, " * 40
+    request = charts_api.ChartSpecRenderRequest(spec={
+        **_spec(), "title": long, "subtitle": long,
+        "series": [{"label": long, "x": [100.0], "y": [1.0]}],
+    })
+    for text in (request.spec.title, request.spec.subtitle, request.spec.series[0].label):
+        assert len(text) == charts_api.MAX_SPEC_TEXT
+        assert text.endswith("…")
+        assert long.startswith(text[:-1])
+    short = charts_api.ChartSpecRenderRequest(spec={**_spec(), "title": "Group delay"})
+    assert short.spec.title == "Group delay"
+    with pytest.raises(ValidationError, match="at most 10000 characters"):
+        charts_api.ChartSpecRenderRequest(spec={**_spec(), "title": "x" * 10_001})
