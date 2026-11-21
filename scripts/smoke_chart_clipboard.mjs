@@ -1,6 +1,14 @@
 // Native WebKit check using an already installed Playwright and browser. No downloads.
 // Optional WG_PLAYWRIGHT_MODULE and WG_WEBKIT_EXECUTABLE point to existing installs.
 // Run with Node 20: node scripts/smoke_chart_clipboard.mjs
+//
+// Chart images are drawn by hornlab-plots on the server, so a card's Copy PNG
+// hands the clipboard a blob that is still being fetched. WebKit refuses a
+// clipboard write that starts after an await, which is why `copyChartPng`
+// starts the write inside the click with the pending blob. This checks that
+// rule in a real WebKit, with a drawing that resolves a turn later, and that
+// `saveChartPng` writes exactly the drawn bytes. `chartImage.smoke.test.ts`
+// fails when this script calls a chartImage function that no longer exists.
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -20,22 +28,22 @@ const temporary = await mkdtemp(join(tmpdir(), 'wg-chart-clipboard-'));
 let browser;
 try {
   const pageFile = join(temporary, 'clipboard.html');
-  await writeFile(pageFile, '<!doctype html><button id="copy">Copy PNG</button><div id="chart" style="width:80px;height:40px"><canvas width="160" height="80" style="width:80px;height:40px"></canvas></div><div id="paste" contenteditable="true">Paste here</div>');
+  await writeFile(pageFile, '<!doctype html><button id="copy">Copy PNG</button><div id="paste" contenteditable="true">Paste here</div>');
   browser = await webkit.launch({ headless: true, timeout: 10_000,
     ...(process.env.WG_WEBKIT_EXECUTABLE ? { executablePath: process.env.WG_WEBKIT_EXECUTABLE } : {}) });
   const page = await browser.newPage();
   await page.goto(pathToFileURL(pageFile).href);
   await page.addScriptTag({ content: code });
   await page.evaluate(async () => {
-    const chart = document.querySelector('#chart');
-    const layer = chart.querySelector('canvas');
-    const context = layer.getContext('2d');
-    context.fillStyle = '#123456'; context.fillRect(0, 0, layer.width, layer.height);
-    // Both operations use the production composition owner. Capture A and
-    // redraw its retained layer as B before writing the captured image.
-    const captured = chartImage.composeChartCanvases(chart, '#fff');
-    const expected = await chartImage.chartPngBlob(chart, '#fff');
-    context.fillStyle = '#fedcba'; context.fillRect(0, 0, layer.width, layer.height);
+    // Stand-in for the hornlab-plots image: a PNG of one colour, ready only
+    // after an event-loop turn, as a server render would be.
+    const drawn = (color) => new Promise((resolve) => setTimeout(() => {
+      const canvas = document.createElement('canvas'); canvas.width = 8; canvas.height = 4;
+      const context = canvas.getContext('2d'); context.fillStyle = color; context.fillRect(0, 0, 8, 4);
+      canvas.toBlob(resolve, 'image/png');
+    }, 50));
+    // Export: the bytes written are the bytes drawn.
+    const expected = await drawn('#123456');
     globalThis.exportMatches = false;
     globalThis.fetch = async (_url, { body }) => {
       const file = body.get('file');
@@ -44,16 +52,12 @@ try {
       globalThis.exportMatches = file.name === 'A.png' && a.length === b.length && a.every((value, i) => value === b[i]);
       return new Response(JSON.stringify({ directory: 'chosen', files: ['A.png'] }));
     };
-    await chartImage.saveChartPng(captured, 'A.png', 'chosen');
+    await chartImage.saveChartPng(Promise.resolve(expected), 'A.png', 'chosen');
 
-    const nativeToBlob = HTMLCanvasElement.prototype.toBlob;
-    // Keep native PNG encoding pending across an event-loop turn.
-    HTMLCanvasElement.prototype.toBlob = function (callback, ...args) {
-      setTimeout(() => nativeToBlob.call(this, callback, ...args), 50);
-    };
+    // Copy: the clipboard write starts in the click, the image lands later.
     globalThis.copyResult = null;
     document.querySelector('#copy').onclick = () => {
-      chartImage.copyChartPng(chart, '#fff').then(() => { globalThis.copyResult = 'copied'; },
+      chartImage.copyChartPng(() => drawn('#fedcba')).then(() => { globalThis.copyResult = 'copied'; },
         (error) => { globalThis.copyResult = `${error.name}: ${error.message}`; });
     };
     globalThis.pastePixels = null;
@@ -70,7 +74,7 @@ try {
       } finally { URL.revokeObjectURL(url); }
     };
   });
-  assert.equal(await page.evaluate(() => globalThis.exportMatches), true, 'Captured A PNG bytes and filename must remain identical');
+  assert.equal(await page.evaluate(() => globalThis.exportMatches), true, 'Exported PNG bytes and filename must be the drawn ones');
   await page.click('#copy');
   await page.waitForFunction(() => globalThis.copyResult !== null, null, { timeout: 5_000 });
   assert.equal(await page.evaluate(() => globalThis.copyResult), 'copied');
@@ -78,7 +82,7 @@ try {
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
   await page.waitForFunction(() => globalThis.pastePixels !== null, null, { timeout: 5_000 });
   assert.deepEqual(await page.evaluate(() => globalThis.pastePixels), [254, 220, 186, 255]);
-  console.log('2 checks passed: identical captured PNG bytes; native WebKit PNG copy/paste with deferred encoding.');
+  console.log('2 checks passed: exported PNG bytes are the drawn ones; native WebKit copy/paste of a PNG drawn after the click.');
 } finally {
   if (browser) await browser.close();
   await rm(temporary, { recursive: true, force: true });
