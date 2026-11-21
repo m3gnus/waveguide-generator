@@ -132,6 +132,8 @@ export interface Preferences {
   showContourNames: boolean;
   chartTypes: ChartType[];
   chartTheme: string;
+  /** Set once a stored "Match interface" export theme has moved to classic; see `adoptClassicExportTheme`. */
+  classicThemeAdopted: boolean;
   /**
    * Draw the on-axis phase beside the SPL trace.
    *
@@ -258,6 +260,7 @@ const defaults: Preferences = {
   // defaulting to them left two of six panels permanently showing their stub.
   chartTypes: ['frequency_response', 'directivity_map_h', 'directivity_map_v', 'directivity_index', 'impedance', 'summary'],
   chartTheme: DEFAULT_EXPORT_THEME,
+  classicThemeAdopted: true,
   splPhase: true,
   measurementPlane: 'horizontal',
   measurementAngles: [],
@@ -325,6 +328,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     // to be coerced with `String`, which turned a stored object into the
     // literal "[object Object]" and asked the exporter to render in it.
     chartTheme: typeof raw.chartTheme === 'string' && raw.chartTheme ? raw.chartTheme : defaults.chartTheme,
+    classicThemeAdopted: raw.classicThemeAdopted === true,
     splPhase: raw.splPhase !== false,
     measurementPlane: MEASUREMENT_PLANES.has(raw.measurementPlane as MeasurementPlane)
       ? raw.measurementPlane as MeasurementPlane
@@ -452,6 +456,28 @@ function migrateV13ToV14(preferences: Partial<Preferences>): Partial<Preferences
 }
 
 /**
+ * Saved chart images are drawn by hornlab-plots in the classic HornLab look by
+ * default. A profile holding "Match interface" -- most of them only because
+ * v8->v9 moved the old default there -- moves to classic once (Magnus's
+ * decision, 21 Nov 2026). Choosing Match interface again afterwards sticks.
+ *
+ * This is a marker, not a `STORAGE_VERSION` bump: a higher stored version is
+ * discarded by an older build, so a bump would cost anyone rolling back their
+ * whole profile for one setting. An older build drops the marker, so moving
+ * forward again repeats the step once -- the price of keeping the profile.
+ */
+function adoptClassicExportTheme(preferences: Partial<Preferences>): { preferences: Partial<Preferences>; changed: boolean } {
+  if (preferences.classicThemeAdopted === true) return { preferences, changed: false };
+  // The marker is set in memory either way, so a later choice of Match
+  // interface is saved with it; only a moved theme needs the rewrite now.
+  const moved = preferences.chartTheme === MATCH_INTERFACE_THEME;
+  return {
+    preferences: { ...preferences, classicThemeAdopted: true, ...(moved ? { chartTheme: DEFAULT_EXPORT_THEME } : {}) },
+    changed: moved,
+  };
+}
+
+/**
  * Migrations are intentionally sequential. v1→v2 replaced two unusable seeded
  * panels while preserving unrelated settings; v2→v3 makes the chart list's
  * stored length authoritative; v3→v4 adds independent job-version naming;
@@ -518,10 +544,12 @@ export function readPreferences(raw: string | null): { value: Preferences; migra
       // Current schema, so nothing is migrated -- but a profile written before
       // a format was retired still names it, and normalizing it away in memory
       // leaves the durable copy untouched. Report exactly those as needing the
-      // rewrite `load` performs. Everything else stays byte-stable on disk.
+      // rewrite `load` performs, and a profile that has not yet taken the
+      // classic export theme. Everything else stays byte-stable on disk.
+      const adopted = adoptClassicExportTheme(parsed.preferences ?? {});
       return {
-        value: normalize(parsed.preferences),
-        migrated: holdsRetiredFormat(parsed.preferences),
+        value: normalize(adopted.preferences),
+        migrated: holdsRetiredFormat(parsed.preferences) || adopted.changed,
       };
     }
     const from = Number(parsed.version);
@@ -530,7 +558,7 @@ export function readPreferences(raw: string | null): { value: Preferences; migra
       for (let version = from; version < STORAGE_VERSION; version += 1) {
         carried = MIGRATIONS[version](carried);
       }
-      return { value: normalize(carried), migrated: true };
+      return { value: normalize(adoptClassicExportTheme(carried).preferences), migrated: true };
     }
     return { value: { ...defaults }, migrated: raw !== null };
   } catch {

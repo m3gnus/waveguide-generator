@@ -57,9 +57,11 @@ describe('client preferences', () => {
     const stored = JSON.parse(localStorage.getItem('waveguide-v2-g3-preferences')!);
     expect(stored.version).toBe(STORAGE_VERSION);
     if (chartTheme === undefined) expect(stored.preferences).not.toHaveProperty('chartTheme');
-    else expect(stored.preferences.chartTheme).toBe(chartTheme === 'hornlab' ? MATCH_INTERFACE_THEME : chartTheme);
+    // The old fixed default went to Match interface (v8->v9) and from there,
+    // once, to the classic export theme.
+    else expect(stored.preferences.chartTheme).toBe(chartTheme === 'hornlab' ? DEFAULT_EXPORT_THEME : chartTheme);
     reloaded.setChartThemeDefault('console');
-    expect(reloaded.getSnapshot().chartTheme).toBe(chartTheme === undefined ? 'console' : chartTheme === 'hornlab' ? MATCH_INTERFACE_THEME : chartTheme);
+    expect(reloaded.getSnapshot().chartTheme).toBe(chartTheme === undefined ? 'console' : chartTheme === 'hornlab' ? DEFAULT_EXPORT_THEME : chartTheme);
   });
 
   it('persists the complete format selection and clamps the run sequence', () => {
@@ -155,6 +157,21 @@ describe('client preferences', () => {
    * `String`, which handed the exporter the literal "[object Object]" as a
    * theme name rather than falling back to the default export theme.
    */
+  it('moves a saved Match interface export theme to classic once, and keeps a later choice', () => {
+    const current = (preferences: Record<string, unknown>) => JSON.stringify({ version: STORAGE_VERSION, preferences });
+    const first = readPreferences(current({ chartTheme: MATCH_INTERFACE_THEME, smoothing: '1/3' }));
+    expect(first).toMatchObject({ migrated: true, value: { chartTheme: DEFAULT_EXPORT_THEME, classicThemeAdopted: true, smoothing: '1/3' } });
+    // Every other saved theme is a deliberate choice and stays.
+    expect(readPreferences(current({ chartTheme: 'vellum' })).value.chartTheme).toBe('vellum');
+    // The old fixed default reaches classic through v8->v9 and this step.
+    expect(readPreferences(JSON.stringify({ version: 8, preferences: { chartTheme: 'hornlab' } })).value.chartTheme).toBe(DEFAULT_EXPORT_THEME);
+    // Once adopted, Match interface chosen again is kept and nothing is rewritten.
+    expect(readPreferences(current({ chartTheme: MATCH_INTERFACE_THEME, classicThemeAdopted: true })))
+      .toMatchObject({ migrated: false, value: { chartTheme: MATCH_INTERFACE_THEME } });
+    // No version bump: a build rolled back to still reads the profile.
+    expect(STORAGE_VERSION).toBe(14);
+  });
+
   it('takes nothing on trust from a hand-edited payload', () => {
     const loaded = loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: {
       chartTheme: { name: 'console' },
@@ -360,7 +377,7 @@ describe('client preferences', () => {
     // The detection has to be narrow: flagging every read would rewrite the
     // durable file on each launch and defeat the point of the version check.
     const stored = JSON.stringify({ version: 14, preferences: {
-      exportFormats: ['csv', 'stl'], autoExportFormats: ['json'], minRating: 1,
+      exportFormats: ['csv', 'stl'], autoExportFormats: ['json'], minRating: 1, classicThemeAdopted: true,
     } });
     expect(readPreferences(stored).migrated).toBe(false);
   });

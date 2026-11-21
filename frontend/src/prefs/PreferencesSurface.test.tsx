@@ -91,7 +91,8 @@ describe('preferences surfaces', () => {
   });
 
   it.each(['console', MATCH_INTERFACE_THEME, 'unavailable-theme'])('preserves the saved theme %s when themes arrive', async (chartTheme) => {
-    preferencesStore.adoptDurable(JSON.stringify({ version: STORAGE_VERSION, preferences: { chartTheme } }));
+    // Chosen after the classic export theme was adopted, so it is the user's.
+    preferencesStore.adoptDurable(JSON.stringify({ version: STORAGE_VERSION, preferences: { chartTheme, classicThemeAdopted: true } }));
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       themes: [{ id: 'console', label: 'Console' }, { name: 'vellum', label: 'Vellum' }], default: 'vellum',
     }))));

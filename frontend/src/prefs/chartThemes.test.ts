@@ -28,7 +28,7 @@ describe('chart theme startup', () => {
 
   it.each(['vellum', MATCH_INTERFACE_THEME])('starts immediately with a durable %s choice', async (theme) => {
     vi.useFakeTimers();
-    preferencesStore.adoptDurable(JSON.stringify({ version: 1, preferences: { chartTheme: theme } }));
+    preferencesStore.adoptDurable(JSON.stringify({ version: 1, preferences: { chartTheme: theme, classicThemeAdopted: true } }));
     const fetcher = vi.fn(() => new Promise<Response>(() => {}));
     vi.stubGlobal('fetch', fetcher);
     let settled = false;
