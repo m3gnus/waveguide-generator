@@ -20,7 +20,7 @@ import time
 
 import pytest
 
-from server.jobs.archive_holds import ArchiveSnapshotHolds, HoldTooLarge, HoldUnavailable
+from server.workspace.archive_holds import ArchiveSnapshotHolds, HoldTooLarge, HoldUnavailable
 
 
 def _tree(root: Path) -> dict[str, bytes]:

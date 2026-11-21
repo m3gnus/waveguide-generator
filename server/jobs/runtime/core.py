@@ -42,7 +42,7 @@ from server.cadlink.store import CadLinkStore
 from server.workspace import archive_identity
 from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig, Expr
-from server.jobs.archive_holds import (
+from server.workspace.archive_holds import (
     MESH_MEMBER,
     RADIATION_IMPEDANCE_MEMBER,
     ArchiveSnapshotHolds,

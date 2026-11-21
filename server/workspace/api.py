@@ -248,7 +248,7 @@ def _server_member_unavailable_response(exc: ServerMemberUnavailable) -> JSONRes
 
 
 def _parse_server_member(value: str) -> ServerMember:
-    from server.jobs.archive_holds import MESH_MEMBER
+    from server.workspace.archive_holds import MESH_MEMBER
 
     try:
         parsed = json.loads(value)
@@ -275,7 +275,7 @@ def _resolve_server_members(
     so a refusal leaves no trace.
     """
 
-    from server.jobs.archive_holds import HoldUnavailable
+    from server.workspace.archive_holds import HoldUnavailable
 
     resolved: list[tuple[str, bytes]] = []
     for relative_path, content in members:

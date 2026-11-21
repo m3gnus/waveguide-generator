@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from server.jobs.archive_holds import HoldTooLarge
+from server.workspace.archive_holds import HoldTooLarge
 from server.jobs.design_reader import SavedSolveRequest
 from server.jobs.fem_field import FemFieldCorrupt, FemFieldInvalidSelection
 from server.jobs.operation_progress import request_operation
