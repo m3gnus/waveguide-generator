@@ -3718,20 +3718,152 @@ export interface components {
             /** Formulation */
             formulation: string | null;
         };
+        /** ChartSpecAxis */
+        ChartSpecAxis: {
+            /**
+             * Label
+             * @default
+             */
+            label?: string;
+            /** Max */
+            max?: number | null;
+            /** Min */
+            min?: number | null;
+            /**
+             * Scale
+             * @default linear
+             * @enum {string}
+             */
+            scale?: "log" | "linear";
+        };
+        /** ChartSpecBand */
+        ChartSpecBand: {
+            /** Label */
+            label?: string | null;
+            /** X0 */
+            x0: number;
+            /** X1 */
+            x1: number;
+        };
+        /** ChartSpecHLine */
+        ChartSpecHLine: {
+            /**
+             * Axis
+             * @default 0
+             * @enum {integer}
+             */
+            axis?: 0 | 1;
+            /** Y */
+            y: number;
+        };
+        /** ChartSpecLineSeries */
+        ChartSpecLineSeries: {
+            /**
+             * Axis
+             * @default 0
+             * @enum {integer}
+             */
+            axis?: 0 | 1;
+            /**
+             * Color
+             * @default 0
+             */
+            color?: number | ("accent" | "ink" | "muted");
+            /** Label */
+            label?: string | null;
+            /** Markers */
+            markers?: number[] | null;
+            /**
+             * Opacity
+             * @default 1
+             */
+            opacity?: number;
+            /**
+             * Style
+             * @default solid
+             * @enum {string}
+             */
+            style?: "solid" | "dashed" | "dotted";
+            /**
+             * Width
+             * @default 2
+             */
+            width?: number;
+            /** X */
+            x: (number | null)[];
+            /** Y */
+            y: (number | null)[];
+            /** Z */
+            z?: number | null;
+        };
+        /** ChartSpecPolarSeries */
+        ChartSpecPolarSeries: {
+            /** Angle */
+            angle: (number | null)[];
+            /**
+             * Color
+             * @default 0
+             */
+            color?: number | ("accent" | "ink" | "muted");
+            /** Label */
+            label?: string | null;
+            /**
+             * Opacity
+             * @default 1
+             */
+            opacity?: number;
+            /** R */
+            r: (number | null)[];
+            /**
+             * Style
+             * @default solid
+             * @enum {string}
+             */
+            style?: "solid" | "dashed" | "dotted";
+            /**
+             * Width
+             * @default 2
+             */
+            width?: number;
+        };
+        /** ChartSpecRadius */
+        ChartSpecRadius: {
+            /** Max */
+            max: number;
+            /** Min */
+            min: number;
+            /** Step */
+            step?: number | null;
+            /**
+             * Unit
+             * @default dB
+             */
+            unit?: string;
+        };
         /**
          * ChartSpecRenderRequest
          * @description One chart described as data; hornlab_plots.spec documents the shape.
+         *
+         *     Typed and bounded here so a malformed or oversized spec is a 422 naming
+         *     the field, never a renderer exception or minutes under the render lock.
          */
         ChartSpecRenderRequest: {
             /** Spec */
-            spec: {
-                [key: string]: unknown;
-            };
+            spec: components["schemas"]["LineChartSpec"] | components["schemas"]["PolarChartSpec"];
             /**
              * Theme
              * @default classic
              */
             theme?: string;
+        };
+        /** ChartSpecShade */
+        ChartSpecShade: {
+            /** From */
+            from: number;
+            /** Label */
+            label?: string | null;
+            /** To */
+            to: number;
         };
         /** ChartsReferencePayload */
         ChartsReferencePayload: {
@@ -5947,6 +6079,30 @@ export interface components {
             $ref: string;
         };
         JsonValue: unknown;
+        /** LineChartSpec */
+        LineChartSpec: {
+            /** Bands */
+            bands?: components["schemas"]["ChartSpecBand"][] | null;
+            /** Hlines */
+            hlines?: components["schemas"]["ChartSpecHLine"][] | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "lines";
+            /** Series */
+            series: components["schemas"]["ChartSpecLineSeries"][];
+            /** Subtitle */
+            subtitle?: string | null;
+            /**
+             * Title
+             * @default
+             */
+            title?: string;
+            x?: components["schemas"]["ChartSpecAxis"];
+            y?: components["schemas"]["ChartSpecAxis"];
+            y2?: components["schemas"]["ChartSpecAxis"] | null;
+        };
         /**
          * LumpedSealedRearChamberSpec
          * @description Lossless sealed compliance; Sd is derived from the moving mesh faces.
@@ -6687,6 +6843,26 @@ export interface components {
             r_mm: number;
             /** Z Mm */
             z_mm: number;
+        };
+        /** PolarChartSpec */
+        PolarChartSpec: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "polar";
+            r: components["schemas"]["ChartSpecRadius"];
+            /** Series */
+            series: components["schemas"]["ChartSpecPolarSeries"][];
+            /** Shade */
+            shade?: components["schemas"]["ChartSpecShade"][] | null;
+            /** Subtitle */
+            subtitle?: string | null;
+            /**
+             * Title
+             * @default
+             */
+            title?: string;
         };
         /**
          * PolarConfig

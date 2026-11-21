@@ -2748,14 +2748,415 @@
         "title": "ChannelSolveExecution",
         "type": "object"
       },
+      "ChartSpecAxis": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "maximum": 1000000000.0,
+                "minimum": -1000000000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "maximum": 1000000000.0,
+                "minimum": -1000000000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "scale": {
+            "default": "linear",
+            "enum": [
+              "log",
+              "linear"
+            ],
+            "title": "Scale",
+            "type": "string"
+          }
+        },
+        "title": "ChartSpecAxis",
+        "type": "object"
+      },
+      "ChartSpecBand": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "x0": {
+            "maximum": 1000000000.0,
+            "minimum": -1000000000.0,
+            "title": "X0",
+            "type": "number"
+          },
+          "x1": {
+            "maximum": 1000000000.0,
+            "minimum": -1000000000.0,
+            "title": "X1",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x0",
+          "x1"
+        ],
+        "title": "ChartSpecBand",
+        "type": "object"
+      },
+      "ChartSpecHLine": {
+        "additionalProperties": false,
+        "properties": {
+          "axis": {
+            "default": 0,
+            "enum": [
+              0,
+              1
+            ],
+            "title": "Axis",
+            "type": "integer"
+          },
+          "y": {
+            "maximum": 1000000000.0,
+            "minimum": -1000000000.0,
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "y"
+        ],
+        "title": "ChartSpecHLine",
+        "type": "object"
+      },
+      "ChartSpecLineSeries": {
+        "additionalProperties": false,
+        "properties": {
+          "axis": {
+            "default": 0,
+            "enum": [
+              0,
+              1
+            ],
+            "title": "Axis",
+            "type": "integer"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "maximum": 63.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "enum": [
+                  "accent",
+                  "ink",
+                  "muted"
+                ],
+                "type": "string"
+              }
+            ],
+            "default": 0,
+            "title": "Color"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "markers": {
+            "anyOf": [
+              {
+                "items": {
+                  "exclusiveMaximum": 20000.0,
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                "maxItems": 20000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markers"
+          },
+          "opacity": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "type": "number"
+          },
+          "style": {
+            "default": "solid",
+            "enum": [
+              "solid",
+              "dashed",
+              "dotted"
+            ],
+            "title": "Style",
+            "type": "string"
+          },
+          "width": {
+            "default": 2.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 20.0,
+            "title": "Width",
+            "type": "number"
+          },
+          "x": {
+            "items": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000.0,
+                  "minimum": -1000000000.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxItems": 20000,
+            "title": "X",
+            "type": "array"
+          },
+          "y": {
+            "items": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000.0,
+                  "minimum": -1000000000.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxItems": 20000,
+            "title": "Y",
+            "type": "array"
+          },
+          "z": {
+            "anyOf": [
+              {
+                "maximum": 20.0,
+                "minimum": -10.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Z"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ],
+        "title": "ChartSpecLineSeries",
+        "type": "object"
+      },
+      "ChartSpecPolarSeries": {
+        "additionalProperties": false,
+        "properties": {
+          "angle": {
+            "items": {
+              "anyOf": [
+                {
+                  "maximum": 360.0,
+                  "minimum": -360.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxItems": 20000,
+            "title": "Angle",
+            "type": "array"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "maximum": 63.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "enum": [
+                  "accent",
+                  "ink",
+                  "muted"
+                ],
+                "type": "string"
+              }
+            ],
+            "default": 0,
+            "title": "Color"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "opacity": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "type": "number"
+          },
+          "r": {
+            "items": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000.0,
+                  "minimum": -1000000000.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxItems": 20000,
+            "title": "R",
+            "type": "array"
+          },
+          "style": {
+            "default": "solid",
+            "enum": [
+              "solid",
+              "dashed",
+              "dotted"
+            ],
+            "title": "Style",
+            "type": "string"
+          },
+          "width": {
+            "default": 2.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 20.0,
+            "title": "Width",
+            "type": "number"
+          }
+        },
+        "required": [
+          "angle",
+          "r"
+        ],
+        "title": "ChartSpecPolarSeries",
+        "type": "object"
+      },
+      "ChartSpecRadius": {
+        "additionalProperties": false,
+        "properties": {
+          "max": {
+            "maximum": 1000.0,
+            "minimum": -1000.0,
+            "title": "Max",
+            "type": "number"
+          },
+          "min": {
+            "maximum": 1000.0,
+            "minimum": -1000.0,
+            "title": "Min",
+            "type": "number"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "unit": {
+            "default": "dB",
+            "maxLength": 200,
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "min",
+          "max"
+        ],
+        "title": "ChartSpecRadius",
+        "type": "object"
+      },
       "ChartSpecRenderRequest": {
         "additionalProperties": false,
-        "description": "One chart described as data; hornlab_plots.spec documents the shape.",
+        "description": "One chart described as data; hornlab_plots.spec documents the shape.\n\nTyped and bounded here so a malformed or oversized spec is a 422 naming\nthe field, never a renderer exception or minutes under the render lock.",
         "properties": {
           "spec": {
-            "additionalProperties": true,
-            "title": "Spec",
-            "type": "object"
+            "discriminator": {
+              "mapping": {
+                "lines": "#/components/schemas/LineChartSpec",
+                "polar": "#/components/schemas/PolarChartSpec"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LineChartSpec"
+              },
+              {
+                "$ref": "#/components/schemas/PolarChartSpec"
+              }
+            ],
+            "title": "Spec"
           },
           "theme": {
             "default": "classic",
@@ -2767,6 +3168,41 @@
           "spec"
         ],
         "title": "ChartSpecRenderRequest",
+        "type": "object"
+      },
+      "ChartSpecShade": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "From",
+            "type": "number"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "to": {
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "To",
+            "type": "number"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "ChartSpecShade",
         "type": "object"
       },
       "ChartsReferencePayload": {
@@ -9911,6 +10347,94 @@
         "type": "object"
       },
       "JsonValue": {},
+      "LineChartSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "bands": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ChartSpecBand"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bands"
+          },
+          "hlines": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ChartSpecHLine"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hlines"
+          },
+          "kind": {
+            "const": "lines",
+            "title": "Kind",
+            "type": "string"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/ChartSpecLineSeries"
+            },
+            "maxItems": 64,
+            "title": "Series",
+            "type": "array"
+          },
+          "subtitle": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtitle"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Title",
+            "type": "string"
+          },
+          "x": {
+            "$ref": "#/components/schemas/ChartSpecAxis"
+          },
+          "y": {
+            "$ref": "#/components/schemas/ChartSpecAxis"
+          },
+          "y2": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartSpecAxis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "series"
+        ],
+        "title": "LineChartSpec",
+        "type": "object"
+      },
       "LumpedSealedRearChamberSpec": {
         "additionalProperties": false,
         "description": "Lossless sealed compliance; Sd is derived from the moving mesh faces.",
@@ -12498,6 +13022,67 @@
           "z_mm"
         ],
         "title": "Point",
+        "type": "object"
+      },
+      "PolarChartSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "polar",
+            "title": "Kind",
+            "type": "string"
+          },
+          "r": {
+            "$ref": "#/components/schemas/ChartSpecRadius"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/ChartSpecPolarSeries"
+            },
+            "maxItems": 64,
+            "title": "Series",
+            "type": "array"
+          },
+          "shade": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ChartSpecShade"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shade"
+          },
+          "subtitle": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtitle"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "r",
+          "series"
+        ],
+        "title": "PolarChartSpec",
         "type": "object"
       },
       "PolarConfig": {
