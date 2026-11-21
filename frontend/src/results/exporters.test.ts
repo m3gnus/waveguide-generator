@@ -643,7 +643,8 @@ describe('result exporters', () => {
       result: wrapped,
       jobStem: 'horn_1',
       designName: 'Horn One',
-      preferences: preferencesStore.getSnapshot(),
+      // A dark export theme: the report's charts stay classic on its light page.
+      preferences: { ...preferencesStore.getSnapshot(), chartTheme: 'console' },
       now: new Date('2026-08-20T12:00:00Z'),
       saveText,
     })).resolves.toEqual(['horn_1_report.html']);
@@ -654,8 +655,8 @@ describe('result exporters', () => {
     expect(saveText.mock.calls[0][0]).toContain('<h1>Horn One</h1>');
     expect(saveText.mock.calls[0][0]).toContain('<h2>HF</h2>');
     expect(saveText.mock.calls[0][0]).toContain('<h2>MF</h2>');
-    // Both channels' charts, drawn in the export theme and embedded, so the
-    // file opens offline on its own.
+    // Both channels' charts, drawn classic and embedded, so the file opens
+    // offline on its own.
     const drawn = runReportChartSpecs(wrapped);
     expect(drawn.map(({ section }) => section)).toEqual(['HF', 'MF']);
     expect(reportChart.render.mock.calls.map((call) => (call as unknown[]).slice(0, 2))).toEqual(drawn.map(({ spec }) => [spec, 'classic']));

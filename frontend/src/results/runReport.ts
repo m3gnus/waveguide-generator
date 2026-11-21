@@ -3,7 +3,7 @@ import { buildDerivedAcoustics, type DerivedAcousticsRow } from './derivedAcoust
 import { groupDelayValue } from './mappers';
 import { radiatedPowerMetadata } from './radiatedPower';
 import { resultChannels, type ResultPayload } from './types';
-import type { GroupDelayUnit } from '../prefs/preferences';
+import { DEFAULT_EXPORT_THEME, type GroupDelayUnit } from '../prefs/preferences';
 import { drawCounted, renderChartSpec } from './chartImage';
 import type { LineChartSpec } from './chartSpec';
 
@@ -106,7 +106,8 @@ function reportPlotSpec(rows: DerivedAcousticsRow[], plot: ReportPlot): LineChar
   if (sampled.length < 2 || !series.length) return null;
   return {
     kind: 'lines',
-    title: plot.heading,
+    // The page writes the heading right above the image; the image does not repeat it.
+    title: '',
     x: { label: 'Frequency [Hz]', scale: 'log' },
     y: { label: plot.yLabel },
     series,
@@ -125,13 +126,20 @@ export function runReportChartSpecs(result: ResultPayload): Array<{ section: str
 }
 
 /**
- * Draw the report's charts with hornlab-plots in `theme`. One request per chart,
+ * The report is a light page, so its charts are always drawn in the classic
+ * theme whatever the export theme is: a dark chart would sit on it as a dark
+ * rectangle. The export theme still governs card and `png` images.
+ */
+export const REPORT_CHART_THEME = DEFAULT_EXPORT_THEME;
+
+/**
+ * Draw the report's charts with hornlab-plots. One request per chart,
  * counted on the status bar, since a multi-channel report draws several.
  */
-export async function renderRunReportCharts(result: ResultPayload, theme: string, fetcher: typeof fetch): Promise<RunReportCharts> {
+export async function renderRunReportCharts(result: ResultPayload, fetcher: typeof fetch): Promise<RunReportCharts> {
   const specs = runReportChartSpecs(result);
   const images = await drawCounted('Drawing report charts', fetcher, specs, ({ spec }, scoped) => (
-    renderChartSpec(spec, theme, scoped, 'WG could not draw the charts for this report. Try the export again.')
+    renderChartSpec(spec, REPORT_CHART_THEME, scoped, 'WG could not draw the charts for this report. Try the export again.')
   ));
   const charts: RunReportCharts = {};
   specs.forEach(({ section, chart }, index) => { (charts[section] ??= {})[chart] = images[index]; });

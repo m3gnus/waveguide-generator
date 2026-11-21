@@ -89,7 +89,8 @@ describe('static run report', () => {
     expect(specs.map(({ section, chart }) => `${section}:${chart}`)).toEqual(['HF:response', 'HF:beamwidth']);
     const rows = buildDerivedAcoustics(channel).rows;
     const [response, beamwidth] = specs.map(({ spec }) => spec);
-    expect(response).toMatchObject({ kind: 'lines', title: 'Response and power response', x: { scale: 'log' }, y: { label: 'Level [dB]' } });
+    // The page's own <h3> names the chart; the image does not repeat it.
+    expect(response).toMatchObject({ kind: 'lines', title: '', x: { scale: 'log' }, y: { label: 'Level [dB]' } });
     expect(response.series.map(({ label, x, y, color }) => ({ label, x, y, color }))).toEqual([
       { label: 'On-axis SPL', x: rows.map((row) => row.frequency_hz), y: rows.map((row) => row.on_axis_spl_db), color: 0 },
       { label: 'Power response', x: rows.map((row) => row.frequency_hz), y: rows.map((row) => row.power_response_db_spl_avg), color: 1 },
@@ -107,8 +108,8 @@ describe('static run report', () => {
     const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
       const shown = activityStore.getSnapshot()[0]?.progress;
       if (shown) progress.push([shown.done, shown.total]);
-      const { spec, theme } = JSON.parse(String(init?.body)) as { spec: { title: string }; theme: string };
-      return Response.json({ image: `data:image/png;base64,${btoa(`${spec.title}|${theme}`)}` });
+      const { spec, theme } = JSON.parse(String(init?.body)) as { spec: { y: { label: string } }; theme: string };
+      return Response.json({ image: `data:image/png;base64,${btoa(`${spec.y.label}|${theme}`)}` });
     });
     const labels: string[] = [];
     const unsubscribe = activityStore.subscribe(() => {
@@ -117,14 +118,15 @@ describe('static run report', () => {
     });
     // Inside an export, the chart drawing joins the export's activity and
     // must still say what it is doing.
-    const charts = await activityOperation({ kind: 'export', label: 'Exporting HTML report' }, fetcher, (scoped) => renderRunReportCharts(result, 'classic', scoped));
+    const charts = await activityOperation({ kind: 'export', label: 'Exporting HTML report' }, fetcher, (scoped) => renderRunReportCharts(result, scoped));
     unsubscribe();
     expect(labels).toEqual(['Exporting HTML report', 'Drawing report charts', 'Exporting HTML report']);
     expect(fetcher).toHaveBeenCalledTimes(4);
     expect(progress).toEqual([[0, 4], [1, 4], [2, 4], [3, 4]]);
     expect(fetcher.mock.calls.every(([input]) => String(input) === '/api/render-chart')).toBe(true);
-    expect(atob(charts.MF.beamwidth!.split(',')[1])).toBe('-6 dB beamwidth|classic');
-    expect(atob(charts.HF.response!.split(',')[1])).toBe('Response and power response|classic');
+    // Classic whatever the export theme: the report is a light page.
+    expect(atob(charts.MF.beamwidth!.split(',')[1])).toBe('Beamwidth [°]|classic');
+    expect(atob(charts.HF.response!.split(',')[1])).toBe('Level [dB]|classic');
     expect(activityStore.getSnapshot()).toEqual([]);
   });
 });

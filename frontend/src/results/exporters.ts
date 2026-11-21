@@ -649,9 +649,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     if (format === 'html_report') {
       if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
       const filename = `${context.jobStem}_report.html`;
-      const charts = await renderRunReportCharts(
-        context.result, resolveChartTheme(context.preferences.chartTheme), context.fetcher ?? fetch,
-      );
+      const charts = await renderRunReportCharts(context.result, context.fetcher ?? fetch);
       saveText(buildRunReportHtml(context.result, {
         title: context.designName ?? context.jobStem,
         generatedAt: now,
