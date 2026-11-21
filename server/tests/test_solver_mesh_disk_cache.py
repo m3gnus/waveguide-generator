@@ -403,3 +403,38 @@ def test_queueing_a_write_never_waits_on_one_being_written(tmp_path) -> None:
     cache.flush()
     assert cache.get("a" * 64) == {"msh_text": "a"}
     cache.close()
+
+
+def test_app_startup_does_not_wait_for_the_disk_cache(tmp_path, monkeypatch) -> None:
+    import threading
+
+    from server.app import create_app
+
+    release = threading.Event()
+    opened = []
+
+    def slow_configure(root):
+        assert release.wait(10)
+        cache = SolverMeshDiskCache(root, {"mesher": "test"})
+        cache.open()
+        opened.append(cache)
+        return cache
+
+    closed = []
+    monkeypatch.setattr(builder, "configure_solver_mesh_disk_cache", slow_configure)
+    monkeypatch.setattr(builder, "close_solver_mesh_disk_cache", closed.append)
+    app = create_app(data_dir=tmp_path / "data", solver_warmup=False)
+
+    async def scenario() -> None:
+        async with app.router.lifespan_context(app):
+            assert not opened, "startup waited for the disk cache"
+            release.set()
+            await app.state.solver_mesh_disk_cache_opening
+        assert closed == opened and len(opened) == 1
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+        for cache in opened:
+            cache.close()

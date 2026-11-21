@@ -532,18 +532,28 @@ def create_app(
 
     # Solve meshes outlive a restart: an unchanged design solved again after
     # one reads its mesh back instead of rebuilding it (server/mesh/cache.py).
+    # Opening it measures WG's mesh code (about 3 s), so it opens in the
+    # background: startup does not wait, and solves until then build as if
+    # the cache were cold.
     async def open_solver_mesh_disk_cache() -> None:
         from server.mesh.builder import configure_solver_mesh_disk_cache
 
-        application.state.solver_mesh_disk_cache = await asyncio.to_thread(
+        application.state.solver_mesh_disk_cache_opening = asyncio.ensure_future(asyncio.to_thread(
             configure_solver_mesh_disk_cache, resolved_data_dir / SOLVER_MESH_DISK_CACHE_DIRNAME,
-        )
+        ))
 
     async def close_solver_mesh_disk_cache() -> None:
         from server.mesh.builder import close_solver_mesh_disk_cache as close
 
-        cache = getattr(application.state, "solver_mesh_disk_cache", None)
-        application.state.solver_mesh_disk_cache = None
+        opening = getattr(application.state, "solver_mesh_disk_cache_opening", None)
+        application.state.solver_mesh_disk_cache_opening = None
+        if opening is None:
+            return
+        try:
+            cache = await opening  # a thread cannot be cancelled: let it finish
+        except Exception:  # noqa: BLE001 - the cache never opened
+            logging.getLogger("wg.mesh").warning("Solver mesh disk cache did not open", exc_info=True)
+            return
         await asyncio.to_thread(close, cache)
 
     application.router.add_event_handler("startup", open_solver_mesh_disk_cache)
