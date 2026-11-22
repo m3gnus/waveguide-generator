@@ -1676,21 +1676,6 @@ function PolarResponseCard({ items, tokens, density, live }: { items: NamedResul
 }
 
 /**
- * Why a driver-coupled chart has nothing to draw.
- *
- * Power, current and excursion all exist only when a driver model was part of
- * the solve. The default waveguide solve is unit-acceleration -- no voltage, no
- * ohms, no cone -- so the honest answer is that this result has no drive, not
- * that something failed.
- *
- * `impedance_omitted` comes first because the unit-acceleration line is a lie
- * for the case that hits users most: an LR4 combined channel *is* voltage
- * driven, but `_combined_channel_response` pops its impedance block and leaves
- * `impedance_units: "Z/(rho*c)"` behind from `build_solver_response`, so the
- * tag check below reads it as an unloaded waveguide. The server already wrote
- * the real reason in that field; nothing had read it.
- */
-/**
  * Why this channel cannot take a driver model, when the solver would refuse one.
  *
  * A driver model drives exactly one source at unit weight; the server refuses
@@ -1712,6 +1697,21 @@ export function driverRefusedChannelReason(result: ResultPayload): string | null
   return null;
 }
 
+/**
+ * Why a driver-coupled chart has nothing to draw.
+ *
+ * Power, current and excursion all exist only when a driver model was part of
+ * the solve. The default waveguide solve is unit-acceleration -- no voltage, no
+ * ohms, no cone -- so the honest answer is that this result has no drive, not
+ * that something failed.
+ *
+ * `impedance_omitted` comes first because the unit-acceleration line is a lie
+ * for the case that hits users most: an LR4 combined channel *is* voltage
+ * driven, but `_combined_channel_response` pops its impedance block and leaves
+ * `impedance_units: "Z/(rho*c)"` behind from `build_solver_response`, so the
+ * tag check below reads it as an unloaded waveguide. The server already wrote
+ * the real reason in that field; nothing had read it.
+ */
 export function driverChartMissingReason(result: ResultPayload, chart: string): string {
   const omitted = result.metadata?.impedance_omitted;
   if (typeof omitted === 'string' && omitted.trim()) {

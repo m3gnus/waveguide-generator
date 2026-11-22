@@ -392,6 +392,31 @@ def test_a_weighted_beat_patch_reports_its_own_patch_impedance(runtime, monkeypa
     assert weighted["a"]["impedance"] == unit["a"]["impedance"]
 
 
+@pytest.mark.parametrize("failure", [np.linalg.LinAlgError("singular"), ValueError("bad fit"), "nonfinite"])
+def test_a_failed_modal_fit_drops_the_curve_and_never_fails_the_solve(runtime, monkeypatch, failure):
+    from server.solver.imported_channels import IMPEDANCE_OMITTED_MULTI_SOURCE
+
+    monkeypatch.setattr(bridge, "engine_version", lambda: "1.2.3")
+
+    def broken(frequencies, values, targets):
+        if failure == "nonfinite":
+            return np.full((len(targets), np.asarray(values).reshape(len(frequencies), -1).shape[1]), np.nan)
+        raise failure
+
+    monkeypatch.setattr(beat_imported, "fit_columns_separately", broken)
+    request = cad._request(drive_channels=[{"id": "pair", "source_ids": ["source-a", "source-b"]},
+                                           {"id": "unit", "source_ids": ["source-c"]}])
+    request.options.adaptive_frequency_sampling = True
+    request.options.frequency_range = [100., 1000.]
+    request.options.frequencies_hz = None
+    request.options.num_frequencies = 24
+    result = beat_imported.solve_imported_beat_from_msh_text(cad.MESH, request, cad._record(), backend="cpu")
+    pair = result["channels"]["pair"]
+    assert "impedance" not in pair
+    assert pair["metadata"]["impedance_omitted"] == IMPEDANCE_OMITTED_MULTI_SOURCE
+    assert "impedance" in result["channels"]["unit"]
+
+
 @pytest.mark.parametrize("axial", [False, True])
 @pytest.mark.parametrize("channels", [
     [{"id": "left", "source_ids": ["source-a", "source-b"]},

@@ -103,7 +103,14 @@ def _adaptive_tag_means(channel: Any, batches: Sequence[Any], frequencies: Any) 
         return None
     acquired_hz = np.concatenate([np.asarray(batch.frequencies_hz, dtype=float) for batch in batches])
     values = np.concatenate([np.stack([np.asarray(item[tag]) for tag in tags], axis=1) for item in means])
-    fitted = fit_columns_separately(acquired_hz, values, np.asarray(frequencies, dtype=float))
+    try:
+        fitted = fit_columns_separately(acquired_hz, values, np.asarray(frequencies, dtype=float))
+    except (np.linalg.LinAlgError, FloatingPointError, ValueError):
+        # The modal curve is optional: a fit that fails leaves the rule's drop
+        # in place and never fails a solve that otherwise finished.
+        return None
+    if not np.all(np.isfinite(fitted)):
+        return None
     return {tag: fitted[:, column] for column, tag in enumerate(tags)}
 
 
