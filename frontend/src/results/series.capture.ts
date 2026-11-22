@@ -16,7 +16,7 @@ import { preferencesStore } from '../prefs/preferences';
 
 /**
  * Every output the series layer and its grid rules feed, on every fixture and
- * smoothing mode, as `key -> sha256(output)`.
+ * smoothing mode, as `key -> sha256(canonicalNumbers(output))`.
  *
  * Test support only. `series.capture.json` is this function's output from the
  * code before the series layer (WG dev ef17eccb1), so comparing against it
@@ -71,8 +71,28 @@ export async function captureSeriesOutputs(): Promise<Record<string, string>> {
     }
   }
   const out: Record<string, string> = {};
-  for (const [key, text] of texts) out[key] = await sha256Hex(text);
+  for (const [key, text] of texts) out[key] = await sha256Hex(canonicalNumbers(text));
   return out;
+}
+
+/** Significant digits kept for every non-integer number before hashing. */
+const SIGNIFICANT_DIGITS = 10;
+
+/**
+ * Rounds every decimal or exponent number in `text` to SIGNIFICANT_DIGITS
+ * significant digits; integers are kept as written. Applied identically to
+ * old and new outputs.
+ *
+ * Math.log10, Math.pow and friends may differ in the last bit between V8
+ * builds: macOS arm64 and Linux x64 CI gave different full-precision digests
+ * for one DI and one polar-impedance output. Ten digits is far above a
+ * last-bit difference (about 1e-16 relative) and far below anything an output
+ * shows: a 1e-6 dB change on a 100 dB level still moves the tenth digit.
+ */
+function canonicalNumbers(text: string): string {
+  return text.replace(/\d+\.\d+(?:[eE][-+]?\d+)?|\d+[eE][-+]?\d+/g, (token) => (
+    String(Number(Number(token).toPrecision(SIGNIFICANT_DIGITS)))
+  ));
 }
 
 async function sha256Hex(text: string): Promise<string> {

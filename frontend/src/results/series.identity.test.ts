@@ -94,7 +94,9 @@ describe('one series layer keeps every consumer’s values', () => {
     // series.capture.json: captureSeriesOutputs() run at WG dev ef17eccb1,
     // before the series layer existed. Covers the CSV, summary, PNG payload,
     // derived CSV/JSON, report, screen series, phase, group delay, beam, drive
-    // power, FRD, ZMA and measurement-angle outputs.
+    // power, FRD, ZMA and measurement-angle outputs. Numbers are hashed at
+    // ten significant digits (canonicalNumbers), so a last-bit Math.*
+    // difference between platforms cannot fail it but a 1e-6 dB change does.
     const outputs = await captureSeriesOutputs();
     expect(Object.keys(outputs).sort()).toEqual(Object.keys(FROZEN).sort());
     const changed = Object.keys(FROZEN).filter((key) => outputs[key] !== (FROZEN as Record<string, string>)[key]);
