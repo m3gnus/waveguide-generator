@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 
 from server.contracts.conventions import solver_to_engineering
+from server.mesh.gmsh22 import MshFormatError, read_msh
 
 from .acoustics import reference_air_density_kg_per_m3, reference_sound_speed_m_per_s
 from .beam_shape import beam_shape_summary
@@ -166,52 +167,29 @@ def _gmsh22_observation_frame_parts(
 ) -> _ObservationFrameParts:
     """Read the authoritative observation basis and centres from a Gmsh artifact."""
 
-    lines = msh_text.splitlines()
     try:
-        nodes_start = lines.index("$Nodes")
-        elements_start = lines.index("$Elements")
-        node_count = int(lines[nodes_start + 1])
-        element_count = int(lines[elements_start + 1])
-    except (ValueError, IndexError) as exc:
+        artifact = read_msh(msh_text)
+    except MshFormatError as exc:
         raise ValueError(
             "observation framing requires an ASCII Gmsh 2.2 solver artifact"
         ) from exc
-    node_rows = lines[nodes_start + 2 : nodes_start + 2 + node_count]
-    nodes: dict[int, np.ndarray] = {}
-    try:
-        for row in node_rows:
-            parts = row.split()
-            if len(parts) >= 4:
-                nodes[int(parts[0])] = np.asarray(parts[1:4], dtype=float)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("solver artifact contains invalid Gmsh nodes") from exc
+    if not artifact.has_nodes or not artifact.has_elements:
+        raise ValueError(
+            "observation framing requires an ASCII Gmsh 2.2 solver artifact"
+        )
+    vertices = artifact.points
+    corners = artifact.corner_indices
+    # Triangles without a tag, or naming an undeclared node, take no part.
+    usable = artifact.tagged & np.all(corners >= 0, axis=1)
 
-    tagged_triangles: dict[int, list[list[np.ndarray]]] = {}
-    try:
-        for row in lines[elements_start + 2 : elements_start + 2 + element_count]:
-            parts = row.split()
-            if len(parts) < 3 or int(parts[1]) != 2:
-                continue
-            tag_count = int(parts[2])
-            first_node = 3 + tag_count
-            if tag_count < 1 or len(parts) < first_node + 3:
-                continue
-            physical_tag = int(parts[3])
-            node_ids = [int(value) for value in parts[first_node : first_node + 3]]
-            if all(node_id in nodes for node_id in node_ids):
-                tagged_triangles.setdefault(physical_tag, []).append(
-                    [nodes[node_id] for node_id in node_ids]
-                )
-    except (TypeError, ValueError) as exc:
-        raise ValueError("solver artifact contains invalid Gmsh elements") from exc
+    def tagged_triangles(tag: int) -> np.ndarray:
+        return vertices[corners[usable & (artifact.triangle_tags == tag)]]
 
-    source_triangles = tagged_triangles.get(2, [])
-    if not nodes or not source_triangles:
+    source = tagged_triangles(2)
+    if not len(vertices) or not len(source):
         raise ValueError(
             "observation framing requires source-tagged triangles (physical tag 2)"
         )
-    vertices = np.stack(list(nodes.values()))
-    source = np.asarray(source_triangles, dtype=float)
     normals = np.cross(source[:, 1] - source[:, 0], source[:, 2] - source[:, 0])
     areas = np.linalg.norm(normals, axis=1)
     valid = areas > 1.0e-15
@@ -234,7 +212,7 @@ def _gmsh22_observation_frame_parts(
         threshold = float(np.max(along_axis) - 0.02 * np.ptp(along_axis))
         mouth_center = np.mean(vertices[along_axis >= threshold], axis=0)
     else:
-        aperture = np.asarray(tagged_triangles.get(int(aperture_tag), []), dtype=float)
+        aperture = tagged_triangles(int(aperture_tag))
         if not aperture.size:
             raise ValueError(
                 f"solver artifact has no aperture triangles with physical tag {aperture_tag}"

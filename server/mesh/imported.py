@@ -44,6 +44,7 @@ from server.mesh.builder import (
     _self_intersection_warnings,
 )
 from server.mesh.cache import SolverMeshArtifactCache
+from server.mesh.gmsh22 import MshFormatError, read_msh
 from server.mesh.integrity import (
     mesh_element_quality_report,
     mesh_integrity_report,
@@ -1490,46 +1491,21 @@ def gmsh22_triangle_arrays(msh_text: str) -> tuple[np.ndarray, np.ndarray]:
     not parse is a ``ValueError``.
     """
 
-    lines = [line.strip() for line in msh_text.splitlines()]
     try:
-        version = lines[lines.index("$MeshFormat") + 1].split()
-    except (ValueError, IndexError) as exc:
-        raise ValueError("the mesh artifact is not an ASCII Gmsh 2.2 mesh") from exc
-    if len(version) < 2 or not version[0].startswith("2.") or version[1] != "0":
-        raise ValueError(
-            "the mesh artifact is not an ASCII Gmsh 2.2 mesh "
-            f"(format {' '.join(version)!r})"
-        )
-    empty = (np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=np.int64))
-    if "$Nodes" not in lines or "$Elements" not in lines:
-        return empty
-    try:
-        nodes_start = lines.index("$Nodes")
-        node_count = int(lines[nodes_start + 1])
-        rows = [line.split() for line in lines[nodes_start + 2 : nodes_start + 2 + node_count]]
-        if len(rows) != node_count:
-            raise ValueError("the mesh artifact is missing Gmsh nodes")
-        index = {row[0]: position for position, row in enumerate(rows)}
-        points = np.asarray([row[1:4] for row in rows], dtype=float).reshape(-1, 3)
-        elements_start = lines.index("$Elements")
-        element_count = int(lines[elements_start + 1])
-        corners: list[list[int]] = []
-        for line in lines[elements_start + 2 : elements_start + 2 + element_count]:
-            parts = line.split()
-            if len(parts) < 4 or parts[1] != "2":
-                continue
-            tag_count = int(parts[2])
-            corner = [index[node] for node in parts[3 + tag_count : 6 + tag_count]]
-            if len(corner) != 3:
-                raise ValueError("the mesh artifact holds a triangle without three nodes")
-            corners.append(corner)
-    except (IndexError, KeyError, ValueError) as exc:
+        artifact = read_msh(msh_text)
+    except MshFormatError as exc:
+        if exc.kind == "format":
+            raise ValueError(str(exc)) from exc
         raise ValueError(
             f"the mesh artifact holds malformed Gmsh nodes or elements: {exc}"
         ) from exc
-    if not corners:
+    empty = (np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=np.int64))
+    if not artifact.has_nodes or not artifact.has_elements:
+        return empty
+    points = np.array(artifact.points, dtype=float)
+    if not len(artifact.triangles):
         return points, empty[1]
-    return points, np.asarray(corners, dtype=np.int64)
+    return points, np.array(artifact.triangles, dtype=np.int64)
 
 
 def verify_artifact_reduced_orientation(

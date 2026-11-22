@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from server.mesh.gmsh22 import MshFormatError, read_msh
+
 
 @dataclass(frozen=True)
 class SurfaceMesh:
@@ -36,60 +38,61 @@ class SurfaceMesh:
 
 
 def read_surface(msh_text: str, *, scale_to_m: float = 1.0) -> SurfaceMesh:
-    """Retain node rows, triangle rows, winding and physical tags exactly."""
+    """Retain node rows, triangle rows, winding and physical tags exactly.
+
+    Only points (15), lines (1) and triangles (2) may appear; every triangle
+    carries a positive physical tag, and only triangles enter the surface.
+    """
     if not np.isfinite(scale_to_m) or scale_to_m <= 0:
         raise ValueError("Mesh scale must be finite and positive")
-    lines = [line.strip() for line in msh_text.splitlines()]
     try:
-        header = lines.index("$MeshFormat")
-        if lines[header + 1].split() != ["2.2", "0", "8"]:
-            raise ValueError("Expected ASCII Gmsh 2.2")
-        start = lines.index("$Nodes") + 1
-        count = int(lines[start])
-        if count <= 0 or lines[start + count + 1] != "$EndNodes":
-            raise ValueError("Invalid Gmsh nodes")
-        nodes = [row.split() for row in lines[start + 1:start + count + 1]]
-        if any(len(row) != 4 for row in nodes):
-            raise ValueError("Invalid Gmsh node row")
-        node_ids = tuple(int(row[0]) for row in nodes)
-        if min(node_ids) <= 0 or len(set(node_ids)) != count:
-            raise ValueError("Invalid or duplicate Gmsh node IDs")
-        points = np.asarray([row[1:] for row in nodes], dtype=float) * scale_to_m
-        lookup = {node_id: i for i, node_id in enumerate(node_ids)}
-        start = lines.index("$Elements") + 1
-        count = int(lines[start])
-        if count <= 0 or lines[start + count + 1] != "$EndElements":
-            raise ValueError("Invalid Gmsh elements")
-        faces, tags, element_ids = [], [], []
-        for line in lines[start + 1:start + count + 1]:
-            row = [int(value) for value in line.split()]
-            if len(row) < 3:
-                raise ValueError("Invalid Gmsh element row")
-            if row[1] not in {1, 2, 15}:
-                raise ValueError(f"Unsupported Gmsh element type {row[1]}; expected points (15), lines (1) or triangles (2)")
-            if row[1] != 2:
-                continue  # Physical lines/points do not enter the BEM surface.
-            n_tags = row[2]
-            if n_tags < 1 or len(row) != 6 + n_tags or row[3] <= 0:
-                raise ValueError("Triangle requires a positive physical tag")
-            faces.append([lookup[node] for node in row[3 + n_tags:]])
-            tags.append(row[3])
-            element_ids.append(row[0])
-        mesh = SurfaceMesh(points, np.asarray(faces, dtype=np.int64),
-                           np.asarray(tags, dtype=np.int64), node_ids, tuple(element_ids))
-        if (not faces or not np.isfinite(points).all() or len(set(element_ids)) != len(faces)
-                or min(element_ids) <= 0 or np.any(mesh.areas_m2 <= 0)):
-            raise ValueError("Surface requires finite nodes and unique nondegenerate triangles")
-        return mesh
-    except (IndexError, KeyError, OverflowError) as exc:
-        raise ValueError("Invalid ASCII Gmsh 2.2 surface") from exc
+        artifact = read_msh(msh_text)
+    except MshFormatError as exc:
+        if exc.kind == "format":
+            raise ValueError("Expected ASCII Gmsh 2.2") from exc
+        raise
+    if artifact.version != ("2.2", "0", "8"):
+        raise ValueError("Expected ASCII Gmsh 2.2")
+    if not artifact.has_nodes or not artifact.has_elements:
+        raise ValueError("Invalid ASCII Gmsh 2.2 surface")
+    if not artifact.node_ids:
+        raise ValueError("Invalid Gmsh nodes")
+    if min(artifact.node_ids) <= 0:
+        raise ValueError("Invalid or duplicate Gmsh node IDs")
+    if not len(artifact.element_types):
+        raise ValueError("Invalid Gmsh elements")
+    # The first offending row decides the message, as reading row by row would.
+    types = artifact.element_types
+    unsupported = np.flatnonzero((types != 1) & (types != 2) & (types != 15))
+    untagged = artifact.triangle_rows[
+        (artifact.triangle_tag_counts < 1) | (artifact.triangle_tags <= 0)
+    ]
+    first_unsupported = int(unsupported[0]) if unsupported.size else None
+    first_untagged = int(untagged[0]) if untagged.size else None
+    if first_unsupported is not None and (
+        first_untagged is None or first_unsupported < first_untagged
+    ):
+        kind = int(types[first_unsupported])
+        raise ValueError(
+            f"Unsupported Gmsh element type {kind}; expected points (15), lines (1) or triangles (2)"
+        )
+    if first_untagged is not None:
+        raise ValueError("Triangle requires a positive physical tag")
+    points = np.array(artifact.points, dtype=float) * scale_to_m
+    element_ids = tuple(artifact.triangle_ids.tolist())
+    mesh = SurfaceMesh(points, np.array(artifact.triangles, dtype=np.int64),
+                       np.array(artifact.triangle_tags, dtype=np.int64), artifact.node_ids, element_ids)
+    if (not element_ids or not np.isfinite(points).all() or len(set(element_ids)) != len(element_ids)
+            or min(element_ids) <= 0 or np.any(mesh.areas_m2 <= 0)):
+        raise ValueError("Surface requires finite nodes and unique nondegenerate triangles")
+    return mesh
 
 
 def scale_msh_text(msh_text: str, scale_to_m: float) -> str:
     """Scale node coordinates while preserving tags, IDs and element rows."""
     mesh = read_surface(msh_text, scale_to_m=scale_to_m)
     lines = msh_text.splitlines()
-    start = next(index for index, line in enumerate(lines) if line.strip() == "$Nodes") + 2
+    start = read_msh(msh_text).node_lines[0]
     for index, (node_id, point) in enumerate(zip(mesh.node_ids, mesh.points_m, strict=True)):
         lines[start + index] = f"{node_id} " + " ".join(format(float(value), ".17g") for value in point)
     return "\n".join(lines) + "\n"

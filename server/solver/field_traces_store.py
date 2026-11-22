@@ -14,6 +14,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from server.mesh.artifact import mesh_text_sha256
+from server.mesh.gmsh22 import read_msh
 from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 
@@ -135,29 +136,14 @@ def mesh_trace_dof_counts(
     """Estimate P1 and DP0 counts from a Gmsh 2.2 mesh, with stats fallback."""
 
     try:
-        lines = msh_text.splitlines()
-        start = lines.index("$Elements")
-        element_count = int(lines[start + 1].strip())
-        element_lines = lines[start + 2 : start + 2 + element_count]
-        if len(element_lines) != element_count:
-            raise ValueError("truncated element section")
-        used_vertices: set[int] = set()
-        triangle_count = 0
-        for line in element_lines:
-            fields = line.split()
-            if len(fields) < 4 or int(fields[1]) != 2:
-                continue
-            tag_count = int(fields[2])
-            node_start = 3 + tag_count
-            nodes = fields[node_start:]
-            if len(nodes) != 3:
-                raise ValueError("invalid first-order triangle")
-            used_vertices.update(int(value) for value in nodes)
-            triangle_count += 1
-        if used_vertices and triangle_count:
-            return len(used_vertices), triangle_count
-    except (IndexError, TypeError, ValueError):
-        pass
+        artifact = read_msh(msh_text)
+    except ValueError:
+        artifact = None
+    if artifact is not None and artifact.has_elements:
+        triangle_count = len(artifact.triangle_ids)
+        used_vertex_count = len(np.unique(artifact.triangle_node_ids))
+        if used_vertex_count and triangle_count:
+            return used_vertex_count, triangle_count
 
     stats = mesh_stats if isinstance(mesh_stats, Mapping) else {}
     try:

@@ -20,6 +20,7 @@ from server.mesh.artifact import (
     read_verified_import_mesh,
     verify_record_mesh_text,
 )
+from server.mesh.gmsh22 import MshFormatError, read_msh
 
 
 def imported_domain_planes(record: Mapping[str, Any]) -> tuple[str, ...]:
@@ -212,35 +213,17 @@ class SourceAxis:
 def _msh_triangles(msh_text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Node coordinates, triangle corner rows and physical tags of a Gmsh 2.2 mesh."""
 
-    lines = msh_text.splitlines()
     try:
-        nodes_start = lines.index("$Nodes")
-        elements_start = lines.index("$Elements")
-        node_count = int(lines[nodes_start + 1])
-        element_count = int(lines[elements_start + 1])
-        index: dict[str, int] = {}
-        coordinates = np.empty((node_count, 3), dtype=float)
-        for row, line in enumerate(lines[nodes_start + 2 : nodes_start + 2 + node_count]):
-            parts = line.split()
-            index[parts[0]] = row
-            coordinates[row] = [float(value) for value in parts[1:4]]
-        corners: list[list[int]] = []
-        tags: list[int] = []
-        for line in lines[elements_start + 2 : elements_start + 2 + element_count]:
-            parts = line.split()
-            if len(parts) < 4 or parts[1] != "2":
-                continue
-            tag_count = int(parts[2])
-            if tag_count < 1 or len(parts) < 6 + tag_count:
-                continue
-            corners.append([index[node] for node in parts[3 + tag_count : 6 + tag_count]])
-            tags.append(int(parts[3]))
-    except (ValueError, IndexError, KeyError) as exc:
+        artifact = read_msh(msh_text)
+    except MshFormatError as exc:
         raise ValueError("imported mesh artifact is not a readable Gmsh 2.2 mesh") from exc
+    if not artifact.has_nodes or not artifact.has_elements:
+        raise ValueError("imported mesh artifact is not a readable Gmsh 2.2 mesh")
+    tagged = artifact.tagged
     return (
-        coordinates,
-        np.asarray(corners, dtype=np.int64).reshape(-1, 3),
-        np.asarray(tags, dtype=np.int64),
+        np.array(artifact.points, dtype=float),
+        np.array(artifact.triangles[tagged], dtype=np.int64),
+        np.array(artifact.triangle_tags[tagged], dtype=np.int64),
     )
 
 
