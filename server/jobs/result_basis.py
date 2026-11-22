@@ -8,10 +8,89 @@ from typing import Any, Mapping
 from pydantic import ValidationError
 
 from server.jobs.models import ImportedGeometrySource
+from server.jobs.read_time_cache import ReadTimeCache
+
+
+# Verdicts for the few records most recently opened, so polling or reopening
+# a multi-megabyte run serves its stored or presented bytes without parsing.
+_SERVED = ReadTimeCache(4)
 
 
 def with_result_basis(text: str, digest: str, row: Mapping[str, Any]) -> tuple[str, str]:
+    """Serve ``text`` with its read-time excitation identity, and the digest of what is served."""
+
     payload = json.loads(text)
+    if not _apply_result_basis(payload, row):
+        return text, digest
+    content = json.dumps(payload, allow_nan=False, separators=(",", ":"))
+    return content, hashlib.sha256(content.encode()).hexdigest()
+
+
+def served_result_basis(text: str, digest: str, row: Mapping[str, Any]) -> tuple[str, str]:
+    """``with_result_basis`` for a stored record whose ``digest`` names ``text``.
+
+    The verdict is memoised by that digest and the saved request's inputs to
+    the identity, so only the first read of a record parses it.
+    """
+
+    key = _basis_inputs_key(row)
+    if key is None:
+        return with_result_basis(text, digest, row)
+
+    def present() -> str | None:
+        served, _ = with_result_basis(text, digest, row)
+        return None if served is text else served
+
+    return _SERVED.serve(f"{digest}\0{key}", text, digest, present)
+
+
+def with_result_basis_payload(payload: Mapping[str, Any], row: Mapping[str, Any]) -> dict[str, Any]:
+    """The decoded form of ``with_result_basis`` for results already in memory.
+
+    Equal, as JSON, to decoding ``with_result_basis(json.dumps(payload), ...)``;
+    ``payload`` itself is never mutated. Only the dictionaries the identity can
+    touch are copied; every array and other branch is shared with the input.
+    """
+
+    presented = _copy_basis_path(payload)
+    _apply_result_basis(presented, row)
+    return presented
+
+
+def _copy_basis_path(payload: Mapping[str, Any]) -> dict[str, Any]:
+    def node(value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        copied = dict(value)
+        if isinstance(copied.get("metadata"), Mapping):
+            copied["metadata"] = dict(copied["metadata"])
+        return copied
+
+    presented: dict[str, Any] = node(payload)
+    channels = presented.get("channels")
+    if isinstance(channels, Mapping):
+        presented["channels"] = {channel_id: node(channel) for channel_id, channel in channels.items()}
+    return presented
+
+
+def _basis_inputs_key(row: Mapping[str, Any]) -> str | None:
+    """Name the saved-request inputs of the identity, or None when it cannot."""
+
+    try:
+        config = row.get("config_json") or {}
+        geometry = config.get("geometry") or {}
+        kind = geometry.get("type")
+        if kind != "imported":
+            return json.dumps(kind)
+        inputs = json.dumps([geometry, config.get("options")], sort_keys=True, allow_nan=False)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return hashlib.sha256(inputs.encode()).hexdigest()
+
+
+def _apply_result_basis(payload: dict[str, Any], row: Mapping[str, Any]) -> bool:
+    """Add the read-time identity to decoded ``payload`` in place; True if it changed."""
+
     config = row.get("config_json") or {}
     geometry = config.get("geometry") or {}
     normalization = None
@@ -63,7 +142,4 @@ def with_result_basis(text: str, digest: str, row: Mapping[str, Any]) -> tuple[s
         else:
             continue
         changed = True
-    if not changed:
-        return text, digest
-    content = json.dumps(payload, allow_nan=False, separators=(",", ":"))
-    return content, hashlib.sha256(content.encode()).hexdigest()
+    return changed

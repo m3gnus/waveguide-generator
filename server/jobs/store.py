@@ -29,6 +29,7 @@ from server.jobs.cad_intent import return_identity
 from server.jobs.progress import METADATA_KEY as FREQUENCY_METADATA_KEY, checked_frequency_progress
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.jobs.json_encoding import result_json_text
+from server.jobs.read_time_cache import ReadTimeCache
 from server.platform.incidents import retain_job_logs
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
 from server.platform.sqlite import JournalModeStatus, configure_connection
@@ -472,9 +473,7 @@ _SCHEMA_STATEMENTS = (
 
 # Read-time flags for the few archived records most recently opened, keyed by
 # the stored digest, so reopening a multi-megabyte run does not re-parse it.
-_READ_TIME_CACHE_SIZE = 4
-_read_time_cache: dict[str, tuple[str, str]] = {}
-_read_time_cache_lock = threading.Lock()
+_READ_TIME_FLAGS = ReadTimeCache(4)
 
 
 def _with_power_qualification(text: str, digest: str) -> tuple[str, str]:
@@ -486,23 +485,7 @@ def _with_power_qualification(text: str, digest: str) -> tuple[str, str]:
     names the bytes actually served.
     """
 
-    with _read_time_cache_lock:
-        cached = _read_time_cache.get(digest)
-    if cached is not None:
-        return cached
-    annotated = annotate_stored_text(text)
-    served = (
-        (text, digest)
-        if annotated is None
-        else (annotated, sha256(annotated.encode("utf-8")).hexdigest())
-    )
-    if annotated is not None:
-        with _read_time_cache_lock:
-            _read_time_cache.pop(digest, None)
-            _read_time_cache[digest] = served
-            while len(_read_time_cache) > _READ_TIME_CACHE_SIZE:
-                _read_time_cache.pop(next(iter(_read_time_cache)))
-    return served
+    return _READ_TIME_FLAGS.serve(digest, text, digest, lambda: annotate_stored_text(text))
 
 
 def _now_iso() -> str:
