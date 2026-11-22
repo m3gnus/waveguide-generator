@@ -90,10 +90,6 @@ class LadderBand:
     positions: tuple[int, ...]
     resolution_scale: float
 
-    @property
-    def is_baseline(self) -> bool:
-        return self.resolution_scale == 1.0
-
 
 @dataclass(frozen=True, slots=True)
 class MeshLadderPlan:
