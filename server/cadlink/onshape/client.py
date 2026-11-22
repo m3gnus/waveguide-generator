@@ -111,14 +111,6 @@ class OnshapeResponse:
     body: Any
     headers: Mapping[str, str]
 
-    @property
-    def rate_limit_remaining(self) -> int | None:
-        raw = self.headers.get("x-rate-limit-remaining")
-        try:
-            return int(raw) if raw is not None else None
-        except ValueError:
-            return None
-
 
 class Transport(Protocol):
     """The one seam tests replace instead of reaching the network."""

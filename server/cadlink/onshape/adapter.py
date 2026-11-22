@@ -865,26 +865,6 @@ class OnshapeAdapter:
         )
         return len(payload)
 
-    def read_variables(
-        self, document_id: str, workspace_id: str, variable_studio_id: str
-    ) -> list[dict[str, Any]]:
-        """Read back what actually landed. Used by verification, not by send."""
-
-        response = self._client.get(
-            f"/variables/d/{document_id}/w/{workspace_id}/e/{variable_studio_id}/variables"
-        )
-        body = response.body
-        if not isinstance(body, list):
-            return []
-        found: list[dict[str, Any]] = []
-        for table in body:
-            if not isinstance(table, Mapping):
-                continue
-            variables = table.get("variables")
-            if isinstance(variables, list):
-                found.extend(item for item in variables if isinstance(item, Mapping))
-        return found
-
 
 def read_bundle(bundle_path: str | Path) -> tuple[dict[str, Any], bytes]:
     """Load one ``.wglink`` bundle's manifest and its STEP payload."""
