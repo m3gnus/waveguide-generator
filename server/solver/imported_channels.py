@@ -410,28 +410,50 @@ def imported_combined_channel(
     )
 
 
+IMPEDANCE_OMITTED_MULTI_SOURCE = "multi-source channel: per-patch impedance is not a channel impedance"
+IMPEDANCE_OMITTED_WEIGHTED = (
+    "weighted patch: the patch pressure is scaled by its weight, so it is not the patch impedance"
+)
+
+
+def impedance_omitted_reason(channel: Any) -> str | None:
+    """Why a drive channel's raw acoustic impedance is not a channel impedance.
+
+    The one rule for every backend, live and final. The raw field is a single
+    tag's (Metal, BEMPP) or the unweighted union's (BEAT) area-mean pressure per
+    unit drive, so it is the channel impedance only for one source at unit
+    weight. ``None`` keeps the curve.
+    """
+
+    if len(channel.source_ids) > 1:
+        return IMPEDANCE_OMITTED_MULTI_SOURCE
+    if any(weight != 1 for weight in (getattr(channel, "patch_weights", None) or {}).values()):
+        return IMPEDANCE_OMITTED_WEIGHTED
+    return None
+
+
 def finish_imported_channel_response(
     channel_response: dict[str, Any],
     *,
     geometry: ImportedGeometrySource,
     driver_payload: dict[str, Any] | None,
     rms_velocity: bool,
-    omit_impedance: bool,
+    channel: Any,
 ) -> bool:
     """Apply the impedance and driver contract to one imported channel response.
 
-    ``omit_impedance`` drops a per-patch impedance that is not a channel
-    impedance; a voltage-driven channel then reports its electrical input
-    impedance instead. Returns whether a driver payload was applied.
+    A raw impedance that is not a channel impedance (``impedance_omitted_reason``)
+    is dropped with its reason; a voltage-driven channel then reports its
+    electrical input impedance instead. Returns whether a driver payload was
+    applied.
     """
 
     if rms_velocity:
         channel_response["metadata"]["impedance_drive"] = "rms_velocity"
-    if omit_impedance:
+    omitted = impedance_omitted_reason(channel)
+    if omitted is not None:
         channel_response.pop("impedance", None)
-        channel_response["metadata"]["impedance_omitted"] = (
-            "multi-source channel: per-patch impedance is not a channel impedance"
-        )
+        channel_response["metadata"]["impedance_omitted"] = omitted
     if driver_payload is None:
         return False
     electrical = driver_payload.pop("electrical_impedance_ohm")

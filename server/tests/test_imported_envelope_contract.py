@@ -11,7 +11,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from server.solver.imported_channels import (
+    IMPEDANCE_OMITTED_MULTI_SOURCE,
+    IMPEDANCE_OMITTED_WEIGHTED,
     finish_imported_channel_response,
+    impedance_omitted_reason,
     imported_envelope,
     imported_fem_exclusion,
 )
@@ -25,6 +28,10 @@ def _geometry(**overrides):
     )
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _channel(source_ids, patch_weights=None):
+    return SimpleNamespace(source_ids=list(source_ids), patch_weights=patch_weights)
 
 
 def _record(fem_air_volumes=None):
@@ -109,7 +116,7 @@ def test_driver_channel_reports_electrical_impedance_in_the_adapter_order() -> N
     }
     applied = finish_imported_channel_response(
         response, geometry=_geometry(), driver_payload=payload,
-        rms_velocity=True, omit_impedance=True,
+        rms_velocity=True, channel=_channel(["a", "b"]),
     )
 
     assert applied is True
@@ -129,7 +136,28 @@ def test_driver_channel_reports_electrical_impedance_in_the_adapter_order() -> N
 def test_channel_without_driver_keeps_its_acoustic_impedance() -> None:
     response = {"impedance": {"real": [1.0]}, "metadata": {}}
     applied = finish_imported_channel_response(
-        response, geometry=_geometry(), driver_payload=None, rms_velocity=False, omit_impedance=False,
+        response, geometry=_geometry(), driver_payload=None, rms_velocity=False, channel=_channel(["a"]),
     )
     assert applied is False
     assert response == {"impedance": {"real": [1.0]}, "metadata": {}}
+
+
+def test_one_impedance_rule_for_every_backend() -> None:
+    """Only one source at unit weight has a channel impedance in the raw field."""
+
+    assert impedance_omitted_reason(_channel(["a"])) is None
+    assert impedance_omitted_reason(_channel(["a"], {"a": 1.0})) is None
+    assert impedance_omitted_reason(_channel(["a", "b"])) == IMPEDANCE_OMITTED_MULTI_SOURCE
+    assert impedance_omitted_reason(_channel(["a", "b"], {"a": 1.0, "b": 0.5})) == IMPEDANCE_OMITTED_MULTI_SOURCE
+    assert impedance_omitted_reason(_channel(["a"], {"a": 0.5})) == IMPEDANCE_OMITTED_WEIGHTED
+    assert impedance_omitted_reason(_channel(["a"], {"a": -1.0})) == IMPEDANCE_OMITTED_WEIGHTED
+
+
+def test_a_weighted_single_source_channel_drops_its_acoustic_curve_with_the_reason() -> None:
+    response = {"impedance": {"real": [1.0]}, "metadata": {}}
+    applied = finish_imported_channel_response(
+        response, geometry=_geometry(), driver_payload=None, rms_velocity=False,
+        channel=_channel(["a"], {"a": 0.5}),
+    )
+    assert applied is False
+    assert response == {"metadata": {"impedance_omitted": IMPEDANCE_OMITTED_WEIGHTED}}

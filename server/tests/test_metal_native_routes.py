@@ -90,3 +90,52 @@ def test_imported_single_source_solves_on_the_native_interface(monkeypatch, tmp_
     assert response["channel_order"] == ["left"]
     assert response["channels"]["left"]["metadata"]["role"] == "HF"
     _assert_native_setup_stage(stages, "Configuring imported multi-source Metal BEM solve")
+
+
+@pytest.mark.parametrize("weight", [1.0, 0.5, -1.0])
+def test_imported_metal_keeps_impedance_only_for_a_unit_weight_source_live_and_final(monkeypatch, tmp_path, weight):
+    """One rule with BEAT: a weighted patch's raw pressure is w * Z, not an impedance."""
+
+    from server.solver.imported_channels import IMPEDANCE_OMITTED_WEIGHTED
+
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    def native_multi_source(path, specs, config, *, frequencies_hz=None):
+        result = imported_result()
+        assert config.on_frequency_result(0, 100.0, {
+            "observation_angles_deg": result.observation_angles_deg,
+            "observation_planes": result.observation_planes,
+            "observation_pressure_complex": result.pressure_complex[0],
+            "observation_directivity_db": result.directivity_db[0],
+            "impedance": result.impedance[0],
+        }) is True
+        return [result]
+
+    monkeypatch.setattr(metal, "native_solve_multi_source", native_multi_source)
+    request = _request("wgi_" + "0" * 26, drive_channels=[{
+        "id": "left", "source_ids": ["source-a"], "patch_weights": {"source-a": weight}}],
+        required_features=["wg-design-assembly-v1"],
+        mesh={"rigid_size_mm": 8., "transition_mm": 20., "source_size_mm": {"source-a": 3.}})
+    request.options.frequencies_hz = [100., 200.]
+    mesh_path = tmp_path / "imported.msh"
+    msh = _cabinet_msh()
+    mesh_path.write_text(msh)
+    record = _roled_record(mesh_path)
+    record["source_tags"]["source-a"] = 2
+    # A design assembly's sketched diaphragm is how one patch gets a weight.
+    record["required_features"] = ["wg-design-assembly-v1"]
+    record["excitations"] = [{"id": "left", "source_ids": ["source-a"], "motion": "normal",
+                              "patch_weights": {"source-a": weight}}]
+    streamed = []
+    response = metal.solve_imported_metal_from_msh_text(
+        msh, request, record, result_callback=lambda index, frame: streamed.append(frame))
+    final = response["channels"]["left"]
+    live = streamed[0]["channels"]["left"]
+    if weight == 1.0:
+        assert "impedance" in final and "impedance" in live
+        assert "impedance_omitted" not in final["metadata"]
+    else:
+        assert "impedance" not in final and "impedance" not in live
+        assert final["metadata"]["impedance_omitted"] == IMPEDANCE_OMITTED_WEIGHTED

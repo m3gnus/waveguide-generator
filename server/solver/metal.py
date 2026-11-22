@@ -94,6 +94,7 @@ from .imported_channels import (
     channel_basis_metadata,
     channel_source_identity,
     finish_imported_channel_response,
+    impedance_omitted_reason,
     imported_combined_channel,
     imported_envelope,
     imported_validity_metadata,
@@ -1764,7 +1765,7 @@ def solve_imported_metal_from_msh_text(
                     "hornlab_metal_bem"
                 ),
             )
-            if len(channel.source_ids) > 1:
+            if impedance_omitted_reason(channel) is not None:
                 channel_response.pop("impedance", None)
             channel_response["metadata"].update(channel_identity[channel.id])
             provisional_channels[channel.id] = channel_response
@@ -1963,7 +1964,7 @@ def solve_imported_metal_from_msh_text(
                 geometry=geometry,
                 driver_payload=driver_payloads.get(channel.id),
                 rms_velocity=geometry.uses_rms_velocity,
-                omit_impedance=len(channel.source_ids) > 1,
+                channel=channel,
             )
             if not driver_applied and cardioid_owns_driver:
                 channel_response["metadata"]["driver_coupling_deferred_to"] = (

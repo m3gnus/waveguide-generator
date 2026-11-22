@@ -55,6 +55,7 @@ from .imported_channels import (
     channel_basis_metadata,
     channel_source_identity,
     finish_imported_channel_response,
+    impedance_omitted_reason,
     imported_combined_channel,
     imported_envelope,
     imported_validity_metadata,
@@ -424,7 +425,7 @@ def solve_imported_beat_from_msh_text(
                 backend="beat",
                 sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
             )
-            if len(_channel.source_ids) > 1:
+            if impedance_omitted_reason(_channel) is not None:
                 channel_response.pop("impedance", None)
             channel_metadata = channel_response.setdefault("metadata", {})
             channel_metadata.update(channel_identity[_channel.id])
@@ -512,7 +513,7 @@ def solve_imported_beat_from_msh_text(
                         },
                         sound_speed_m_per_s=BEAT_SOUND_SPEED_M_PER_S,
                     )
-                    if len(channel.source_ids) > 1:
+                    if impedance_omitted_reason(channel) is not None:
                         snapshot.pop("impedance", None)
                     live_channel_status[channel.id] = snapshot["frequency_status"]
                     # Unpublished channels have no solved rows yet.
@@ -696,10 +697,7 @@ def solve_imported_beat_from_msh_text(
             geometry=geometry,
             driver_payload=driver_payloads.get(channel.id),
             rms_velocity=geometry.uses_rms_velocity,
-            omit_impedance=(
-                len(channel.source_ids) > 1
-                or any(w != 1 for w in (channel.patch_weights or {}).values())
-            ),
+            channel=channel,
         )
         channels[channel.id] = channel_response
 
