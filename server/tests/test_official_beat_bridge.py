@@ -286,6 +286,37 @@ def test_imported_production(runtime, monkeypatch, adaptive, axial, backend):
     np.testing.assert_allclose(decoded[0], [.01, 0, 0] if not axial else [0, 0, 0])
 
 
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_an_old_beat_assembly_replay_converts_its_impedance_once(runtime, monkeypatch, adaptive):
+    """An assembly request without excitation_normalization shows the same Z/(rho*c) as
+    one that states rms_velocity: the basis is bookkeeping, converted exactly once."""
+
+    monkeypatch.setattr(bridge, "engine_version", lambda: "1.2.3")
+
+    def solve(normalization):
+        channels = [{"id": name, "source_ids": [source], "patch_weights": {source: 1.0}}
+                    for name, source in (("a", "source-a"), ("b", "source-b"), ("c", "source-c"))]
+        extra = {} if normalization is None else {"excitation_normalization": normalization}
+        request = cad._request(drive_channels=channels, required_features=["wg-design-assembly-v1"], **extra)
+        request.options.adaptive_frequency_sampling = adaptive
+        if adaptive:
+            request.options.frequency_range = [100., 1000.]
+            request.options.frequencies_hz = None
+            request.options.num_frequencies = 24
+        record = cad._record()
+        record["required_features"] = ["wg-design-assembly-v1"]
+        record["excitations"] = [{"id": c["id"], "source_ids": c["source_ids"], "motion": "normal",
+                                  "patch_weights": c["patch_weights"]} for c in channels]
+        return beat_imported.solve_imported_beat_from_msh_text(cad.MESH, request, record, backend="cpu")
+
+    old, explicit = solve(None)["channels"], solve("rms_velocity")["channels"]
+    for name in ("a", "b", "c"):
+        np.testing.assert_allclose(old[name]["impedance"]["real"], explicit[name]["impedance"]["real"], rtol=1e-9)
+        np.testing.assert_allclose(old[name]["impedance"]["imaginary"], explicit[name]["impedance"]["imaginary"],
+                                   rtol=1e-9)
+        assert old[name]["spl_on_axis"] == explicit[name]["spl_on_axis"]
+
+
 @pytest.mark.parametrize("axial", [False, True])
 @pytest.mark.parametrize("channels", [
     [{"id": "left", "source_ids": ["source-a", "source-b"]},

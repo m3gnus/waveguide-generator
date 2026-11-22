@@ -8,9 +8,12 @@ def pressure_per_velocity_scale(
 ) -> np.ndarray:
     """Convert pressure in the stated solver basis to pressure per 1 m/s RMS.
 
-    Untagged results retain acceleration-consumer semantics, including historical
-    assembly runs whose fields were scaled without informing these consumers.
-    Only explicit requests opt into the corrected basis contract.
+    Untagged results retain acceleration-consumer semantics. An old assembly
+    replay (no ``excitation_normalization``) decodes to RMS velocity untagged:
+    ``normalize_prescribed_result`` scales its pressure fields to the velocity
+    basis but leaves its impedance and per-tag means in the acceleration basis,
+    so this conversion is their only one. Explicit requests tag the result and
+    opt into the velocity basis contract here.
     """
     frequencies = np.asarray(frequencies_hz, dtype=float)
     if normalization == "rms_velocity":

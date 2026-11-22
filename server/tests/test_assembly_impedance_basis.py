@@ -62,15 +62,54 @@ def test_assembly_impedance_is_converted_to_velocity_once(monkeypatch, tmp_path,
     np.testing.assert_allclose(shown, once, rtol=1e-12)
 
 
-def test_the_old_double_conversion_was_off_by_j_omega(monkeypatch, tmp_path):
-    """Pins the bug's size: the replay shown before the fix was j*omega times the true value."""
+def _normalize_before_the_fix(result, geometry, *, engine=None):
+    """A frozen copy of ``normalize_prescribed_result`` as it was before the fix."""
 
-    once = np.asarray(specific_impedance_z_over_rho_c(SimpleNamespace(frequencies_hz=FREQUENCIES, impedance=RAW)))
     from server.solver.excitation_basis import pressure_per_velocity_scale
+    from server.solver.imported_channels import scale_channel_result
 
-    twice = np.asarray(specific_impedance_z_over_rho_c(SimpleNamespace(
-        frequencies_hz=FREQUENCIES, impedance=RAW * pressure_per_velocity_scale(FREQUENCIES))))
-    ratio = twice / once
-    np.testing.assert_allclose(np.abs(ratio), 2 * np.pi * FREQUENCIES, rtol=1e-12)
-    assert abs(ratio[0]) == pytest.approx(628.3185307179587)
-    np.testing.assert_allclose(_z(_solve(monkeypatch, tmp_path, None)), once, rtol=1e-12)
+    normalization = geometry.normalization_for_engine(engine)
+    explicit = (geometry.excitation_normalization is not None
+                or geometry.excitation_normalization_by_engine is not None)
+    if explicit:
+        result.excitation_normalization = normalization
+    if normalization != "rms_velocity":
+        return
+    scale = pressure_per_velocity_scale(result.frequencies_hz)
+    scale_channel_result(result, scale)
+    impedance = getattr(result, "impedance", None)
+    if impedance is not None:
+        result.impedance = np.asarray(impedance) * scale
+
+
+def test_the_old_double_conversion_was_off_by_j_omega(monkeypatch, tmp_path):
+    """The old code's shown value, from a frozen copy of it, was j*omega times today's."""
+
+    from server.solver import imported_channels
+
+    fixed = _z(_solve(monkeypatch, tmp_path, None))
+    monkeypatch.setattr(metal, "normalize_prescribed_result", _normalize_before_the_fix)
+    monkeypatch.setattr(imported_channels, "normalize_prescribed_result", _normalize_before_the_fix)
+    old = _z(_solve(monkeypatch, tmp_path, None))
+    ratio = old / fixed
+    np.testing.assert_allclose(ratio, 2j * np.pi * FREQUENCIES, rtol=1e-12)
+    assert ratio[0] == pytest.approx(628.3185307179587j)
+    once = np.asarray(specific_impedance_z_over_rho_c(SimpleNamespace(frequencies_hz=FREQUENCIES, impedance=RAW)))
+    np.testing.assert_allclose(fixed, once, rtol=1e-12)
+
+
+def test_an_assembly_channel_can_never_carry_a_driver():
+    """So no driver-derived number (ohms, excursion, driver-scaled SPL) of an
+    untagged assembly replay can move with this fix: the contract refuses them."""
+
+    from server.contracts.source_contour import validate_contour_request
+    driver = {"sd_cm2": 210.0, "bl_t_m": 10.5, "re_ohm": 5.3, "mms_g": 20.0, "cms_m_per_n": 4e-4,
+              "rms_kg_per_s": 1.2}
+    request = _request("wgi_" + "0" * 26, drive_channels=[{"id": "drive", "source_ids": ["source-a"],
+                                                           "driver": driver}],
+                       required_features=["wg-design-assembly-v1"],
+                       mesh={"rigid_size_mm": 8., "transition_mm": 20., "source_size_mm": {"source-a": 3.}})
+    record = {"required_features": ["wg-design-assembly-v1"], "skipped_source_ids": [],
+              "excitations": [{"id": "drive", "source_ids": ["source-a"], "motion": "normal"}]}
+    with pytest.raises(ValueError, match="contradicts the compiled radiator excitation"):
+        validate_contour_request(request.geometry, record)
