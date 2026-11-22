@@ -2,6 +2,8 @@ import { importedSimulationSetup, useImportedSimulationSetup } from '../stores/i
 import { EmptyState } from '../shell/EmptyState';
 import { prefillExteriorDriver } from '../stores/exteriorTransducer';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useSettled } from './useSettled';
+
 import {
   getDriver,
   searchDrivers,
@@ -47,6 +49,9 @@ import {
   type DriverKindTally,
 } from './driverLibraryCounts';
 import { failureWords } from '../api/httpError';
+
+/** How long typing must pause before the library is searched. */
+const DRIVER_SEARCH_DEBOUNCE_MS = 150;
 
 
 /**
@@ -364,10 +369,13 @@ function DriverSearch({ channel, roleHint, counts, onPick, displayName }: {
     setKind(openingSearchKind(preferredKind, counts));
   }, [counts, preferredKind]);
 
+  // One library search per pause in typing, not per keystroke: each search
+  // also re-checks the library folder on the server.
+  const settledQuery = useSettled(query, DRIVER_SEARCH_DEBOUNCE_MS);
   useEffect(() => {
     if (!open) return;
     const request = ++generation.current;
-    void searchDrivers({ q: query, kind, limit: 40 }).then(
+    void searchDrivers({ q: settledQuery, kind, limit: 40 }).then(
       (result) => {
         if (request !== generation.current) return;
         setHits(result.items);
@@ -384,7 +392,7 @@ function DriverSearch({ channel, roleHint, counts, onPick, displayName }: {
       },
     );
     return () => { generation.current += 1; };
-  }, [kind, open, query]);
+  }, [kind, open, settledQuery]);
 
   const matches = useMemo<Candidate[]>(() => {
     const fromLibrary = hits.map((hit): Candidate => ({

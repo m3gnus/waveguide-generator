@@ -38,12 +38,18 @@ export function ProfileCanvasDialog() {
 }
 
 /** Generated samples are physical mm, including Scale. Never replace authored
- * samples with this export: the mesher curve query is the authoring authority. */
-export function useGeneratedProfile(design: DesignDocument, revision: number, identity: number) {
+ * samples with this export: the mesher curve query is the authoring authority.
+ *
+ * Only `enabled` asks the server: the canvas stays mounted for every FREEFORM
+ * design, and sampling the profile on each edit while nobody looks at it is a
+ * request per edit for nothing. While disabled the last answer stands and is
+ * not reported as pending; enabling again fetches the current profile. */
+export function useGeneratedProfile(design: DesignDocument, revision: number, identity: number, enabled = true) {
   const [result, setResult] = useState<{ key: string; identity: number; samples: ProfileSamples; scale: number }>();
   const [failure, setFailure] = useState<{ key: string; message: string }>();
   const key = `${identity}:${revision}`;
   useEffect(() => {
+    if (!enabled) return undefined;
     const origin = currentEditOrigin(), abort = new AbortController();
     // The content key guards the export too, even though its wire format is CSV.
     const requestKey = profileRequestKey(origin, design);
@@ -56,19 +62,20 @@ export function useGeneratedProfile(design: DesignDocument, revision: number, id
       });
     }, 300);
     return () => { activeKey = undefined; clearTimeout(timer); abort.abort(); };
-  }, [design, revision, identity, key]);
+  }, [design, revision, identity, key, enabled]);
   const visible = result?.identity === identity ? result : undefined;
-  const error = failure?.key === key ? failure.message : undefined;
-  return { samples: visible?.samples, scale: visible?.scale, stale: visible?.key !== key || Boolean(error), error };
+  const error = enabled && failure?.key === key ? failure.message : undefined;
+  return { samples: visible?.samples, scale: visible?.scale, stale: enabled && (visible?.key !== key || Boolean(error)), error };
 }
 
 function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () => void }) {
   const design = useDesignStore(state => state.design), revision = useDesignStore(state => state.designRevision), identity = useDesignStore(state => state.loadGeneration);
   const invalidInputs = useSyncExternalStore(parameterPanelValidity.subscribe, parameterPanelValidity.getSnapshot, parameterPanelValidity.getSnapshot);
-  const currentCurves = useCurrentProfileCurves(), generated = useGeneratedProfile(design, revision, identity), edit = useProfileEdit();
+  const [showGenerated, setShowGenerated] = useState(true);
+  const currentCurves = useCurrentProfileCurves(), generated = useGeneratedProfile(design, revision, identity, visible && showGenerated), edit = useProfileEdit();
   const [state, setState] = useState(design), [session, setSession] = useState<PlainController<DesignDocument, DesignDocument, ProfileCommand>>();
   const [selection, setSelection] = useState<string[]>([]), [plane, setPlane] = useState<ProfilePlaneChoice>('both');
-  const [scaled, setScaled] = useState(false), [showGenerated, setShowGenerated] = useState(true), [dragging, setDragging] = useState(false);
+  const [scaled, setScaled] = useState(false), [dragging, setDragging] = useState(false);
   const [fitRequest, setFitRequest] = useState(0), [fieldVersion, setFieldVersion] = useState(0);
   const [actionError, setActionError] = useState<string>();
   const [propertiesHost, setPropertiesHost] = useState<HTMLDivElement | null>(null);

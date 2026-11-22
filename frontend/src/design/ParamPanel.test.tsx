@@ -3534,6 +3534,8 @@ describe('driver picker', () => {
     act(() => input.focus());
     await settle();
     await type(input, 'b&c 15');
+    // The library search waits for typing to pause.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
     await settle();
 
     const empty = channelCard().querySelector<HTMLElement>('.driver-empty')!;

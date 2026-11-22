@@ -41,6 +41,17 @@ describe('full-installer update control', () => {
       <UpdateDialog open={options.open ?? true} snapshot={snapshot} onRefresh={refresh} onClose={close} activeJobs={options.activeJobs}/>
     </QueryClientProvider>));
   }
+  /** The dialog fed by the real status query, as TopBar mounts it. */
+  function Live({ open }: { open: boolean }) {
+    const snapshot = useUpdateStatus();
+    return <UpdateDialog open={open} snapshot={snapshot} onRefresh={snapshot.refresh} onClose={close}/>;
+  }
+  function renderLive(initial: UpdateStatus, next: () => UpdateStatus, open = true) {
+    client.setQueryData(UPDATE_QUERY_KEY, initial);
+    fetch.mockImplementation(async (url: string) => url === '/api/updates/install' ? reply(accepted, 202) : reply(next()));
+    act(() => root.render(<QueryClientProvider client={client}><Live open={open}/></QueryClientProvider>));
+  }
+  const statusReads = () => fetch.mock.calls.filter(([url]) => url === '/api/updates/status').length;
   function button(label: string) { return [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === label)!; }
   async function click(label: string) { await act(async () => button(label).click()); }
 
@@ -211,8 +222,9 @@ describe('full-installer update control', () => {
     expect(button('Check again')).toBeDefined();
   });
   it('offers download recovery when progress polling reports failure', async () => {
-    vi.useFakeTimers(); render(); await click('Install and restart');
-    fetch.mockResolvedValue(reply(status({ installState: 'failed', activeVersion: '2.0.1', error: 'Download interrupted.' })));
+    vi.useFakeTimers();
+    renderLive(status(), () => status({ installState: 'failed', activeVersion: '2.0.1', error: 'Download interrupted.' }));
+    await click('Install and restart');
     await act(async () => vi.advanceTimersByTimeAsync(400));
     expect(host.textContent).toContain('Download interrupted.');
     expect(host.textContent).toContain('Choose Install and restart to download and verify the installer again.');
@@ -322,21 +334,30 @@ describe('full-installer update control', () => {
     expect(button('Install and restart')).toBeDefined();
   });
   it('polls through verification and ready without another download request', async () => {
-    vi.useFakeTimers(); render(); await click('Install and restart');
+    vi.useFakeTimers();
     const verifying = status({ installState: 'verifying', activeVersion: '2.0.1', downloadedBytes: 244_000_000, totalBytes: 244_000_000 });
-    fetch.mockResolvedValue(reply(verifying)); await act(async () => vi.advanceTimersByTimeAsync(400));
+    let next = verifying;
+    renderLive(status(), () => next);
+    await click('Install and restart');
+    await act(async () => vi.advanceTimersByTimeAsync(400));
     expect(host.textContent).toContain('Verifying the download');
-    fetch.mockResolvedValue(reply({ ...verifying, installState: 'ready' })); await act(async () => vi.advanceTimersByTimeAsync(400));
+    // The query's next 400 ms read, then its batched notification.
+    next = { ...verifying, installState: 'ready' }; await act(async () => vi.advanceTimersByTimeAsync(401));
     expect(button('Restarting…').disabled).toBe(true);
     expect(fetch.mock.calls.filter(([url]) => url === '/api/updates/install')).toHaveLength(1);
   });
-  it('aborts progress polling when closed', async () => {
-    vi.useFakeTimers(); render(); await click('Install and restart');
-    const pending = deferred<Response>(); fetch.mockReturnValue(pending.promise);
-    await act(async () => vi.advanceTimersByTimeAsync(400));
-    const signal = (fetch.mock.calls.at(-1)![1] as RequestInit).signal!;
-    render(status(), { open: false }); expect(signal.aborted).toBe(true);
-    await act(async () => pending.resolve(reply(status())));
+  it('adds no status polling of its own to the query’s while a download runs', async () => {
+    vi.useFakeTimers();
+    const downloading = status({ installState: 'downloading', activeVersion: '2.0.1', downloadedBytes: 1_000_000, totalBytes: 244_000_000 });
+    let downloaded = 1_000_000;
+    renderLive(downloading, () => ({ ...downloading, downloadedBytes: (downloaded += 1_000_000) }));
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    const before = statusReads();
+    await act(async () => vi.advanceTimersByTimeAsync(1_200));
+    // One read per 400 ms: the query's. The dialog used to add a second loop.
+    expect(statusReads() - before).toBeLessThanOrEqual(3);
+    expect(host.textContent).toMatch(/\d+\.\d MB of 244\.0 MB/);
+    root.render(<QueryClientProvider client={client}><Live open={false}/></QueryClientProvider>);
   });
   it.each([
     [{ from: '2.0.0', to: '2.0.1', result: 'installed', when: '', log: '' } as const, 'Updated to v2.0.1.'],

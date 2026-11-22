@@ -136,9 +136,10 @@ describe('completed-job auto-export naming', () => {
       });
       expect(jobsCoordinatorBridge.getSnapshot().actionError).toContain('Workspace is unavailable.');
       expect(activate).not.toHaveBeenCalled();
+      // A later change to the run (not a progress frame) retries the write.
       if (update < 3) act(() => {
         host.querySelector('input')!.focus();
-        publishJobs([{ ...run }]);
+        publishJobs([{ ...run, rating: update }]);
       });
     }
     act(() => host.querySelector('input')!.blur());

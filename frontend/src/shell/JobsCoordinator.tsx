@@ -11,8 +11,8 @@ import type { ExportFormat } from '../prefs/preferences';
 import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { exportRunAutomatically } from '../jobs/autoExportRun';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from 'react';
-import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { useJobsApartFromProgress } from '../api/jobsSelector';
+import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
+import { useJobsApartFromProgress, useJobsSelector } from '../api/jobsSelector';
 import { clearJobLink, jobIdFromLink, openLinkedJob } from '../jobs/jobDeepLink';
 import { compareSelection } from '../api/results';
 import type { CadReturnIngestRecord } from '../api/cadlink';
@@ -902,6 +902,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
  * a new command, and so re-rendered all of them, for nothing they show. These
  * effects run on exactly the job lists they did when the coordinator held them.
  */
+const selectJobsLoaded = (snapshot: JobsSnapshot) => snapshot.cursor !== null;
+
 function JobsFollower({ automation, preferences, reportError, completeCadSolve, setActionError, recoveryNotices, linkedJobId }: {
   automation: JobAutomation;
   preferences: ReturnType<typeof usePreferences>;
@@ -911,9 +913,11 @@ function JobsFollower({ automation, preferences, reportError, completeCadSolve, 
   recoveryNotices: Parameters<typeof useRecoveryNoticeAttention>[0];
   linkedJobId: MutableRefObject<string | null | undefined>;
 }) {
-  const jobsSnapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
-  const jobs = jobsSnapshot.jobs;
-  const jobsLoaded = jobsSnapshot.cursor !== null;
+  // Nothing here reads a run's progress fields (progress, stage, stage_message,
+  // frequency_progress, log_tail), so these effects need not rerun per
+  // progress frame of a running solve.
+  const jobs = useJobsApartFromProgress();
+  const jobsLoaded = useJobsSelector(selectJobsLoaded);
   useEffect(() => {
     for (const job of latestCadJobs(jobs)) {
       const parent = jobs.find((candidate) => candidate.id === job.parent_job_id);

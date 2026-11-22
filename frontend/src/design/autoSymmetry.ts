@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import type { DesignDocument } from '../stores/design';
+import { useSettled } from './useSettled';
 
 /** Resolving samples the surface, so it must not run on every keystroke. */
 const SYMMETRY_DEBOUNCE_MS = 400;
@@ -15,16 +16,6 @@ const SYMMETRY_STALE_MS = 5 * 60_000;
 
 /** How long a superseded payload's answer is kept in case the user comes back. */
 const SYMMETRY_GC_MS = 60_000;
-
-/** Hold a value back until it has stopped changing for `delay` milliseconds. */
-function useSettled<T>(value: T, delay: number): T {
-  const [settled, setSettled] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setSettled(value), delay);
-    return () => clearTimeout(timer);
-  }, [value, delay]);
-  return settled;
-}
 
 export interface AutoSymmetryOptions {
   /** False keeps the query idle (no request) while the caller has no use for it. */

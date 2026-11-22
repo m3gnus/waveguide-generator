@@ -329,6 +329,23 @@ describe('profile canvas freshness (FV regression net)', () => {
   const respond = async (group: Request[] = requests) => act(async () => { group.forEach(request => request.resolve(request.response)); await flush(); });
   const curve = () => document.querySelector('.profile-authored')?.getAttribute('d');
 
+  it('samples the generated profile only while the canvas is open and showing it', async () => {
+    const fetcher = profileServer();
+    const exports = () => fetcher.mock.calls.filter(([url]) => String(url).startsWith('/api/export')).length;
+    await act(async () => { root.render(<><ProfileCanvasLauncher/><ProfileCanvasDialog/></>); await flush(); });
+    await act(async () => useDesignStore.getState().updateValue('length', 130)); await tick();
+    expect(exports()).toBe(0);
+    await act(async () => button('Edit profile on canvas…').click()); await tick();
+    expect(exports()).toBe(1);
+    const generated = [...document.querySelectorAll<HTMLLabelElement>('label')].find(label => label.textContent?.includes('Generated profile'))!;
+    await act(async () => generated.querySelector('input')!.click());
+    await act(async () => useDesignStore.getState().updateValue('length', 140)); await tick();
+    expect(exports()).toBe(1);
+    expect(document.querySelector('.profile-canvas-freshness')?.textContent).not.toContain('Updating');
+    await act(async () => generated.querySelector('input')!.click()); await tick();
+    expect(exports()).toBe(2);
+  });
+
   it('debounces requests, drops late curve/export replies, and hides another document immediately', async () => {
     await mount(); expect(requests).toHaveLength(0); await tick(); expect(requests).toHaveLength(2);
     await respond(); const firstCurve = curve(); expect(firstCurve).toBeTruthy();

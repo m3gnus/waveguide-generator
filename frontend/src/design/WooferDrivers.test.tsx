@@ -63,6 +63,22 @@ describe('a design assembly in the shared Drivers section', () => {
   });
   afterEach(() => { act(() => root.unmount()); host.remove(); vi.clearAllMocks(); });
 
+  it('searches the library once per pause in typing, not per keystroke', async () => {
+    const { searchDrivers } = await import('../api/drivers');
+    act(() => solveDriver().click());
+    const search = host.querySelector<HTMLInputElement>('[role="combobox"][aria-label="Find driver for Woofer 1"]')!;
+    await act(async () => { search.focus(); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 200)); });
+    vi.mocked(searchDrivers).mockClear();
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    for (const text of ['s', 'sb', 'sb1', 'sb15']) {
+      await act(async () => { setValue.call(search, text); search.dispatchEvent(new Event('input', { bubbles: true })); });
+    }
+    expect(searchDrivers).not.toHaveBeenCalled();
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 200)); });
+    expect(vi.mocked(searchDrivers).mock.calls.map(([request]) => request?.q)).toEqual(['sb15']);
+  });
+
   it('lists the horn and each woofer by name before any build, with the build\'s fixed motion', () => {
     expect(host.querySelector('[data-channel-id="horn-throat"]')?.textContent).toContain('The horn\'s source moves at 1 m/s RMS');
     expect(section().textContent).toContain('Woofer 1');

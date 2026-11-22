@@ -12,8 +12,11 @@ import { useCapabilities } from './useCapabilities';
 import { useSolvePlan } from './useSolvePlan';
 import { activeReadyMeshSubmission, useImportedSolvePlan } from './useImportedSolvePlan';
 
-/** Controls share the submission planner; routing may depend on geometry and mounting. */
-export function useSolveControlBackend(modeOverride?: WorkspaceMode) {
+/**
+ * Controls share the submission planner; routing may depend on geometry and mounting.
+ * `enabled: false` keeps both planners idle (no request) for a caller with no use for a plan.
+ */
+export function useSolveControlBackend(modeOverride?: WorkspaceMode, enabled = true) {
   const workspace = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot);
   const mode = modeOverride ?? workspace.mode;
   const design = useDesignStore((state) => state.design);
@@ -36,8 +39,8 @@ export function useSolveControlBackend(modeOverride?: WorkspaceMode) {
   const readyMesh = activeReadyMeshSubmission(planningModel);
   const readyMeshActive = readyMesh !== null;
   const submission = readyMesh && typeof readyMesh !== 'string' && !(readyMesh instanceof Error) ? planSubmission(readyMesh) : null;
-  const parametric = useSolvePlan(design, options, mode === 'parametric' && !readyMeshActive);
-  const imported = useImportedSolvePlan(mode === 'cad' || submission !== null, readyMeshActive ? submission : undefined);
+  const parametric = useSolvePlan(design, options, enabled && mode === 'parametric' && !readyMeshActive);
+  const imported = useImportedSolvePlan(enabled && (mode === 'cad' || submission !== null), readyMeshActive ? submission : undefined);
   const snapshot = mode === 'cad' || readyMeshActive ? imported : parametric;
   // A control may keep its last routing answer during edits; submission must
   // still use only the current plan returned by the planner hooks.

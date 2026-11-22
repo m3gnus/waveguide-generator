@@ -216,14 +216,17 @@ export function usePlannedBackendCapabilities(): readonly EngineCapability[] {
     ? candidates.filter((item) => item.name.startsWith('beat-')) : candidates;
 }
 
-/** Migrate a legacy family alias only after this model has a server plan. */
+/**
+ * Migrate a legacy family alias only after this model has a server plan.
+ * Each planner asks the server only while its options still name 'beat'.
+ */
 export function useLegacyBeatEngineMigration(): void {
   const engine = useSolveOptionsStore((state) => state.engine);
   const setEngine = useSolveOptionsStore((state) => state.setEngine);
   const importedEngine = useImportedSolveOptionsStore((state) => state.engine);
   const setImportedEngine = useImportedSolveOptionsStore((state) => state.setEngine);
-  const parametric = useSolveControlBackend('parametric');
-  const imported = useSolveControlBackend('cad');
+  const parametric = useSolveControlBackend('parametric', engine === 'beat');
+  const imported = useSolveControlBackend('cad', importedEngine === 'beat');
   useEffect(() => {
     const migrated = engine === 'beat' ? parametric.plan?.engine ?? null : null;
     if (migrated !== null) setEngine(migrated);

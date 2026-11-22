@@ -106,6 +106,8 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
   const [verifiedChannel, setVerifiedChannel] = useState<UpdateChannel>();
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [progress, setProgress] = useState<UpdateInstallAccepted>();
+  /** The status query's update count when the install was accepted. */
+  const acceptedAt = useRef(0);
   const state = progress?.installState ?? data?.installState;
   const installing = active(state) || state === 'ready';
   const close = useCallback(() => {
@@ -138,27 +140,23 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
     });
     return () => controller.abort();
   }, [open, data?.channel, choice]);
+  // Progress follows the status query, which polls every 400 ms while an
+  // install is active (`useUpdateStatus`). This dialog used to run a second
+  // 400 ms loop of its own beside it. A status read before the install was
+  // accepted must not overwrite the accepted progress.
   useEffect(() => {
     if (!open || !active(state)) return;
-    const controller = new AbortController();
-    let timer: number;
-    const poll = async () => {
-      try {
-        const result = await getUpdateStatus(false, controller.signal);
-        if (controller.signal.aborted) return;
-        client.setQueryData(UPDATE_QUERY_KEY, result);
-        setProgress({ accepted: true, version: result.activeVersion ?? '', activeVersion: result.activeVersion ?? '',
-          installState: result.installState, downloadedBytes: result.downloadedBytes, totalBytes: result.totalBytes, error: result.error });
-        if (active(result.installState)) timer = window.setTimeout(() => void poll(), 400);
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setFeedback(`WG could not read the update’s progress. ${failureWords(error, 'Reopen this window to check it.')}`);
-        timer = window.setTimeout(() => void poll(), 400);
-      }
-    };
-    timer = window.setTimeout(() => void poll(), 400);
-    return () => { controller.abort(); window.clearTimeout(timer); };
-  }, [client, open, state]);
+    // Read the cache, not the prop: the count and the data must be one read.
+    const query = client.getQueryState<UpdateStatus>(UPDATE_QUERY_KEY);
+    const current = query?.data;
+    if (!current || (query?.dataUpdateCount ?? 0) <= acceptedAt.current) return;
+    setProgress({ accepted: true, version: current.activeVersion ?? '', activeVersion: current.activeVersion ?? '',
+      installState: current.installState, downloadedBytes: current.downloadedBytes, totalBytes: current.totalBytes, error: current.error });
+  }, [client, open, data, state]);
+  useEffect(() => {
+    if (!open || !active(state) || !snapshot.error) return;
+    setFeedback(`WG could not read the update’s progress. ${failureWords(snapshot.error, 'Reopen this window to check it.')}`);
+  }, [open, state, snapshot.error]);
   if (!open) return null;
 
   const perform = async (action: () => Promise<void>) => {
@@ -173,7 +171,12 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
     const operation = generation.current + 1;
     void perform(async () => {
       const result = await installApplicationUpdate();
-      if (operation === generation.current) { setProgress(result); setConfirmRestart(false); }
+      if (operation === generation.current) {
+        acceptedAt.current = client.getQueryState(UPDATE_QUERY_KEY)?.dataUpdateCount ?? 0;
+        setProgress(result); setConfirmRestart(false);
+        // Read the status now, so the query's 400 ms polling starts from it.
+        void client.invalidateQueries({ queryKey: UPDATE_QUERY_KEY });
+      }
     });
   };
   const copyDiagnostics = () => {
