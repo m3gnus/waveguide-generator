@@ -435,12 +435,10 @@ def test_a_failed_warmup_is_reported_rather_than_raised(
     onto the job that hits it.
     """
 
-    from server.solver import warmup as warmup_module
-
     def explode(_status):
         raise RuntimeError("no assembly backend")
 
-    monkeypatch.setattr(warmup_module, "warm_bempp_in_this_process", explode)
+    monkeypatch.setattr(bempp_process, "warm_bempp_in_this_process", explode)
 
     outcome = bempp_process._warm_this_process()
 

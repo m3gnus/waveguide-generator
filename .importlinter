@@ -4,7 +4,7 @@ root_package = server
 exclude_type_checking_imports = false
 
 [importlinter:contract:server-layers]
-name = Server layers (legacy edges are explicit)
+name = Server layers
 type = layers
 containers = server
 # Highest to lowest. Assembly and API ownership follow the current graph;
@@ -38,12 +38,8 @@ exhaustive_ignores =
     # Test modules are clients of production packages, not runtime layers.
     tests
 unmatched_ignore_imports_alerting = error
-# Exact module edges only: never widen these to wildcard package exceptions.
-# Remove an edge when its dependency is extracted into a lower layer.
-ignore_imports =
-    # solver -> engines: existing upward dependency.
-    # Legacy use: full3d_engine_order.
-    server.solver.warmup -> server.engines.registry
+# No ignored edges. When a module needs one in a higher layer, move the shared
+# code down to the layer that owns it rather than adding an exception.
 
 # CAD Link lanes (S7-1). Highest to lowest; docs/architecture/CAD-OPERATIONS.md, "Server layout".
 # onshape sits above joblane|fusion because its return leg imports joblane and intake. identity
@@ -107,9 +103,9 @@ forbidden_modules =
 
 # Solver engine adapters are independent: no engine's adapter may import another
 # engine's, directly or through a chain. Shared solver utilities and multi-engine
-# dispatchers stay outside these lists. When you add an engine-specific module, add
-# it to its engine's list here. Ignored edges are exact module edges: new symbols
-# taken along an already ignored edge are not caught until the edge is removed.
+# dispatchers (server.engines.warmup) stay outside these lists. When you add an
+# engine-specific module, add it to its engine's list here. None of these
+# contracts ignores an edge.
 
 [importlinter:contract:solver-engine-metal]
 name = No other engine imports the Metal adapter
@@ -130,12 +126,6 @@ source_modules =
 forbidden_modules =
     server.solver.metal
     server.solver.metal_permit
-ignore_imports =
-    # Legacy: BEMPP's worker and BEAT's readiness import the shared warmup
-    # dispatcher, which reaches every engine.
-    server.solver.bempp_process -> server.solver.warmup
-    server.solver.beat -> server.solver.warmup
-unmatched_ignore_imports_alerting = none
 
 [importlinter:contract:solver-engine-bempp]
 name = No other engine imports the BEMPP adapter
@@ -156,12 +146,6 @@ forbidden_modules =
     server.solver.bempp_process
     server.solver.bempp_field
     server.solver.bempp_opencl
-ignore_imports =
-    # Legacy: BEMPP's worker and BEAT's readiness import the shared warmup
-    # dispatcher, which reaches every engine.
-    server.solver.bempp_process -> server.solver.warmup
-    server.solver.beat -> server.solver.warmup
-unmatched_ignore_imports_alerting = none
 
 [importlinter:contract:solver-engine-beat]
 name = No other engine imports the BEAT adapter
@@ -182,12 +166,6 @@ forbidden_modules =
     server.solver.beat_adapter.coupled_request
     server.solver.beat_cpu_runtime
     server.solver.official_beat
-ignore_imports =
-    # Legacy: BEMPP's worker and BEAT's readiness import the shared warmup
-    # dispatcher, which reaches every engine.
-    server.solver.bempp_process -> server.solver.warmup
-    server.solver.beat -> server.solver.warmup
-unmatched_ignore_imports_alerting = none
 
 [importlinter:contract:solver-engine-dryrun]
 name = No other engine imports the dry-run adapter
@@ -208,9 +186,3 @@ source_modules =
     server.solver.official_beat
 forbidden_modules =
     server.engines.dryrun
-ignore_imports =
-    # Legacy: BEMPP's worker and BEAT's readiness import the shared warmup
-    # dispatcher, which reaches every engine.
-    server.solver.bempp_process -> server.solver.warmup
-    server.solver.beat -> server.solver.warmup
-unmatched_ignore_imports_alerting = none

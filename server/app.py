@@ -221,7 +221,7 @@ async def prewarm_solver(engine: str | None = None) -> None:
     """Start the solver warmup. Deliberately imported late and never awaited."""
 
     def start() -> None:
-        from server.solver.warmup import start_solver_warmup
+        from server.engines.warmup import start_solver_warmup
 
         start_solver_warmup(**({"engine": engine} if engine is not None else {}))
 
@@ -309,7 +309,7 @@ async def bempp_worker_prewarm(
     def load_warmup() -> Callable[[str | None], bool]:
         # create_task does not isolate synchronous imports: an import lock or
         # native module initialization here would freeze the startup/HTTP loop.
-        from server.solver.warmup import prewarm_bempp_worker_for_engine
+        from server.engines.warmup import prewarm_bempp_worker_for_engine
 
         return prewarm_bempp_worker_for_engine
 
@@ -353,7 +353,7 @@ async def beat_worker_prewarm(
     def load_warmup():
         from server.solver.beat import is_beat_engine
         from server.solver.beat_cpu_runtime import cpu_preparation_in_flight
-        from server.solver.warmup import prewarm_beat_worker_for_engine
+        from server.engines.warmup import prewarm_beat_worker_for_engine
 
         def preparation_in_flight() -> bool:
             # These checks take threading locks shared with provisioning and
@@ -671,7 +671,7 @@ def create_app(
                     await prewarm_solver(resolved)
                     return
                 if resolved == "bempp":
-                    from server.solver.warmup import prewarm_bempp_worker_for_engine
+                    from server.engines.warmup import prewarm_bempp_worker_for_engine
 
                     await asyncio.to_thread(prewarm_bempp_worker_for_engine, resolved)
                     return

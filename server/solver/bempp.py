@@ -178,7 +178,7 @@ def _version() -> str | None:
 #: Two caveats, both real:
 #:
 #: * Each spawned worker re-JITs bempp-cl's kernels, so a split sweep re-creates
-#:   part of the cold-start window ``server/solver/warmup.py`` exists to remove.
+#:   part of the cold-start window ``server/engines/warmup.py`` exists to remove.
 #:   It is amortised over >= 40 frequencies per worker, not over one.
 #: * Every worker holds its own dense matrix. The figures above are from an
 #:   M1 Max, which has several times the memory bandwidth of a mainstream

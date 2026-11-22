@@ -9,6 +9,7 @@ import pytest
 
 import server.app as app_module
 from server.app import create_app
+from server.engines import warmup as engine_warmup
 from server.solver import official_beat, warmup
 from server.solver.beat_runtime.session import SessionCancelled
 from server.tests.test_jobs_api import _request_with_headers
@@ -144,7 +145,7 @@ def test_automatic_prewarm_starts_cpu_setup_only_after_running_solve(app, monkey
     monkeypatch.setattr(beat_cpu_runtime, 'start_selected_provisioning',
                         lambda engine, **kwargs: started.append(engine))
     monkeypatch.setattr(app_module, 'resolve_prewarm_engine', lambda *a, **k: asyncio.sleep(0, 'bempp'))
-    monkeypatch.setattr(warmup, 'prewarm_bempp_worker_for_engine', lambda engine: None)
+    monkeypatch.setattr(engine_warmup, 'prewarm_bempp_worker_for_engine', lambda engine: None)
 
     async def scenario():
         status, _, _ = await _request_with_headers(app, 'POST', '/api/runtimes/beat/prewarm',
@@ -163,8 +164,8 @@ def test_unavailable_runtime_never_launches_a_warmup(monkeypatch):
     monkeypatch.delenv('WG2_SOLVER_WARMUP', raising=False)
     monkeypatch.setattr(official_beat, 'production_statuses', lambda **kwargs: {
         'metal': {'available': False, 'reason': 'not provisioned'}})
-    monkeypatch.setattr(warmup, '_warm_beat', lambda *a, **k: pytest.fail('unavailable runtime warmed'))
-    assert not warmup.prewarm_beat_worker_for_engine('beat-metal', cancellation_callback=lambda: None)
+    monkeypatch.setattr(engine_warmup, '_warm_beat', lambda *a, **k: pytest.fail('unavailable runtime warmed'))
+    assert not engine_warmup.prewarm_beat_worker_for_engine('beat-metal', cancellation_callback=lambda: None)
 
 
 def test_named_selection_reuses_existing_backend_hook(monkeypatch):
@@ -173,7 +174,7 @@ def test_named_selection_reuses_existing_backend_hook(monkeypatch):
 
     calls = []
     monkeypatch.setattr(beat_cpu_runtime, 'cpu_preparation_in_flight', lambda: False)
-    monkeypatch.setattr(warmup, 'prewarm_beat_worker_for_engine',
+    monkeypatch.setattr(engine_warmup, 'prewarm_beat_worker_for_engine',
                         lambda engine, **kwargs: calls.append(engine) or True)
     asyncio.run(app_module.beat_worker_prewarm(EngineRegistry(detector=lambda: []),
                                               requested='beat-metal', cancellation_callback=lambda: None))
@@ -190,8 +191,8 @@ def test_reselection_retries_busy_admission_after_cancelled_warmup_drains(monkey
         attempts.append(True)
         return len(attempts) > 1
 
-    monkeypatch.setattr(warmup, '_warm_beat', warm)
-    assert warmup.prewarm_beat_worker_for_engine('beat-metal', cancellation_callback=lambda: None)
+    monkeypatch.setattr(engine_warmup, '_warm_beat', warm)
+    assert engine_warmup.prewarm_beat_worker_for_engine('beat-metal', cancellation_callback=lambda: None)
     assert len(attempts) == 2
 
 

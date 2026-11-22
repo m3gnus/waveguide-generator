@@ -14,22 +14,22 @@ Two things follow from the child being the process that actually solves, and
 both are what makes the first solve fast:
 
 * **The initialization cost belongs to the child, so the warmup does too.**
-  ``server/solver/warmup.py`` originally ran its warmup solve in the API
-  process.  Measured on the reference Windows VM that bought exactly nothing:
+  The boot warmup (now ``server/engines/warmup.py``) originally ran its
+  warmup solve in the API process.  Measured on the reference Windows VM that bought exactly nothing:
   the parent spent 24.2 s warming itself and the first *child* solve still took
   24.3 s, because bempp-cl's hot numba kernels are declared without
   ``cache=True`` and the JIT therefore runs again in every new interpreter.
   ``prewarm()`` hands the child a ``_WARMUP_JOB_ID`` command as its first work
   item, so the child pays that cost at boot, in the process that will reuse it.
 
-* **The child answers warmup.py's shutdown objection.**  That module keeps its
+* **The child answers the warmup's shutdown objection.**  That module keeps its
   in-parent warmup opt-in because a daemon thread abandoned inside native code
   cannot be stopped, so Quit could hang for the rest of the initialization
   block.  A child can: ``_terminate_sync`` reaches ``TerminateProcess`` (and
   ``SIGKILL``) which do not need the native code to cooperate, and ``close()``
   bounds the graceful attempt at ``_JOIN_SECONDS`` before doing so.  The
   objection is answered for this path and only for this path -- Metal still
-  solves in-parent, so warmup.py still gates that branch.
+  solves in-parent, so ``server/engines/warmup.py`` still gates that branch.
 
 A cancelled solve rebuilds the warm child eagerly rather than at the next
 solve.  Killing the child is the only bounded way to interrupt assembly, and
@@ -62,6 +62,7 @@ from server.platform.process_tree import (
 
 from .base import CancelCallback, ResultCallback, StageCallback
 from .context import SolverContext
+from .warmup import WARMUP_FREQUENCY_HZ, WARMUP_MESH
 
 
 log = logging.getLogger("wg.solve")
@@ -264,6 +265,40 @@ def _worker_death_error(
                             failure_code="solver_memory_exhausted" if exitcode is not None and exitcode & 0xFFFFFFFF == 0xC0000017 else "solver_engine_stopped")
 
 
+def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:
+    """Compile and exercise the BEMPP fallback in the *calling* interpreter.
+
+    Called in this module's killable worker child, which is the process every
+    real BEMPP solve runs in.  Calling it in the API process warms an
+    interpreter that never solves: measured on the reference Windows VM, an in-parent warmup
+    cost 24.2 s and left the first child solve at 24.3 s, unchanged.  Only
+    pyopencl's on-disk *program* cache crosses a process boundary, and on this
+    host it was already populated.
+    """
+
+    from .bempp import validate_assembly_status
+    from .bempp_opencl import execution_route, native_call
+
+    validate_assembly_status(status)
+    backend, _device = execution_route()
+    from hornlab_bempp_bem import ObservationConfig, SolveConfig, solve
+
+    config = SolveConfig(
+        freq_min_hz=WARMUP_FREQUENCY_HZ,
+        freq_max_hz=WARMUP_FREQUENCY_HZ,
+        freq_count=1,
+        observation=ObservationConfig(),
+        assembly_backend=backend,
+        opencl_device="cpu",
+        precision="single",
+        # Never spawn. A worker process would re-pay every cost this
+        # warmup exists to pay once, and would do it while the user is
+        # trying to use the application.
+        workers=1,
+    )
+    native_call(solve, str(WARMUP_MESH), config, execution_config=config)
+
+
 def _warm_this_process() -> dict[str, Any]:
     """Pay the native initialization cost here, in the process that will reuse it.
 
@@ -276,7 +311,6 @@ def _warm_this_process() -> dict[str, Any]:
     began = time.monotonic()
     try:
         from .bempp import bempp_status
-        from .warmup import warm_bempp_in_this_process
 
         warm_bempp_in_this_process(bempp_status())
     except BaseException as exc:  # noqa: BLE001 - a warmup is an optimisation

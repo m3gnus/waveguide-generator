@@ -1,0 +1,472 @@
+"""Optionally pay the selected solver's one-off per-process start-up cost.
+
+``docs/validation/2026-08/WINDOWS-VALIDATION.md`` check 12 measured the problem this exists to
+fix. The first bempp solve after every server start spends a long time inside
+one block with no cancellation checkpoint in it -- the engine's only checkpoint
+is its per-frequency progress callback, and the first callback does not fire
+until the first assembly is finished. Re-measured on the same machine in
+2026-08, 3 frequencies, R-OSSE: 25.4 s of that block on OpenCL and 61.4 s on
+numba, for a first solve of 28.2 s and 65.7 s. The second solve is 0.8 s and
+4.1 s.
+
+Check 12 read that block as Stop latency. It is no longer that:
+``server/solver/bempp_process.py`` moved the solve into a child the parent
+polls every 50 ms and kills outright, and a Stop 5.0 s into a cold solve now
+returns in 5.05 s. What survives is the part a process boundary cannot fix --
+time to first result -- and that is what this module is for.
+
+The cost is per process and cannot be moved to disk. bempp-cl's hot numba
+kernels are declared without ``cache=True``, so the JIT runs again in every new
+interpreter; only pyopencl's *program* cache survives a restart, and that is
+the smaller half.
+
+*Which* process therefore decides whether warming is worth anything at all,
+and that is what this module originally got wrong. Every BEMPP solve runs in
+the killable worker child owned by ``server/solver/bempp_process.py``, not
+here, so warming this interpreter warmed one that never solves. Measured on
+the reference Windows VM: ``WG2_SOLVER_WARMUP=1`` spent 24.2 s in the parent
+and the first child solve still took 24.3 s, indistinguishable from no warmup
+at all. ``_warm_bempp`` now hands the work to the child, and
+``server.app`` does the same from boot without an opt-in, through
+``prewarm_bempp_worker_for_engine``.
+
+That relocation is also what answers the objection below. The warmup is a real,
+non-cancellable native solve with no fast shutdown hook, so a daemon thread
+running it *in this process* could hold Quit open for the rest of the
+initialization block -- which is why the in-process path stayed behind
+``WG2_SOLVER_WARMUP=1`` and why it still does for Metal, which has no worker
+child. A child needs no cooperation to die: ``BemppProcessHost.close()`` gives
+it half a second and then reaches ``TerminateProcess``/``SIGKILL``. So the
+BEMPP branch is on by default and the Metal branch is not, and the difference
+between them is exactly whether shutdown can bound the wait.
+
+Measured phases in a fresh interpreter on the development Windows VM:
+
+======================================  ========
+importing ``bempp_cl.api``               ~1.7 s
+first ``function_space`` (numba JIT)    ~12.4 s
+four boundary-operator assemblies        ~4.4 s
+a small GMRES solve                     ~10.5 s
+potential-operator evaluation            ~0.5 s
+======================================  ========
+
+Running one real end-to-end solve is therefore the warmup: it is the only
+thing that touches every one of those paths in the same order a user's solve
+will. The engine must match AUTO resolution. Apple Silicon normally resolves
+to Metal; warming the fallback BEMPP engine there wastes several seconds and
+does not remove Metal's smaller first-solve cost.
+
+``start_solver_warmup`` uses a plain daemon thread rather than
+``asyncio.to_thread``. The default executor's threads are joined during
+interpreter shutdown, and for the in-process Metal path that would hold Quit
+open for the remainder of the native initialization block. The worker prewarm
+has no such problem -- it only spawns a process and writes one command to a
+pipe -- so it runs as an ordinary task the app can cancel.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import threading
+import time
+from typing import Any, Callable, Mapping
+
+from server.solver.warmup import (
+    WARMUP_FREQUENCY_HZ,
+    WARMUP_MESH,
+    WARMUP_THREAD_NAME,
+    beat_warmup_recorded,
+)
+
+
+# The name the warmup has always logged under; the log filter below keeps it.
+log = logging.getLogger("wg.solver.warmup")
+
+_lock = threading.Lock()
+_thread: threading.Thread | None = None
+
+class _QuietWarmupFilter(logging.Filter):
+    """Keep the warmup's own solver chatter out of the user's log.
+
+    A real solve's bempp output is a diagnostic somebody may need; the
+    warmup's is the same output about a 410-triangle stand-in nobody asked to
+    solve, and at INFO it is roughly a hundred lines of assembler timings and
+    GMRES iterations on every single start.
+
+    Filtering by *thread* rather than by logger level is what keeps this
+    surgical: it silences those libraries only while they are being driven by
+    the warmup thread, so a real solve running at the same time still logs in
+    full. Records from this module are always kept -- the point is to be able
+    to see that the warmup ran.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.threadName != WARMUP_THREAD_NAME:
+            return True
+        return record.name.startswith("wg.")
+
+
+_quiet_filter = _QuietWarmupFilter()
+
+
+def _log_handlers() -> tuple[logging.Handler, ...]:
+    """Every handler a warmup record could reach.
+
+    Filters attached to a *logger* only see records logged through that logger,
+    so a filter on the root logger would miss everything propagating up from
+    the solver's own loggers. Handler filters see all of it.
+    """
+
+    handlers = list(logging.getLogger().handlers)
+    try:
+        from server.platform.logging_setup import log_sinks
+
+        handlers.extend(log_sinks())
+    except Exception:  # noqa: BLE001 - logging may not be configured at all
+        pass
+    return tuple(dict.fromkeys(handlers))
+
+
+def _warm_metal() -> None:
+    """Run the same native Metal formulation used by a real application solve."""
+
+    from hornlab_metal_bem import ObservationConfig, native_config, solve
+
+    from server.solver.formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
+
+    config = native_config(
+        freq_min_hz=WARMUP_FREQUENCY_HZ,
+        freq_max_hz=WARMUP_FREQUENCY_HZ,
+        freq_count=1,
+        observation=ObservationConfig(),
+        formulation=DEFAULT_BEM_FORMULATION,
+        complex_k_shift=DEFAULT_COMPLEX_K_SHIFT,
+    )
+    solve(str(WARMUP_MESH), config)
+
+
+def _warm_beat(backend: str, *, cancellation_callback: Callable[[], None] | None = None,
+               admission_callback: Callable[[], None] | None = None) -> bool:
+    """Start and exercise the BEAT Engine's persistent Julia worker.
+
+    BEAT is the one engine whose cost was never being paid off the user's
+    first solve, and the one where a warmup is cheapest to justify. Every BEAT
+    solve goes through the official engine's Julia worker, so startup is reused -- but nothing
+    was paying it until a user asked for a solve and then waited through Julia
+    startup, package loading, engine compilation and accelerator kernel
+    compilation before the first frequency began.
+
+    ``mode="tiny"`` rather than ``"worker"``: booting the worker alone leaves
+    the JIT and the GPU kernel compilation on the first real solve, which is
+    most of the wait. ``"tiny"`` solves one frequency on a four-triangle
+    tetrahedron and touches those paths in the order a user's solve will, the
+    same reasoning as the BEMPP and Metal warmups above.
+
+    Unlike ``_warm_metal`` this needs no ``WG2_SOLVER_WARMUP=1`` opt-in. The
+    objection that gates the Metal branch is that a non-cancellable native
+    solve on a daemon thread can hold Quit open; BEAT's work happens in
+    another process that ``shutdown_beat_worker`` stops with a bounded wait,
+    including persistent hosts, so this thread is only ever waiting on a pipe.
+
+    The backend is the caller's, not this function's to guess. Each BEAT
+    backend is its own selectable engine and its own persistent Julia worker
+    (the package keys workers by Julia project, and the four backends have four
+    projects), so warming a different one is worse than not warming at all: it
+    pays a device initialisation twice and leaves the path the user waits on
+    cold. ``prewarm_beat_worker_for_engine`` reads the backend off the engine
+    name that was actually selected.
+    """
+
+    from server.solver.beat_runtime.warmup import warm_up
+
+    with beat_warmup_recorded():
+        options = ({"cancellation_callback": cancellation_callback, "admission_callback": admission_callback,
+                    "idle_only": True, "wait_for_idle": True}
+                   if cancellation_callback is not None else {})
+        return warm_up(beat_backend=backend, mode="tiny", **options)
+
+
+def _warm_bempp(status: Mapping[str, object]) -> None:
+    """Warm the BEMPP worker child, which is where a real solve runs.
+
+    ``del status`` is deliberate: the child re-probes rather than inheriting a
+    status this process happened to resolve.  ``bempp_status`` is cached per
+    interpreter and the child is a fresh one, so a probe there costs a probe
+    and describes the process whose backend choice actually matters.
+    """
+
+    del status
+    from server.solver.bempp_process import prewarm_bempp_process
+
+    prewarm_bempp_process()
+
+
+def _warmup_beat_status() -> dict[str, Any]:
+    """Select from the same official readiness rows AUTO uses."""
+
+    from server.solver import beat
+
+    from server.solver.official_beat import production_statuses
+
+    statuses = production_statuses()
+    for backend in beat.BEAT_BACKENDS:
+        if statuses[backend].get("available"):
+            return statuses[backend]
+    return {"available": False, "reason": "; ".join(
+        str(statuses[backend].get("reason", "")) for backend in beat.BEAT_BACKENDS)}
+
+
+def _beat_cpu_leads_bempp() -> bool:
+    """Whether AUTO would reach a provisioned BEAT CPU runtime before BEMPP.
+
+    Two questions, both cheap: does AUTO prefer it (an ordering fact),
+    and is it actually provisioned here (a capability fact, answered from a
+    state file rather than a Julia launch). Asking both is what keeps this
+    warmup on the engine the user's first solve will really use -- the
+    divergence ``resolve_beat_backend`` exists to prevent, in the other
+    direction.
+    """
+
+    from server.engines.registry import full3d_engine_order
+    from server.solver import beat as beat_adapter
+
+    order = full3d_engine_order()
+    cpu_engine = beat_adapter.beat_engine_name(beat_adapter.BEAT_CPU_BACKEND)
+    if order.index(cpu_engine) > order.index("bempp"):
+        return False
+
+    from server.solver.official_beat import production_statuses
+
+    statuses = production_statuses()
+    return bool(statuses.get(beat_adapter.BEAT_CPU_BACKEND, {}).get("available"))
+
+
+def _run_warmup(engine: str | None = None) -> None:
+    if engine not in {None, "metal"}:
+        return  # Killable workers own the other engines' warm-up.
+    began = time.monotonic()
+    handlers = _log_handlers()
+    for handler in handlers:
+        handler.addFilter(_quiet_filter)
+    try:
+        # Match EngineRegistry.resolve_auto_engine's priority without probing
+        # every optional stack up front. In particular, do not import or
+        # initialize BEMPP when Metal is the engine the first user solve takes.
+        from server.solver import metal as metal_adapter
+
+        metal_status = metal_adapter.metal_status()
+        if engine == "metal" and not metal_status.get("available"):
+            return
+        if metal_status.get("available"):
+            engine = "Metal"
+            _warm_metal()
+        else:
+            # AUTO's order is metal, BEAT's accelerators, then the two CPU
+            # engines with BEAT CPU ahead of BEMPP (see
+            # ``registry.full3d_engine_order``). Leaving BEAT out here did not
+            # merely skip a warmup: on a CUDA host, where AUTO resolves to BEAT,
+            # this fell through and warmed BEMPP -- an engine that host's first
+            # solve never reaches. The package probe answers for the accelerator
+            # half, which is the half that outranks BEMPP everywhere.
+            from server.solver import beat as beat_adapter
+
+            beat_status = _warmup_beat_status()
+            beat_backend = (
+                beat_adapter.resolve_beat_backend(beat_status)
+                if beat_status.get("available")
+                else None
+            )
+            if beat_backend is not None and beat_backend != beat_adapter.BEAT_CPU_BACKEND:
+                engine = "BEAT"
+                _warm_beat(beat_backend)
+            elif _beat_cpu_leads_bempp():
+                # AUTO prefers a *provisioned* BEAT CPU runtime to
+                # BEMPP, and that row is available only where a real solve has
+                # already been proved, so asking for it here cannot warm an
+                # engine the first solve will not reach.
+                engine = "BEAT"
+                _warm_beat(beat_adapter.BEAT_CPU_BACKEND)
+            else:
+                from server.solver import bempp as bempp_adapter
+
+                bempp_status = bempp_adapter.bempp_status()
+                if not bempp_status.get("available"):
+                    log.info(
+                        "Solver warmup skipped: Metal: %s; BEAT: %s; BEMPP: %s",
+                        metal_status.get("reason"),
+                        beat_status.get("reason"),
+                        bempp_status.get("reason"),
+                    )
+                    return
+                engine = "BEMPP"
+                _warm_bempp(bempp_status)
+    except Exception as exc:  # noqa: BLE001 - a warmup is an optimisation
+        # Whatever failed here will fail again at the real call site, where the
+        # message reaches the user attached to their job. The same policy as
+        # server/platform/warmup.py.
+        log.info("Solver warmup did not complete: %s", exc)
+        return
+    finally:
+        for handler in handlers:
+            handler.removeFilter(_quiet_filter)
+    if engine == "BEMPP":
+        # Nothing was warmed here. The child was handed the work and is paying
+        # the cost now, off this thread and off the user's first solve; saying
+        # "finished" would claim a duration that has not elapsed yet.
+        log.info("BEMPP worker warmup handed to the solver worker process")
+    else:
+        log.info(
+            "%s solver warmup finished in %.1f s; the first solve no longer pays its "
+            "one-off initialization cost",
+            engine,
+            time.monotonic() - began,
+        )
+
+
+def start_solver_warmup(*, engine: str | None = None) -> threading.Thread | None:
+    """Begin an explicitly requested background warmup. Never blocks or raises.
+
+    Returns the live thread, or ``None`` when warming is switched off with
+    ``WG2_SOLVER_WARMUP=0``. Calling twice while one is running returns the
+    running thread rather than starting a second. The production launcher
+    calls this path only when ``WG2_SOLVER_WARMUP=1``; direct callers opt in by
+    calling it or by passing ``solver_warmup=True`` to ``create_app``.
+    """
+
+    global _thread
+    if os.environ.get("WG2_SOLVER_WARMUP") == "0":
+        log.info("Solver warmup disabled by WG2_SOLVER_WARMUP=0")
+        return None
+    with _lock:
+        if _thread is not None and _thread.is_alive():
+            return _thread
+        _thread = threading.Thread(
+            target=_run_warmup, kwargs={"engine": engine}, name=WARMUP_THREAD_NAME, daemon=True
+        )
+        _thread.start()
+        return _thread
+
+
+def prewarm_beat_worker_for_engine(
+    engine: str | None, *, cancellation_callback: Callable[[], None] | None = None,
+    admission_callback: Callable[[], None] | None = None,
+) -> bool:
+    """Warm the BEAT Julia worker for the backend this host will actually solve on.
+
+    The sibling of ``prewarm_bempp_worker_for_engine``, and registered the same
+    way, for the same reason: BEAT's initialization is the largest thing
+    between a server start and a GPU host's first result, and it happens in a
+    child process, so warming it costs shutdown nothing.
+
+    It is a *separate* hook rather than a branch inside the BEMPP one because
+    the two warm different things in different processes and only one of them
+    can apply to a given host; a single function named for one engine that
+    quietly warmed the other would be worse than two honest ones.
+
+    Returns whether a worker was warmed, for tests and diagnostics.
+
+    Every branch logs at INFO, including the skip. PLAN calls this step a hard
+    requirement and six consecutive boots of ``server.log`` recorded nothing
+    about it at all: the success path logged nothing and the skip logged at
+    DEBUG, which the shipped configuration does not emit. An optimisation whose
+    absence is invisible cannot be diagnosed from a user's log, and this one
+    was diagnosed from a packaged app's ``job_events`` instead.
+    """
+
+    if os.environ.get("WG2_SOLVER_WARMUP") == "0":
+        log.info("BEAT worker prewarm disabled by WG2_SOLVER_WARMUP=0")
+        return False
+    from server.solver import beat as beat_adapter
+
+    # The backend is read off the engine name rather than re-derived from a
+    # probe: each BEAT backend is its own selectable engine and its own
+    # persistent Julia worker, so "which engine will the first solve use" is
+    # already the whole answer.
+    backend = beat_adapter.beat_engine_backend(engine or "")
+    if backend is None and (engine or "").strip().lower() != beat_adapter.LEGACY_BEAT_ENGINE:
+        log.info("BEAT worker prewarm skipped: the first solve uses %s", engine)
+        return False
+    began = time.monotonic()
+    try:
+        if cancellation_callback is not None:
+            cancellation_callback()
+            # A named backend must be provisioned before it can be warmed.
+            # Readiness reads proof/state only; this never prepares a runtime.
+            from server.solver.official_beat import production_statuses
+
+            status = production_statuses(backend=backend).get(backend, {}) if backend else _warmup_beat_status()
+            if not status.get("available"):
+                log.info("BEAT worker prewarm skipped: %s", status.get("reason"))
+                return False
+        if backend is None:
+            # A stored preference written before the backends became separately
+            # selectable, which the registry could not map to an available
+            # variant. Letting the package's own probe choose is what this hook
+            # did for that name before the split, and it beats warming nothing.
+            status = _warmup_beat_status()
+
+            if (not status.get("available")):
+                log.info("BEAT worker prewarm skipped: %s", status.get("reason"))
+                return False
+            backend = beat_adapter.resolve_beat_backend(status)
+        log.info("BEAT worker prewarm starting on the %s backend", backend)
+        if cancellation_callback is None:
+            _warm_beat(backend)
+        else:
+            # A cancelled selection can still own admission while its session
+            # monitor retires the warmup. Wait off-thread for that lease to
+            # drain, so BEAT -> Metal -> BEAT does not leave the final pick cold.
+            while not _warm_beat(backend, cancellation_callback=cancellation_callback,
+                                 admission_callback=admission_callback):
+                cancellation_callback()
+    except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
+        log.info(
+            "BEAT worker prewarm failed after %.1f s: %s", time.monotonic() - began, exc
+        )
+        return False
+    log.info(
+        "BEAT worker prewarm finished in %.1f s; the first solve no longer pays "
+        "the engine's one-off compilation",
+        time.monotonic() - began,
+    )
+    return True
+
+
+def prewarm_bempp_worker_for_engine(engine: str | None) -> bool:
+    """Warm the BEMPP worker child, but only where AUTO would reach it.
+
+    ``engine`` is AUTO's already-resolved answer, passed in rather than probed
+    for. Probing here instead cost a second, concurrent ``detect_engines()`` at
+    boot: this ran on its own thread 2 ms after ``EngineRegistry.prewarm``
+    started the same work, and ``lru_cache`` does not serialise a miss, so both threads did the full
+    probe. The registry already owns one snapshot behind an ``asyncio.Lock``;
+    the caller awaits that and hands the answer over.
+
+    Returns whether a worker was warmed, for tests and diagnostics.
+    """
+
+    if os.environ.get("WG2_SOLVER_WARMUP") == "0":
+        log.info("BEMPP worker prewarm disabled by WG2_SOLVER_WARMUP=0")
+        return False
+    if engine != "bempp":
+        # A Metal or GPU-BEAT host would spend a process and several seconds on
+        # a fallback its first solve never reaches. Users who then pick BEMPP by
+        # hand pay the cost on that solve, as before.
+        log.debug("BEMPP worker prewarm skipped: AUTO resolves to %s", engine)
+        return False
+    try:
+        from server.solver.bempp_process import prewarm_bempp_process
+
+        prewarm_bempp_process()
+    except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
+        log.info("BEMPP worker prewarm did not start: %s", exc)
+        return False
+    return True
+
+
+__all__ = [
+    "prewarm_beat_worker_for_engine",
+    "prewarm_bempp_worker_for_engine",
+    "start_solver_warmup",
+]

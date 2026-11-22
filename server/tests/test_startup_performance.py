@@ -221,14 +221,15 @@ def test_the_bempp_worker_prewarm_is_registered_by_default(tmp_path: Path) -> No
 def test_the_bempp_worker_prewarm_can_be_switched_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from server.solver import bempp_process, warmup as solver_warmup
+    from server.solver import bempp_process
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.setattr(
         bempp_process, "prewarm_bempp_process", lambda: pytest.fail("must not warm")
     )
     monkeypatch.setenv("WG2_SOLVER_WARMUP", "0")
 
-    assert solver_warmup.prewarm_bempp_worker_for_engine("bempp") is False
+    assert engine_warmup.prewarm_bempp_worker_for_engine("bempp") is False
 
 
 def test_the_bempp_worker_prewarm_skips_hosts_auto_solves_elsewhere(
@@ -236,7 +237,8 @@ def test_the_bempp_worker_prewarm_skips_hosts_auto_solves_elsewhere(
 ) -> None:
     """A Metal or GPU host must not spend a process on an unreachable fallback."""
 
-    from server.solver import bempp_process, warmup as solver_warmup
+    from server.solver import bempp_process
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     prewarmed: list[str] = []
@@ -244,11 +246,11 @@ def test_the_bempp_worker_prewarm_skips_hosts_auto_solves_elsewhere(
         bempp_process, "prewarm_bempp_process", lambda: prewarmed.append("bempp")
     )
 
-    assert solver_warmup.prewarm_bempp_worker_for_engine("metal") is False
-    assert solver_warmup.prewarm_bempp_worker_for_engine(None) is False
+    assert engine_warmup.prewarm_bempp_worker_for_engine("metal") is False
+    assert engine_warmup.prewarm_bempp_worker_for_engine(None) is False
     assert prewarmed == []
 
-    assert solver_warmup.prewarm_bempp_worker_for_engine("bempp") is True
+    assert engine_warmup.prewarm_bempp_worker_for_engine("bempp") is True
     assert prewarmed == ["bempp"]
 
 
@@ -287,7 +289,7 @@ def _beat_quit_hook(application: Any) -> Any:
 @pytest.mark.parametrize("provider", [None, "hbb", "legacy", "Official", "official"])
 def test_beat_lifecycle_defaults_to_official_with_rollback(monkeypatch, tmp_path, provider):
     import server.app as app_module
-    from server.solver import warmup
+    from server.engines import warmup
     from server.solver.beat_runtime import manager, warmup as official_warmup
 
     static = tmp_path / "static"
@@ -503,35 +505,33 @@ def test_the_beat_worker_prewarm_only_warms_the_engine_auto_chose(
     guard and nothing else.
     """
 
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     warmed: list[str] = []
-    monkeypatch.setattr(
-        solver_warmup, "_warm_beat", lambda status: warmed.append("beat")
+    monkeypatch.setattr(engine_warmup, "_warm_beat", lambda status: warmed.append("beat")
     )
 
-    assert solver_warmup.prewarm_beat_worker_for_engine("metal") is False
-    assert solver_warmup.prewarm_beat_worker_for_engine("bempp") is False
-    assert solver_warmup.prewarm_beat_worker_for_engine(None) is False
+    assert engine_warmup.prewarm_beat_worker_for_engine("metal") is False
+    assert engine_warmup.prewarm_beat_worker_for_engine("bempp") is False
+    assert engine_warmup.prewarm_beat_worker_for_engine(None) is False
     assert warmed == []
 
-    monkeypatch.setattr(solver_warmup, "_warmup_beat_status", lambda: {"available": True, "backend": "cpu"})
-    assert solver_warmup.prewarm_beat_worker_for_engine("beat") is True
+    monkeypatch.setattr(engine_warmup, "_warmup_beat_status", lambda: {"available": True, "backend": "cpu"})
+    assert engine_warmup.prewarm_beat_worker_for_engine("beat") is True
     assert warmed == ["beat"]
 
 
 def test_the_beat_worker_prewarm_can_be_switched_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
-    monkeypatch.setattr(
-        solver_warmup, "_warm_beat", lambda backend: pytest.fail("must not warm")
+    monkeypatch.setattr(engine_warmup, "_warm_beat", lambda backend: pytest.fail("must not warm")
     )
     monkeypatch.setenv("WG2_SOLVER_WARMUP", "0")
 
-    assert solver_warmup.prewarm_beat_worker_for_engine("beat-cuda") is False
+    assert engine_warmup.prewarm_beat_worker_for_engine("beat-cuda") is False
 
 
 def test_the_beat_warmup_runs_a_solve_not_just_a_process_start(
@@ -545,7 +545,7 @@ def test_the_beat_warmup_runs_a_solve_not_just_a_process_start(
     warmup worth a process at all.
     """
 
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     calls: list[dict[str, object]] = []
     module = types.SimpleNamespace(
@@ -553,7 +553,7 @@ def test_the_beat_warmup_runs_a_solve_not_just_a_process_start(
     )
     _mock_beat_runtime(monkeypatch, module)
 
-    solver_warmup._warm_beat("cuda")
+    engine_warmup._warm_beat("cuda")
 
     assert calls == [{"beat_backend": "cuda", "mode": "tiny"}]
 
@@ -580,7 +580,7 @@ def test_the_beat_warmup_warms_the_backend_the_solve_will_use(
     """
 
     from server.engines.registry import create_engine
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     calls: list[dict[str, object]] = []
     module = types.SimpleNamespace(warm_up=lambda **kwargs: calls.append(kwargs))
@@ -588,7 +588,7 @@ def test_the_beat_warmup_warms_the_backend_the_solve_will_use(
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
 
     engine = f"beat-{backend}"
-    assert solver_warmup.prewarm_beat_worker_for_engine(engine) is True
+    assert engine_warmup.prewarm_beat_worker_for_engine(engine) is True
 
 
     # The thread count is part of the package's worker key: the solve asks
@@ -602,15 +602,14 @@ def test_the_beat_warmup_warms_the_backend_the_solve_will_use(
 def test_the_beat_prewarm_ignores_engines_that_are_not_beat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
-    monkeypatch.setattr(
-        solver_warmup, "_warm_beat", lambda backend: pytest.fail("must not warm")
+    monkeypatch.setattr(engine_warmup, "_warm_beat", lambda backend: pytest.fail("must not warm")
     )
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
 
     for engine in ("metal", "bempp", "axisym", "dryrun", None):
-        assert solver_warmup.prewarm_beat_worker_for_engine(engine) is False
+        assert engine_warmup.prewarm_beat_worker_for_engine(engine) is False
 
 
 def test_the_beat_prewarm_still_answers_the_legacy_family_name(
@@ -624,17 +623,16 @@ def test_the_beat_prewarm_still_answers_the_legacy_family_name(
     before the split, and it is better than warming nothing.
     """
 
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     calls: list[dict[str, object]] = []
     module = types.SimpleNamespace(warm_up=lambda **kwargs: calls.append(kwargs))
     _mock_beat_runtime(monkeypatch, module)
-    monkeypatch.setattr(
-        solver_warmup, "_warmup_beat_status", lambda: {"available": True, "backend": "rocm"}
+    monkeypatch.setattr(engine_warmup, "_warmup_beat_status", lambda: {"available": True, "backend": "rocm"}
     )
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
 
-    assert solver_warmup.prewarm_beat_worker_for_engine("beat") is True
+    assert engine_warmup.prewarm_beat_worker_for_engine("beat") is True
     assert calls == [{"beat_backend": "rocm", "mode": "tiny"}]
 
 
@@ -661,7 +659,7 @@ def test_the_bempp_worker_prewarm_takes_auto_from_the_registrys_one_snapshot(
 
     from server.app import bempp_worker_prewarm
     from server.engines.registry import EngineInfo, EngineRegistry
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     probes = 0
@@ -672,8 +670,7 @@ def test_the_bempp_worker_prewarm_takes_auto_from_the_registrys_one_snapshot(
         return [EngineInfo("bempp", True, "test", "0.1.0")]
 
     engines: list[str | None] = []
-    monkeypatch.setattr(
-        solver_warmup,
+    monkeypatch.setattr(engine_warmup,
         "prewarm_bempp_worker_for_engine",
         lambda engine: engines.append(engine) or True,
     )
@@ -744,6 +741,7 @@ def test_jobs_answer_while_solver_prewarm_is_synchronously_blocked(
     """
     from server import app as app_module
     from server.solver import beat_cpu_runtime, bempp_process, warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
     from server.tests.test_app_batch_e import TestClient
 
     monkeypatch.setenv("WG2_SOLVER_WARMUP", "1")
@@ -752,8 +750,8 @@ def test_jobs_answer_while_solver_prewarm_is_synchronously_blocked(
         EngineInfo(saved, True, "test", "0.1.0"),
     ])
     monkeypatch.setattr(solver_warmup, "persisted_engine_preference", lambda _settings: saved)
-    monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", lambda _engine, **_kwargs: True)
-    monkeypatch.setattr(solver_warmup, "start_solver_warmup", lambda **kwargs: None)
+    monkeypatch.setattr(engine_warmup, "prewarm_beat_worker_for_engine", lambda _engine, **_kwargs: True)
+    monkeypatch.setattr(engine_warmup, "start_solver_warmup", lambda **kwargs: None)
     monkeypatch.setattr(bempp_process, "prewarm_bempp_process", lambda: None)
     monkeypatch.setattr(bempp_process, "shutdown_bempp_process", lambda: None)
     monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: False)
@@ -870,19 +868,20 @@ def test_the_bempp_warmup_targets_the_process_that_actually_solves(
     left the first child solve at 24.3 s, unchanged.
     """
 
-    from server.solver import bempp_process, warmup as solver_warmup
+    from server.solver import bempp_process
+    from server.engines import warmup as engine_warmup
 
     calls: list[str] = []
     monkeypatch.setattr(
         bempp_process, "prewarm_bempp_process", lambda: calls.append("worker")
     )
     monkeypatch.setattr(
-        solver_warmup,
+        bempp_process,
         "warm_bempp_in_this_process",
         lambda _status: calls.append("in-parent"),
     )
 
-    solver_warmup._warm_bempp({"available": True, "assembly_backend": "opencl"})
+    engine_warmup._warm_bempp({"available": True, "assembly_backend": "opencl"})
 
     assert calls == ["worker"]
 
@@ -904,7 +903,7 @@ def test_the_solver_warmup_handler_never_blocks_startup(
 ) -> None:
     """Startup runs before the listen socket exists, so this must only schedule."""
 
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     started = 0
     finished = threading.Event()
@@ -914,7 +913,7 @@ def test_the_solver_warmup_handler_never_blocks_startup(
         started += 1
         finished.set()
 
-    monkeypatch.setattr(solver_warmup, "start_solver_warmup", fake_start)
+    monkeypatch.setattr(engine_warmup, "start_solver_warmup", fake_start)
     from server.app import prewarm_solver
 
     async def exercise():
@@ -926,14 +925,14 @@ def test_the_solver_warmup_handler_never_blocks_startup(
 
 
 def test_the_solver_warmup_can_be_switched_off() -> None:
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     import os
 
     previous = os.environ.get("WG2_SOLVER_WARMUP")
     os.environ["WG2_SOLVER_WARMUP"] = "0"
     try:
-        assert solver_warmup.start_solver_warmup() is None
+        assert engine_warmup.start_solver_warmup() is None
     finally:
         if previous is None:
             os.environ.pop("WG2_SOLVER_WARMUP", None)
@@ -946,7 +945,8 @@ def test_solver_warmup_follows_auto_engine_priority(
 ) -> None:
     """A Metal host must not spend seconds warming an unused BEMPP fallback."""
 
-    from server.solver import metal, warmup
+    from server.engines import warmup
+    from server.solver import metal
 
     calls: list[str] = []
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": True})
@@ -977,7 +977,8 @@ def test_solver_warmup_falls_back_to_bempp(
     one.
     """
 
-    from server.solver import bempp, metal, warmup
+    from server.engines import warmup
+    from server.solver import bempp, metal
 
     calls: list[tuple[str, object]] = []
     status = {"available": True, "assembly_backend": "numba"}
@@ -999,7 +1000,8 @@ def test_forced_cpu_probe_warms_only_a_ready_cpu_runtime(
     """A forced package probe cannot bypass the registry's CPU readiness."""
 
     from server.solver import beat as beat_adapter
-    from server.solver import bempp, metal, warmup
+    from server.engines import warmup
+    from server.solver import bempp, metal
 
     calls: list[str] = []
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False})
@@ -1031,7 +1033,8 @@ def test_solver_warmup_skips_when_no_physical_engine_is_available(
     test means to exercise.
     """
 
-    from server.solver import bempp, metal, warmup
+    from server.engines import warmup
+    from server.solver import bempp, metal
 
     calls: list[str] = []
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no Metal"})
@@ -1053,7 +1056,8 @@ def test_warmup_solver_chatter_is_filtered_but_our_own_line_survives() -> None:
     diagnostics intact if an explicitly requested warmup overlaps it.
     """
 
-    from server.solver.warmup import WARMUP_THREAD_NAME, _QuietWarmupFilter
+    from server.engines.warmup import _QuietWarmupFilter
+    from server.solver.warmup import WARMUP_THREAD_NAME
 
     quiet = _QuietWarmupFilter()
 
@@ -1322,12 +1326,11 @@ def test_the_beat_prewarm_follows_the_users_choice_over_autos(
 
     from server.app import beat_worker_prewarm
     from server.engines.registry import EngineInfo, EngineRegistry
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     warmed: list[str | None] = []
-    monkeypatch.setattr(
-        solver_warmup,
+    monkeypatch.setattr(engine_warmup,
         "prewarm_beat_worker_for_engine",
         lambda engine: warmed.append(engine) or True,
     )
@@ -1367,12 +1370,11 @@ def test_a_saved_engine_this_host_cannot_run_does_not_warm_auto(
 
     from server.app import bempp_worker_prewarm
     from server.engines.registry import EngineInfo, EngineRegistry
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     warmed: list[str | None] = []
-    monkeypatch.setattr(
-        solver_warmup,
+    monkeypatch.setattr(engine_warmup,
         "prewarm_bempp_worker_for_engine",
         lambda engine: warmed.append(engine) or True,
     )
@@ -1392,7 +1394,7 @@ def test_failed_beat_head_start_never_warms_a_replacement(
 
     from server.app import beat_worker_prewarm
     from server.engines.registry import EngineInfo, EngineRegistry
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     warmed: list[str | None] = []
 
@@ -1400,7 +1402,7 @@ def test_failed_beat_head_start_never_warms_a_replacement(
         warmed.append(engine)
         return engine == replacement
 
-    monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", warm)
+    monkeypatch.setattr(engine_warmup, "prewarm_beat_worker_for_engine", warm)
     registry = EngineRegistry(
         detector=lambda: [
             EngineInfo("beat-cuda", False, "CUDA unavailable", None),
@@ -1420,11 +1422,10 @@ def test_explicit_backend_never_warms_a_ready_alternative(
 
     from server.app import beat_worker_prewarm
     from server.engines.registry import EngineInfo, EngineRegistry
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     warmed: list[str | None] = []
-    monkeypatch.setattr(
-        solver_warmup,
+    monkeypatch.setattr(engine_warmup,
         "prewarm_beat_worker_for_engine",
         lambda engine: warmed.append(engine) or True,
     )
@@ -1447,12 +1448,11 @@ def test_leaving_the_picker_on_auto_still_warms_autos_answer(
 
     from server.app import bempp_worker_prewarm
     from server.engines.registry import EngineInfo, EngineRegistry
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     warmed: list[str | None] = []
-    monkeypatch.setattr(
-        solver_warmup,
+    monkeypatch.setattr(engine_warmup,
         "prewarm_bempp_worker_for_engine",
         lambda engine: warmed.append(engine) or True,
     )
@@ -1483,7 +1483,7 @@ def test_a_saved_engine_warms_without_waiting_for_the_capability_probe(
     """
 
     from server.app import beat_worker_prewarm
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     warming = threading.Event()
@@ -1501,7 +1501,7 @@ def test_a_saved_engine_warms_without_waiting_for_the_capability_probe(
             EngineInfo("beat-cpu", True, "test", "0.1.0"),
         ]
 
-    monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", warm)
+    monkeypatch.setattr(engine_warmup, "prewarm_beat_worker_for_engine", warm)
 
     asyncio.run(beat_worker_prewarm(EngineRegistry(detector=detector), _persisted("beat")))
 
@@ -1525,7 +1525,7 @@ def test_a_saved_beat_backend_gets_the_head_start_too(
     """
 
     from server.app import beat_worker_prewarm
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
 
@@ -1546,7 +1546,7 @@ def test_a_saved_beat_backend_gets_the_head_start_too(
                 EngineInfo("beat-cpu", True, "test", "0.1.0"),
             ]
 
-        monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", warm)
+        monkeypatch.setattr(engine_warmup, "prewarm_beat_worker_for_engine", warm)
         asyncio.run(
             beat_worker_prewarm(EngineRegistry(detector=detector), _persisted(saved))
         )
@@ -1564,7 +1564,7 @@ def test_a_saved_metal_engine_does_not_take_beats_head_start(
     """
 
     from server.app import beat_worker_prewarm
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     warmed: list[str | None] = []
@@ -1573,8 +1573,7 @@ def test_a_saved_metal_engine_does_not_take_beats_head_start(
         assert warmed == [], "Metal is not BEAT's to warm before the probe"
         return [EngineInfo("metal", True, "test", "0.1.0")]
 
-    monkeypatch.setattr(
-        solver_warmup,
+    monkeypatch.setattr(engine_warmup,
         "prewarm_beat_worker_for_engine",
         lambda engine: warmed.append(engine) or False,
     )
@@ -1592,7 +1591,7 @@ def test_the_probe_still_gates_a_prewarm_with_no_saved_engine(
     """AUTO's answer is only knowable from the snapshot, so that path waits."""
 
     from server.app import bempp_worker_prewarm
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     warmed: list[str | None] = []
@@ -1601,8 +1600,7 @@ def test_the_probe_still_gates_a_prewarm_with_no_saved_engine(
         assert warmed == [], "nothing may be warmed before AUTO has an answer"
         return [EngineInfo("bempp", True, "test", "0.1.0")]
 
-    monkeypatch.setattr(
-        solver_warmup,
+    monkeypatch.setattr(engine_warmup,
         "prewarm_bempp_worker_for_engine",
         lambda engine: warmed.append(engine) or True,
     )
@@ -1619,12 +1617,11 @@ def test_a_failed_head_start_never_warms_a_different_solver(
     """A failed warm-up leaves the explicit selection untouched."""
 
     from server.app import beat_worker_prewarm
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     warmed: list[str | None] = []
-    monkeypatch.setattr(
-        solver_warmup,
+    monkeypatch.setattr(engine_warmup,
         "prewarm_beat_worker_for_engine",
         lambda engine: bool(warmed.append(engine)),
     )
@@ -1644,7 +1641,7 @@ def test_a_cancelled_prewarm_does_not_leave_its_head_start_running(
     """``shutdown_beat_worker`` cancels this task, and awaiting one does not cancel it."""
 
     from server.app import beat_worker_prewarm
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     warming = threading.Event()
@@ -1654,7 +1651,7 @@ def test_a_cancelled_prewarm_does_not_leave_its_head_start_running(
         warming.set()
         return release.wait(10.0)
 
-    monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", warm)
+    monkeypatch.setattr(engine_warmup, "prewarm_beat_worker_for_engine", warm)
 
     async def scenario() -> asyncio.Task[bool]:
         task = asyncio.create_task(
@@ -1688,7 +1685,8 @@ def test_stopping_during_runtime_preparation_cancels_deferred_prewarm(
     """A quit does not wait for the provisioner's native/download work."""
 
     from server.app import beat_worker_prewarm
-    from server.solver import beat_cpu_runtime, warmup as solver_warmup
+    from server.solver import beat_cpu_runtime
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     checked = threading.Event()
@@ -1698,8 +1696,7 @@ def test_stopping_during_runtime_preparation_cancels_deferred_prewarm(
         return True
 
     monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", in_flight)
-    monkeypatch.setattr(
-        solver_warmup, "prewarm_beat_worker_for_engine",
+    monkeypatch.setattr(engine_warmup, "prewarm_beat_worker_for_engine",
         lambda _engine: pytest.fail("must not warm a partial runtime"),
     )
 
@@ -1734,23 +1731,22 @@ def test_the_beat_prewarm_records_every_outcome_in_the_log(
     reason are all INFO now.
     """
 
-    from server.solver import warmup as solver_warmup
+    from server.engines import warmup as engine_warmup
 
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
-    monkeypatch.setattr(
-        solver_warmup, "_warmup_beat_status", lambda: {"available": True, "backend": "metal"}
+    monkeypatch.setattr(engine_warmup, "_warmup_beat_status", lambda: {"available": True, "backend": "metal"}
     )
-    monkeypatch.setattr(solver_warmup, "_warm_beat", lambda status: None)
+    monkeypatch.setattr(engine_warmup, "_warm_beat", lambda status: None)
 
     with caplog.at_level(logging.INFO, logger="wg.solver.warmup"):
-        assert solver_warmup.prewarm_beat_worker_for_engine("beat") is True
-        assert solver_warmup.prewarm_beat_worker_for_engine("metal") is False
+        assert engine_warmup.prewarm_beat_worker_for_engine("beat") is True
+        assert engine_warmup.prewarm_beat_worker_for_engine("metal") is False
 
         def explode(status: object) -> None:
             raise RuntimeError("no Julia here")
 
-        monkeypatch.setattr(solver_warmup, "_warm_beat", explode)
-        assert solver_warmup.prewarm_beat_worker_for_engine("beat") is False
+        monkeypatch.setattr(engine_warmup, "_warm_beat", explode)
+        assert engine_warmup.prewarm_beat_worker_for_engine("beat") is False
 
     messages = [record.getMessage() for record in caplog.records]
     assert any("starting on the metal backend" in message for message in messages)

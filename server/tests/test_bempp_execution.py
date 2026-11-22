@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 import numpy as np
 import pytest
 
-from server.solver import bempp, bempp_opencl as probe, bempp_process, bempp_field, field_plane, warmup
+from server.solver import bempp, bempp_opencl as probe, bempp_process, bempp_field, field_plane
 from server.solver.field_traces_store import BEMPP_FIELD_TRACE_BACKEND
 from server.tests.test_engines_adapters import _cabinet_msh, _context, _result
 from server.tests import test_imported_bempp as imported
@@ -97,7 +97,7 @@ def test_every_native_consumer_preserves_qualification(monkeypatch, host, state)
     monkeypatch.setattr(bempp, "bempp_solve", solve)
     monkeypatch.setattr(package, "solve", solve)
     bempp.solve_bempp_from_msh_text(_cabinet_msh(), _context(field_plane=False))
-    warmup.warm_bempp_in_this_process(bempp.bempp_status())
+    bempp_process.warm_bempp_in_this_process(bempp.bempp_status())
     recorder = imported._RecordingBempp()
     def sweep(path, frequencies, config):
         record(config)

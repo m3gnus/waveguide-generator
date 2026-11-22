@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from server.solver import beat, bempp, metal, official_beat, warmup
+from server.engines import warmup
+from server.solver import beat, bempp, metal, official_beat
 
 
 @pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm", None])

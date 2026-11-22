@@ -9,6 +9,7 @@ import pytest
 
 from server import app as app_module
 from server.engines import registry as registry_module
+from server.engines import warmup as engine_warmup
 from server.solver import beat, bempp, bempp_opencl as probe, metal, warmup, official_beat
 from server.tests.test_app_batch_e import TestClient
 from server.tests.test_bempp_opencl import CPU
@@ -45,7 +46,7 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
         assert release_import.wait(5)
         return True
     monkeypatch.setattr(warmup, 'persisted_engine_preference', lambda _settings: 'bempp')
-    monkeypatch.setattr(warmup, 'prewarm_bempp_worker_for_engine', startup_import)
+    monkeypatch.setattr(engine_warmup, 'prewarm_bempp_worker_for_engine', startup_import)
     def run(mode, device, timeout):
         assert threading.current_thread() is not threading.main_thread()
         calls.append(mode)
