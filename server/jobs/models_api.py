@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, Vali
 
 from server.cadlink.identity import mint_id, utc_now
 from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
-from server.cadlink.roles import inventory_sha256, normalize_source_role, prepared_inventory_sha256
+from server.contracts.source_roles import inventory_sha256, normalize_source_role, prepared_inventory_sha256
 from server.cadlink.intake.design_assembly import AssemblySuperseded, compile_design_assembly
 from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, StaleAttempt, design_model_id, file_model_id
 from server.contracts.wglink_protocol import SOURCE_ROLES

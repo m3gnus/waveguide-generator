@@ -54,9 +54,6 @@ ignore_imports =
     # mesh -> cadlink: existing upward dependency.
     # Legacy use: AS_MODELLED, spec_axis, spec_matrix.
     server.mesh.imported -> server.cadlink.interpretation.solver_frame
-    # solver -> cadlink: existing upward dependency.
-    # Legacy use: canonical_source_role.
-    server.solver.imported_channels -> server.cadlink.roles
     # solver -> engines: existing upward dependency.
     # Legacy use: full3d_engine_order.
     server.solver.warmup -> server.engines.registry
@@ -103,7 +100,7 @@ layers =
     store : receipts
     identity
     interpretation
-    wgreturn : operations : roles : usage : ipc : build_flags
+    wgreturn : operations : usage : ipc : build_flags
     snapshot_mesh
     limits
     retained_files

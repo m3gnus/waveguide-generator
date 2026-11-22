@@ -13,7 +13,7 @@ import sqlite3
 import pytest
 
 from server.cadlink.identity import SaveIdentity
-from server.cadlink.roles import inventory_sha256
+from server.contracts.source_roles import inventory_sha256
 from server.cadlink.store import STORE_FORMAT_VERSION, CadLinkStore
 
 

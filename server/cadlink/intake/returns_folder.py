@@ -14,7 +14,7 @@ from server.contracts.canonical import canonical_ascii_strict_json
 from server.workspace.api import _strictly_inside
 
 from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
-from server.cadlink.roles import normalize_source_role
+from server.contracts.source_roles import normalize_source_role
 from server.cadlink.wgreturn import declared_domain_planes
 
 

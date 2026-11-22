@@ -10,7 +10,7 @@ from urllib.parse import quote
 from fastapi import FastAPI
 import pytest
 
-from server.cadlink.roles import inventory_sha256, prepared_inventory_sha256
+from server.contracts.source_roles import inventory_sha256, prepared_inventory_sha256
 from server.cadlink.store import CadLinkStore
 from server.jobs.imported_setup import setup_content, setup_digest, validate_setup
 from server.jobs.models_api import mount_models_api, public_record

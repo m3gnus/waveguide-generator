@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from server.cadlink.roles import inventory_sha256, normalize_source_role, prepared_inventory_sha256
+from server.contracts.source_roles import inventory_sha256, normalize_source_role, prepared_inventory_sha256
 
 
 @pytest.mark.parametrize(

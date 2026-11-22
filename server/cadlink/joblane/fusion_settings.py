@@ -20,7 +20,7 @@ from typing import Any
 
 from server.cadlink.intake.readings import snapshot_project
 from server.cadlink.joblane.default_setup import solve_defaults, sweep_points
-from server.cadlink.roles import inventory_sha256
+from server.contracts.source_roles import inventory_sha256
 from server.cadlink.store import UNFILED_MODEL_ID, CadLinkStore
 from server.jobs.imported_setup import CadSolveSetup, setup_content, setup_digest, validate_setup
 

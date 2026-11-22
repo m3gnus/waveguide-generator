@@ -49,7 +49,7 @@ from .operations import (
     validate_outcome,
 )
 from .ipc import legacy_ledger_path
-from .roles import inventory_sha256
+from server.contracts.source_roles import inventory_sha256
 from . import receipts
 
 # How long ``make_durable`` waits for a reader that pins the log.

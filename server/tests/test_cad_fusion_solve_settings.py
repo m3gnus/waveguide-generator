@@ -27,7 +27,7 @@ from server.cadlink.joblane.fusion_settings import (
 )
 from server.cadlink.joblane.project_setup import project_setup
 from server.cadlink.joblane.request_status import project_request_status
-from server.cadlink.roles import inventory_sha256
+from server.contracts.source_roles import inventory_sha256
 from server.cadlink.operations import PREPARE_AND_SOLVE, prepare_and_solve_request, request_digest
 from server.contracts.wglink_protocol import SOLVE_SETTINGS_FIELD
 from server.jobs.cad_intent import CadSolveIntent

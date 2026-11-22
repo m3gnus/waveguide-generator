@@ -61,7 +61,7 @@ from server.cadlink.interpretation.solver_frame import (
 from server.cadlink.joblane.manual_solve import OperationConflict, SnapshotNotRetained, UnknownIngest
 from server.cadlink.joblane.project_setup import compose_solve_request
 from server.cadlink.operations import FINDINGS_REVIEW_MESSAGE, REASON_CODES, REASON_UPDATE_RESTART_PENDING, REJECTED
-from server.cadlink.roles import prepared_inventory_sha256
+from server.contracts.source_roles import prepared_inventory_sha256
 from server.cadlink.store import UNFILED_MODEL_ID
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from server.cadlink.store import CadLinkStore
-from server.cadlink.roles import prepared_inventory_sha256
+from server.contracts.source_roles import prepared_inventory_sha256
 from server.contracts.wglink_protocol import source_physical_name
 from server.mesh.imported import parse_source_physical_name
 from server.jobs.runtime.cad_lane import _imported_symmetry_metadata

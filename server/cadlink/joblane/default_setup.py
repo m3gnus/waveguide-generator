@@ -23,7 +23,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from server.cadlink.roles import normalize_source_role
+from server.contracts.source_roles import normalize_source_role
 from server.jobs.imported_setup import DEFAULTS_ORIGIN, CadSolveSetup, validate_setup
 
 

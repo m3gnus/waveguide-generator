@@ -13,7 +13,7 @@ import pytest
 
 from server.cadlink.intake.ingest import retain_snapshot
 from server.cadlink.joblane.project_setup import project_setup
-from server.cadlink.roles import inventory_sha256
+from server.contracts.source_roles import inventory_sha256
 from server.cadlink.store import CadLinkStore
 from server.jobs.imported_setup import setup_content, setup_digest, validate_setup
 from server.jobs.models_api import mount_models_api, register_mesh

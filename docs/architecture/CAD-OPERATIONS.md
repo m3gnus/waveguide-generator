@@ -52,10 +52,11 @@ and exact-id return waiter on reconnect.
 
 `api.py` assembles the CAD Link routers at the top. `store.py` and `receipts.py`
 keep persistence; `identity.py` owns model identity. Root contracts remain in
-`wgreturn.py`, `operations.py`, `roles.py`, `usage.py`, `ipc.py`, `build_flags.py`
-and `limits.py`. The pinned `wglink_protocol.py` is vendored byte for byte at
+`wgreturn.py`, `operations.py`, `usage.py`, `ipc.py`, `build_flags.py` and
+`limits.py`. The pinned `wglink_protocol.py` is vendored byte for byte at
 `server/contracts/wglink_protocol.py`, below every server package that reads it
-(mesh and platform included). The parked `onshape/` adapter keeps its own package.
+(mesh and platform included), and the source-role rules it carries are
+normalised in `server/contracts/source_roles.py`, which the solver reads too. The parked `onshape/` adapter keeps its own package.
 `retained_files.py` owns the shared checksum verifier for retained CAD downloads
 and returned-STEP exports; it imports only the standard library.
 

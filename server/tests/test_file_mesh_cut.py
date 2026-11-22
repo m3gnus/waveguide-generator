@@ -246,7 +246,7 @@ def test_unmarked_preparation_is_reprepared_then_current_preparation_is_reused(t
 
 def test_record_reimport_setup_and_replay_share_effective_cut(tmp_path):
     from server.jobs.models_api import _file_import_memory, read_setup
-    from server.cadlink.roles import prepared_inventory_sha256
+    from server.contracts.source_roles import prepared_inventory_sha256
     from collections import OrderedDict
     body = cutting_registration(auto_cut=True)
     store = CadLinkStore.for_data_dir(tmp_path)

@@ -1324,7 +1324,7 @@ const ROLE_BAND_RANK: Readonly<Record<string, number>> = DEFAULT_CROSSOVER.bandR
 /** Canonicalize band roles without rewriting structural CAD roles. A return
  * whose sources say `hf`/` LF ` must still rank as HF/LF: an exact lookup
  * ordered such a chain backwards, low-passing the HF driver.
- * Mirrors `canonical_source_role` in server/cadlink/roles.py. */
+ * Mirrors `canonical_source_role` in server/contracts/source_roles.py. */
 function canonicalSourceRole(role: string | undefined): string {
   const rawRole = role ?? '';
   const bandRole = rawRole.trim().toUpperCase();

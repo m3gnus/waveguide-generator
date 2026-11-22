@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal, Mapping, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
 
-from server.cadlink.roles import normalize_source_role
+from server.contracts.source_roles import normalize_source_role
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.contracts.observations import (
     FieldPlaneRequest as FieldPlaneRequest,

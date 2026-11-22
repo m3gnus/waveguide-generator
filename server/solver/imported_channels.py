@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from server.cadlink.roles import normalize_source_role
+from server.contracts.source_roles import normalize_source_role
 from server.contracts.conventions import ENGINEERING_PHASE_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 

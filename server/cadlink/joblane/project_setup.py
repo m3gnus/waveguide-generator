@@ -23,7 +23,7 @@ from server.jobs.models import SolveRequest
 from server.jobs.imported_polar import widen_polar_to_derivation
 
 from server.cadlink.interpretation.domain_interpretation import excitation_problem
-from server.cadlink.roles import inventory_sha256
+from server.contracts.source_roles import inventory_sha256
 from server.jobs.imported_setup import CadSolveSetup, solve_request_for, validate_setup
 from server.cadlink.store import CadLinkStore
 
