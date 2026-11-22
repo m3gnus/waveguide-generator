@@ -447,6 +447,110 @@ def drop_live_impedance(channel: Any, channel_response: dict[str, Any]) -> None:
         channel_response.setdefault("metadata", {})["impedance_omitted"] = omitted
 
 
+IMPEDANCE_NORMALIZATION_MODAL = "mean_square_velocity"
+
+
+def solved_tag_areas(msh_text: str) -> dict[int, float]:
+    """Each physical tag's meshed area in the solved (possibly reduced) domain.
+
+    Only ratios between a channel's tags are used. Every face of a reduced
+    domain has the same number of mirror images, so these ratios are the full
+    channel's; recorded source areas are not, since a completed cut source and
+    an off-plane one carry different completion factors.
+    """
+
+    from server.mesh.imported import _tag_areas
+
+    from .imported import _msh_triangles
+
+    points, triangles, tags = _msh_triangles(msh_text)
+    return _tag_areas(points, triangles, tags)
+
+
+def modal_channel_impedance(
+    result: Any,
+    channel: Any,
+    source_tags: Mapping[str, Any],
+    tag_areas: Mapping[int, float],
+) -> np.ndarray | None:
+    """The channel's power-consistent impedance, in the raw ``impedance`` basis.
+
+    ``Zs = sum_i w_i S_i <p>_i / sum_i w_i**2 S_i`` per frequency, from the
+    area-mean pressure ``<p>_i`` on each driven tag under the channel's whole
+    drive (``surface_pressure_avg``), the patch weights ``w_i`` and the tag
+    areas ``S_i``. ``Re(Zs)/(rho*c)`` is the radiated power over
+    ``rho*c * integral |v|^2 dS``, so it tends to 1 at high ka for any shape,
+    and for one unit-weight patch it is exactly that patch's ``<p>/v``.
+    Normal motion only: an axial patch's raw tag mean lacks the n.a projection.
+    ``None`` when the solve did not return every tag's mean or the weights
+    leave no motion.
+    """
+
+    if getattr(channel, "motion", "normal") != "normal":
+        return None
+    averages = getattr(result, "surface_pressure_avg", None)
+    if not isinstance(averages, Mapping):
+        return None
+    weights = channel.patch_weights or {}
+    by_tag: dict[int, float] = {}
+    for source_id in channel.source_ids:
+        tag = int(source_tags[source_id])
+        weight = float(weights.get(source_id, 1.0))
+        if by_tag.setdefault(tag, weight) != weight:
+            return None
+    numerator: Any = 0.0
+    denominator = 0.0
+    for tag, weight in by_tag.items():
+        if tag not in averages or tag_areas.get(tag, 0.0) <= 0.0:
+            return None
+        area = float(tag_areas[tag])
+        numerator = numerator + weight * area * np.asarray(averages[tag], dtype=np.complex128)
+        denominator += weight * weight * area
+    if denominator <= 0.0:
+        return None
+    return np.asarray(numerator, dtype=np.complex128).reshape(-1) / denominator
+
+
+def apply_modal_channel_impedance(
+    results_by_id: Mapping[str, Any],
+    drive_channels: Any,
+    source_tags: Mapping[str, Any],
+    msh_text: str,
+    *,
+    tag_areas: Mapping[int, float] | None = None,
+) -> set[str]:
+    """Give every channel the raw field misreports its power-consistent impedance.
+
+    Only channels ``impedance_omitted_reason`` rejects are touched: a
+    unit-weight single source's raw value already is its ``Zs`` and stays
+    bit-identical. Call it on the native results, before any basis
+    normalisation, so the tag means and the raw impedance share one basis.
+    ``tag_areas`` may be supplied by a backend that already holds them;
+    otherwise they are read from ``msh_text``. Returns the channels that now
+    carry ``Zs``.
+    """
+
+    candidates = [channel for channel in drive_channels
+                  if channel.id in results_by_id and impedance_omitted_reason(channel) is not None]
+    if not candidates:
+        return set()
+    if tag_areas is None:
+        try:
+            tag_areas = solved_tag_areas(msh_text)
+        except ValueError:
+            # Without readable tag areas there is no Zs; the rule's drop stands.
+            return set()
+    modal: set[str] = set()
+    for channel in candidates:
+        result = results_by_id[channel.id]
+        zs = modal_channel_impedance(result, channel, source_tags, tag_areas)
+        if zs is None or zs.shape != np.asarray(result.frequencies_hz).reshape(-1).shape:
+            continue
+        result.impedance = zs
+        modal.add(channel.id)
+    return modal
+
+
 def finish_imported_channel_response(
     channel_response: dict[str, Any],
     *,
@@ -454,19 +558,23 @@ def finish_imported_channel_response(
     driver_payload: dict[str, Any] | None,
     rms_velocity: bool,
     channel: Any,
+    modal_impedance: bool = False,
 ) -> bool:
     """Apply the impedance and driver contract to one imported channel response.
 
     A raw impedance that is not a channel impedance (``impedance_omitted_reason``)
-    is dropped with its reason; a voltage-driven channel then reports its
-    electrical input impedance instead. Returns whether a driver payload was
-    applied.
+    is dropped with its reason, unless ``modal_impedance`` says the result
+    already carries the channel's power-consistent ``Zs``; a voltage-driven
+    channel then reports its electrical input impedance instead. Returns
+    whether a driver payload was applied.
     """
 
     if rms_velocity:
         channel_response["metadata"]["impedance_drive"] = "rms_velocity"
     omitted = impedance_omitted_reason(channel)
-    if omitted is not None:
+    if omitted is not None and modal_impedance:
+        channel_response["metadata"]["impedance_normalization"] = IMPEDANCE_NORMALIZATION_MODAL
+    elif omitted is not None:
         channel_response.pop("impedance", None)
         channel_response["metadata"]["impedance_omitted"] = omitted
     if driver_payload is None:

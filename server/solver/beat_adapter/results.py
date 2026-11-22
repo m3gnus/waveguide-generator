@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 import math
@@ -147,6 +147,8 @@ class FrequencyResult:
     surface_neumann_complex: np.ndarray | None
     diagnostics: dict[str, Any]
     generalized_impedances: dict[str, complex] | None = None
+    # Area-mean pressure on each of the channel's tags, in ``impedance``'s basis.
+    tag_mean_pressure: dict[int, complex] | None = None
 
     @property
     def spl_db(self) -> np.ndarray:
@@ -173,6 +175,7 @@ def parse_frequency(
     excitation_port_ids: tuple[str, ...] | None = None,
     channel_port_ids: tuple[str, ...] | None = None,
     port_weights: Mapping[str, float] | None = None,
+    tag_loadings: Mapping[int, BoundaryLoading] | None = None,
     _decoded_quantities: dict[str, np.ndarray] | None = None,
 ) -> FrequencyResult:
     """Map a unit-velocity basis or a WG channel's sum of independent ports.
@@ -246,6 +249,7 @@ def parse_frequency(
     generalized = dict(zip(ports, (complex(value) for value in forces)))
     force = generalized[channel_ports[0]] if len(channel_ports) == 1 else None
     surface_pressure = surface_neumann = None
+    tag_means: dict[int, complex] | None = None
     if trace_counts is not None:
         if len(trace_counts) != 2 or any(type(n) is not int or n <= 0 for n in trace_counts):
             raise ValueError("Trace counts must be positive (node, face) integers")
@@ -260,6 +264,9 @@ def parse_frequency(
             if mean_pressure_velocity is not None:
                 raise ValueError("Supply boundary loading or a precomputed mean, not both")
             mean_pressure_velocity = boundary_loading.mean_pressure(boundary_pressure)
+            if tag_loadings:
+                tag_means = {int(tag): complex(loading.mean_pressure(boundary_pressure) * scale)
+                             for tag, loading in tag_loadings.items()}
         if trace_counts is not None:
             surface_pressure = boundary_pressure * scale
             surface_neumann = quantity("surface:neumann", "bem_boundary_neumann", "Pa/m",
@@ -272,7 +279,17 @@ def parse_frequency(
     elif not np.isfinite(mean_pressure_velocity):
         raise ResultContractError("Boundary-derived mean pressure must be finite")
     return FrequencyResult(frequency_hz, pressure, complex(mean_pressure_velocity * scale),
-                           force, sphere, surface_pressure, surface_neumann, diagnostics, generalized)
+                           force, sphere, surface_pressure, surface_neumann, diagnostics, generalized,
+                           tag_mean_pressure=tag_means)
+
+
+def _channel_tag_loadings(request: CompiledRequest, members: Sequence[str]) -> dict[int, BoundaryLoading] | None:
+    """Each of a channel's tags' own loading, when the request carries them."""
+
+    if not request.tag_loading:
+        return None
+    tags = {basis.port_id: basis.tag for basis in request.bases}
+    return {int(tags[port]): request.tag_loading[int(tags[port])] for port in members}
 
 
 def parse_compiled_frequency(result: Any, request: CompiledRequest, *, frequency_hz: float
@@ -295,6 +312,7 @@ def parse_compiled_frequency(result: Any, request: CompiledRequest, *, frequency
             symmetry=options["symmetry"], precision=options["precision"], backend=options["bem_backend"],
             trace_counts=counts, boundary_loading=request.channel_loading[channel],
             port_weights={b.port_id: b.weight for b in request.bases} if any(b.weight != 1 for b in request.bases) else None,
+            tag_loadings=_channel_tag_loadings(request, members),
             _decoded_quantities=decoded)
         for channel, members in request.channel_ports.items()
     }
@@ -317,6 +335,8 @@ class SweepResult:
     requested_frequency_count: int
     solver_log: list[dict[str, Any]]
     radiation_impedance: np.ndarray | None = None
+    # Each of the channel's tags' area-mean pressure per frequency, when known.
+    surface_pressure_avg: dict[int, np.ndarray] | None = None
 
     timings: dict[str, float] = field(default_factory=dict)
 
@@ -349,6 +369,17 @@ class SweepResult:
     @property
     def spl_norm_db(self) -> np.ndarray:
         return self.directivity_db
+
+
+def _stack_tag_means(rows: Sequence[FrequencyResult]) -> dict[int, np.ndarray] | None:
+    """Per-tag mean pressures across the sweep, only when every row has them all."""
+
+    if not rows or any(row.tag_mean_pressure is None for row in rows):
+        return None
+    tags = sorted(rows[0].tag_mean_pressure)
+    if any(sorted(row.tag_mean_pressure) != tags for row in rows):
+        return None
+    return {tag: np.asarray([row.tag_mean_pressure[tag] for row in rows], dtype=complex) for tag in tags}
 
 
 def map_sweep(
@@ -465,7 +496,8 @@ def map_sweep(
                 stack("surface_pressure_complex", (trace_counts[0],)) if trace_counts else None,
                 stack("surface_neumann_complex", (trace_counts[1],)) if trace_counts else None,
                 terminal == "cancelled", len(frequencies), logs,
-                np.asarray([row.radiation_impedance for row in rows], dtype=complex))
+                np.asarray([row.radiation_impedance for row in rows], dtype=complex),
+                _stack_tag_means(rows))
         results = {name: finish(name) for name in channels}
         return results if _channel_callbacks is not None else results[channel_id]
     finally:

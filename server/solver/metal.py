@@ -95,6 +95,7 @@ from .imported_channels import (
     channel_source_identity,
     finish_imported_channel_response,
     drop_live_impedance,
+    apply_modal_channel_impedance,
     imported_combined_channel,
     imported_envelope,
     imported_validity_metadata,
@@ -1841,6 +1842,8 @@ def solve_imported_metal_from_msh_text(
         for channel, result in zip(geometry.drive_channels, results, strict=True):
             sort_native_result_frequencies(result)
             sorted_results[channel.id] = result
+        modal_channels = apply_modal_channel_impedance(
+            sorted_results, geometry.drive_channels, source_tags, msh_text)
 
         if geometry.passive_cardioid_enabled:
             consumer_hz = np.asarray(results[0].frequencies_hz, dtype=np.float64)
@@ -1964,6 +1967,7 @@ def solve_imported_metal_from_msh_text(
                 driver_payload=driver_payloads.get(channel.id),
                 rms_velocity=geometry.uses_rms_velocity,
                 channel=channel,
+                modal_impedance=channel.id in modal_channels,
             )
             if not driver_applied and cardioid_owns_driver:
                 channel_response["metadata"]["driver_coupling_deferred_to"] = (

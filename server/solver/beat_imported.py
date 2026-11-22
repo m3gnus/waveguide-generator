@@ -56,6 +56,7 @@ from .imported_channels import (
     channel_source_identity,
     finish_imported_channel_response,
     drop_live_impedance,
+    apply_modal_channel_impedance,
     imported_combined_channel,
     imported_envelope,
     imported_validity_metadata,
@@ -602,6 +603,9 @@ def solve_imported_beat_from_msh_text(
     if stage_callback:
         stage_callback("finalizing", 1.0, "Packaging imported drive-channel bases")
 
+    modal_channels = apply_modal_channel_impedance(
+        sorted_results, geometry.drive_channels, source_tags, msh_text,
+        tag_areas={tag: loading.area_m2 for tag, loading in compiled.tag_loading.items()})
     driver_payloads: dict[str, dict[str, Any]] = {}
     for result in sorted_results.values():
         normalize_prescribed_result(result, geometry)
@@ -696,6 +700,7 @@ def solve_imported_beat_from_msh_text(
             driver_payload=driver_payloads.get(channel.id),
             rms_velocity=geometry.uses_rms_velocity,
             channel=channel,
+            modal_impedance=channel.id in modal_channels,
         )
         channels[channel.id] = channel_response
 

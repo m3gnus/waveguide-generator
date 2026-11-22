@@ -58,6 +58,9 @@ class CompiledRequest:
     axial_identity: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     # Original metre coordinates, before precision conversion and image snapping.
     source_mesh: SurfaceMesh | None = field(default=None, repr=False, compare=False)
+    # Each driven tag's own loading, so a channel can report every tag's mean
+    # pressure (``surface_pressure_avg``) for its power-consistent impedance.
+    tag_loading: Mapping[int, BoundaryLoading] = field(default_factory=dict, repr=False, compare=False)
 
 
 def validate_imported_request(compiled: CompiledRequest, native_plane: str | None) -> None:
@@ -305,7 +308,9 @@ def build_request(
         wire["cancel_path"] = str(cancel_path.resolve())
     return CompiledRequest(wire, transformed_layout, transformed, tuple(bases), channels,
                            loading, frame, engine_id, surface_traces,
-                           source_mesh=mesh if _retain_source_mesh else None)
+                           source_mesh=mesh if _retain_source_mesh else None,
+                           tag_loading={int(tag): BoundaryLoading.from_mesh(transformed, [tag])
+                                        for tag in sorted({basis.tag for basis in bases})})
 
 
 def build_parametric_request(

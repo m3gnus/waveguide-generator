@@ -257,8 +257,16 @@ def test_imported_production(runtime, monkeypatch, adaptive, axial, backend):
     assert all(channel["metadata"]["solver_engine"]["provider"] == "official"
                for channel in result["channels"].values())
     assert set(result["channels"]) == {"left", "right"}
-    assert "impedance" not in result["channels"]["left"]
+    # A multi-source normal channel reports its power-consistent modal
+    # impedance; an axial one still has no channel impedance to report.
+    left = result["channels"]["left"]
+    if axial:
+        assert "impedance" not in left
+    else:
+        assert "impedance" in left
+        assert left["metadata"]["impedance_normalization"] == "mean_square_velocity"
     assert "impedance" in result["channels"]["right"]
+    assert "impedance_normalization" not in result["channels"]["right"]["metadata"]
     assert result["_field_traces"] is not None
     assert result["_channel_bases_npz"]
     assert frames and [i for i, _ in frames] == list(range(len(frames)))
@@ -319,7 +327,7 @@ def test_an_old_beat_assembly_replay_converts_its_impedance_once(runtime, monkey
 
 @pytest.mark.parametrize("adaptive", [False, True])
 def test_weighted_single_source_live_frames_match_the_final_impedance_rule(runtime, monkeypatch, adaptive):
-    """A w != 1 patch's raw pressure is w*Z: no live curve that the final result then drops."""
+    """A w != 1 patch's raw pressure is w*Z: never drawn live; the final shows its modal impedance."""
 
     from server.solver.imported_channels import IMPEDANCE_OMITTED_WEIGHTED
 
@@ -348,8 +356,11 @@ def test_weighted_single_source_live_frames_match_the_final_impedance_rule(runti
     assert all("impedance" not in channel for channel in live)
     assert all(channel["metadata"]["impedance_omitted"] == IMPEDANCE_OMITTED_WEIGHTED for channel in live)
     assert any("impedance" in frame["channels"]["unit"] for frame in frames if "unit" in frame["channels"])
-    assert "impedance" not in result["channels"]["weighted"]
-    assert result["channels"]["weighted"]["metadata"]["impedance_omitted"] == IMPEDANCE_OMITTED_WEIGHTED
+    # The final result replaces the raw w*Z with the patch's modal impedance;
+    # live frames carry no per-tag means, so they keep the rule's drop.
+    weighted = result["channels"]["weighted"]
+    assert "impedance" in weighted and "impedance_omitted" not in weighted["metadata"]
+    assert weighted["metadata"]["impedance_normalization"] == "mean_square_velocity"
     assert "impedance" in result["channels"]["unit"]
 
 
