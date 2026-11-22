@@ -427,7 +427,10 @@ def impedance_omitted_reason(channel: Any) -> str | None:
     area-mean pressure per unit drive of a single tag (Metal, BEMPP) or of the
     union of the channel's tags under their weighted summed pressure (BEAT), so
     it is the channel impedance only for one source at unit weight. ``None``
-    keeps the curve.
+    means the raw value is the channel impedance as solved. Otherwise the raw
+    value is never shown: a final result carries the channel's modal impedance
+    instead when ``apply_modal_channel_impedance`` could compute it, and drops
+    the curve with this reason when it could not (and on every live frame).
     """
 
     if len(channel.source_ids) > 1:
@@ -447,7 +450,10 @@ def drop_live_impedance(channel: Any, channel_response: dict[str, Any]) -> None:
         channel_response.setdefault("metadata", {})["impedance_omitted"] = omitted
 
 
-IMPEDANCE_NORMALIZATION_MODAL = "mean_square_velocity"
+# Names what a modal channel's curve is. Not ``impedance_normalization``: the
+# chart payload already uses that key for rho_c/absolute display scaling.
+IMPEDANCE_PROJECTION_KEY = "impedance_projection"
+IMPEDANCE_PROJECTION_MODAL = "modal_mean_square_velocity"
 
 
 def solved_tag_areas(msh_text: str) -> dict[int, float]:
@@ -461,6 +467,8 @@ def solved_tag_areas(msh_text: str) -> dict[int, float]:
 
     from server.mesh.imported import _tag_areas
 
+    # Reads through the shared Gmsh reader's text-keyed cache, so a mesh the
+    # solve already parsed is not parsed again.
     from .imported import _msh_triangles
 
     points, triangles, tags = _msh_triangles(msh_text)
@@ -488,7 +496,10 @@ def modal_channel_impedance(
 
     if getattr(channel, "motion", "normal") != "normal":
         return None
-    averages = getattr(result, "surface_pressure_avg", None)
+    # BEAT reports its modal tag means apart from ``surface_pressure_avg``.
+    averages = getattr(result, "tag_mean_pressure", None)
+    if not isinstance(averages, Mapping):
+        averages = getattr(result, "surface_pressure_avg", None)
     if not isinstance(averages, Mapping):
         return None
     weights = channel.patch_weights or {}
@@ -501,6 +512,8 @@ def modal_channel_impedance(
     numerator: Any = 0.0
     denominator = 0.0
     for tag, weight in by_tag.items():
+        if weight == 0.0:
+            continue  # A still patch adds nothing, wherever it lies.
         if tag not in averages or tag_areas.get(tag, 0.0) <= 0.0:
             return None
         area = float(tag_areas[tag])
@@ -572,8 +585,8 @@ def finish_imported_channel_response(
     if rms_velocity:
         channel_response["metadata"]["impedance_drive"] = "rms_velocity"
     omitted = impedance_omitted_reason(channel)
-    if omitted is not None and modal_impedance:
-        channel_response["metadata"]["impedance_normalization"] = IMPEDANCE_NORMALIZATION_MODAL
+    if omitted is not None and modal_impedance:  # the result already carries Zs
+        channel_response["metadata"][IMPEDANCE_PROJECTION_KEY] = IMPEDANCE_PROJECTION_MODAL
     elif omitted is not None:
         channel_response.pop("impedance", None)
         channel_response["metadata"]["impedance_omitted"] = omitted

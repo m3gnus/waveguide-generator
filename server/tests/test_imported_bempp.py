@@ -689,3 +689,80 @@ def test_a_source_that_only_touches_the_mirror_at_a_vertex_is_not_projected(
         bempp_imported.solve_imported_bempp_from_msh_text(
             MESH, _axial_request(), _record(planes=["x0"])
         )
+
+
+class _TagMeanBempp(_RecordingBempp):
+    """Also returns each driven tag's mean, as the real package does."""
+
+    def solve_frequencies(self, path: str, frequencies: list[float], config: Any) -> SimpleNamespace:
+        result = super().solve_frequencies(path, frequencies, config)
+        tags = sorted(config.velocity_sources)
+        result.surface_pressure_avg = {
+            tag: np.asarray([(1.0 + 0.1 * tag) * (1.0 + 0.5j * frequency / 100) for frequency in frequencies])
+            for tag in tags
+        }
+        result.impedance = np.asarray(result.surface_pressure_avg[tags[0]])
+        return result
+
+
+def test_bempp_multi_source_channel_reports_its_modal_impedance(monkeypatch):
+    """End to end on BEMPP: the two-tag channel gets Zs from its tag means and solved areas."""
+
+    from server.solver.imported_channels import solved_tag_areas
+    from server.solver.result_mapping import specific_impedance_z_over_rho_c
+
+    package = _TagMeanBempp()
+    _install(monkeypatch, package)
+    envelope = _solve(_request(), _record())
+    areas = solved_tag_areas(MESH)
+    points = np.array([[0.01, 0, 0], [0, 0.02, 0], [0, 0, 0.03], [0.01, 0.02, 0.03]])
+    for tag, (a, b, c) in {101: (1, 2, 4), 102: (2, 3, 4), 103: (1, 3, 4)}.items():
+        p0, p1, p2 = points[a - 1], points[b - 1], points[c - 1]
+        assert areas[tag] == pytest.approx(0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0)))
+    means = {tag: np.asarray([(1.0 + 0.1 * tag) * (1.0 + 0.5j * f / 100) for f in (100., 500., 1000.)])
+             for tag in (101, 102)}
+    zs = (areas[101] * means[101] + areas[102] * means[102]) / (areas[101] + areas[102])
+    expected = specific_impedance_z_over_rho_c(SimpleNamespace(frequencies_hz=np.array([100., 500., 1000.]),
+                                                               impedance=zs))
+    left = envelope["channels"]["left"]
+    assert left["metadata"]["impedance_projection"] == "modal_mean_square_velocity"
+    np.testing.assert_allclose(left["impedance"]["real"], [z.real for z in expected], rtol=1e-12)
+    np.testing.assert_allclose(left["impedance"]["imaginary"], [z.imag for z in expected], rtol=1e-12)
+    # The single-source channel keeps exactly its raw value.
+    right = envelope["channels"]["right"]
+    raw = specific_impedance_z_over_rho_c(SimpleNamespace(frequencies_hz=np.array([100., 500., 1000.]),
+                                                          impedance=_right_channel_means(package)))
+    assert "impedance_projection" not in right["metadata"]
+    assert right["impedance"]["real"] == [z.real for z in raw]
+
+
+def _right_channel_means(package: _TagMeanBempp) -> np.ndarray:
+    return np.asarray([(1.0 + 0.1 * 103) * (1.0 + 0.5j * f / 100) for f in (100., 500., 1000.)])
+
+
+def test_solved_tag_areas_keep_full_domain_ratios_in_a_symmetry_half():
+    """Every face of a reduced domain has one image, so tag-area ratios are the full ones."""
+
+    from server.solver.imported_channels import solved_tag_areas
+
+    def strip(x0, x1, y0, y1, tag, start):
+        nodes = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        return nodes, [(tag, (start, start + 1, start + 2)), (tag, (start, start + 2, start + 3))]
+
+    def msh(parts):
+        nodes, elements = [], []
+        for part_nodes, part_elements in parts:
+            nodes.extend(part_nodes)
+            elements.extend(part_elements)
+        lines = ["$MeshFormat", "2.2 0 8", "$EndMeshFormat", "$Nodes", str(len(nodes))]
+        lines += [f"{i + 1} {x} {y} 0" for i, (x, y) in enumerate(nodes)]
+        lines += ["$EndNodes", "$Elements", str(len(elements))]
+        lines += [f"{i + 1} 2 2 {tag} {tag} {a} {b} {c}" for i, (tag, (a, b, c)) in enumerate(elements)]
+        return "\n".join(lines + ["$EndElements", ""])
+
+    # Tag 2 straddles the x = 0 plane; tag 3 lies wholly on one side, with its mirror image.
+    full = msh([strip(-0.2, 0.2, 0, 0.1, 2, 1), strip(0.3, 0.5, 0, 0.1, 3, 5), strip(-0.5, -0.3, 0, 0.1, 3, 9)])
+    half = msh([strip(0.0, 0.2, 0, 0.1, 2, 1), strip(0.3, 0.5, 0, 0.1, 3, 5)])
+    full_areas, half_areas = solved_tag_areas(full), solved_tag_areas(half)
+    assert half_areas[2] == pytest.approx(0.02) and half_areas[3] == pytest.approx(0.02)
+    assert half_areas[2] / half_areas[3] == pytest.approx(full_areas[2] / full_areas[3])

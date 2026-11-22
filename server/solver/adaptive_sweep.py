@@ -262,6 +262,32 @@ def _cancelled_batches(batches: list[Any]) -> Any:
     return current
 
 
+def fit_columns_separately(frequencies, values, targets) -> np.ndarray:
+    """Interpolate extra columns on their own, outside the planner's shared fit.
+
+    The planner's vector fit is not column-separable: adding a column moves
+    every other column's prediction and the acquisition choices. Columns that
+    only a derived quantity needs are fitted here instead, on the rows the
+    planner acquired, with each acquired row restored exactly.
+    """
+
+    f = np.asarray(frequencies, dtype=float)
+    data = np.asarray(values, dtype=complex).reshape(len(f), -1)
+    targets = np.asarray(targets, dtype=float)
+    order = np.argsort(f, kind="stable")
+    f, data = f[order], data[order]
+    exact = {float(value): row for value, row in zip(f, data, strict=True)}
+    if all(float(value) in exact for value in targets):
+        return np.stack([exact[float(value)] for value in targets])
+    band = (min(f[0], targets.min()), max(f[-1], targets.max()))
+    model = SweepModel(f, data, band, min(30, max(2, len(f) - 2)), np.zeros(data.shape[1]), physical=True)
+    prediction = np.asarray(model(targets))
+    for row, value in enumerate(targets):
+        if float(value) in exact:
+            prediction[row] = exact[float(value)]
+    return prediction
+
+
 def native_acquisition_frequencies(context) -> np.ndarray:
     """Requested rows plus geometric coverage queries; also the progress budget."""
     requested = canonical_frequencies(context)

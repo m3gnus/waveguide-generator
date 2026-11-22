@@ -140,3 +140,45 @@ def test_imported_metal_keeps_impedance_only_for_a_unit_weight_source_live_and_f
         assert "impedance" not in final and "impedance" not in live
         assert final["metadata"]["impedance_omitted"] == IMPEDANCE_OMITTED_WEIGHTED
         assert live["metadata"]["impedance_omitted"] == IMPEDANCE_OMITTED_WEIGHTED
+
+
+def test_imported_metal_multi_source_channel_reports_its_modal_impedance(monkeypatch, tmp_path):
+    """End to end on Metal: Zs from the native tag means and the solved mesh's tag areas."""
+
+    import numpy as np
+
+    from server.solver.imported_channels import solved_tag_areas
+    from server.solver.result_mapping import specific_impedance_z_over_rho_c
+
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
+    frequencies = np.array([100., 200.])
+    means = {2: np.array([1 + 2j, 3 - 1j]), 1: np.array([0.5 + 0.5j, -2 + 1j])}
+
+    def native_multi_source(path, specs, config, *, frequencies_hz=None):
+        assert specs == [{2: 1 + 0j, 1: 1 + 0j}]
+        result = imported_result()
+        result.frequencies_hz = frequencies
+        result.surface_pressure_avg = dict(means)
+        result.impedance = means[1].copy()  # the lowest driven tag, as the native helper reports
+        return [result]
+
+    monkeypatch.setattr(metal, "native_solve_multi_source", native_multi_source)
+    request = _request("wgi_" + "0" * 26, drive_channels=[{"id": "pair", "source_ids": ["source-a", "source-b"]}],
+                       mesh={"rigid_size_mm": 8., "transition_mm": 20.,
+                             "source_size_mm": {"source-a": 3., "source-b": 3.}})
+    request.options.frequencies_hz = frequencies.tolist()
+    msh = _cabinet_msh()
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text(msh)
+    record = _roled_record(mesh_path)
+    record["source_tags"].update({"source-a": 2, "source-b": 1})
+    response = metal.solve_imported_metal_from_msh_text(msh, request, record)
+    areas = solved_tag_areas(msh)
+    zs = (areas[2] * means[2] + areas[1] * means[1]) / (areas[2] + areas[1])
+    expected = specific_impedance_z_over_rho_c(SimpleNamespace(frequencies_hz=frequencies, impedance=zs))
+    pair = response["channels"]["pair"]
+    assert pair["metadata"]["impedance_projection"] == "modal_mean_square_velocity"
+    np.testing.assert_allclose(pair["impedance"]["real"], [z.real for z in expected], rtol=1e-12)
+    np.testing.assert_allclose(pair["impedance"]["imaginary"], [z.imag for z in expected], rtol=1e-12)

@@ -264,9 +264,9 @@ def test_imported_production(runtime, monkeypatch, adaptive, axial, backend):
         assert "impedance" not in left
     else:
         assert "impedance" in left
-        assert left["metadata"]["impedance_normalization"] == "mean_square_velocity"
+        assert left["metadata"]["impedance_projection"] == "modal_mean_square_velocity"
     assert "impedance" in result["channels"]["right"]
-    assert "impedance_normalization" not in result["channels"]["right"]["metadata"]
+    assert "impedance_projection" not in result["channels"]["right"]["metadata"]
     assert result["_field_traces"] is not None
     assert result["_channel_bases_npz"]
     assert frames and [i for i, _ in frames] == list(range(len(frames)))
@@ -360,8 +360,36 @@ def test_weighted_single_source_live_frames_match_the_final_impedance_rule(runti
     # live frames carry no per-tag means, so they keep the rule's drop.
     weighted = result["channels"]["weighted"]
     assert "impedance" in weighted and "impedance_omitted" not in weighted["metadata"]
-    assert weighted["metadata"]["impedance_normalization"] == "mean_square_velocity"
+    assert weighted["metadata"]["impedance_projection"] == "modal_mean_square_velocity"
     assert "impedance" in result["channels"]["unit"]
+
+
+@pytest.mark.parametrize("weight", [0.5, -1.0])
+def test_a_weighted_beat_patch_reports_its_own_patch_impedance(runtime, monkeypatch, weight):
+    """End to end on BEAT: a w patch's Zs is the unit-weight patch's raw <p>/v, never w*Z."""
+
+    monkeypatch.setattr(bridge, "engine_version", lambda: "1.2.3")
+
+    def solve(w):
+        channels = [{"id": "c", "source_ids": ["source-c"], "patch_weights": {"source-c": w}},
+                    {"id": "a", "source_ids": ["source-a"], "patch_weights": {"source-a": 1.0}},
+                    {"id": "b", "source_ids": ["source-b"], "patch_weights": {"source-b": 1.0}}]
+        request = cad._request(drive_channels=channels, required_features=["wg-design-assembly-v1"],
+                               excitation_normalization="rms_velocity")
+        record = cad._record()
+        record["required_features"] = ["wg-design-assembly-v1"]
+        record["excitations"] = [{"id": c["id"], "source_ids": c["source_ids"], "motion": "normal",
+                                  "patch_weights": c["patch_weights"]} for c in channels]
+        return beat_imported.solve_imported_beat_from_msh_text(cad.MESH, request, record, backend="cpu")
+
+    weighted, unit = solve(weight)["channels"], solve(1.0)["channels"]
+    assert weighted["c"]["metadata"]["impedance_projection"] == "modal_mean_square_velocity"
+    assert "impedance_projection" not in unit["c"]["metadata"]
+    np.testing.assert_allclose(weighted["c"]["impedance"]["real"], unit["c"]["impedance"]["real"], rtol=1e-6)
+    np.testing.assert_allclose(weighted["c"]["impedance"]["imaginary"], unit["c"]["impedance"]["imaginary"],
+                               rtol=1e-6)
+    # Untouched unit channels are identical run to run.
+    assert weighted["a"]["impedance"] == unit["a"]["impedance"]
 
 
 @pytest.mark.parametrize("axial", [False, True])

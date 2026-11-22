@@ -335,8 +335,10 @@ class SweepResult:
     requested_frequency_count: int
     solver_log: list[dict[str, Any]]
     radiation_impedance: np.ndarray | None = None
-    # Each of the channel's tags' area-mean pressure per frequency, when known.
-    surface_pressure_avg: dict[int, np.ndarray] | None = None
+    # Each of the channel's tags' area-mean pressure per frequency, for the
+    # channel's modal impedance only. Deliberately not ``surface_pressure_avg``:
+    # that name feeds the driver model and the adaptive planner's shared fit.
+    tag_mean_pressure: dict[int, np.ndarray] | None = None
 
     timings: dict[str, float] = field(default_factory=dict)
 

@@ -78,6 +78,12 @@ def sort_official_result(result: SweepResult) -> None:
     force = getattr(result, "radiation_impedance", None)
     if force is not None:
         result.radiation_impedance = force[order] if len(force) == len(order) else None
+    means = getattr(result, "tag_mean_pressure", None)
+    if isinstance(means, dict):
+        result.tag_mean_pressure = {
+            tag: (np.asarray(values)[order] if len(values) == len(order) else values)
+            for tag, values in means.items()
+        }
     sort_native_result_frequencies(result)
     with np.errstate(divide="ignore"):
         result.spl_db = 20.0 * np.log10(np.abs(result.pressure_complex) / 20e-6)

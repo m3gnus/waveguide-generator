@@ -239,4 +239,4 @@ def test_a_modal_channel_keeps_its_curve_and_says_what_it_is() -> None:
         channel=_channel(["a", "b"]), modal_impedance=True,
     )
     assert response == {"impedance": {"real": [1.0]},
-                        "metadata": {"impedance_normalization": "mean_square_velocity"}}
+                        "metadata": {"impedance_projection": "modal_mean_square_velocity"}}

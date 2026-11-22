@@ -43,6 +43,7 @@ from .field_traces_store import (
 )
 from .adaptive_sweep import (
     enabled as adaptive_enabled,
+    fit_columns_separately,
     native_acquisition_frequencies,
     solve_native_adaptively,
 )
@@ -56,6 +57,7 @@ from .imported_channels import (
     channel_source_identity,
     finish_imported_channel_response,
     drop_live_impedance,
+    impedance_omitted_reason,
     apply_modal_channel_impedance,
     imported_combined_channel,
     imported_envelope,
@@ -81,6 +83,28 @@ PASSIVE_CARDIOID_REFUSAL = (
     "Turn the passive cardioid off to solve this return on BEAT, or solve it "
     "with Metal."
 )
+
+
+def _adaptive_tag_means(channel: Any, batches: Sequence[Any], frequencies: Any) -> dict[int, Any] | None:
+    """A modal channel's per-tag means on the adaptive result's frequency axis.
+
+    They stay out of the planner's shared fit, which would otherwise move
+    every existing column; they are fitted on their own from the acquired
+    rows. Channels with a raw channel impedance need none.
+    """
+
+    if impedance_omitted_reason(channel) is None:
+        return None
+    means = [getattr(batch, "tag_mean_pressure", None) for batch in batches]
+    if not means or any(not isinstance(item, Mapping) for item in means):
+        return None
+    tags = sorted(means[0])
+    if any(sorted(item) != tags for item in means):
+        return None
+    acquired_hz = np.concatenate([np.asarray(batch.frequencies_hz, dtype=float) for batch in batches])
+    values = np.concatenate([np.stack([np.asarray(item[tag]) for tag in tags], axis=1) for item in means])
+    fitted = fit_columns_separately(acquired_hz, values, np.asarray(frequencies, dtype=float))
+    return {tag: fitted[:, column] for column, tag in enumerate(tags)}
 
 
 class ImportedBeatRefusal(ValueError):
@@ -552,20 +576,25 @@ def solve_imported_beat_from_msh_text(
                     result_callback(next_revision[0], frame)
                     next_revision[0] += 1
 
+                acquired: list[Any] = []
+
                 def solve_batch(batch):
                     # Reuse this channel's projection throughout refinement.
-                    return solve_compiled(
+                    solved = solve_compiled(
                         batch_request(selected, batch), channel_id=channel.id,
                         worker_manager=_worker_manager, julia_executable=_julia_executable,
                         _profile=profile,
                         cancellation_callback=cancellation_callback,
                         progress_callback=progress, status_callback=stage_status,
                     )
+                    acquired.append(solved)
+                    return solved
                 result = solve_native_adaptively(
                     context, solve_batch, distance_m=config.observation.distance_m,
                     sound_speed=BEAT_SOUND_SPEED_M_PER_S,
                     publish=publish, cancel=cancellation_callback,
                 )
+                result.tag_mean_pressure = _adaptive_tag_means(channel, acquired, result.frequencies_hz)
             else:
                 result = solve_compiled(
                     batch_request(compiled, frequencies), channel_id=channel.id,

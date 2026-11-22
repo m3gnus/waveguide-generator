@@ -851,3 +851,64 @@ def test_planner_disagreement_queries_ignore_peak_ulp_noise(monkeypatch, directi
         selections.append(planner.pending.copy())
     np.testing.assert_array_equal(selections[0], selections[1])
     assert 1 in selections[0] and 3 not in selections[0]
+
+
+def _reference_batches(extra: str | None):
+    """Real BEM rows (adaptive-ref-S) served as native batches, optionally with tag means."""
+
+    f, truth = reference()
+    pressure, impedance = truth[:, :37], truth[:, 37]
+    # Two further real columns, standing in for a modal channel's per-tag means.
+    tags = {2: truth[:, 5] * 1e-3, 3: truth[:, 21] * 1e-3}
+    rows = {float(value): i for i, value in enumerate(f)}
+    calls: list[list[float]] = []
+
+    def solve_batch(batch):
+        calls.append(list(batch))
+        ids = [rows[float(value)] for value in batch]
+        native = SimpleNamespace(
+            frequencies_hz=np.asarray(batch, dtype=float),
+            pressure_complex=pressure[ids][:, None, :],
+            impedance=impedance[ids],
+            solver_log=[], timings={},
+        )
+        if extra is not None:
+            setattr(native, extra, {tag: values[ids] for tag, values in tags.items()})
+        return native
+
+    context = SolverContext(None, (float(f[0]), float(f[-1])), len(f), frequencies_hz=tuple(f.tolist()))
+    context.adaptive_frequency_sampling = True
+    result = solve_native_adaptively(context, solve_batch, distance_m=2.0, sound_speed=343.0)
+    return result, calls, f, tags
+
+
+def test_modal_tag_means_stay_out_of_the_planner_fit_on_real_rows():
+    """BEAT's modal per-tag means must not move any column the planner already fits."""
+
+    from server.solver.adaptive_sweep import fit_columns_separately
+
+    plain, plain_calls, f, tags = _reference_batches(None)
+    modal, modal_calls, _, _ = _reference_batches("tag_mean_pressure")
+    assert "interpolated" in plain.frequency_status
+    assert modal_calls == plain_calls
+    assert modal.frequency_status == plain.frequency_status
+    np.testing.assert_array_equal(modal.pressure_complex, plain.pressure_complex)
+    np.testing.assert_array_equal(modal.impedance, plain.impedance)
+
+    # The same columns inside the shared fit would move the others: this is
+    # what keeping them apart protects (review P2-1).
+    shared, shared_calls, _, _ = _reference_batches("surface_pressure_avg")
+    assert (shared_calls != plain_calls
+            or not np.array_equal(shared.impedance, plain.impedance)
+            or not np.array_equal(shared.pressure_complex, plain.pressure_complex))
+
+    # Fitted on their own, the tag means restore every acquired row exactly
+    # and interpolate the rest of the published axis.
+    acquired = np.concatenate([np.asarray(call, dtype=float) for call in plain_calls])
+    ids = np.searchsorted(f, acquired)
+    values = np.stack([tags[2][ids], tags[3][ids]], axis=1)
+    fitted = fit_columns_separately(acquired, values, f)
+    np.testing.assert_array_equal(fitted[ids], values)
+    truth = np.stack([tags[2], tags[3]], axis=1)
+    errors = abs(20 * np.log10(abs(fitted) / abs(truth)))
+    assert errors.max() < 0.5
