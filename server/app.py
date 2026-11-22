@@ -532,8 +532,8 @@ def create_app(
 
     # Solve meshes outlive a restart: an unchanged design solved again after
     # one reads its mesh back instead of rebuilding it (server/mesh/cache.py).
-    # Opening it measures WG's mesh code (seconds under load), so it opens on
-    # a daemon thread: neither startup nor a stop waits for it, and solves
+    # Opening it reads and hashes WG's code and tidies the folder, so it opens
+    # on a daemon thread: neither startup nor a stop waits for it, and solves
     # until then build as if the cache were cold.
     def open_solver_mesh_disk_cache() -> None:
         from server.mesh.builder import SolverMeshDiskCacheOpening

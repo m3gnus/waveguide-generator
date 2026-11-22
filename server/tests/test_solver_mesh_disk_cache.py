@@ -286,42 +286,81 @@ def test_an_unmeasured_identity_keeps_the_disk_cache_off(tmp_path, monkeypatch) 
     assert builder._solver_mesh_disk_cache is None
 
 
-def test_the_code_fingerprint_follows_in_repo_imports(tmp_path) -> None:
+def test_the_code_fingerprint_covers_every_module_but_the_tests(tmp_path) -> None:
     package = tmp_path / "server"
-    for folder in ("mesh", "preview", "design", "other"):
+    for folder in ("mesh", "preview", "cli", "tests", "mesh/__pycache__"):
         (package / folder).mkdir(parents=True)
-        (package / folder / "__init__.py").write_text("", encoding="utf-8")
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "mesh" / "builder.py").write_text(
-        "import numpy\nfrom server.preview import errors\n\n"
-        "def later():\n    from ..design.native import FORMULAS\n    return FORMULAS\n",
-        encoding="utf-8",
+        "def later():\n    from ..preview import errors\n    return errors\n", encoding="utf-8",
     )
     (package / "preview" / "errors.py").write_text("TEXT = 'old warning'\n", encoding="utf-8")
-    (package / "design" / "native.py").write_text("FORMULAS = {'OSSE'}\n", encoding="utf-8")
-    (package / "other" / "unused.py").write_text("X = 1\n", encoding="utf-8")
+    # Nothing imports it by name: a lazy export, or a module a build never reaches.
+    (package / "cli" / "render.py").write_text("X = 1\n", encoding="utf-8")
+    (package / "tests" / "test_builder.py").write_text("def test(): pass\n", encoding="utf-8")
+    (package / "mesh" / "__pycache__" / "builder.py").write_text("stale\n", encoding="utf-8")
+    (package / "mesh" / "notes.txt").write_text("not code\n", encoding="utf-8")
 
     def fingerprint() -> str:
-        start = [package / "mesh" / "builder.py"]
-        return builder._source_digest(package, builder._in_repo_import_closure(package, start))
+        return builder._source_digest(package, builder._wg_code_files(package))
 
+    assert [path.relative_to(package).as_posix() for path in builder._wg_code_files(package)] == [
+        "__init__.py", "cli/render.py", "mesh/builder.py", "preview/errors.py",
+    ]
     first = fingerprint()
-    (package / "other" / "unused.py").write_text("X = 2\n", encoding="utf-8")
+    (package / "tests" / "test_builder.py").write_text("def test(): assert True\n", encoding="utf-8")
+    (package / "mesh" / "notes.txt").write_text("still not code\n", encoding="utf-8")
     assert fingerprint() == first
     (package / "preview" / "errors.py").write_text("TEXT = 'reworded warning'\n", encoding="utf-8")
     second = fingerprint()
     assert second != first
-    (package / "design" / "native.py").write_text("FORMULAS = {'OSSE', 'R-OSSE'}\n", encoding="utf-8")
+    (package / "cli" / "render.py").write_text("X = 2\n", encoding="utf-8")
     assert fingerprint() != second
+
+
+def test_measuring_the_code_reads_it_and_never_parses_it(monkeypatch) -> None:
+    """The measurement runs in the server process beside its first requests.
+
+    It parsed every module it followed (about 5.7 MB of source), which held
+    the GIL for seconds at every start: on a loaded 4-CPU Linux runner a
+    POST /api/solve made then waited past 10 s (CI run 45010896870,
+    test_bounded_server_shutdown.py). Reading and hashing the same sources
+    takes milliseconds and mostly releases the GIL.
+    """
+
+    import ast
+    import builtins
+
+    parsed: list[str] = []
+    real_parse, real_compile = ast.parse, builtins.compile
+
+    def parse(source, filename="<unknown>", *args, **kwargs):
+        parsed.append(str(filename))
+        return real_parse(source, filename, *args, **kwargs)
+
+    def compile_(source, filename, *args, **kwargs):
+        parsed.append(str(filename))
+        return real_compile(source, filename, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ast, "parse", parse)
+        patch.setattr(builtins, "compile", compile_)
+        identity = builder._wg_mesh_code_identity.__wrapped__()
+    assert parsed == []
+    assert identity is not None and identity.startswith("sha256:")
+    assert identity == builder._wg_mesh_code_identity()
 
 
 def test_the_real_fingerprint_covers_the_modules_that_shape_an_artifact() -> None:
     from pathlib import Path
 
     package = Path(builder.__file__).resolve().parents[1]
-    start = sorted(path for path in (package / "mesh").rglob("*.py") if "__pycache__" not in path.parts)
-    covered = {path.relative_to(package).as_posix() for path in builder._in_repo_import_closure(package, start)}
-    assert {"preview/errors.py", "contracts/geometry.py", "design/native.py", "preview/translate.py"} <= covered
+    covered = {path.relative_to(package).as_posix() for path in builder._wg_code_files(package)}
+    assert {
+        "mesh/builder.py", "preview/errors.py", "contracts/geometry.py", "design/native.py",
+        "preview/translate.py",
+    } <= covered
+    assert not any(name.startswith("tests/") for name in covered)
     generator = builder._solver_mesh_disk_generator()
     assert generator is not None
     assert set(generator["parser_versions"]) == {"meshio", "numpy"}

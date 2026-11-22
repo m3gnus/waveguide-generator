@@ -989,63 +989,22 @@ def _solver_mesh_generator() -> dict[str, Any]:
     }
 
 
-def _in_repo_import_closure(package_root: Path, start: list[Path]) -> list[Path]:
-    """Every module under ``package_root`` that ``start`` imports, transitively.
+def _wg_code_files(package_root: Path) -> list[Path]:
+    """Every module of the ``package_root`` package except its tests, sorted.
 
-    Read from the source (module-level and deferred imports alike), so it
-    covers code a build reaches lazily. ``package_root`` is the folder of the
-    top-level package (``server``); imports of anything else are ignored.
+    A superset of whatever a build can reach from ``server/mesh``: deferred
+    imports, package ``__init__`` files and lazy exports included. Listing
+    them costs a directory walk; parsing them to follow the imports cost
+    seconds of the GIL at every start, and only ever left out the CLI, the
+    tools and a few API modules.
     """
 
-    import ast
-
-    package = package_root.name
-    seen: set[Path] = set()
-    queue = [path.resolve() for path in start]
-
-    def module_file(dotted: str) -> Path | None:
-        parts = dotted.split(".")
-        if parts[0] != package:
-            return None
-        base = package_root.joinpath(*parts[1:])
-        for candidate in (base.with_suffix(".py"), base / "__init__.py"):
-            if candidate.is_file():
-                return candidate.resolve()
-        return None
-
-    while queue:
-        path = queue.pop()
-        if path in seen:
-            continue
-        seen.add(path)
-        relative = path.relative_to(package_root.resolve()).with_suffix("")
-        module_parts = [package, *relative.parts]
-        if module_parts[-1] == "__init__":
-            module_parts.pop()
-        # Each package's __init__ runs on import too.
-        for depth in range(1, len(module_parts)):
-            init = module_file(".".join(module_parts[:depth]))
-            if init is not None:
-                queue.append(init)
-        tree = ast.parse(path.read_bytes(), filename=str(path))
-        for node in ast.walk(tree):
-            names: list[str] = []
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                if node.level:
-                    is_package = path.name == "__init__.py"
-                    anchor = module_parts if is_package else module_parts[:-1]
-                    anchor = anchor[: len(anchor) - (node.level - 1)]
-                    base = ".".join([*anchor, *([node.module] if node.module else [])])
-                else:
-                    base = node.module or ""
-                names = [base, *(f"{base}.{alias.name}" for alias in node.names)]
-            for name in names:
-                found = module_file(name)
-                if found is not None:
-                    queue.append(found)
-    return sorted(seen)
+    root = package_root.resolve()
+    return sorted(
+        path
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts and path.relative_to(root).parts[0] != "tests"
+    )
 
 
 def _source_digest(package_root: Path, files: list[Path]) -> str:
@@ -1065,21 +1024,24 @@ def _source_digest(package_root: Path, files: list[Path]) -> str:
 def _wg_mesh_code_identity() -> str | None:
     """Digest of the WG code that shapes every artifact after its key.
 
-    ``server/mesh`` and everything in ``server`` it imports, transitively
-    (warnings text, the domain tables, the formula families, ...): the policy
-    config, the memory stop, stats, warnings and integrity reports. A disk
-    artifact from other code (a WG update, another branch on the same data
-    folder) must not be served. None when the sources cannot be read.
+    Every module of ``server`` but its tests (``_wg_code_files``), so all
+    that ``server/mesh`` uses is covered: warnings text, the domain tables,
+    the formula families, the policy config, the memory stop, stats,
+    warnings and integrity reports. A disk artifact from other code (a WG
+    update, another branch on the same data folder) must not be served.
+
+    The sources are read and hashed, never parsed: this runs in the server
+    process at every start, beside its first requests. None when the sources
+    cannot be read.
     """
 
-    mesh = Path(__file__).resolve().parent
-    package_root = mesh.parent
+    package_root = Path(__file__).resolve().parents[1]
     try:
-        start = sorted(path for path in mesh.rglob("*.py") if "__pycache__" not in path.parts)
-        if not start:
+        files = _wg_code_files(package_root)
+        if not files:
             return None
-        return _source_digest(package_root, _in_repo_import_closure(package_root, start))
-    except (OSError, SyntaxError, ValueError):
+        return _source_digest(package_root, files)
+    except (OSError, ValueError):
         return None
 
 
@@ -1159,9 +1121,9 @@ def close_solver_mesh_disk_cache(cache: SolverMeshDiskCache | None) -> None:
 class SolverMeshDiskCacheOpening:
     """Open the disk cache on a daemon thread; close it without waiting.
 
-    Opening measures WG's mesh code (seconds under load). The application
+    Opening reads and hashes WG's code and touches the disk. The application
     starts it at startup and closes it at shutdown: neither waits, so a stop
-    that arrives mid-measurement keeps its budget. Solves build as if the
+    that arrives mid-opening keeps its budget. Solves build as if the
     cache were cold until it is open; a cache that opens after the close is
     closed at once.
     """
