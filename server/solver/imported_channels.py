@@ -328,7 +328,11 @@ def normalize_prescribed_result(result: Any, geometry: ImportedGeometrySource, *
     scale = pressure_per_velocity_scale(result.frequencies_hz)
     scale_channel_result(result, scale)
     impedance = getattr(result, "impedance", None)
-    if impedance is not None:
+    # Only a tagged result may carry a velocity-basis impedance: the response
+    # mapping converts an untagged (acceleration_legacy) one itself. An old
+    # assembly replay decodes RMS velocity untagged, and converting it here as
+    # well put its shown Z/(rho*c) off by j*omega.
+    if impedance is not None and explicit:
         result.impedance = np.asarray(impedance) * scale
     if explicit and isinstance(getattr(result, "surface_pressure_avg", None), Mapping):
         result.surface_pressure_avg = {
