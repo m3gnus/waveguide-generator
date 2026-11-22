@@ -164,3 +164,79 @@ def test_a_weighted_single_source_channel_drops_its_acoustic_curve_with_the_reas
     )
     assert applied is False
     assert response == {"metadata": {"impedance_omitted": IMPEDANCE_OMITTED_WEIGHTED}}
+
+
+def _modal_result(averages, impedance=None):
+    import numpy as np
+
+    count = len(next(iter(averages.values())))
+    return SimpleNamespace(frequencies_hz=np.arange(1.0, count + 1.0),
+                           surface_pressure_avg={tag: np.asarray(v, dtype=complex) for tag, v in averages.items()},
+                           impedance=np.asarray(impedance if impedance is not None else [0j] * count))
+
+
+def test_modal_impedance_is_the_power_consistent_channel_value() -> None:
+    import numpy as np
+
+    from server.solver.imported_channels import modal_channel_impedance
+
+    tags = {"a": 2, "b": 3}
+    areas = {2: 1.0, 3: 3.0}
+    result = _modal_result({2: [1 + 2j, 2 + 0j], 3: [3 - 1j, 4 + 4j]})
+    # One unit-weight patch: exactly its own area mean, i.e. today's raw value.
+    one = modal_channel_impedance(result, SimpleNamespace(source_ids=["a"], patch_weights=None, motion="normal"),
+                                  tags, areas)
+    np.testing.assert_array_equal(one, result.surface_pressure_avg[2])
+    # Uniform drive over two patches: the area-weighted mean over their union.
+    uniform = modal_channel_impedance(
+        result, SimpleNamespace(source_ids=["a", "b"], patch_weights=None, motion="normal"), tags, areas)
+    np.testing.assert_allclose(uniform, (1 * result.surface_pressure_avg[2] + 3 * result.surface_pressure_avg[3]) / 4)
+    # Weighted: sum w S <p> / sum w^2 S, which is independent of the weights' scale.
+    weights = {"a": 1.0, "b": -0.5}
+    weighted = modal_channel_impedance(
+        result, SimpleNamespace(source_ids=["a", "b"], patch_weights=weights, motion="normal"), tags, areas)
+    expected = (1.0 * 1 * result.surface_pressure_avg[2] - 0.5 * 3 * result.surface_pressure_avg[3]) / (1 + 0.25 * 3)
+    np.testing.assert_allclose(weighted, expected)
+    scaled = modal_channel_impedance(
+        result, SimpleNamespace(source_ids=["a", "b"], patch_weights={k: 4 * v for k, v in weights.items()},
+                                motion="normal"), tags, areas)
+    # Same means under a 4x drive give Zs/4: real means scale with the drive, so Zs is invariant.
+    np.testing.assert_allclose(scaled * 4, weighted)
+    # Undefined cases keep the rule's drop.
+    assert modal_channel_impedance(
+        result, SimpleNamespace(source_ids=["a"], patch_weights=None, motion="axial"), tags, areas) is None
+    assert modal_channel_impedance(
+        result, SimpleNamespace(source_ids=["a", "b"], patch_weights={"a": 0.0, "b": 0.0}, motion="normal"),
+        tags, areas) is None
+    assert modal_channel_impedance(
+        _modal_result({2: [1j, 1j]}), SimpleNamespace(source_ids=["a", "b"], patch_weights=None, motion="normal"),
+        tags, areas) is None
+
+
+def test_apply_modal_touches_only_channels_the_rule_rejects() -> None:
+    import numpy as np
+
+    from server.solver.imported_channels import apply_modal_channel_impedance
+
+    unit = _modal_result({2: [5j, 6j]}, impedance=[7j, 8j])
+    pair = _modal_result({2: [1j, 2j], 3: [3j, 4j]}, impedance=[9j, 9j])
+    channels = [SimpleNamespace(id="unit", source_ids=["a"], patch_weights=None, motion="normal"),
+                SimpleNamespace(id="pair", source_ids=["a", "b"], patch_weights=None, motion="normal")]
+    modal = apply_modal_channel_impedance({"unit": unit, "pair": pair}, channels, {"a": 2, "b": 3}, "",
+                                          tag_areas={2: 1.0, 3: 1.0})
+    assert modal == {"pair"}
+    np.testing.assert_array_equal(unit.impedance, [7j, 8j])  # left exactly as solved
+    np.testing.assert_allclose(pair.impedance, [2j, 3j])
+    # No readable mesh areas: no Zs, the drop stands.
+    assert apply_modal_channel_impedance({"pair": _modal_result({2: [1j], 3: [1j]})}, channels[1:],
+                                         {"a": 2, "b": 3}, "not a mesh") == set()
+
+
+def test_a_modal_channel_keeps_its_curve_and_says_what_it_is() -> None:
+    response = {"impedance": {"real": [1.0]}, "metadata": {}}
+    finish_imported_channel_response(
+        response, geometry=_geometry(), driver_payload=None, rms_velocity=False,
+        channel=_channel(["a", "b"]), modal_impedance=True,
+    )
+    assert response == {"impedance": {"real": [1.0]},
+                        "metadata": {"impedance_normalization": "mean_square_velocity"}}
