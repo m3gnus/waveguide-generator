@@ -48,7 +48,11 @@ export function useGeneratedProfile(design: DesignDocument, revision: number, id
   const [result, setResult] = useState<{ key: string; identity: number; samples: ProfileSamples; scale: number }>();
   const [failure, setFailure] = useState<{ key: string; message: string }>();
   const key = `${identity}:${revision}`;
+  // Edits are coalesced; opening the canvas or ticking Generated is not an edit.
+  const wasEnabled = useRef(false);
   useEffect(() => {
+    const opening = enabled && !wasEnabled.current;
+    wasEnabled.current = enabled;
     if (!enabled) return undefined;
     const origin = currentEditOrigin(), abort = new AbortController();
     // The content key guards the export too, even though its wire format is CSV.
@@ -60,7 +64,7 @@ export function useGeneratedProfile(design: DesignDocument, revision: number, id
       }, reason => {
         if (!abort.signal.aborted && activeKey === requestKey && isCurrentOrigin(origin)) setFailure({ key, message: failureWords(reason) });
       });
-    }, 300);
+    }, opening ? 0 : 300);
     return () => { activeKey = undefined; clearTimeout(timer); abort.abort(); };
   }, [design, revision, identity, key, enabled]);
   const visible = result?.identity === identity ? result : undefined;
@@ -198,7 +202,7 @@ function ProfileCanvas({ open: visible, onClose }: { open: boolean; onClose: () 
         <option value="design">Design mm</option><option value="scaled">Scaled mm</option>
       </select></label>}
     </div>
-    <p className="profile-canvas-caption">Authored: mesher curve · Generated: thin line{generated.samples && equalProfiles(generated.samples) ? ' · Generated H = V' : ''}{isSharedProfile(design) ? ' · Authored H = V (stored V inactive)' : ' · H blue / V amber'}{design.scale !== 1 ? ` · ${scaled ? 'Plot in scaled mm' : 'Design mm before Scale'} (Scale = ${design.scale}).` : ''}</p>
+    <p className="profile-canvas-caption">Authored: mesher curve{showGenerated ? ' · Generated: thin line' : ''}{showGenerated && generated.samples && equalProfiles(generated.samples) ? ' · Generated H = V' : ''}{isSharedProfile(design) ? ' · Authored H = V (stored V inactive)' : ' · H blue / V amber'}{design.scale !== 1 ? ` · ${scaled ? 'Plot in scaled mm' : 'Design mm before Scale'} (Scale = ${design.scale}).` : ''}</p>
     <div className="source-editor-columns">
       <div className="source-workspace"><Workspace adapter={adapter} state={displayState} session={session} selection={selection} onSelectionChange={setSelection} fitRequest={fitRequest} slots={{ properties: propertiesHost }} onEscape={close}/></div>
       <aside aria-label="Profile properties and preview">

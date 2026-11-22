@@ -428,9 +428,8 @@ describe('results dock view switch', () => {
     compareSelection.setPrimary('primary');
     await render();
 
-    // The strip is gone: crossover settings live in the rail alone, and the
-    // dock hands the rail what it needs through the bridge instead.
-    expect(host.querySelector('form.result-recombine')).toBeNull();
+    // Crossover settings live in the rail alone: the dock hands the rail what
+    // it needs through the bridge.
     const shown = latestCombine.getSnapshot()!;
     expect(shown.jobId).toBe('primary');
     expect(shown.channelId).toBe('combined');

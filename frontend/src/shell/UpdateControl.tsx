@@ -17,9 +17,13 @@ export interface UpdateSnapshot {
 }
 export function useUpdateStatus(): UpdateSnapshot {
   const client = useQueryClient();
+  // A download in progress keeps reporting while the window is hidden, as the
+  // update dialog's own polling loop used to; otherwise polling pauses there.
+  const installing = active(client.getQueryData<UpdateStatus>(UPDATE_QUERY_KEY)?.installState);
   const query = useQuery({
     queryKey: UPDATE_QUERY_KEY, queryFn: ({ signal }) => getUpdateStatus(false, signal), retry: false, staleTime: 60_000,
     refetchInterval: (value) => value.state.data?.checking || active(value.state.data?.installState) ? 400 : 60_000,
+    refetchIntervalInBackground: installing,
   });
   const refresh = useCallback(async () => {
     await client.cancelQueries({ queryKey: UPDATE_QUERY_KEY });

@@ -355,6 +355,7 @@ describe('full-installer update control', () => {
     const before = statusReads();
     await act(async () => vi.advanceTimersByTimeAsync(1_200));
     // One read per 400 ms: the query's. The dialog used to add a second loop.
+    expect(statusReads() - before).toBeGreaterThanOrEqual(2);
     expect(statusReads() - before).toBeLessThanOrEqual(3);
     expect(host.textContent).toMatch(/\d+\.\d MB of 244\.0 MB/);
     root.render(<QueryClientProvider client={client}><Live open={false}/></QueryClientProvider>);

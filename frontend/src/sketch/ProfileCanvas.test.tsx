@@ -335,13 +335,17 @@ describe('profile canvas freshness (FV regression net)', () => {
     await act(async () => { root.render(<><ProfileCanvasLauncher/><ProfileCanvasDialog/></>); await flush(); });
     await act(async () => useDesignStore.getState().updateValue('length', 130)); await tick();
     expect(exports()).toBe(0);
-    await act(async () => button('Edit profile on canvas…').click()); await tick();
+    // Opening is not an edit: the sample is asked for at once, not after the debounce.
+    await act(async () => button('Edit profile on canvas…').click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); await flush(); });
     expect(exports()).toBe(1);
+    await tick();
     const generated = [...document.querySelectorAll<HTMLLabelElement>('label')].find(label => label.textContent?.includes('Generated profile'))!;
     await act(async () => generated.querySelector('input')!.click());
     await act(async () => useDesignStore.getState().updateValue('length', 140)); await tick();
     expect(exports()).toBe(1);
     expect(document.querySelector('.profile-canvas-freshness')?.textContent).not.toContain('Updating');
+    expect(document.querySelector('.profile-canvas-caption')?.textContent).not.toContain('Generated');
     await act(async () => generated.querySelector('input')!.click()); await tick();
     expect(exports()).toBe(2);
   });

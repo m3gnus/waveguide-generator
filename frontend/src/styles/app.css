@@ -1245,10 +1245,6 @@ textarea:disabled { opacity: .48; }
   font-weight: var(--head-weight);
 }
 
-/* Post-solve crossover editor for a combined result channel. */
-/* The crossover strip wraps rather than scrolls: a narrow dock must still show
-   the Apply button and the null-depth chip, not hide them off the right edge. */
-
 /* Measured responses overlaid on the on-axis SPL chart. */
 .result-measured { border-bottom: 1px solid var(--hair-soft); text-transform: none; }
 .result-measured-caption { flex: none; color: var(--fg3); text-transform: uppercase; letter-spacing: .04em; }
