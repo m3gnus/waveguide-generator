@@ -1,10 +1,10 @@
-"""The shared Gmsh 2.2 reader answers exactly as the seven readers it replaced.
+"""The shared Gmsh 2.2 reader answers as the seven readers it replaced.
 
 Each fixture goes through every old reader (frozen in ``legacy_gmsh22_readers``)
-and through the view that replaced it. Where both answer, the answers must be
-bit-identical; where the old reader refused, the view must refuse too. The only
-allowed differences are listed in ``STRICTER``: malformed structure some old
-readers skipped over and the shared reader refuses. No WG writer produces it.
+and through the view that replaced it, comparing answers bit for bit and
+refusals by exception class and message. The differences left on these
+fixtures, all on malformed text no WG writer produces, are listed in
+``DIFFERENCES``.
 
 ``WG_GMSH22_CORPUS_DIR`` names a directory of ``*.msh`` texts (for example the
 meshes a test run captured) to hold to the same comparison.
@@ -213,12 +213,13 @@ def _differences(text: str) -> set[str]:
     return found
 
 
-#: Every difference from the old readers, on malformed text no writer emits.
+#: Every difference from the old readers on these fixtures, all malformed text
+#: no writer emits. The list is exact for the fixtures here, not for every
+#: possible malformed text: other malformed rows may still answer differently.
 #: Gmsh and WG write every solve text (user imports are refused or rewritten
 #: by ``file_import``), so none of these reaches a reader. Where keeping an old
-#: reader's answer was cheap it is kept; what is left is listed exactly, so any
-#: new difference fails. ``dofs`` "answer" is the trace count falling back to
-#: the solve's mesh stats where it used to count the rows.
+#: reader's answer was cheap it is kept; what is left on these fixtures is
+#: listed, so a new difference on them fails.
 DIFFERENCES = {
     # Both refuse; the old message named the token or node the lookup missed,
     # or numpy's ragged-array complaint, or a later symptom of the same fault.
@@ -299,3 +300,30 @@ def test_placement_neither_parses_elements_nor_keeps_the_unplaced_mesh():
     assert not gmsh22._cache
     assert gmsh22.read_msh_nodes(FULL).elements is None
     assert placed != FULL
+
+
+def test_the_frame_survey_turns_any_unreadable_mesh_into_unavailable():
+    """``infer_record_frame`` never raises for bad geometry, whatever the reader raises."""
+
+    from server.cadlink.interpretation.frame_infer import SurveyUnavailable
+    from server.cadlink.interpretation.frame_infer import parse_tagged_msh as survey_read
+
+    # A dangling node (TaggedMeshError) and a short triangle row (plain ValueError).
+    for name in ("undeclared-node", "short-triangle"):
+        with pytest.raises(SurveyUnavailable):
+            survey_read(_crafted()[name])
+
+
+def test_idle_entries_expire_on_a_cache_hit_too(monkeypatch):
+    gmsh22.clear_cache()
+    clock = [1000.0]
+    monkeypatch.setattr(gmsh22.time, "monotonic", lambda: clock[0])
+    first = gmsh22.read_msh(FULL)
+    other = scale_msh_text(FULL, 2.0)
+    gmsh22.read_msh(other)
+    clock[0] += gmsh22._CACHE_IDLE_SECONDS / 2
+    assert gmsh22.read_msh(other) is not None  # a hit keeps ``other`` fresh
+    clock[0] += gmsh22._CACHE_IDLE_SECONDS / 2 + 1
+    assert gmsh22.read_msh(other) is not None  # this hit drops the idle FULL entry
+    assert list(gmsh22._cache) == [other]
+    assert gmsh22.read_msh(FULL) is not first

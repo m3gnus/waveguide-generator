@@ -393,11 +393,19 @@ def _size(artifact: MeshArtifact) -> int:
         for value in vars(section).values():
             if isinstance(value, np.ndarray):
                 size += value.nbytes
-        size += 8 * len(getattr(section, "node_ids", ()))
+        # A Python int above 256 and its tuple slot take about 36 bytes.
+        size += 36 * len(getattr(section, "node_ids", ()))
     # The lazy corner indices take as much as the triangle node ids.
     if artifact.elements is not None:
         size += artifact.elements.triangle_node_ids.nbytes
     return size
+
+
+def _expire(now: float) -> None:
+    """Drop entries unused for the idle time; call with the lock held."""
+
+    for key in [key for key, (_, _, used) in _cache.items() if now - used > _CACHE_IDLE_SECONDS]:
+        del _cache[key]
 
 
 def read_msh(text: str) -> MeshArtifact:
@@ -411,6 +419,7 @@ def read_msh(text: str) -> MeshArtifact:
 
     now = time.monotonic()
     with _cache_lock:
+        _expire(now)
         entry = _cache.get(text)
         if entry is not None:
             _cache[text] = (entry[0], entry[1], now)
@@ -419,8 +428,7 @@ def read_msh(text: str) -> MeshArtifact:
     artifact = _parse(text)
     size = _size(artifact)
     with _cache_lock:
-        for key in [key for key, (_, _, used) in _cache.items() if now - used > _CACHE_IDLE_SECONDS]:
-            del _cache[key]
+        _expire(now)
         if size <= _CACHE_MAX_BYTES:
             _cache[text] = (artifact, size, now)
             _cache.move_to_end(text)
@@ -440,6 +448,7 @@ def read_msh_nodes(text: str) -> MeshArtifact:
     """
 
     with _cache_lock:
+        _expire(time.monotonic())
         entry = _cache.get(text)
     if entry is not None:
         return entry[0]

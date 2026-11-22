@@ -1057,12 +1057,17 @@ def _cancelled_reason(role_normals: Mapping[str, np.ndarray], roles: Iterable[st
 
 
 def parse_tagged_msh(msh_text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[int, str]]:
-    """Read surface arrays, preserving the survey's refusal type."""
-    from server.mesh.tagged_msh import TaggedMeshError, parse_tagged_msh as parse
+    """Read surface arrays, preserving the survey's refusal type.
+
+    Any text that does not read as a tagged surface -- a ``TaggedMeshError``
+    or the plain ``ValueError`` some malformed rows raise -- is a survey that
+    cannot run, so ``infer_record_frame`` never raises for bad geometry.
+    """
+    from server.mesh.tagged_msh import parse_tagged_msh as parse
 
     try:
         return parse(msh_text)
-    except TaggedMeshError as exc:
+    except ValueError as exc:
         raise SurveyUnavailable(str(exc)) from exc
 
 
