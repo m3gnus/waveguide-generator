@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { preferencesStore } from '../prefs/preferences';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
-import { currentJobLabel, jobAnnouncement } from './JobsCoordinator';
+import { nextRunLabel } from '../jobs/runNaming';
+import { currentRunNameSource } from '../jobs/runNameSource';
+import { jobAnnouncement } from './JobsCoordinator';
+
+/** The label a solve press submits, read at press time as JobsCoordinator does. */
+const currentJobLabel = (now = new Date()) => nextRunLabel(currentRunNameSource().name, preferencesStore.getSnapshot(), now);
 
 describe('current job naming', () => {
   beforeEach(() => {
@@ -32,7 +37,7 @@ describe('current job naming', () => {
       runNameDateFormat: 'yyyy-mm-dd',
       runNameNumberPosition: 'off',
     });
-    expect(currentJobLabel(undefined, new Date(2026, 7, 12, 12))).toBe('2026-08-12_horn');
+    expect(currentJobLabel(new Date(2026, 7, 12, 12))).toBe('2026-08-12_horn');
     expect(useDocumentStore.getState().designName).toBe('horn');
   });
 });

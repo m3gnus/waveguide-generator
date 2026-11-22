@@ -221,14 +221,6 @@ export function useOptionalSolveControl(): SolveControl | null {
   return context ?? published;
 }
 
-/** Read naming at submission time, including a commit from the same key event. */
-export function currentJobLabel(
-  designName = currentRunNameSource().name,
-  now = new Date(),
-): string {
-  return nextRunLabel(designName, preferencesStore.getSnapshot(), now);
-}
-
 /**
  * Record that a run was stored under this design's next number.
  *
@@ -306,21 +298,6 @@ function askMeshSolveChoice(
 const jobsConnection = () => jobsSocket.getSnapshot().connection;
 
 const systemNow = () => new Date();
-
-/**
- * Re-read a terminal job before creating its permanent archive.
- *
- * The completion event is intentionally small and can reach the browser just
- * before the following metadata event advertises retained pressure bases,
- * radiation impedance, final timings, and artifact byte counts. Archiving the
- * event snapshot makes that ordering permanent: the archive is marked done
- * without files that already exist on the server. A status read is the
- * server's canonical, fully serialized view of that job and closes that race.
- */
-export async function refreshedArchiveJob(job: JobItem): Promise<JobItem> {
-  await jobsSocket.refreshJobs([job.id]);
-  return jobsSocket.getSnapshot().jobs.find((candidate) => candidate.id === job.id) ?? job;
-}
 
 export function JobsCoordinator({ children, now = systemNow }: { children: ReactNode; now?: () => Date }) {
   // The job list's own effects run in JobsFollower. The render still reads the
@@ -968,7 +945,6 @@ function JobsFollower({ automation, preferences, reportError, completeCadSolve, 
           files: await archiveRunToWorkspace(freshJob, preferences, fetcher), failures: [],
         }));
       },
-      markArchived: async () => undefined,
       reportError,
       reportMeshNotice: (jobId, message) => useRunExportStore.getState().reportMeshNotice(jobId, message),
     });

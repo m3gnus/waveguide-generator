@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptySketch } from '../model';
 import { applyCommand, importedSketch } from '../ops';
-import { cancelLine, continueLine, lineState, placeLine, prospectiveLine, typedTarget } from './line';
+import { continueLine, lineState, placeLine, prospectiveLine, typedTarget } from './line';
 import { coalesceTargets, select } from './select';
 import { candidateDimension, dimensionPicks } from './dimension';
 import { constraintFor } from './constraints';
@@ -22,7 +22,6 @@ describe('pure sketch tools', () => {
     expect(typeof chain.from).toBe('string');
     const endpoint = { x: 0, y: 0, glyph: 'endpoint' as const, constraint: { kind: 'coincident' as const, point: 'origin' } };
     expect(placeLine(chain, { x: 0, y: 0 }, endpoint).command).toMatchObject({ from: chain.from, to: { snap: endpoint } });
-    expect(cancelLine()).toEqual(lineState());
   });
   it('computes typed lengths and degrees exactly', () => {
     expect(typedTarget({ x: 2, y: 3 }, { x: 10, y: 3 }, 5)).toEqual({ x: 7, y: 3 });

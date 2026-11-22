@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CompiledAssembly } from '../api/assembly';
 import { hydrateDesignDocument } from '../api/designIo';
 import { resolveAssemblySetup } from '../jobs/importedSubmission';
-import { addWoofer, commitAssembly, emptyAssembly, moveToGroup, setDriver, setMemberProcessing, setWiringGroup, setWooferEnabled, type DesignAssembly } from './assembly';
+import { addWoofer, commitAssembly, emptyAssembly, moveToGroup, setDriver, setMemberProcessing, setWiringGroup, updateWoofer, type DesignAssembly } from './assembly';
 import { resetAssemblyBuild } from './assemblyBuild';
 import { adoptDesignBuild } from './importedModel';
 import { combineBaseSpec, combineEnabledEffective, combineWire } from './cadReturn';
@@ -219,7 +219,7 @@ describe('assembly as the shared Simulation input', () => {
     expect(lf.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(lf.members).toEqual([{ radiator_id: first }, { radiator_id: second, delay_ms: 0.5, invert: true }]);
     // A disabled woofer leaves the record but keeps its group and driver.
-    const disabled = setWooferEnabled(assembly, second, false);
+    const disabled = updateWoofer(assembly, second, { enabled: false });
     const withDriver = { ...disabled, drivers: { [second]: { exterior_transducer: DRIVER } } };
     const kept = applyAssemblySimulation(withDriver, assemblySimulationData({ ...useDesignStore.getState().design, assembly: withDriver }, compiledFor([first])), ids);
     expect(kept.drivers?.[second]).toEqual({ exterior_transducer: DRIVER });

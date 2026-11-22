@@ -45,7 +45,6 @@ import {
   JobsCoordinator,
   jobsCoordinatorBridge,
   solveControlStore,
-  refreshedArchiveJob,
   useSolveControl,
   useOptionalSolveControl,
 } from './JobsCoordinator';
@@ -3718,29 +3717,5 @@ describe('solve invocation mutex', () => {
       await pending.promise;
       await Promise.resolve();
     });
-  });
-});
-
-describe('archive completion refresh', () => {
-  it('uses the canonical job snapshot after late artifact metadata arrives', async () => {
-    const stale = failedJob();
-    stale.status = 'complete';
-    stale.has_results = true;
-    stale.has_pressure_basis_artifact = false;
-    stale.has_radiation_impedance_artifact = false;
-    const complete = {
-      ...stale,
-      completed_at: '2026-08-20T16:53:37Z',
-      has_pressure_basis_artifact: true,
-      pressure_basis_artifact_bytes: 56_998,
-      has_radiation_impedance_artifact: true,
-      radiation_impedance_artifact_bytes: 3_584,
-    };
-    const refresh = vi.spyOn(jobsSocket, 'refreshJobs').mockImplementation(async () => {
-      publishJobs([complete]);
-    });
-
-    await expect(refreshedArchiveJob(stale)).resolves.toBe(complete);
-    expect(refresh).toHaveBeenCalledExactlyOnceWith([stale.id]);
   });
 });

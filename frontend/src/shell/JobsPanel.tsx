@@ -13,7 +13,7 @@ import { isActiveJobStatus, JobModelProtectionError, jobsSocket, type JobItem } 
 import { useWorkspaceFolder } from './WorkspaceFolderControls';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
-import { canOpenJobModel, canLoadJobDesign } from '../jobs/jobDesign';
+import { canOpenJobModel } from '../jobs/jobDesign';
 import { selectJob } from '../jobs/selectJob';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
@@ -87,8 +87,6 @@ export function meshWarnings(job: Pick<JobItem, 'mesh_stats'>): string[] {
   const warnings = (job.mesh_stats as { warnings?: unknown } | null)?.warnings;
   return Array.isArray(warnings) ? warnings.map((warning) => String(warning)) : [];
 }
-
-export const canLoadDesign = canLoadJobDesign;
 
 function Rating({ job, onError }: { job: JobItem; onError: (message: string) => void }) {
   const rating = job.rating ?? 0;

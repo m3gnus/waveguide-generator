@@ -10,7 +10,7 @@ import type { RegisteredMesh } from '../api/meshImport';
 import { bundle, record as cadRecord } from '../shell/cadlink/selection.fixtures';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import {
-  activePreparedModel, adoptDesignBuild, designPreparedRecord, resetDesignModel, useDesignModelStore, applyCadOptions, cadOptionsSnapshot, discardParkedCadModel, importedModelBlocker, openImported,
+  adoptDesignBuild, designPreparedRecord, resetDesignModel, useDesignModelStore, applyCadOptions, cadOptionsSnapshot, discardParkedCadModel, importedModelBlocker, openImported,
   reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore,
 } from './importedModel';
 import { migrateLastModel, readLastModel, rememberLastModel } from './lastModel';
@@ -778,11 +778,6 @@ describe('design prepared session', () => {
     expect(useImportedModelStore.getState().prepared).toEqual(cad.prepared);
     workspaceModeStore.setImportedInput('file');
     expect(useImportedModelStore.getState().prepared).toEqual(file.prepared);
-    expect(activePreparedModel()).toBeNull();
-    commitAssembly(emptyAssembly());
-    expect(activePreparedModel()).toBe(useDesignModelStore.getState());
-    workspaceModeStore.setMode('cad');
-    expect(activePreparedModel()).toBe(useImportedModelStore.getState());
   });
 
   it('leaves a file preparation in flight to finish with its own scene', async () => {

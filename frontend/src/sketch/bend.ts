@@ -4,10 +4,6 @@ import { arcGeometry, arcThrough, curveEnds, distance } from './geometry';
 
 export const arcBendClampMessage = "An arc can't bend past its chord · drag back";
 
-export function arcBendTargets(s: Sketch, arcId: string, cursor: XY, mode: 'bend' | 'radius'): DragTarget[] {
-  return arcBendPlan(s, arcId, cursor, mode).targets;
-}
-
 export function arcBendPlan(s: Sketch, arcId: string, cursor: XY, mode: 'bend' | 'radius'): { targets: DragTarget[]; clamped: boolean } {
   const arc = s.entities.find(e => e.id === arcId);
   if (arc?.kind !== 'arc' || arc.reference) throw new Error('Bending needs an authored arc. Select an arc body.');

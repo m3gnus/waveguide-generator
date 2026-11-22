@@ -89,11 +89,6 @@ export function addWoofer(assembly: DesignAssembly, options: NewWooferOptions,
   return { assembly: next, id };
 }
 
-/** Disabled woofers keep every setting and leave geometry and solve. */
-export function setWooferEnabled(assembly: DesignAssembly, id: string, enabled: boolean): DesignAssembly {
-  return updateWoofer(assembly, id, { enabled });
-}
-
 export type WooferPatch = Partial<Pick<AssemblyWoofer, 'label' | 'enabled' | 'radius_mm' | 'shape' | 'resolution_mm' | 'drive'>>;
 
 export function updateWoofer(assembly: DesignAssembly, id: string, patch: WooferPatch): DesignAssembly {
@@ -375,17 +370,4 @@ export function setWooferShape(assembly: DesignAssembly, id: string, shape: Asse
 export function setHfSource(assembly: DesignAssembly, id: string, source: NonNullable<DesignAssembly['hf_source']>): DesignAssembly {
   if (id !== HF_RADIATOR_ID || source.radiator_id && source.radiator_id !== id) throw new ProgramFault('Unknown HF radiator.');
   return { ...structuredClone(assembly), hf_source: structuredClone(source) };
-}
-
-/** Each call is one project Undo; the shared workspace owns gestures and drafts. */
-export function commitWooferShape(id: string, shape: AssemblyWooferShape): void {
-  const assembly = useDesignStore.getState().design.assembly;
-  if (!assembly) throw new ProgramFault('No design assembly.');
-  commitAssembly(setWooferShape(assembly, id, shape));
-}
-
-export function commitHfSource(id: string, source: NonNullable<DesignAssembly['hf_source']>): void {
-  const assembly = useDesignStore.getState().design.assembly;
-  if (!assembly) throw new ProgramFault('No design assembly.');
-  commitAssembly(setHfSource(assembly, id, source));
 }

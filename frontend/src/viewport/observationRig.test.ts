@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ResultData } from '../api/results';
 import {
-  angleForPoint,
-  nearestMicrophone,
   observationFrameBasisOf,
   observationRig,
   pivotFor,
@@ -123,34 +121,5 @@ describe('observationRig', () => {
   it('collapses to the single measured point when the sweep has one angle', () => {
     const rig = observationRig(basis, spec({ angleCount: 1 }), 1);
     expect(rig.microphones.map(({ angleDeg }) => angleDeg)).toEqual([0]);
-  });
-});
-
-describe('angleForPoint', () => {
-  it('inverts the placement it was built from', () => {
-    const planes = spec({ planes: ['horizontal', 'vertical'] });
-    const rig = observationRig(basis, { ...planes, angleCount: 7 }, 1_000);
-    rig.microphones.forEach((microphone) => {
-      const found = angleForPoint(basis, planes, 1_000, microphone.position);
-      expect(found?.angleDeg).toBeCloseTo(microphone.angleDeg, 9);
-      // On-axis is the same physical point in every plane, so which plane
-      // claims it is arbitrary and the first one wins. Everywhere else the
-      // point belongs to exactly one plane.
-      if (microphone.angleDeg !== 0) expect(found?.plane).toBe(microphone.plane);
-    });
-  });
-
-  it('picks the plane a point off the arc is nearest to', () => {
-    const off: [number, number, number] = [0, 1.9, 0.19];
-    expect(angleForPoint(basis, spec({ planes: ['horizontal', 'vertical'] }), 1, off)?.plane).toBe('vertical');
-  });
-});
-
-describe('nearestMicrophone', () => {
-  it('finds the sampled angle a point is closest to', () => {
-    const rig = observationRig(basis, spec({ angleCount: 3 }), 1);
-    expect(nearestMicrophone(rig, [0.1, 0, 2.2])?.angleDeg).toBe(0);
-    expect(nearestMicrophone(rig, [2, 0, 0.3])?.angleDeg).toBe(90);
-    expect(nearestMicrophone({ origin: [0, 0, 0], microphones: [], arcs: [] }, [0, 0, 0])).toBeNull();
   });
 });

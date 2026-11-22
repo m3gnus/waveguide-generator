@@ -85,7 +85,6 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   // the return store and is unchanged by flipping the view.
   crossoverView: 'inert',
   crossoverGainUnit: 'inert',
-  paramHelp: 'inert',
   paramSections: 'inert',
   cadSetupDrafts: 'inert',
   cadSetupDrafts_v2: 'inert',

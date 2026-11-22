@@ -50,7 +50,6 @@ export const SETTINGS_NAMESPACES = {
   meshImport: 'wg-saved-mesh-setup',
   crossoverView: 'wg2.crossover.view.v1',
   crossoverGainUnit: 'wg2.crossover.gain-unit.v1',
-  paramHelp: 'wg-param-help-visible',
   paramSections: 'wg-param-sections',
   cadSetupDrafts: 'wg2.cad.setup.drafts.v1',
   cadSetupDrafts_v2: 'wg2.cad.setup.drafts.v2',

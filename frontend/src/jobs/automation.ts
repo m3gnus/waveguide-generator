@@ -11,7 +11,6 @@ export interface AutomationDependencies {
   markExported(job: JobItem, files: string[], formats: JobItem['auto_export_formats'], completedAt: string | null): Promise<void>;
   /** Write the run record and its curves to the design's archive folder. */
   archiveCompleted(job: JobItem): Promise<void>;
-  markArchived(job: JobItem, archivedAt: string): Promise<void>;
   reportError(message: string): void;
   reportMeshNotice(jobId: string, message: string): void;
   /** Where a caught error's stack goes for the developers; the user still sees `reportError`. */
@@ -109,6 +108,7 @@ export class JobAutomation {
       if (this.archiveStarted.has(job.id)) return;
       this.archiveStarted.add(job.id);
       tasks.push(this.enqueue(async () => {
+        // The server marks the run archived when the archive completes.
         try {
           await dependencies.archiveCompleted(job);
         } catch (error) {
@@ -116,16 +116,6 @@ export class JobAutomation {
           this.archiveStarted.delete(job.id);
           diagnose('run-archive', job, error);
           dependencies.reportError(`WG could not archive ${runDisplayName(job)}. ${failureWords(error, 'Use Export on the run to keep a copy.')}`);
-          return;
-        }
-        try {
-          await dependencies.markArchived(job, dependencies.now?.() ?? new Date().toISOString());
-        } catch (error) {
-          // The files are on disk. Keep the session guard so a failed metadata
-          // write cannot archive twice; an unmarked job retries after a
-          // restart, when this in-memory guard intentionally resets.
-          diagnose('run-archive-record', job, error);
-          dependencies.reportError(`WG archived ${runDisplayName(job)} but could not note it on the run. It may archive it again next time.`);
         }
       }));
     });

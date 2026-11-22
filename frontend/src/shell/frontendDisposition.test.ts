@@ -8,7 +8,8 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import type { ResultData } from '../api/results';
 import { splSubtitle } from './ResultsPanel';
 import { documentLabel, engineStatusLabel, solveSummary } from './StatusBar';
-import { canLoadDesign, meshWarnings, selectJob } from './JobsPanel';
+import { meshWarnings, selectJob } from './JobsPanel';
+import { canLoadJobDesign as canLoadDesign } from '../jobs/jobDesign';
 
 function selectableJob(id: string, label: string, scriptSnapshot: JobItem['script_snapshot']): JobItem {
   return {

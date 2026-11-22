@@ -4,7 +4,7 @@ import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { createImportedSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { formatApiDetail } from '../api/httpError';
-import { fetchSymmetry, getCapabilities, planSolveDesign, postSolvePlan, postImportedSolvePlan, postSymmetry, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
+import { getCapabilities, planSolveDesign, postSolvePlan, postImportedSolvePlan, postSymmetry, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('retains the compatibility export from the single HTTP formatter owner', () => {
@@ -172,7 +172,7 @@ describe('solve submission', () => {
       body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(JSON.stringify({ quadrants: 1, xz: true, yz: true, reasons: { xz: [], yz: [] }, tolerance_mm: 0.01, relative_tolerance: 0.0002 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     };
-    await expect(fetchSymmetry(designForFamily('R-OSSE'), fetcher as typeof fetch)).resolves.toMatchObject({ quadrants: 1, xz: true, yz: true });
+    await expect(postSymmetry(JSON.stringify(toSolveDesign(designForFamily('R-OSSE'))), fetcher as typeof fetch)).resolves.toMatchObject({ quadrants: 1, xz: true, yz: true });
     expect(path).toBe('/api/design/symmetry');
     expect(body?.formula).toBe('R-OSSE');
   });
@@ -199,18 +199,6 @@ describe('symmetry resolution', () => {
     expect(resolution.quadrants).toBe(14);
   });
 
-  it('keeps fetchSymmetry serialising the solve design for its callers', async () => {
-    let body: unknown;
-    const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({ quadrants: 1234, xz: false, yz: false, reasons: { xz: ['a'], yz: ['b'] }, tolerance_mm: 1e-7, relative_tolerance: 2e-4 }), {
-        status: 200, headers: { 'Content-Type': 'application/json' },
-      });
-    };
-    const design = designForFamily('R-OSSE');
-    await fetchSymmetry(design, fetcher as typeof fetch);
-    expect(body).toEqual(toSolveDesign(design));
-  });
 });
 
 

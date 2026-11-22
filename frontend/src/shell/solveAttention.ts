@@ -186,30 +186,6 @@ function attentionKey(operation: CadOperationSummary): string | null {
   return `${operation.state}:${operation.reason ?? ''}:${operation.attemptGeneration}:${operation.preparationId ?? ''}`;
 }
 
-/**
- * Front the CAD Link panel when an operation arrives needing the user, or
- * moves to needing them, while its command is still the user's latest intention.
- *
- * Only in CAD mode: the panel exists only there, and this never changes the
- * workspace mode. Everywhere else -- Parametric mode, or a user who has
- * navigated since -- the top bar's notice is the route to it.
- */
-export function useOperationAttention(operations: Record<string, CadOperationSummary>): void {
-  const seen = useRef(new Map<string, string | null>());
-  useEffect(() => {
-    let front = false;
-    for (const operation of Object.values(operations)) {
-      if (operation.kind === 'prepare_and_solve' && isPendingCadOperation(operation)) solveAttention.noticeOperation(operation.operationId);
-      const key = attentionKey(operation);
-      const previous = seen.current.get(operation.operationId);
-      seen.current.set(operation.operationId, key);
-      if (key === null || key === previous) continue;
-      if (solveAttention.operationArmed(operation.operationId)) front = true;
-    }
-    if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('geometry');
-  }, [operations]);
-}
-
 /** Solve gates belong to jobs; Fusion edit recovery retains operation attention. */
 export function useJobAttention(jobs: JobItem[]): void {
   const seen = useRef(new Map<string, string | null>());

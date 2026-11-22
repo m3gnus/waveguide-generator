@@ -5,14 +5,12 @@ import {
   fieldPlaneDisplayValue,
   fieldPlaneWindowForMode,
   FIELD_PLANE_DIVERGING_COLORMAP,
-  FIELD_PLANE_ISOLINE_STEP_DB,
   FIELD_PLANE_LUT_SIZE,
   FIELD_PLANE_NORMALIZED_MIN_DB,
   FIELD_PLANE_PHASE_COLORMAP,
   FIELD_PLANE_PHASE_LIMIT_DEGREES,
   instantaneousPressure,
   isolineCoordinate,
-  isolineDistanceDb,
   lutIndex,
   maxFieldMagnitudePa,
   maxFieldSplDb,
@@ -149,9 +147,6 @@ describe('field-plane colour oracle', () => {
 
   it('places isolines on exact 6 dB multiples', () => {
     expect(isolineCoordinate(-18)).toBe(-3);
-    expect(isolineDistanceDb(-18)).toBe(0);
-    expect(isolineDistanceDb(-15)).toBeCloseTo(FIELD_PLANE_ISOLINE_STEP_DB / 2, 10);
-    expect(isolineDistanceDb(1.5)).toBeCloseTo(1.5, 10);
   });
 
   it('advances visual phase by cycles per second and wraps full turns', () => {

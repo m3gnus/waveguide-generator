@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import {
   HF_RADIATOR_ID, addWoofer, commitAssembly, deleteWoofer, emptyAssembly, moveToGroup, setDriver,
-  setMemberProcessing, setPlacement, setWooferEnabled, updateWoofer, type DesignAssembly,
+  setMemberProcessing, setPlacement, updateWoofer, type DesignAssembly,
   setWiringGroup, removeWiringGroup,
 } from './assembly';
 import { designForFamily, mergeDesignForFamily, resetDesignStore, serializeDesign, useDesignStore } from './design';
@@ -109,7 +109,7 @@ describe('assembly identity', () => {
   it('disables without losing data and deletes relations, membership and crossover branches', () => {
     const { assembly, first, second } = twoWoofers();
     const related = setPlacement(assembly, second, { anchor: 'below', gap_mm: 5, spacing_to: { radiator_id: first, distance_mm: 180 } });
-    const disabled = setWooferEnabled(related, first, false);
+    const disabled = updateWoofer(related, first, { enabled: false });
     expect(disabled.woofers?.[0]).toMatchObject({ id: first, enabled: false, radius_mm: 80 });
     const firstGroup = disabled.signal_groups!.find(group => group.members[0].radiator_id === first)!.id;
     const hfGroup = disabled.signal_groups![0].id;
@@ -147,7 +147,7 @@ describe('assembly in the design document', () => {
     const before = structuredClone(useDesignStore.getState().design);
     const { assembly, first } = twoWoofers();
     commitAssembly(assembly);
-    commitAssembly(setWooferEnabled(assembly, first, false));
+    commitAssembly(updateWoofer(assembly, first, { enabled: false }));
     expect(useDesignStore.getState().design.assembly?.woofers?.[0].enabled).toBe(false);
     useDesignStore.getState().undo();
     expect(useDesignStore.getState().design.assembly).toEqual(assembly);
@@ -204,19 +204,20 @@ describe('assembly in the design document', () => {
 });
 
 it('commits each named diaphragm atomically with one Undo and preserves other radiators', async () => {
-  const { commitWooferShape, commitHfSource } = await import('./assembly');
+  const { setHfSource, setWooferShape } = await import('./assembly');
+  const current = () => useDesignStore.getState().design.assembly!;
   resetDesignStore();
   const { assembly, first, second } = twoWoofers();
   commitAssembly(assembly);
   const oldSecond = structuredClone(assembly.woofers?.find(w => w.id === second));
-  commitWooferShape(first, { kind: 'sketched', status: 'unfinished', authoring: { version: 'wg-source-authoring-v2', pending: true } });
+  commitAssembly(setWooferShape(current(), first, { kind: 'sketched', status: 'unfinished', authoring: { version: 'wg-source-authoring-v2', pending: true } }));
   expect(useDesignStore.getState().design.assembly?.woofers?.find(w => w.id === first)?.shape.kind).toBe('sketched');
   useDesignStore.getState().undo();
   expect(useDesignStore.getState().design.assembly).toEqual(assembly);
   useDesignStore.getState().redo();
   expect(useDesignStore.getState().design.assembly?.woofers?.find(w => w.id === second)).toEqual(oldSecond);
   const before = structuredClone(useDesignStore.getState().design.assembly);
-  commitHfSource(HF_RADIATOR_ID, { kind: 'sketched', status: 'unfinished' });
+  commitAssembly(setHfSource(current(), HF_RADIATOR_ID, { kind: 'sketched', status: 'unfinished' }));
   useDesignStore.getState().undo();
   expect(useDesignStore.getState().design.assembly).toEqual(before);
 });

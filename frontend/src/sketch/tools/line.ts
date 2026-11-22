@@ -7,7 +7,6 @@ import { tangentIncoming } from '../geometry';
 
 export interface LineState { from?: PointRef; end?: PointRef; mode: 'line' | 'tangent' | 'arc3' }
 export const lineState = (): LineState => ({ mode: 'line' });
-export const cancelLine = (): LineState => lineState();
 export function placeLine(state: LineState, cursor: XY, snap: SnapResult | null, sketch?: Sketch): { state: LineState; command?: Command; reason?: string } {
   const to = { ...cursor, snap };
   if (state.mode === 'tangent' && typeof state.from !== 'string') {

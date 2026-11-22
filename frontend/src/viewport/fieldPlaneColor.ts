@@ -244,11 +244,6 @@ export function isolineCoordinate(valueDb: number): number {
   return valueDb / FIELD_PLANE_ISOLINE_STEP_DB;
 }
 
-export function isolineDistanceDb(valueDb: number): number {
-  const coordinate = isolineCoordinate(valueDb);
-  return Math.abs(coordinate - Math.round(coordinate)) * FIELD_PLANE_ISOLINE_STEP_DB;
-}
-
 export function advanceFieldPlanePhase(currentRadians: number, deltaSeconds: number, cyclesPerSecond: number): number {
   const turn = 2 * Math.PI;
   const next = currentRadians + deltaSeconds * cyclesPerSecond * turn;

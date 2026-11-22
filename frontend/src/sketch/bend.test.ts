@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { arcBendTargets } from './bend';
+import { arcBendPlan } from './bend';
+
+const arcBendTargets = (...args: Parameters<typeof arcBendPlan>) => arcBendPlan(...args).targets;
 import { importedSketch } from './ops';
 import { arcGeometry, distance } from './geometry';
 import { SketchSession, toSolverSketch } from './session';

@@ -267,14 +267,6 @@ export function plannedEngineNames(
   return plan.requested === 'auto' ? plan.full3dOrder : [plan.requested];
 }
 
-export async function fetchSymmetry(
-  design: DesignDocument,
-  fetcher: typeof fetch = fetch,
-  signal?: AbortSignal,
-): Promise<SymmetryResolution> {
-  return postSymmetry(JSON.stringify(toSolveDesign(design)), fetcher, signal);
-}
-
 /**
  * Resolve symmetry for an already-serialised solve design.
  *

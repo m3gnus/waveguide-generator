@@ -5,7 +5,8 @@ import { preferencesStore } from '../prefs/preferences';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { currentJobLabel } from './JobsCoordinator';
+import { nextRunLabel } from '../jobs/runNaming';
+import { currentRunNameSource } from '../jobs/runNameSource';
 import { RunNameField } from './RunNameField';
 
 function enter(input: HTMLInputElement, value: string) {
@@ -48,7 +49,7 @@ describe('the parametric document name', () => {
 
     expect(host.querySelector<HTMLInputElement>('[aria-label="Design name"]')?.value).toBe('horn');
     expect(host.querySelector('.run-name-preview')?.textContent)
-      .toBe(`Next · ${currentJobLabel(undefined, now)}`);
+      .toBe(`Next · ${nextRunLabel(currentRunNameSource().name, preferencesStore.getSnapshot(), now)}`);
   });
 
   it('sets the next run number for the design on screen and hides it when numbering is off', async () => {

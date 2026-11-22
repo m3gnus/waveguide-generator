@@ -140,7 +140,7 @@ vi.mock('../api/previewSocket', () => ({
   },
 }));
 
-import { femFieldJob, fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
+import { femFieldJob, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 /** Viewport resolves auto symmetry through React Query, as it does under the app's provider. */
@@ -1848,11 +1848,4 @@ describe('camera refit', () => {
     // model, so they keep the safe answer rather than pinning a stale framing.
     expect(refitsCamera(scene('cad', null), scene('cad', null))).toBe(true);
   });
-});
-
-it('offers a new UI solve for per-band results without referring to a missing control', () => {
-  const text = fieldPlaneUnavailableTooltip([{ status: 'complete', unavailable_reason: 'unsupported_per_band_mesh_ladder' } as JobItem]);
-  expect(text).toContain('Open its design, turn on Keep field plane data');
-  expect(text).toContain('solve in WG');
-  expect(text).not.toContain('turn the per-band mesh ladder off');
 });

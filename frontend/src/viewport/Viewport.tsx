@@ -317,25 +317,6 @@ export function femFieldJob(
     ? candidate : null;
 }
 
-export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
-  const completed = jobs.find((job) => job.status === 'complete');
-  if (!completed) return 'No field plane yet. Solve this design first.';
-  switch (completed.unavailable_reason) {
-    case 'solve_predates_traces': return 'This run has no field data. Solve the design again.';
-    case 'artifact_pruned': return 'This run’s field data was cleaned up. Solve the design again.';
-    case 'artifact_persistence_failed': return 'WG could not save this run’s field data. Check the disk has space, then solve again.';
-    case 'size_cap_exceeded': return 'This run’s field data was too large to keep. Reduce the mesh or the sweep, then solve again.';
-    case 'trace_output_missing': return 'The engine returned no field data. Solve the design again.';
-    case 'unsupported_axisymmetric_formulation': return 'This historical Axisymmetric result has no field-plane traces. Re-solve with a field-plane-capable configuration.';
-    case 'unsupported_coupled_infinite_baffle': return 'This run has no field plane. Set Mounting to Bare shell, Thickened waveguide (freestanding), or Waveguide in enclosure and re-solve with Metal or BEMPP';
-    case 'unsupported_per_band_mesh_ladder': return 'This run used several meshes, so it has no field plane. Open its design, turn on Keep field plane data, and solve in WG';
-    case 'unsupported_ground_plane': return 'The field plane cannot show a ground plane. Turn the ground plane off and solve again. Polar and impedance results do include the ground';
-    case 'unsupported_solve_mode': return 'This solve has no field plane. Solve it in full 3D.';
-    case 'disabled_by_option': return 'This run has no field data. Turn on Keep field plane data, then solve again.';
-    default: return 'No completed run has field data. Turn on Keep field plane data, then solve.';
-  }
-}
-
 /** The viewport's words when it has no CAD mesh to draw. The model's status
  * line and its action live in Results, once: the viewport names the model and
  * points there, never repeating the line. */

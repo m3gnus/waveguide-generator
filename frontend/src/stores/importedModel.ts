@@ -1,5 +1,4 @@
 import type { CompiledAssembly } from '../api/assembly';
-import { useDesignStore } from './design';
 import { activityOperation } from '../shell/activityOperation';
 import { seedFileSimulation } from './importedSimulationSetup';
 import type { SimulationData } from './cadReturn';
@@ -127,12 +126,6 @@ export function designPreparedRecord(): CompiledAssembly | null {
 
 export function useDesignPreparedRecord(): CompiledAssembly | null {
   return useDesignModelStore(state => state.prepared) as CompiledAssembly | null;
-}
-
-export function activePreparedModel(): ImportedModelState | null {
-  return workspaceModeStore.getSnapshot().mode === 'parametric'
-    ? useDesignStore.getState().design.assembly ? useDesignModelStore.getState() : null
-    : useImportedModelStore.getState();
 }
 
 /** What the server answered a model or run read with. */
