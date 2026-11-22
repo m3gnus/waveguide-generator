@@ -146,8 +146,12 @@ The Metal pin `80a2d5e` supplies a BEAT-compatible worker using the existing
 request compiler and event/result decoder. WG uses it only for exterior
 transducer networks, which have no native equivalent. Parametric and imported
 Metal solves always use the native interface, with the explicit `complex_k`
-formulation and 0.005 shift: the worker measured 3-10% slower on them with the
-same results to within about 0.0004 dB. The selected engine remains Metal, and
+formulation and 0.005 shift. Measured warm and interleaved, the worker was
+3-10% slower on parametric designs and 4-9% slower on imported single-source
+meshes. Between the two routes, on-axis SPL, |Z|, DI and radiated power differ
+by at most 0.0002 dB, and polars within 20 dB of their peak by at most 0.0004 dB.
+Field-plane surface pressure differs by at most 0.0016 dB, about 1.5 times
+Metal's own float32 run-to-run spread. The selected engine remains Metal, and
 BEAT Metal stays a separate choice. Results record observed source/version/commit
 and helper/shader identity; unavailable identity remains unknown.
 

@@ -51,7 +51,11 @@ def _worker_session(
 
 
 def worker_available() -> bool:
-    """Whether the worker exists; without it, imported solves keep the native path."""
+    """Whether the installed Metal-BEM exposes the compatible worker interface.
+
+    Only ``transducer_worker_available`` asks: exterior-transducer networks need
+    the worker, and are not offered on Metal without it.
+    """
     try:
         from hornlab_metal_bem import MetalEngineWorker, validate_compiled
 
@@ -62,7 +66,7 @@ def worker_available() -> bool:
 
 
 def validate_worker_request(compiled: Any) -> None:
-    """Reuse the provider's request and mesh validation before routing."""
+    """Apply the provider's own request and mesh validation to a transducer request."""
     from hornlab_metal_bem import validate_compiled
 
     validate_compiled(compiled.wire)

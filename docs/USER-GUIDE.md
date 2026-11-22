@@ -677,8 +677,6 @@ imported geometry. Metal does, and so does BEAT · CPU, which runs on every
 platform without a GPU. BEAT · Metal does when you choose it yourself, in Fast
 or Accurate. BEMPP does too, where it assembles on an OpenCL device;
 a build that would fall back to numba does not offer imported geometry.
-Metal also supports eligible single-source, normal-motion exterior solves;
-those runs remain shown as **Metal** in the solver choice and results.
 BEAT · CPU mirrors an x0 half and an x0+y0 quarter natively; a return cut on y0
 alone is refused on BEAT with the reason, and solves on Metal or BEMPP. BEMPP
 refuses a return with open edges off its mirror planes, because it holds the

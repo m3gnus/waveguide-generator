@@ -25,9 +25,12 @@ def _no_worker(monkeypatch) -> None:
     assert not hasattr(metal_worker, "solve_worker")
 
 
-def _assert_native_setup_stage(stages) -> None:
+def _assert_native_setup_stage(stages, configuring: str) -> None:
+    """Configure first, then the native load's own setup stage, then any frequency."""
+
     names = [message for _stage, _fraction, message in stages]
     assert ("setup", 0.0, PREPARING) in stages
+    assert names.index(configuring) < names.index(PREPARING)
     assert all(stage != "frequency_solve" for stage, *_ in stages[:names.index(PREPARING)])
 
 
@@ -43,7 +46,7 @@ def test_parametric_metal_always_solves_on_the_native_interface(monkeypatch):
                                                  stage_callback=lambda *values: stages.append(values))
         assert response["metadata"]["metal"]["interface"] == "native"
         assert response["metadata"]["metal"]["interface_reason"] == NATIVE_REASON
-        _assert_native_setup_stage(stages)
+        _assert_native_setup_stage(stages, "Configuring Metal BEM solve")
 
 
 def test_imported_single_source_solves_on_the_native_interface(monkeypatch, tmp_path):
@@ -54,7 +57,16 @@ def test_imported_single_source_solves_on_the_native_interface(monkeypatch, tmp_
 
     def native_multi_source(path, specs, config, *, frequencies_hz=None):
         calls.append(len(specs))
-        return [imported_result()]
+        result = imported_result()
+        # Stream one live frame, as the native helper does per frequency.
+        assert config.on_frequency_result(0, 100.0, {
+            "observation_angles_deg": result.observation_angles_deg,
+            "observation_planes": result.observation_planes,
+            "observation_pressure_complex": result.pressure_complex[0],
+            "observation_directivity_db": result.directivity_db[0],
+            "impedance": result.impedance[0],
+        }) is True
+        return [result]
 
     monkeypatch.setattr(metal, "native_solve_multi_source", native_multi_source)
     _no_worker(monkeypatch)
@@ -66,13 +78,15 @@ def test_imported_single_source_solves_on_the_native_interface(monkeypatch, tmp_
     mesh_path.write_text(msh)
     record = _roled_record(mesh_path)
     record["source_tags"]["source-a"] = 2
-    stages = []
+    stages, streamed = [], []
     response = metal.solve_imported_metal_from_msh_text(
         msh, request, record, stage_callback=lambda *values: stages.append(values),
+        result_callback=lambda index, frame: streamed.append((index, frame)),
     )
     assert calls == [1]
+    assert streamed and streamed[0][1]["channels"]["left"]["metadata"]["role"] == "HF"
     assert response["metadata"]["solver_engine"]["interface"] == "native"
     assert response["metadata"]["solver_engine"]["interface_reason"] == NATIVE_REASON
     assert response["channel_order"] == ["left"]
     assert response["channels"]["left"]["metadata"]["role"] == "HF"
-    _assert_native_setup_stage(stages)
+    _assert_native_setup_stage(stages, "Configuring imported multi-source Metal BEM solve")
