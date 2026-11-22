@@ -15,6 +15,7 @@ import numpy as np
 from server.cadlink.interpretation.solver_frame import AXES, CONTRACT, frame_matrix
 from server.cadlink.intake.solver_frame_api import router
 from server.cadlink.store import CadLinkStore
+from cad_legacy_rows import record_preparation
 from test_cad_operations_store import SOLVE, _solve_request
 
 
@@ -153,8 +154,8 @@ def test_preview_and_confirm_through_an_operations_preparation(tmp_path: Path) -
     assert no_preparation.status_code == 409
     generation = store.claim("cmd-1", 0)
     assert generation is not None
-    assert store.record_preparation(
-        "cmd-1", generation, preparation_id=ingest_id, snapshot_sha256=ARTIFACT,
+    assert record_preparation(
+        store, "cmd-1", generation, preparation_id=ingest_id, snapshot_sha256=ARTIFACT,
         setup_revision_id=None, ingest_id=ingest_id, report_sha256=None,
         blocking_finding_ids=[],
     ) is not None

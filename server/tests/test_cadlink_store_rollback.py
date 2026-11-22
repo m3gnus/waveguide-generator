@@ -39,6 +39,7 @@ from server.cadlink.operations import (
 from server.cadlink.store import _OPERATION_COLUMNS, CadLinkStore
 
 from _release_tags import CADLINK_ROLLBACK_TAGS, skip_or_fail_missing_tag
+from cad_legacy_rows import add_approvals, advance_operation, bind_request, record_preparation
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -240,15 +241,15 @@ def _populate(store: CadLinkStore, design_id: str) -> None:
     assert store.note_snapshot_unreadable("cmd-solved", "2026-09-21T09:00:00+00:00")
     generation = store.claim("cmd-solved", 0)
     assert generation == 1
-    assert store.advance_operation("cmd-solved", generation, frame_axis="+z") is not None
-    assert store.record_preparation(
-        "cmd-solved", generation, preparation_id="wgi_prepared", snapshot_sha256="sha256:" + "4" * 64,
+    assert advance_operation(store, "cmd-solved", generation, frame_axis="+z") is not None
+    assert record_preparation(
+        store, "cmd-solved", generation, preparation_id="wgi_prepared", snapshot_sha256="sha256:" + "4" * 64,
         setup_revision_id=revision, ingest_id="wgi_prepared", report_sha256="sha256:" + "8" * 64,
         blocking_finding_ids=["finding-1"], meshing_semantics="semantics-1",
     ) is not None
-    assert store.add_approvals("cmd-solved", "wgi_prepared", ["finding-1"], generation=generation)
-    assert store.bind_request(
-        "cmd-solved", generation, setup_revision_id=revision, request_json='{"request": 1}'
+    assert add_approvals(store, "cmd-solved", "wgi_prepared", ["finding-1"], generation=generation)
+    assert bind_request(
+        store, "cmd-solved", generation, setup_revision_id=revision, request_json='{"request": 1}'
     ) is not None
     assert store.record_outcome(
         "cmd-solved", generation, ACCEPTED, job_id="job-1", outcome={"message": "submitted"}

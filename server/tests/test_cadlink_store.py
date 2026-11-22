@@ -251,7 +251,6 @@ def test_export_sequences_are_atomic_and_idempotent_across_store_instances(
     assert retry_store.get_export(original["export_id"]) == original
     assert retry_store.get_export(original["bundle_id"]) == original
     assert retry_store.find_export_by_idempotency_key("retry-key") == original
-    assert retry_store.find_export_by_artifact("sha256:first") == original
     assert original["snapshot_text"] == saved["text"]
 
     built = retry_store.allocate_export(

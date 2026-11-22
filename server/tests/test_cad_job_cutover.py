@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from cad_backends import JobsHarness, compat_prepare
+from cad_legacy_rows import add_approvals, advance_operation, bind_request, record_preparation
 from server.cadlink import api
 from server.cadlink.joblane.job_shims import sweep_pending_solves
 from server.cadlink.operations import REASON_CODES
@@ -49,19 +50,19 @@ def test_upgrade_migrates_every_pending_state_once_without_losing_preparation(h,
         record = h.ingest(h.data_dir / "imports" / "bundles" / (snapshot["manifest_sha256"].removeprefix("sha256:") + ".wgreturn"),
                           {}, [], h.store, h.data_dir, prep_options={}, commit_guard=lambda conn: True, retained_copy=True)
         prep_id = record["ingest_id"]
-        h.store.advance_operation("cmd-1", generation, setup_revision_id=revision)
-        h.store.record_preparation("cmd-1", generation, preparation_id=prep_id, ingest_id=prep_id,
-                                   snapshot_sha256=snapshot["manifest_sha256"], setup_revision_id=revision,
-                                   report_sha256=record["report_sha256"], blocking_finding_ids=["review-1"],
-                                   meshing_semantics=meshing_semantics_fingerprint())
-        h.store.add_approvals("cmd-1", prep_id, ["review-1"])
+        advance_operation(h.store, "cmd-1", generation, setup_revision_id=revision)
+        record_preparation(h.store, "cmd-1", generation, preparation_id=prep_id, ingest_id=prep_id,
+                           snapshot_sha256=snapshot["manifest_sha256"], setup_revision_id=revision,
+                           report_sha256=record["report_sha256"], blocking_finding_ids=["review-1"],
+                           meshing_semantics=meshing_semantics_fingerprint())
+        add_approvals(h.store, "cmd-1", prep_id, ["review-1"])
         if state == "needs_user_input":
             h.store.record_outcome("cmd-1", generation, state, reason="findings_need_review", outcome={"message": "Review exactly this finding."})
         elif state == "bound":
             request = solve_request_for(validate_setup(_setup(engine="metal")), ingest_id=prep_id,
                                         manifest_sha256=snapshot["manifest_sha256"], artifact_sha256=snapshot["artifact_sha256"],
                                         acknowledged_findings=[], client_request_id="cad-solve:cmd-1")
-            h.store.bind_request("cmd-1", generation, setup_revision_id=revision, request_json=request.model_dump_json())
+            bind_request(h.store, "cmd-1", generation, setup_revision_id=revision, request_json=request.model_dump_json())
         elif state == "cancel_requested":
             h.store.request_cancel("cmd-1")
     before = h.row()
@@ -244,8 +245,8 @@ def test_an_inadmissible_legacy_bind_migrates_to_a_refused_job_and_the_sweep_con
     from test_cad_preparation import _accept
     _accept(h.store, "cmd-2", bundle, manifest)
     generation = h.store.claim("cmd-2", 0)
-    h.store.bind_request("cmd-2", generation, setup_revision_id=revision,
-                         request_json=json.dumps({**original_request, "client_request_id": "cad-solve:cmd-2"}))
+    bind_request(h.store, "cmd-2", generation, setup_revision_id=revision,
+                 request_json=json.dumps({**original_request, "client_request_id": "cad-solve:cmd-2"}))
     if cancelled:
         h.store.request_cancel("cmd-2")
     _accept(h.store, "cmd-3", bundle, manifest)
@@ -326,7 +327,7 @@ def test_bound_pending_cancel_never_submits_and_replays_stop_after_commit(h, mon
     request = solve_request_for(validate_setup(_setup(engine="metal")), ingest_id="wgi_01ARZ3NDEKTSV4RRFFQ69G5FAV",
                                 manifest_sha256="sha256:" + "1" * 64, artifact_sha256="sha256:" + "2" * 64,
                                 acknowledged_findings=[], client_request_id="cad-solve:cmd-1")
-    h.store.bind_request("cmd-1", generation, setup_revision_id=_revision(h.store, _setup()), request_json=request.model_dump_json())
+    bind_request(h.store, "cmd-1", generation, setup_revision_id=_revision(h.store, _setup()), request_json=request.model_dump_json())
     h.store.request_cancel("cmd-1")
     real_durable = h.jobs_store.make_durable
     committed = []
@@ -925,12 +926,12 @@ def test_review_compatibility_details_fill_a_partial_historical_job_record(h):
     retained = h.data_dir / "imports" / "bundles" / (snapshot["manifest_sha256"].removeprefix("sha256:") + ".wgreturn")
     ingest = h.ingest(retained, {}, [], h.store, h.data_dir, prep_options={}, commit_guard=lambda conn: True, retained_copy=True)
     prep_id = ingest["ingest_id"]
-    h.store.advance_operation("cmd-1", generation, setup_revision_id=revision)
-    h.store.record_preparation("cmd-1", generation, preparation_id=prep_id, ingest_id=prep_id,
-                               snapshot_sha256=snapshot["manifest_sha256"], setup_revision_id=revision,
-                               report_sha256=ingest["report_sha256"], blocking_finding_ids=["review-1"],
-                               meshing_semantics=meshing_semantics_fingerprint())
-    h.store.add_approvals("cmd-1", prep_id, ["review-1"])
+    advance_operation(h.store, "cmd-1", generation, setup_revision_id=revision)
+    record_preparation(h.store, "cmd-1", generation, preparation_id=prep_id, ingest_id=prep_id,
+                       snapshot_sha256=snapshot["manifest_sha256"], setup_revision_id=revision,
+                       report_sha256=ingest["report_sha256"], blocking_finding_ids=["review-1"],
+                       meshing_semantics=meshing_semantics_fingerprint())
+    add_approvals(h.store, "cmd-1", prep_id, ["review-1"])
     record = h.runtime._preparing_record(CadSolveIntent(operation_id="cmd-1", bundle_path="old.wgreturn",
                                                       manifest_sha256=snapshot["manifest_sha256"], return_id="return"))
     record.update(status="queued", config_json={})

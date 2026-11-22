@@ -590,7 +590,10 @@ def test_push_refuses_ambiguous_or_stale_lineage_selection_before_mutation(
     # Both attempts stop after account resolution. No document, translation,
     # or element endpoint was touched, and the original selection is intact.
     assert {call["path"] for call in transport.calls} == {"/users/sessioninfo"}
-    assert store.get_onshape_link_by_instance(first["instance_id"])["document_id"] == "DID-A"
+    selected = store._read_one(
+        "SELECT * FROM onshape_links WHERE instance_id = ?", (first["instance_id"],)
+    )
+    assert selected["document_id"] == "DID-A"
 
 
 def test_push_unlinks_a_document_that_no_longer_exists(tmp_path: Path) -> None:
