@@ -293,10 +293,12 @@ def test_a_stop_budget_skips_the_join_on_a_gmsh_call_that_does_not_return(
         await gmsh_worker.shutdown_gmsh_worker()
         entered = threading.Event()
         release = threading.Event()
+        returned = threading.Event()
 
         def occ_build() -> str:
             entered.set()
             release.wait(30)
+            returned.set()
             return "done"
 
         work = asyncio.create_task(gmsh_worker.run_on_gmsh_worker(occ_build))
@@ -310,14 +312,13 @@ def test_a_stop_budget_skips_the_join_on_a_gmsh_call_that_does_not_return(
             started = time.monotonic()
             await gmsh_worker.shutdown_gmsh_worker()
             elapsed = time.monotonic() - started
-            abandoned = gmsh_worker.gmsh_call_abandoned()
+            abandoned = not returned.is_set()
         finally:
             backstop.deactivate()
             release.set()
             backstop.exit_now("test finished")
         # The call itself was never interrupted; only the wait for it was cut.
         result = await work
-        assert gmsh_worker.gmsh_call_abandoned() is False
         return elapsed, abandoned, result
 
     elapsed, abandoned, result = asyncio.run(scenario())
@@ -337,10 +338,12 @@ def test_a_stop_budget_still_joins_a_gmsh_call_that_finishes_in_time(
     async def scenario() -> bool:
         await gmsh_worker.shutdown_gmsh_worker()
         entered = threading.Event()
+        returned = threading.Event()
 
         def quick_build() -> str:
             entered.set()
             time.sleep(0.2)
+            returned.set()
             return "done"
 
         work = asyncio.create_task(gmsh_worker.run_on_gmsh_worker(quick_build))
@@ -352,7 +355,7 @@ def test_a_stop_budget_still_joins_a_gmsh_call_that_finishes_in_time(
         backstop.begin("a stop request")
         try:
             await gmsh_worker.shutdown_gmsh_worker()
-            abandoned = gmsh_worker.gmsh_call_abandoned()
+            abandoned = not returned.is_set()
         finally:
             backstop.deactivate()
             backstop.exit_now("test finished")

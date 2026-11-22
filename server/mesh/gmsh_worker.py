@@ -38,12 +38,9 @@ _executor: concurrent.futures.ThreadPoolExecutor | None = None
 _executor_lock = threading.Lock()
 _executor_condition = threading.Condition(_executor_lock)
 _shutting_down = False
-#: Operations submitted and not yet settled (queued or running), and whether
-#: the last stop with a deadline stopped waiting for one of them
-#: (``gmsh_call_abandoned``).
+#: Operations submitted and not yet settled (queued or running).
 _calls_in_flight = 0
 _in_flight_condition = threading.Condition()
-_abandoned_call = False
 
 
 def _preserve_native_windows_path() -> AbstractContextManager[None]:
@@ -172,18 +169,6 @@ def _wait_until_idle(timeout: float) -> bool:
         return _in_flight_condition.wait_for(lambda: _calls_in_flight == 0, timeout)
 
 
-def gmsh_call_abandoned() -> bool:
-    """Whether shutdown stopped waiting for a gmsh call that is still running.
-
-    Such a call holds interpreter exit, which joins executor threads, so
-    ``launch/serve.py`` asks this once its cleanup is done and ends the process
-    instead of waiting out the rest of its budget.
-    """
-
-    with _in_flight_condition:
-        return _abandoned_call and _calls_in_flight > 0
-
-
 async def run_on_gmsh_worker(fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
     """Queue a gmsh operation on the persistent owner thread.
 
@@ -273,11 +258,11 @@ async def shutdown_gmsh_worker() -> None:
     ``launch/serve.py`` has begun a stop budget it cannot drain an OCC build,
     which has no cancellation point and may outlive the whole budget. So queued
     work is dropped, a running call is waited for only while
-    ``shutdown_wait_limit`` allows, and past that the join is skipped and the
-    call is recorded as abandoned (``gmsh_call_abandoned``).
+    ``shutdown_wait_limit`` allows, and past that the join is skipped (the
+    launcher then ends the process once its cleanup finds the thread lingering).
     """
 
-    global _executor, _shutting_down, _abandoned_call
+    global _executor, _shutting_down
 
     # The child holds no state worth draining, and killing it is what ends a
     # build that cannot be asked to stop.
@@ -303,7 +288,6 @@ async def shutdown_gmsh_worker() -> None:
         else:
             wait_for_existing = False
             _shutting_down = True
-            _abandoned_call = False
             executor = _executor
     if wait_for_existing:
         await asyncio.to_thread(wait_for_other_shutdown)
@@ -318,8 +302,6 @@ async def shutdown_gmsh_worker() -> None:
                 if await asyncio.to_thread(_wait_until_idle, limit):
                     await asyncio.to_thread(executor.shutdown, True)
                 else:
-                    with _in_flight_condition:
-                        _abandoned_call = True
                     log.warning(
                         "A gmsh call was still running when shutdown ran out of time "
                         "for it; not waiting for it"
@@ -334,7 +316,6 @@ async def shutdown_gmsh_worker() -> None:
 
 __all__ = [
     "GMSH_WORKER_THREAD_NAME",
-    "gmsh_call_abandoned",
     "gmsh_warmup",
     "prewarm_gmsh_worker",
     "run_on_gmsh_worker",
