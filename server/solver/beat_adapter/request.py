@@ -172,7 +172,7 @@ def build_request(
     sound_speed_m_per_s: float = BEAT_SOUND_SPEED_M_PER_S, density_kg_per_m3: float = BEAT_AIR_DENSITY_KG_PER_M3,
     quadrature_order: int = QUADRATURE_ORDER, singular_order: int = SINGULAR_ORDER, surface_traces: bool = False,
     cancel_path: Path | None = None, ground_plane_min_clearance_m: float = 0.,
-    _retain_source_mesh: bool = False, _source_mesh: SurfaceMesh | None = None,
+    _retain_source_mesh: bool = False,
 ) -> CompiledRequest:
     """Build independent unit-velocity bases; WG channels sum their named ports.
 
@@ -180,10 +180,6 @@ def build_request(
     axes and arbitrary observation points stay in the original metre frame,
     except for a common proper rotation required by an official image plane.
     No files are written and no engine import or runtime discovery occurs.
-
-    Internal callers may reuse a validated source surface in original metre
-    coordinates, already scaled by mesh_scale_to_m, before any image transform,
-    symmetry snapping or precision conversion. Text callers always parse here.
     """
     backend = _backend(engine_id, backend)
     if precision not in {"float32", "float64"} or (backend == "metal" and precision != "float32"):
@@ -205,7 +201,7 @@ def build_request(
         raise ValueError("Frequencies must be positive, finite and distinct in Float64")
     if not np.isfinite(ground_plane_min_clearance_m) or ground_plane_min_clearance_m < 0:
         raise ValueError("Ground clearance must be finite and non-negative")
-    mesh = _source_mesh if _source_mesh is not None else read_surface(msh_text, scale_to_m=mesh_scale_to_m)
+    mesh = read_surface(msh_text, scale_to_m=mesh_scale_to_m)
     mode, rotation, translation = _image_frame(symmetry, ground)
     transformed = replace(mesh, points_m=(mesh.points_m + translation) @ rotation.T)
     transformed = replace(transformed, points_m=transformed.points_m.astype(precision))

@@ -53,7 +53,6 @@ from .base import (
 )
 from .context import SolverContext
 from .engine_run import full_3d_solve_path, run_imported_engine, run_parametric_engine
-from .metal_worker import PREPARING_METAL_STAGE_MESSAGE
 from .frequency_sweep import (
     _FREQUENCY_SHAPED_RESULT_FIELDS,
     canonical_frequencies,
@@ -148,9 +147,12 @@ GEOMETRY_SOURCES: tuple[str, ...] = ("parametric", "imported")
 IMPORTED_FEATURES: tuple[str, ...] = ("passive-cardioid",)
 
 
-# Recorded as ``interface_reason`` whenever a Metal solve runs on the native
-# interface for want of a worker route. Parametric solves always do.
+# Recorded as ``interface_reason`` for every parametric and imported Metal solve:
+# both run on the native interface. Only exterior-transducer networks use the
+# compatible worker.
 NATIVE_INTERFACE_REASON = "This Metal solve requires the native interface"
+# The setup stage shown while the native helper loads and validates the mesh.
+PREPARING_METAL_STAGE_MESSAGE = "Preparing Metal mesh and solver request"
 
 
 class MetalUnavailable(RuntimeError):
@@ -1809,8 +1811,6 @@ def solve_imported_metal_from_msh_text(
     coupled_native_result: Any | None = None
     coupled_payload: dict[str, Any] | None = None
     coupled_mf_channel: Any | None = None
-    worker_request = None
-    worker_reason = NATIVE_INTERFACE_REASON
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".msh", delete=False, encoding="utf-8",
@@ -1826,46 +1826,13 @@ def solve_imported_metal_from_msh_text(
             if context.frequencies_hz is not None
             else None
         )
-        if (len(geometry.drive_channels) == 1 and len(geometry.drive_channels[0].source_ids) == 1
-                and geometry.drive_channels[0].motion == "normal"
-                and geometry.drive_channels[0].patch_weights is None
-                and not geometry.passive_cardioid_enabled and quadrants in {1, 14, 1234}):
-            from .beat_adapter.request import build_imported_request, validate_imported_request
-            from .metal_worker import select_worker_request
-
-            def build_candidate(mesh):
-                candidate = build_imported_request(
-                    msh_text, context, record, geometry.drive_channels,
-                    frequencies_hz=(execution_frequencies if execution_frequencies is not None
-                                    else canonical_frequencies(context)),
-                    engine_id="beat-metal", backend="metal", surface_traces=retain_traces,
-                    _source_mesh=mesh,
-                )
-                validate_imported_request(candidate, imported_symmetry.native_plane)
-                return candidate
-
-            worker_request, worker_reason = select_worker_request(
-                build_candidate, msh_text=msh_text, merge_tol=float(getattr(config, "mesh_merge_tol", 1e-9)),
-                stage_callback=stage_callback,
-            )
-        if worker_request is not None:
-            from .metal_worker import solve_worker
-
-            channel = geometry.drive_channels[0]
-
-            def publish_worker(index: int, response: dict[str, Any]) -> None:
-                response["metadata"].update(channel_identity[channel.id])
-                publish_imported(index, response["frequencies"][0], {channel.id: response})
-
-            results = [solve_worker(
-                worker_request, channel_id=channel.id, context=context, config=config,
-                progress=progress, cancel=cancellation_callback,
-                publish=publish_worker if result_callback is not None else None,
-            )]
-        else:
-            results = native_solve_multi_source(
-                str(path), source_specs, config, frequencies_hz=execution_frequencies,
-            )
+        # The native helper loads and validates the mesh before its first
+        # frequency; say so, so the setup stage does not sit silent meanwhile.
+        if stage_callback:
+            stage_callback("setup", 0.0, PREPARING_METAL_STAGE_MESSAGE)
+        results = native_solve_multi_source(
+            str(path), source_specs, config, frequencies_hz=execution_frequencies,
+        )
         if len(results) != len(geometry.drive_channels):
             raise ValueError(
                 "multi-source Metal solver returned a different number of bases than requested"
@@ -2168,8 +2135,8 @@ def solve_imported_metal_from_msh_text(
             "package": "hornlab-metal-bem",
             "package_version": status.get("version"),
             "device": "metal",
-            "interface": "beat-compatible" if worker_request is not None else "native",
-            "interface_reason": worker_reason,
+            "interface": "native",
+            "interface_reason": NATIVE_INTERFACE_REASON,
             "formulation": kwargs["formulation"],
             "complex_k_shift": kwargs["complex_k_shift"],
         },

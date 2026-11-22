@@ -1,34 +1,22 @@
-"""Metal-BEM's compatible worker, mapped onto WG's existing result contract.
+"""Metal-BEM's compatible worker, used only for exterior-transducer networks.
 
-Two routes use it: imported single-source, normal-motion exterior solves
-(``solve_imported_metal_from_msh_text``) and the exterior-transducer network.
-Parametric design solves always run on the native interface; the worker was
-retired for them after it measured slower with the same results.
+That route has no native equivalent. Parametric and imported solves always run
+on the native interface; the worker route for them was retired after it
+measured slower with the same results.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from contextlib import contextmanager
 import inspect
 from typing import Any
-
-import numpy as np
-
-from .beat_adapter.results import acceleration_scale, map_sweep, real_source_copy_count
-from .beat_adapter.mesh import SurfaceMesh
-from .base import StageCallback
-from .result_mapping import build_provisional_frequency_response
-
-# The setup stage shown while a Metal solve loads its mesh and request, on the
-# native route (metal.py) and on this worker's admission alike.
-PREPARING_METAL_STAGE_MESSAGE = "Preparing Metal mesh and solver request"
 
 
 @contextmanager
 def _worker_session(
     compiled: Any, *, native_formulation: str, complex_k_shift: float,
-    cancellation_callback=None, native_progress_callback=None, status_callback=None,
+    cancellation_callback=None, status_callback=None,
 ):
     """Own one native submission and restore errors wrapped by its event stream."""
     from beat_engine.beat_contract.worker import negotiate_submission
@@ -40,8 +28,6 @@ def _worker_session(
         try:
             if cancellation_callback is not None:
                 cancellation_callback()
-            if native_progress_callback is not None:
-                native_progress_callback(index, frequency, entry)
         except BaseException as exc:
             callback_error.append(exc)
             raise InterruptedError("Native Metal progress callback stopped the solve") from exc
@@ -152,145 +138,3 @@ def solve_transducer_worker(
                 "Retry the full sweep or select BEAT CPU or BEAT Metal."
             )
         return result
-
-
-def select_worker_request(
-    builder: Callable[[SurfaceMesh], Any], *, msh_text: str, merge_tol: float,
-    stage_callback: StageCallback | None = None,
-) -> tuple[Any | None, str | None]:
-    """Select only requests the installed worker can validate before solving.
-
-    ``builder`` compiles the imported single-source request from the parsed
-    source mesh; a refusal leaves the solve on the native interface.
-    """
-    if not worker_available():
-        return None, "The installed Metal-BEM package does not expose the compatible interface"
-    if stage_callback:
-        stage_callback("setup", 0.0, PREPARING_METAL_STAGE_MESSAGE)
-    try:
-        from hornlab_metal_bem.mesh import _compact_surface_vertices, _merge_duplicate_vertices
-
-        from .beat_adapter.mesh import read_surface
-
-        if not np.isfinite(merge_tol):
-            return None, "The native interface is required to preserve mesh loading"
-        mesh = read_surface(msh_text)
-        points, faces, unused = _compact_surface_vertices(mesh.points_m, mesh.faces)
-        _, _, merged = _merge_duplicate_vertices(points, faces, merge_tol)
-        if unused or merged:
-            return None, "The native interface is required to preserve mesh loading"
-        # Admission owns the original Float64 coordinates. The builder applies
-        # its own transforms and precision conversion to this same source mesh.
-        candidate = builder(mesh)
-        validate_worker_request(candidate)
-    except (ImportError, ValueError, RuntimeError):
-        return None, "The compatible interface does not accept this mesh or request"
-    return candidate, None
-
-
-def solve_worker(
-    compiled: Any, *, channel_id: str, context: Any, config: Any,
-    progress: Callable[[int, int, float], None],
-    cancel: Callable[[], None] | None, publish: Callable[[int, dict], None] | None,
-):
-    """Use the worker's event decoder and preserve native Metal result fields.
-
-    This bridge is for a single normal-motion source. Its pressure loading is
-    the area-weighted P1 mean, so the existing native power integrator can use
-    that mean and the source's physical area without approximating a field.
-    """
-    from hornlab_metal_bem.bie import integrate_driven_surface_power
-    from hornlab_metal_bem.observation import integrate_sphere_radiated_power, sphere_grid_solid_angle_weights
-    from hornlab_metal_bem.sweep import _directivity_from_pressure
-
-    frequencies = np.asarray(compiled.wire["frequencies_hz"], dtype=float)
-    layout = compiled.layout
-    loading = compiled.channel_loading[channel_id]
-    options = compiled.wire["solver_options"]
-    native_logs: list[dict[str, Any]] = []
-    sound_speed = float(compiled.wire["compiled_system"]["regions"][0]["sound_speed_m_per_s"])
-    density = float(compiled.wire["compiled_system"]["regions"][0]["density_kg_per_m3"])
-
-    def native_progress(index: int, frequency: float, entry: dict) -> None:
-        source_entries = entry.get("source_results")
-        source_entry = source_entries[0] if isinstance(source_entries, list) else entry
-        if index != len(native_logs) or not isinstance(source_entry, dict):
-            raise ValueError("Metal worker returned out-of-order native diagnostics")
-        native_logs.append({
-            key: value for key, value in source_entry.items()
-            if key not in {"impedance", "observation_pressure_complex", "observation_directivity_db",
-                           "observation_angles_deg", "observation_planes", "observation_sphere_pressure_complex"}
-        })
-        progress(index, len(frequencies), frequency)
-        if publish is None:
-            return
-        pressure = np.asarray(source_entry["observation_pressure_complex"], dtype=np.complex128).reshape(-1)
-        n_planes, n_angles = len(layout.planes), len(layout.angles_deg)
-        pressure = pressure[:n_planes * n_angles].reshape(n_planes, n_angles) * acceleration_scale(frequency)
-        row = {
-            "observation_angles_deg": layout.angles_deg,
-            "observation_planes": list(layout.planes),
-            "observation_pressure_complex": pressure,
-            "observation_directivity_db": _directivity_from_pressure(
-                pressure, int(np.argmin(np.abs(layout.angles_deg))),
-            ),
-            "impedance": complex(source_entry["impedance"]) * acceleration_scale(frequency),
-        }
-        publish(index, build_provisional_frequency_response(
-            index=index, frequency_hz=frequency, entry=row, config=config,
-            context=context, backend="metal", sound_speed_m_per_s=sound_speed,
-        ))
-
-    with _worker_session(
-        compiled,
-        native_formulation="complex_k", complex_k_shift=float(config.complex_k_shift),
-        cancellation_callback=cancel, native_progress_callback=native_progress,
-    ) as events:
-        result = map_sweep(
-            events, frequencies, layout=layout,
-            source_area_m2=loading.area_m2, excitation_port_id=compiled.channel_ports[channel_id][0],
-            symmetry=options["symmetry"], precision=options["precision"], backend="metal",
-            trace_counts=(len(compiled.mesh.points_m), len(compiled.mesh.faces)) if compiled.surface_traces else None,
-            boundary_loading=loading, compiled_request=compiled, channel_id=channel_id,
-        )
-        if result.cancelled or not len(result.frequencies_hz):
-            if cancel is not None:
-                cancel()
-            raise RuntimeError("Metal worker cancelled before the requested sweep completed")
-        if len(native_logs) != len(result.solver_log):
-            raise RuntimeError("Metal worker did not report the native diagnostics for every frequency")
-
-    velocity = np.asarray([acceleration_scale(f) for f in result.frequencies_hz])
-    result.radiated_power_surface_w = integrate_driven_surface_power(
-        result.impedance[:, None], velocity[:, None], np.asarray([loading.area_m2]),
-        symmetry_multiplier=real_source_copy_count(options["symmetry"]),
-    )
-    if result.sphere_pressure_complex is not None:
-        theta = int(context.polar_config.get("spherical_theta_count") or 37)
-        phi = int(context.polar_config.get("spherical_phi_count") or 72)
-        weights = sphere_grid_solid_angle_weights(theta, phi)
-        result.radiated_power_sphere_w = integrate_sphere_radiated_power(
-            result.sphere_pressure_complex, distance_m=float(config.observation.distance_m),
-            solid_angle_weights_sr=weights, air_density=density, speed_of_sound=sound_speed,
-        )
-        result.radiated_power_sphere_coverage_sr = float(np.sum(weights))
-    else:
-        result.radiated_power_sphere_w = None
-        result.radiated_power_sphere_coverage_sr = None
-    for entry, native in zip(result.solver_log, native_logs, strict=True):
-        worker_diagnostics = entry.get("native_diagnostics") or {}
-        native_diagnostics = native.pop("native_diagnostics", None)
-        entry.update(native)
-        entry["native_diagnostics"] = {
-            **(native_diagnostics if isinstance(native_diagnostics, dict) else {}),
-            "engine_provenance": worker_diagnostics.get("engine_provenance"),
-        }
-    result.native_diagnostics = [entry.get("native_diagnostics", {}) for entry in result.solver_log]
-    run = next((entry.get("native_diagnostics", {}).get("engine_provenance")
-                for entry in result.solver_log
-                if isinstance(entry.get("native_diagnostics"), dict)
-                and isinstance(entry["native_diagnostics"].get("engine_provenance"), dict)), {})
-    runtime = run.get("runtime") if isinstance(run, dict) else None
-    result.native_runtime = dict(runtime) if isinstance(runtime, dict) else {}
-    result.native_runtime["source"] = run.get("engine", {}) if isinstance(run, dict) else {}
-    return result
