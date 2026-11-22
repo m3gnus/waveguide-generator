@@ -1123,7 +1123,7 @@
     },
     {
       "kind": "inline",
-      "path": "server/jobs/models.py",
+      "path": "server/solve_request.py",
       "scope": "SolveRequest.validate_client_metadata",
       "ordinal": 0,
       "original_line": 1134,

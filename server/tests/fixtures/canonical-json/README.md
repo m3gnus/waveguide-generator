@@ -54,7 +54,7 @@ to run with only the standard library, bypassing the contracts package initializ
 | `server/preview/geometry_identity.py:17` | `geometry_hash` | `canonical_ascii_strict_json` |
 | `server/integration/api.py:140` | `design_schema_text` | `canonical_ascii_strict_json` |
 | `server/integration/provenance.py:12` | `_canonical_json` | `canonical_utf8_strict_bytes` |
-| `server/jobs/models.py:1135` | `SolveRequest.validate_client_metadata` | `canonical_utf8_strict_json` |
+| `server/solve_request.py:1076` | `SolveRequest.validate_client_metadata` | `canonical_utf8_strict_json` |
 | `server/mesh/builder.py:815` | `_solver_mesh_cache_key` | `canonical_ascii_strict_json` |
 | `server/mesh/imported.py:1733` | `_geometry_fingerprint` | `canonical_ascii_strict_json` |
 | `server/preview/core.py:861` | `PreviewProtocol._compute_frame` | `canonical_ascii_strict_json` |
