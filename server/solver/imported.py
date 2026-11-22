@@ -20,7 +20,7 @@ from server.mesh.artifact import (
     read_verified_import_mesh,
     verify_record_mesh_text,
 )
-from server.mesh.gmsh22 import MshFormatError, read_msh
+from server.mesh.gmsh22 import read_msh
 
 
 def imported_domain_planes(record: Mapping[str, Any]) -> tuple[str, ...]:
@@ -213,17 +213,33 @@ class SourceAxis:
 def _msh_triangles(msh_text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Node coordinates, triangle corner rows and physical tags of a Gmsh 2.2 mesh."""
 
-    try:
-        artifact = read_msh(msh_text)
-    except MshFormatError as exc:
-        raise ValueError("imported mesh artifact is not a readable Gmsh 2.2 mesh") from exc
-    if not artifact.has_nodes or not artifact.has_elements:
-        raise ValueError("imported mesh artifact is not a readable Gmsh 2.2 mesh")
-    tagged = artifact.tagged
+    artifact = read_msh(msh_text)
+    nodes, elements = artifact.nodes, artifact.elements
+    unreadable = ValueError("imported mesh artifact is not a readable Gmsh 2.2 mesh")
+    if (
+        nodes is None
+        or elements is None
+        or not nodes.exact_marker
+        or not elements.exact_marker
+        or nodes.problem is not None
+        or elements.problem is not None
+    ):
+        raise unreadable
+    lengths = elements.row_lengths
+    # Untagged and short triangle rows are skipped before anything else is read.
+    if any(
+        count is None or (count >= 1 and kind == "integer" and int(lengths[row]) >= 6 + count)
+        for row, count, kind in elements.triangle_problems
+    ):
+        raise unreadable
+    tagged = elements.triangle_tag_counts >= 1
+    corners = artifact.corner_indices[tagged]
+    if np.any(corners < 0):
+        raise unreadable
     return (
-        np.array(artifact.points, dtype=float),
-        np.array(artifact.triangles[tagged], dtype=np.int64),
-        np.array(artifact.triangle_tags[tagged], dtype=np.int64),
+        np.array(nodes.points, dtype=float),
+        np.array(corners, dtype=np.int64).reshape(-1, 3),
+        np.array(elements.triangle_tags[tagged], dtype=np.int64),
     )
 
 

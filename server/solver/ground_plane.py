@@ -36,7 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from server.mesh.gmsh22 import MeshArtifact, MshFormatError, read_msh
+from server.mesh.gmsh22 import NodeSection, read_msh_nodes
 
 #: Axis names WG accepts, in coordinate order.  ``y`` is WG's vertical, so a
 #: horn standing above a floor is ``axis="y"``; ``z`` is the horn axis, so a
@@ -103,20 +103,37 @@ class GroundPlaneClearance(ValueError):
     """The model would cross its ground plane at the requested height."""
 
 
-def _mesh(msh_text: str) -> MeshArtifact:
-    """The parsed solver artifact, refused unless it holds a ``$Nodes`` section."""
+def _nodes(msh_text: str) -> NodeSection:
+    """The ``$Nodes`` section, read without the element rows.
 
-    try:
-        artifact = read_msh(msh_text)
-    except MshFormatError as exc:
-        raise ValueError(
-            "a ground-plane solve requires an ASCII Gmsh 2.2 solver artifact"
-        ) from exc
-    if not artifact.has_nodes:
+    Placement reads only node rows, and the text it reads is replaced by the
+    placed copy, so it neither parses elements nor keeps a shared artifact.
+    """
+
+    nodes = read_msh_nodes(msh_text).nodes
+    if nodes is None or not nodes.exact_marker or (
+        nodes.problem is not None and nodes.problem[0] in {"index", "value"}
+    ):
         raise ValueError(
             "a ground-plane solve requires an ASCII Gmsh 2.2 solver artifact"
         )
-    return artifact
+    return nodes
+
+
+def _lowest(nodes: NodeSection, plane: GroundPlane) -> float:
+    # Only this axis's column is read, from every row that has one: node ids,
+    # other columns and short rows never stopped the scan.
+    if nodes.columns is None:
+        column = nodes.points[:, plane.component].tolist()
+    else:
+        values = nodes.columns[plane.component]
+        if isinstance(values, str):
+            raise ValueError(values)
+        column = values.tolist()
+    if not column:
+        raise ValueError("solver artifact contains no Gmsh nodes")
+    # min() keeps the first of equal values, as a row-by-row scan does.
+    return min(column)
 
 
 def model_extent(msh_text: str, plane: GroundPlane) -> float:
@@ -127,11 +144,7 @@ def model_extent(msh_text: str, plane: GroundPlane) -> float:
     agreeing with the package's own check, which is the one that matters.
     """
 
-    column = _mesh(msh_text).points[:, plane.component].tolist()
-    if not column:
-        raise ValueError("solver artifact contains no Gmsh nodes")
-    # min() keeps the first of equal values, as a row-by-row scan does.
-    return min(column)
+    return _lowest(_nodes(msh_text), plane)
 
 
 def place_above_ground(msh_text: str, plane: GroundPlane) -> str:
@@ -152,7 +165,8 @@ def place_above_ground(msh_text: str, plane: GroundPlane) -> str:
     stays referenced to the mouth and follows the model up.
     """
 
-    lowest = model_extent(msh_text, plane)
+    nodes = _nodes(msh_text)
+    lowest = _lowest(nodes, plane)
     if lowest + plane.height_m < 0.0:
         required = -lowest
         raise GroundPlaneClearance(
@@ -166,7 +180,7 @@ def place_above_ground(msh_text: str, plane: GroundPlane) -> str:
 
     lines = msh_text.splitlines(keepends=True)
     bare = [line.rstrip("\r\n") for line in lines]
-    first, last = _mesh(msh_text).node_lines
+    first, last = nodes.first_line, nodes.last_line
     component = plane.component
     for index in range(first, last):
         fields = bare[index].split()

@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 
 from server.contracts.conventions import solver_to_engineering
-from server.mesh.gmsh22 import MshFormatError, read_msh
+from server.mesh.gmsh22 import read_msh
 
 from .acoustics import reference_air_density_kg_per_m3, reference_sound_speed_m_per_s
 from .beam_shape import beam_shape_summary
@@ -167,23 +167,35 @@ def _gmsh22_observation_frame_parts(
 ) -> _ObservationFrameParts:
     """Read the authoritative observation basis and centres from a Gmsh artifact."""
 
-    try:
-        artifact = read_msh(msh_text)
-    except MshFormatError as exc:
-        raise ValueError(
-            "observation framing requires an ASCII Gmsh 2.2 solver artifact"
-        ) from exc
-    if not artifact.has_nodes or not artifact.has_elements:
+    artifact = read_msh(msh_text)
+    nodes, elements = artifact.nodes, artifact.elements
+    if (
+        nodes is None
+        or elements is None
+        or not nodes.exact_marker
+        or not elements.exact_marker
+        or nodes.problem is not None and nodes.problem[0] in {"index", "value"}
+        or elements.problem is not None
+    ):
         raise ValueError(
             "observation framing requires an ASCII Gmsh 2.2 solver artifact"
         )
+    if nodes.problem is not None or not nodes.unique:
+        raise ValueError("solver artifact contains invalid Gmsh nodes")
+    lengths = elements.row_lengths
+    if np.any((elements.element_types < 0) & (lengths >= 3)) or any(
+        count is None or (count >= 1 and int(lengths[row]) >= 6 + count)
+        for row, count, kind in elements.triangle_problems
+        if kind == "integer"
+    ):
+        raise ValueError("solver artifact contains invalid Gmsh elements")
     vertices = artifact.points
     corners = artifact.corner_indices
     # Triangles without a tag, or naming an undeclared node, take no part.
-    usable = artifact.tagged & np.all(corners >= 0, axis=1)
+    usable = (elements.triangle_tag_counts >= 1) & np.all(corners >= 0, axis=1)
 
     def tagged_triangles(tag: int) -> np.ndarray:
-        return vertices[corners[usable & (artifact.triangle_tags == tag)]]
+        return vertices[corners[usable & (elements.triangle_tags == tag)]]
 
     source = tagged_triangles(2)
     if not len(vertices) or not len(source):

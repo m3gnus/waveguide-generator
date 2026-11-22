@@ -105,6 +105,22 @@ def _crafted() -> dict[str, str]:
         "short-count": FULL.replace("$Nodes\n5\n", "$Nodes\n4\n"),
         "bad-element-token": FULL.replace("\n1 2 2 2 2 1 3 2\n", "\n1 2 2 2 2 1 3 x\n"),
         "short-triangle": FULL.replace("\n2 2 2 1 1 1 2 4\n", "\n2 2 2 1 1 1 2\n"),
+        "untagged-dangling": _mesh(TETRA, ["1 2 2 2 2 1 3 2", "2 2 0 1 2 99", "3 2 2 1 1 1 2 4"]),
+        "names-bad-count": FULL.replace("$Nodes\n", '$PhysicalNames\nx\n2 2 "s"\n$EndPhysicalNames\n$Nodes\n'),
+        "names-no-end": FULL.replace("$Nodes\n", '$PhysicalNames\n1\n2 2 "s"\n$Nodes\n'),
+        "names-bad-tag": FULL.replace("$Nodes\n", '$PhysicalNames\n1\n2 x "s"\n$EndPhysicalNames\n$Nodes\n'),
+        "extra-triangle-field": FULL.replace("\n2 2 2 1 1 1 2 4\n", "\n2 2 2 1 1 1 2 4 7\n"),
+        "format-last-line": FULL.split("$EndMeshFormat\n")[1] + "$MeshFormat",
+        "bom": "\ufeff" + FULL,
+        "bom-crlf": "\ufeff" + FULL.replace("\n", "\r\n"),
+        "non-integer-node-id": FULL.replace("\n5 0.123", "\nfive 0.123"),
+        "three-field-node": FULL.replace("\n1 0.0 0.0 0.0\n", "\n1 0.0 0.0\n"),
+        "bad-coordinate": FULL.replace("\n1 0.0 0.0 0.0\n", "\n1 0.0 zero 0.0\n"),
+        "bad-line-token": _mesh(TETRA, ["1 1 2 1 1 1 x", "2 2 2 2 2 1 3 2", "3 2 2 1 1 1 2 4"]),
+        "bad-type-token": _mesh(TETRA, ["1 two 2 1 1 1 2", "2 2 2 2 2 1 3 2", "3 2 2 1 1 1 2 4"]),
+        "truncated-elements": FULL.replace("$Elements\n5\n", "$Elements\n9\n").split("$EndElements")[0],
+        "zero-elements": _mesh(TETRA, []),
+        "negative-count": FULL.replace("$Nodes\n5\n", "$Nodes\n-1\n"),
     }
     return cases
 
@@ -112,8 +128,8 @@ def _crafted() -> dict[str, str]:
 def _outcome(function, *args, **kwargs):
     try:
         return ("ok", _canonical(function(*args, **kwargs)))
-    except (ValueError, KeyError, IndexError, TypeError) as exc:
-        return ("refused", isinstance(exc, ValueError))
+    except Exception as exc:  # the old readers' every failure is compared
+        return ("refused", type(exc).__name__, str(exc))
 
 
 def _canonical(value):
@@ -165,8 +181,25 @@ def _calls():
     return calls
 
 
-def _differences(text: str) -> list[str]:
-    found = []
+def _category(before, after) -> str:
+    if before[0] == "ok" and after[0] == "ok":
+        return "answer"
+    if before[0] == "ok":
+        return "refused"
+    if after[0] == "ok":
+        return "accepted"
+    return "error" if before[1] != after[1] else "message"
+
+
+def _differences(text: str) -> set[str]:
+    """``"<reader> <category>"`` for every reader whose answer changed.
+
+    Categories: ``answer`` (both answered, differently), ``refused`` (it used to
+    answer), ``accepted`` (it used to refuse), ``error`` (both refuse, with a
+    different exception class) and ``message`` (same class, other words).
+    """
+
+    found = set()
     for name, old, new, args, kwargs in _calls():
         gmsh22.clear_cache()
         before = _outcome(old, text, *args, **kwargs)
@@ -174,52 +207,37 @@ def _differences(text: str) -> list[str]:
         # A second read comes from the shared artifact and must answer the same.
         again = _outcome(new, text, *args, **kwargs)
         if after != again:
-            found.append(f"{name}: cached answer differs")
-        if before == after:
-            continue
-        if before[0] == "refused" and after[0] == "refused":
-            continue
-        found.append(f"{name}: {before[0]} -> {after[0]}")
+            found.add(f"{name.split()[0]} cached")
+        if before != after:
+            found.add(f"{name.split()[0]} {_category(before, after)}")
     return found
 
 
-#: Malformed structure no Gmsh 2.2 writer emits, on which some old readers
-#: answered and the shared reader refuses (or, for ``trailing-space``, the other
-#: way round: the readers that matched section markers unstripped refused).
-#: Every solve text is written by Gmsh or by WG (imports are validated by
-#: ``file_import.parse_file_mesh`` and rewritten by ``mesh_text``), so none of
-#: these reaches a reader. The sets are exact, so any new difference fails.
-STRICTER = {
-    "bad-element-token": {"extent", "place"},
-    "binary-flag": {"frame", "dofs", "msh_triangles", "extent", "place"},
-    "duplicate-node": {"dofs", "extent", "place"},
-    "five-field-node": {"frame", "dofs", "msh_triangles", "tagged", "triangle_arrays",
-                        "extent", "place"},
-    "no-header": {"frame", "dofs", "msh_triangles", "extent", "place"},
-    "short-count": {"frame", "dofs", "extent", "place"},
-    "short-triangle": {"frame", "msh_triangles", "extent", "place"},
-    "trailing-space": {"frame", "dofs", "msh_triangles", "extent", "place"},
-    "version-4": {"frame", "dofs", "msh_triangles", "extent", "place"},
+#: Every difference from the old readers, on malformed text no writer emits.
+#: Gmsh and WG write every solve text (user imports are refused or rewritten
+#: by ``file_import``), so none of these reaches a reader. Where keeping an old
+#: reader's answer was cheap it is kept; what is left is listed exactly, so any
+#: new difference fails. ``dofs`` "answer" is the trace count falling back to
+#: the solve's mesh stats where it used to count the rows.
+DIFFERENCES = {
+    # Both refuse; the old message named the token or node the lookup missed,
+    # or numpy's ragged-array complaint, or a later symptom of the same fault.
+    "bad-element-token": {"triangle_arrays message"},
+    "duplicate-node": {"frame message"},
+    "non-integer-node-id": {"triangle_arrays message"},
+    "short-triangle": {"tagged message"},
+    "three-field-node": {"frame message", "triangle_arrays message"},
 }
-
-
-def _reader(difference: str) -> str:
-    return difference.split(" ")[0].rstrip(":")
 
 
 @pytest.mark.parametrize("name", sorted(_crafted()))
 def test_crafted_meshes_read_as_before(name):
-    differences = _differences(_crafted()[name])
-    assert not [item for item in differences if "cached" in item]
-    assert {_reader(item) for item in differences} == STRICTER.get(name, set())
-    direction = "refused -> ok" if name == "trailing-space" else "ok -> refused"
-    # A stats fallback answers where the old count answered: still a refusal to count.
-    assert all(item.endswith(direction) or item.startswith("dofs True") for item in differences)
+    assert _differences(_crafted()[name]) == DIFFERENCES.get(name, set())
 
 
 @pytest.mark.parametrize("path", REPO_MESHES)
 def test_repository_meshes_read_as_before(path):
-    assert _differences((ROOT / path).read_text(encoding="utf-8")) == []
+    assert _differences((ROOT / path).read_text(encoding="utf-8")) == set()
 
 
 @pytest.mark.skipif(not os.environ.get("WG_GMSH22_CORPUS_DIR"), reason="no corpus named")
@@ -239,14 +257,45 @@ def test_one_text_is_parsed_once():
     first = gmsh22.read_msh(FULL)
     assert gmsh22.read_msh(str(FULL)) is first
     assert gmsh22.read_msh("".join(list(FULL))) is first
-    with pytest.raises(ValueError):
-        first.points[0, 0] = 1.0
 
 
-def test_the_cache_is_bounded():
+def test_shared_arrays_cannot_be_written_or_made_writeable():
+    artifact = gmsh22.read_msh(FULL)
+    arrays = [artifact.points, artifact.corner_indices]
+    arrays += [value for value in vars(artifact.elements).values() if isinstance(value, np.ndarray)]
+    for array in arrays:
+        with pytest.raises(ValueError):
+            array.flags.writeable = True
+        if array.size:
+            with pytest.raises(ValueError):
+                array.flat[0] = 1
+
+
+def test_the_cache_is_bounded_by_entries_bytes_and_age(monkeypatch):
     gmsh22.clear_cache()
     texts = [scale_msh_text(FULL, float(scale)) for scale in range(1, 8)]
     artifacts = [gmsh22.read_msh(text) for text in texts]
     assert len(gmsh22._cache) == gmsh22._CACHE_ENTRIES
     assert gmsh22.read_msh(texts[-1]) is artifacts[-1]
     assert gmsh22.read_msh(texts[0]) is not artifacts[0]
+
+    gmsh22.clear_cache()
+    monkeypatch.setattr(gmsh22, "_CACHE_MAX_BYTES", 10)
+    gmsh22.read_msh(FULL)
+    assert not gmsh22._cache  # a single entry over the cap is not kept
+
+    monkeypatch.setattr(gmsh22, "_CACHE_MAX_BYTES", 1 << 30)
+    clock = [1000.0]
+    monkeypatch.setattr(gmsh22.time, "monotonic", lambda: clock[0])
+    gmsh22.read_msh(FULL)
+    clock[0] += gmsh22._CACHE_IDLE_SECONDS + 1
+    gmsh22.read_msh(texts[1])
+    assert list(gmsh22._cache) == [texts[1]]
+
+
+def test_placement_neither_parses_elements_nor_keeps_the_unplaced_mesh():
+    gmsh22.clear_cache()
+    placed = place_above_ground(FULL, GroundPlane(axis="y", height_m=0.25))
+    assert not gmsh22._cache
+    assert gmsh22.read_msh_nodes(FULL).elements is None
+    assert placed != FULL

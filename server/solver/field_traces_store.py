@@ -135,13 +135,20 @@ def mesh_trace_dof_counts(
 ) -> tuple[int, int]:
     """Estimate P1 and DP0 counts from a Gmsh 2.2 mesh, with stats fallback."""
 
-    try:
-        artifact = read_msh(msh_text)
-    except ValueError:
-        artifact = None
-    if artifact is not None and artifact.has_elements:
-        triangle_count = len(artifact.triangle_ids)
-        used_vertex_count = len(np.unique(artifact.triangle_node_ids))
+    elements = read_msh(msh_text).elements
+    if (
+        elements is not None
+        and elements.exact_marker
+        and elements.problem is None
+        and not elements.truncated
+        and elements.count >= 0
+        # A row it cannot type, or a triangle row it cannot count, stops the count.
+        and not np.any((elements.element_types < 0) & (elements.row_lengths >= 4))
+        and not elements.triangle_problems
+        and not np.any(elements.triangle_extra)
+    ):
+        triangle_count = len(elements.triangle_ids)
+        used_vertex_count = len(np.unique(elements.triangle_node_ids))
         if used_vertex_count and triangle_count:
             return used_vertex_count, triangle_count
 

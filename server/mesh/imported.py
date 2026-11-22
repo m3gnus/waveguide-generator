@@ -44,7 +44,7 @@ from server.mesh.builder import (
     _self_intersection_warnings,
 )
 from server.mesh.cache import SolverMeshArtifactCache
-from server.mesh.gmsh22 import MshFormatError, read_msh
+from server.mesh.gmsh22 import read_msh
 from server.mesh.integrity import (
     mesh_element_quality_report,
     mesh_integrity_report,
@@ -1491,21 +1491,40 @@ def gmsh22_triangle_arrays(msh_text: str) -> tuple[np.ndarray, np.ndarray]:
     not parse is a ``ValueError``.
     """
 
-    try:
-        artifact = read_msh(msh_text)
-    except MshFormatError as exc:
-        if exc.kind == "format":
-            raise ValueError(str(exc)) from exc
+    artifact = read_msh(msh_text)
+    version = artifact.version
+    if version is None:
+        raise ValueError("the mesh artifact is not an ASCII Gmsh 2.2 mesh")
+    if len(version) < 2 or not version[0].startswith("2.") or version[1] != "0":
         raise ValueError(
-            f"the mesh artifact holds malformed Gmsh nodes or elements: {exc}"
-        ) from exc
+            "the mesh artifact is not an ASCII Gmsh 2.2 mesh "
+            f"(format {' '.join(version)!r})"
+        )
     empty = (np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=np.int64))
-    if not artifact.has_nodes or not artifact.has_elements:
+    nodes, elements = artifact.nodes, artifact.elements
+    if nodes is None or elements is None:
         return empty
-    points = np.array(artifact.points, dtype=float)
-    if not len(artifact.triangles):
+
+    def malformed(detail: str) -> ValueError:
+        return ValueError(f"the mesh artifact holds malformed Gmsh nodes or elements: {detail}")
+
+    for section in (nodes, elements):
+        if section.problem is not None:
+            raise malformed(section.problem[1])
+        if section is nodes and section.truncated:
+            raise malformed("the mesh artifact is missing Gmsh nodes")
+    for _row, count, kind in elements.triangle_problems:
+        if kind == "short":
+            raise malformed("the mesh artifact holds a triangle without three nodes")
+        raise malformed("a triangle row holds a field that is not an integer")
+    corners = artifact.corner_indices
+    if np.any(corners < 0):
+        missing = elements.triangle_node_ids[corners < 0][0]
+        raise malformed(repr(str(int(missing))))
+    points = np.array(nodes.points, dtype=float).reshape(-1, 3)
+    if not len(corners):
         return points, empty[1]
-    return points, np.array(artifact.triangles, dtype=np.int64)
+    return points, np.array(corners, dtype=np.int64)
 
 
 def verify_artifact_reduced_orientation(
