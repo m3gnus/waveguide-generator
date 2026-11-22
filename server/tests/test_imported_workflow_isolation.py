@@ -90,6 +90,16 @@ def test_acceptance_fixture_replaces_a_live_sessionless_host_and_closes_its_repl
 
     # Cover the acceptance's opt-in as well: a correct helper left unused by
     # the numerical test would let the original order-dependent failure return.
-    acceptance = workflow.test_equivalent_cad_and_file_meshes_use_same_engine_and_agree
-    assert any(mark.name == "usefixtures" and "isolated_import_bempp_host" in mark.args
-               for mark in acceptance.pytestmark)
+    # The real-pipeline solves share the same global worker: CI run
+    # 45062457525 failed the CAD solve on a host an earlier test left warm
+    # without a session (its OpenCL check refused to run, so BEMPP fell back to
+    # numba and refused imported geometry).
+    real_runtime = [
+        getattr(pipeline, name) for name in dir(pipeline)
+        if name.startswith("test_")
+        and any(mark.name == "real_runtime" for mark in getattr(getattr(pipeline, name), "pytestmark", []))
+    ]
+    assert len(real_runtime) >= 4, real_runtime
+    for acceptance in (workflow.test_equivalent_cad_and_file_meshes_use_same_engine_and_agree, *real_runtime):
+        assert any(mark.name == "usefixtures" and "isolated_import_bempp_host" in mark.args
+                   for mark in acceptance.pytestmark), acceptance.__name__

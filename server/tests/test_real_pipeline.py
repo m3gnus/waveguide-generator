@@ -121,6 +121,26 @@ def real_pipeline_session(monkeypatch: pytest.MonkeyPatch) -> Iterator[temp_sess
         session.close(remove=True)
 
 
+@pytest.fixture
+def isolated_import_bempp_host(real_pipeline_session):
+    """Spawn under this test's session, not an earlier app test's warm host.
+
+    The application owns one session for its lifetime. This pytest process
+    creates many, so a live global worker may still carry an earlier (or absent)
+    session; its OpenCL check then refuses to run, BEMPP falls back to numba,
+    and an imported solve is refused. Close only this process's host before
+    probing/solving, and close its replacement before the dependent session
+    fixture removes the directory.
+    """
+    from server.solver.bempp_process import shutdown_bempp_process
+
+    shutdown_bempp_process()
+    try:
+        yield
+    finally:
+        shutdown_bempp_process()
+
+
 def _pins() -> dict[str, str]:
     modules = json.loads(PINS_FILE.read_text(encoding="utf-8"))["modules"]
     return {name: str(entry["sha"]) for name, entry in modules.items()}
@@ -414,6 +434,7 @@ PARAMETRIC_BODY: dict[str, Any] = {
 
 
 @pytest.mark.real_runtime
+@pytest.mark.usefixtures("isolated_import_bempp_host")
 def test_a_parametric_design_solves_on_the_real_mesher_and_bempp(tmp_path: Path) -> None:
     async def scenario() -> None:
         app = create_app(data_dir=tmp_path / "data")
@@ -457,6 +478,7 @@ def test_a_parametric_design_solves_on_the_real_mesher_and_bempp(tmp_path: Path)
 
 
 @pytest.mark.real_runtime
+@pytest.mark.usefixtures("isolated_import_bempp_host")
 def test_a_mesh_file_solves_without_cad_and_replays_after_restart(tmp_path: Path) -> None:
     """Real engine, ready triangles, no CAD exchange, meshing or operations."""
     mesh = (Path(__file__).parent / "fixtures/mesh_import/tetra.msh").read_text()
@@ -531,6 +553,7 @@ def test_a_mesh_file_solves_without_cad_and_replays_after_restart(tmp_path: Path
 
 
 @pytest.mark.real_runtime
+@pytest.mark.usefixtures("isolated_import_bempp_host")
 def test_this_host_offers_an_imported_engine_where_one_is_expected(tmp_path: Path) -> None:
     """The CAD solve below may skip only on a host that is not expected to run it."""
 
@@ -554,6 +577,7 @@ def test_this_host_offers_an_imported_engine_where_one_is_expected(tmp_path: Pat
 
 
 @pytest.mark.real_runtime
+@pytest.mark.usefixtures("isolated_import_bempp_host")
 def test_a_cad_return_ingests_prepares_and_solves_through_its_model(tmp_path: Path) -> None:
     manifest = json.loads((ROUND_RETURN / "wgreturn.json").read_text(encoding="utf-8"))
     design_id = manifest["instances"][0]["design_id"]

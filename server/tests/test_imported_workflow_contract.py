@@ -16,24 +16,7 @@ from test_real_pipeline import (
     _imported_engine, _imported_engine_expected, _settled_capabilities,
 )
 from test_real_pipeline import real_pipeline_session as real_pipeline_session
-
-
-@pytest.fixture
-def isolated_import_bempp_host(real_pipeline_session):
-    """Spawn under this test's session, not an earlier app test's warm host.
-
-    The application owns one session for its lifetime. This pytest process
-    creates many, so a live global worker may still carry an earlier (or absent)
-    session. Close only this process's host before probing/solving, and close its
-    replacement before the dependent session fixture removes the directory.
-    """
-    from server.solver.bempp_process import shutdown_bempp_process
-
-    shutdown_bempp_process()
-    try:
-        yield
-    finally:
-        shutdown_bempp_process()
+from test_real_pipeline import isolated_import_bempp_host as isolated_import_bempp_host
 
 
 @pytest.mark.parametrize("queued", [False, True], ids=["running", "queued"])
