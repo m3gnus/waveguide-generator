@@ -48,6 +48,9 @@ def read_surface(msh_text: str, *, scale_to_m: float = 1.0) -> SurfaceMesh:
     try:
         artifact = read_msh(msh_text)
     except MshFormatError as exc:
+        if exc.kind == "format" and exc.version is None:
+            # Unchanged wording for a text with no header at all.
+            raise ValueError("'$MeshFormat' is not in list") from exc
         if exc.kind == "format":
             raise ValueError("Expected ASCII Gmsh 2.2") from exc
         raise
