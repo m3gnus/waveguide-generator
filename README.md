@@ -62,8 +62,9 @@ libraries, or the portable Windows ZIP? See the
 
 When a new version is out, the version number in the top-left corner turns
 amber and says **update available**. Click it, then **Install update**. The app
-checks the download, swaps it in and restarts. If anything goes wrong, it
-rolls back to the version you had.
+downloads the full installer, checks its signature and checksum, closes, runs the
+installer over your existing installation and restarts. If the installer fails,
+it keeps or restores the version you had.
 
 ## Where your files go
 

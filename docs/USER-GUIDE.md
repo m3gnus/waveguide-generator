@@ -37,7 +37,8 @@ mm, smooth/corner joins and incoming/outgoing angles. One profile initially
 shapes both planes; **Separate vertical profile** enables a separate vertical
 table. You can insert or remove anchors and paste point rows. Edits show a
 preview with curve deviation and generated-profile change before applying.
-Conversion from an existing horn and a profile drawing canvas are not yet
+**Edit profile on canvas…** opens the profile drawing canvas, where you drag
+anchors and preview changes. Conversion from an existing horn is not yet
 available.
 
 Within **OSSE → Model Type → OSSE features**, choose:

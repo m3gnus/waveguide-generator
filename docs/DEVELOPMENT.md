@@ -541,10 +541,12 @@ extensions, and fail at import in a user's hands rather than at build time.
 
 Three things differ from the other two platforms, each for a measured reason:
 
-- **Tcl/Tk is kept, not pruned.** On Linux there is no native window, so
-  `launchers.desktop` falls back to the tkinter status window — the status window *is*
-  the desktop application there. Pruning Tk as macOS and Windows do would have shipped a
-  bundle whose only interface cannot start, and it would have looked like a size win.
+- **Tcl/Tk is kept, not pruned.** Linux has a native Qt window (PySide6, pinned in
+  `server/requirements-runtime.txt`), but when it cannot open (no usable Qt platform
+  plugin or renderer) `launchers.desktop` falls back to the tkinter status window — the
+  status window *is* the desktop application then. Pruning Tk as macOS and Windows do
+  would have shipped a bundle whose only interface can fail to start, and it would have
+  looked like a size win.
   It costs nothing else: measured 2026-09-04 on a bare `ubuntu:24.04` container with no
   X11 package installed, the pinned runtime imports `tkinter` (Tk 9.0) and reaches
   `couldn't connect to display ":99"` — a Tcl-level error, so Tk initialised and its
