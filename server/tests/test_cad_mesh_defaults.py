@@ -381,7 +381,7 @@ def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceili
 
 def test_mesh_too_large_is_an_actionable_refusal_on_both_ingest_routes() -> None:
     from server.cadlink.api import _ingest_error
-    from server.cadlink.onshape.api import _onshape_error
+    from server.exports.onshape_api import _onshape_error
     from server.mesh.errors import MeshTooLarge
 
     error = MeshTooLarge(28_944, 22_000, mesh_sizes={

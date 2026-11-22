@@ -24,12 +24,13 @@ from server.charts import mount_charts
 from server.diagnostics import mount_diagnostics
 from server.diagnostics.api import BUNDLE_PATH, CLIENT_LOG_PATH, MAX_CLIENT_LOG_BODY_BYTES, MAX_REPORT_BODY_BYTES
 from server.diagnostics.capabilities import capabilities_payload
-from server.cadlink import mount_cadlink, mount_onshape
+from server.cadlink import mount_cadlink
 from server.cadlink.build_flags import onshape_enabled
 from server.design_io import mount_design_io
 from server.source_editor import mount_source_editor
 from server.drivers import mount_drivers
 from server.exports import mount_exports
+from server.exports.onshape_api import mount_onshape
 from server.jobs.api import mount_jobs
 from server.integration import mount_integration
 from server.jobs.mesh_preview import mount_solver_mesh

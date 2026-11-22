@@ -1,5 +1,9 @@
 """FastAPI routes for the Onshape leg of the CAD link.
 
+A send exports the design as a WGLink bundle (``wglink_service``) and hands it
+to the Onshape adapter in ``server/cadlink/onshape/``, so the routes sit with
+the exports rather than below them.
+
 Two rules shape this module.
 
 *Status polling never touches the network.* The CAD Link panel polls, and
@@ -34,28 +38,29 @@ from server.exports.wglink_service import (
 )
 from server.mesh.errors import MeshTooLarge
 
-from .adapter import (
+from server.cadlink.onshape.adapter import (
     OnshapeAdapter,
     OnshapeAdapterError,
     OnshapePublicDocumentConsent,
     OnshapeTarget,
     send_bundle,
 )
-from .client import OnshapeClient, OnshapeError, OnshapeHttpError
-from .credentials import (
+from server.cadlink.onshape.client import OnshapeClient, OnshapeError, OnshapeHttpError
+from server.cadlink.onshape.credentials import (
     OnshapeCredentialsError,
     credentials_path,
     file_is_world_readable,
     load_credentials,
 )
-from .return_leg import (
+from server.cadlink.onshape.return_leg import (
     OnshapeReturnError,
     source_contract_from_export,
     write_and_ingest_return,
 )
 
 
-logger = logging.getLogger(__name__)
+# The name it logged under in server/cadlink/onshape/, kept so logs read the same.
+logger = logging.getLogger("server.cadlink.onshape.api")
 
 router = APIRouter(prefix="/api/cadlink/onshape", tags=["cadlink"])
 

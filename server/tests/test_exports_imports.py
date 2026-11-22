@@ -11,7 +11,7 @@ import pytest
     "server.exports.geometry_identity",
     "server.exports.core",
     "server.exports.wglink_service",
-    "server.cadlink.onshape.api",
+    "server.exports.onshape_api",
     "server.cadlink.intake.ingest",
 ])
 def test_helper_import_does_not_assemble_export_or_fusion_routes(module: str) -> None:
@@ -43,7 +43,7 @@ assert ExportRequest is wglink_service.ExportRequest
 assert WgLinkExportRequest is wglink_service.WgLinkExportRequest
 assert ExportRequest.__module__ == WgLinkExportRequest.__module__ == 'server.exports.api'
 from server.exports import api
-from server.cadlink.onshape import api as onshape_api
+from server.exports import onshape_api
 assert api.export_wglink_sync is wglink_service.export_wglink_sync
 assert onshape_api.export_wglink_sync is wglink_service.export_wglink_sync
 assert api.normalize_base_name is onshape_api.normalize_base_name is wglink_service.normalize_base_name

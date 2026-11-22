@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from server.cadlink.identity import SaveIdentity, design_hash
-from server.cadlink.onshape import api as onshape_api
+from server.exports import onshape_api
 from server.cadlink.onshape.adapter import OnshapeAdapterError
 from server.cadlink.onshape.client import OnshapeClient
 from server.cadlink.onshape.credentials import OnshapeCredentials
