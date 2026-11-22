@@ -24,7 +24,7 @@ from server.platform.paths import data_paths
 
 
 #: Distributions whose versions explain pipeline behaviour.
-VERSIONED_DISTRIBUTIONS = ("gmsh", "numpy", "scipy", "bempp-cl", "cadquery-ocp", "fastapi")
+VERSIONED_DISTRIBUTIONS = ("gmsh", "numpy", "scipy", "bempp-cl", "fastapi")
 
 #: Incidents a summary lists, and a report carries in full.
 SUMMARY_INCIDENTS = 10
