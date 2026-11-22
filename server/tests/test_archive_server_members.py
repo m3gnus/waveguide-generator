@@ -25,8 +25,10 @@ from server.workspace.archive_holds import ArchiveSnapshotHolds, HoldTooLarge, H
 
 
 def _tree(root: Path) -> dict[str, bytes]:
+    """Every file under ``root`` by its ``/``-separated relative path, on every OS."""
+
     return {
-        str(path.relative_to(root)): path.read_bytes()
+        path.relative_to(root).as_posix(): path.read_bytes()
         for path in sorted(root.rglob("*"))
         if path.is_file()
     }
