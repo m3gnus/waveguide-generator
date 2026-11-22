@@ -22,7 +22,8 @@ def test_signing_is_opt_in_with_no_publication_authority():
     assert signer['if'] == '${{ inputs.sign_candidate }}'
     assert signer['environment'] == 'update-signing'
     assert signer.get('permissions', WORKFLOW['permissions']) == {'contents': 'read'}
-    assert set(signer['needs']) == {'spa', 'macos-bundle', 'windows-bundle', 'linux-bundle'}
+    assert set(signer['needs']) == {'spa', 'macos-bundle', 'windows-bundle', 'linux-bundle',
+                                 'app-layer-parity'}
     for name, job in WORKFLOW['jobs'].items():
         for step in job.get('steps', []):
             if 'actions/checkout@' in step.get('uses', ''):

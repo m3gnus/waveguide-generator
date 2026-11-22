@@ -370,7 +370,10 @@ jobs:
   windows-bundle:
     name: Build the Windows standalone app
     runs-on: windows-latest
-    needs: [spa, macos-bundle]
+    # Not macos-bundle: the cross-platform app-layer comparison that used to
+    # need its output is the app-layer-parity job, so this build runs beside
+    # the macOS one.
+    needs: spa
     permissions:
       contents: read
       id-token: write
@@ -399,10 +402,6 @@ jobs:
         with:
           name: release-spa
           path: build/spa
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: standalone-app-layer
-          path: build/app-reference
       - name: Install the pinned Inno Setup
         shell: pwsh
         run: |
@@ -425,24 +424,6 @@ jobs:
             throw "The verified SPA inputs are missing."
           }
           uv run --no-project --python 3.13.12 python scripts/build_bundle.py --platform windows --spa $spa --output build/bundle
-      - name: Assert both platforms built the same app layer
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $local = @(Get-ChildItem -File build/bundle/update-app-*.manifest.json)
-          $reference = @(Get-ChildItem -File build/app-reference/update-app-*.manifest.json)
-          if ($local.Count -ne 1 -or $reference.Count -ne 1) {
-            throw "Expected exactly one local and one macOS-built app manifest."
-          }
-          $localTree = (Get-Content -Raw $local[0] | ConvertFrom-Json).treeSha256
-          $referenceTree = (Get-Content -Raw $reference[0] | ConvertFrom-Json).treeSha256
-          if (-not $localTree -or -not $referenceTree) {
-            throw "An app manifest carries no treeSha256; the builder did not write one."
-          }
-          if ($localTree -ne $referenceTree) {
-            throw "Windows and macOS app layers differ: $localTree != $referenceTree"
-          }
-          Write-Host "Cross-platform app layer treeSha256: $localTree"
       - name: Run setup-driven Windows installer gates
         id: installer_gates
         shell: pwsh
@@ -464,6 +445,12 @@ jobs:
             build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
             build/bundle/Waveguide.Generator-*-windows-x86_64.zip
             build/bundle/update-runtime-windows-*.zip
+      - name: Share this platform's app-layer manifest for the parity check
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-layer-manifest-windows
+          path: build/bundle/update-app-*.manifest.json
+          if-no-files-found: error
       - name: Share the Windows RC assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -656,7 +643,8 @@ jobs:
     # ubuntu-latest, so the glibc the runtime is linked against cannot move
     # under the release without anyone deciding to move it.
     runs-on: ubuntu-24.04
-    needs: [spa, macos-bundle]
+    # Parallel with macos-bundle; see windows-bundle and app-layer-parity.
+    needs: spa
     permissions:
       contents: read
       id-token: write
@@ -687,10 +675,6 @@ jobs:
         with:
           name: release-spa
           path: build/spa
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: standalone-app-layer
-          path: build/app-reference
       - name: Build and verify the standalone app
         run: |
           set -euo pipefail
@@ -699,22 +683,6 @@ jobs:
           test -f "$spa"
           test -f "$spa.sha256"
           uv run --no-project --python 3.13.12 python scripts/build_bundle.py --platform linux --spa "$spa" --output build/bundle
-      - name: Assert this platform built the same app layer
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import glob
-          import json
-
-          local = glob.glob("build/bundle/update-app-*.manifest.json")
-          reference = glob.glob("build/app-reference/update-app-*.manifest.json")
-          if len(local) != 1 or len(reference) != 1:
-              raise SystemExit("Expected exactly one local and one macOS-built app manifest.")
-          trees = [json.load(open(path))["treeSha256"] for path in (local[0], reference[0])]
-          if not all(trees) or trees[0] != trees[1]:
-              raise SystemExit(f"Linux and macOS app layers differ: {trees[0]} != {trees[1]}")
-          print(f"Cross-platform app layer treeSha256: {trees[0]}")
-          PY
       - name: Attest the exact Linux installer before transfer
         # The SPA and canonical app layer were produced by other jobs. Attest
         # only this job's local installer and runtime outputs.
@@ -723,6 +691,12 @@ jobs:
           subject-path: |
             build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
             build/bundle/update-runtime-linux-*.zip
+      - name: Share this platform's app-layer manifest for the parity check
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-layer-manifest-linux
+          path: build/bundle/update-app-*.manifest.json
+          if-no-files-found: error
       - name: Share the Linux RC assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -853,11 +827,52 @@ jobs:
             echo
           done
 
+  # Replaces the per-platform comparisons that made the Windows and Linux
+  # builds wait for the macOS job. The three builds now run side by side and
+  # this job compares the app layer each produced: macOS's canonical copy
+  # (standalone-app-layer) against the Windows and Linux manifests.
+  app-layer-parity:
+    name: App layers match across platforms
+    runs-on: ubuntu-latest
+    needs: [macos-bundle, windows-bundle, linux-bundle]
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: standalone-app-layer
+          path: build/manifests/macos
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: app-layer-manifest-windows
+          path: build/manifests/windows
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: app-layer-manifest-linux
+          path: build/manifests/linux
+      - name: Assert every platform built the same app layer
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import json
+
+          trees = {}
+          for platform in ("macos", "windows", "linux"):
+              found = glob.glob(f"build/manifests/{platform}/update-app-*.manifest.json")
+              if len(found) != 1:
+                  raise SystemExit(f"Expected exactly one {platform} app manifest, found {len(found)}.")
+              trees[platform] = json.load(open(found[0])).get("treeSha256")
+          if not all(trees.values()):
+              raise SystemExit(f"An app manifest carries no treeSha256; the builder did not write one: {trees}")
+          if len(set(trees.values())) != 1:
+              raise SystemExit(f"App layers differ across platforms: {trees}")
+          print(f"Cross-platform app layer treeSha256: {trees['macos']}")
+          PY
+
   sign-candidate:
     name: Sign candidate artifacts without publication
     if: ${{ inputs.sign_candidate }}
     runs-on: ubuntu-latest
-    needs: [spa, macos-bundle, windows-bundle, linux-bundle]
+    needs: [spa, macos-bundle, windows-bundle, linux-bundle, app-layer-parity]
     environment: update-signing
     # Inherit the workflow's contents: read; no publication capability is added.
     env:
