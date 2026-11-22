@@ -57,8 +57,7 @@ meshing or publishing an artifact, and the native mesh entry points refuse it
 again; neither may silently return a
 free-standing result. Metal retains the coupled-baffle and passive-cardioid
 paths, which the official BEAT bridge must not advertise without
-implementation. The bridge does serve imported CAD and multi-channel solves,
-as the paragraph above states.
+implementation.
 
 The initial official bridge must reject axial-piston source motion: its
 `normal_velocity` port applies one scalar to a source boundary, not the

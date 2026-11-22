@@ -27,6 +27,7 @@ WORKFLOW = '.github/workflows/rc-build.yml'
 REQUIRED_JOBS = {
     'Build the SPA', 'Build the macOS standalone app',
     'Build the Windows standalone app', 'Build the Linux standalone app',
+    'App layers match across platforms',
     'Sign candidate artifacts without publication',
 }
 

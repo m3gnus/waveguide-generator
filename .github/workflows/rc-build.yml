@@ -830,10 +830,15 @@ jobs:
   # Replaces the per-platform comparisons that made the Windows and Linux
   # builds wait for the macOS job. The three builds now run side by side and
   # this job compares the app layer each produced: macOS's canonical copy
-  # (standalone-app-layer) against the Windows and Linux manifests.
+  # (standalone-app-layer) against the Windows and Linux manifests. The
+  # Windows and Linux installers are therefore attested and uploaded before
+  # this check runs; a mismatch fails the run, which blocks signing
+  # (sign-candidate needs this job) and promotion (the run must succeed), but
+  # leaves those installers downloadable from the failed run.
   app-layer-parity:
     name: App layers match across platforms
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [macos-bundle, windows-bundle, linux-bundle]
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0

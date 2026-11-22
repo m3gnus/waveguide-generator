@@ -93,7 +93,7 @@ jobs:
         with:
           name: ci-spa-dist
           path: frontend/dist
-          retention-days: 1
+          retention-days: 7
           overwrite: true
           if-no-files-found: error
 

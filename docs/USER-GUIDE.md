@@ -31,15 +31,18 @@ Retired table designs open as Custom profiles with a nonblocking deviation notic
 Their original files remain untouched until Save, which writes normal `Freeform.*`
 keys in `.cfg`. SOURCE-DISK designs keep their current-only Family entry.
 
-**Custom profile** starts a blank design with an editable anchor table under
+Choosing **Custom profile** on a design from another family asks whether to
+**Start blank** or **Convert current design**. Conversion previews the current
+design as a Custom profile, with the changes to the wall, mouth outline and
+source surface to review before you accept. Either way you get an editable
+anchor table under
 **Profile**. The table includes the throat and mouth, positions and radii in
 mm, smooth/corner joins and incoming/outgoing angles. One profile initially
 shapes both planes; **Separate vertical profile** enables a separate vertical
 table. You can insert or remove anchors and paste point rows. Edits show a
 preview with curve deviation and generated-profile change before applying.
 **Edit profile on canvas…** opens the profile drawing canvas, where you drag
-anchors and preview changes. Conversion from an existing horn is not yet
-available.
+anchors and preview changes.
 
 Within **OSSE → Model Type → OSSE features**, choose:
 
