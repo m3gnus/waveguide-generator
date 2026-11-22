@@ -19,7 +19,7 @@ import numpy as np
 
 from .acoustics import BEAT_SOUND_SPEED_M_PER_S
 from server.contracts.conventions import PHASE_TIME_CONVENTION
-from server.jobs.models import ImportedGeometrySource, SolveRequest
+from server.solve_request import ImportedGeometrySource, SolveRequest
 
 from .beat_runtime.warm_cache import signature_scope as solve_signature_scope
 from .base import (
@@ -128,7 +128,7 @@ def compile_imported_beat(
     The optional request retains the historical record-only preflight interface
     for qualification scripts. Production always supplies the actual request.
     """
-    from server.jobs.models import DriveChannel
+    from server.solve_request import DriveChannel
     from .beat_adapter.request import build_imported_request, validate_imported_request
 
     symmetry = imported_record_symmetry(record)

@@ -2,7 +2,7 @@
  * The crossover spec the rail, the results strip, the summary and the exports
  * all read.
  *
- * One model, mirrored from `ChannelCombineSpec` in `server/jobs/models.py`
+ * One model, mirrored from `ChannelCombineSpec` in `server/solve_request.py`
  * (CADLINK-CROSSOVER-DRIVERS.md §2). The wire form this module emits is always
  * the per-channel v2 form: the legacy `crossovers_hz`/`level_match`/`align`
  * triple is still accepted by the server, but it can only say "LR4 with auto

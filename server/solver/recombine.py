@@ -12,7 +12,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, Mapping
 
-from server.jobs.models import (
+from server.solve_request import (
     ChannelCombineSpec,
     ImportedGeometrySource,
     SolveRequest,

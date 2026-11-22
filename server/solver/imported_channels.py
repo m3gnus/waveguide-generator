@@ -11,7 +11,7 @@ import numpy as np
 
 from server.contracts.source_roles import normalize_source_role
 from server.contracts.conventions import ENGINEERING_PHASE_CONVENTION
-from server.jobs.models import ImportedGeometrySource, SolveRequest
+from server.solve_request import ImportedGeometrySource, SolveRequest
 
 from .combined_channel import package_combined_channel
 from .context import SolverContext

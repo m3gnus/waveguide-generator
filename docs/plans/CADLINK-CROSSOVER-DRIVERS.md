@@ -27,7 +27,7 @@ so a drive channel's Thiele/Small parameters can be picked instead of typed.
 
 ## 2. Crossover contract
 
-`ChannelCombineSpec` (`server/jobs/models.py`) keeps its legacy fields and
+`ChannelCombineSpec` (`server/solve_request.py`) keeps its legacy fields and
 adds a per-channel form. A spec with only the legacy fields expands to the
 per-channel form as LR4 pairs with auto gain and auto delay, so existing
 clients, stored solve profiles and the OpenAPI snapshot stay valid.

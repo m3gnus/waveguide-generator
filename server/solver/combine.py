@@ -36,6 +36,8 @@ from server.contracts.conventions import (
     solver_to_engineering,
 )
 
+from server.solve_request import expand_legacy_channels
+
 from .driver_limits import MemberLimits, gain_ceiling_db, headroom, member_limit_ratings
 from .filters import Filter, channel_weight, pair_inverts
 
@@ -240,48 +242,6 @@ def normalize_channel(value: Any) -> ResolvedChannel:
         delay_ms=delay_ms,
         invert=None if invert is None else bool(invert),
     )
-
-
-def expand_legacy_channels(
-    members: list[str],
-    crossovers_hz: list[float],
-    *,
-    level_match: bool = True,
-    align: bool = True,
-) -> dict[str, dict[str, Any]]:
-    """Expand the legacy LR4 chain into the per-channel wire form.
-
-    The one definition of what a legacy spec means: LR4 pairs, auto gain when
-    level matching is on and a manual 0 dB when it is off, auto delay when
-    alignment is on and a manual 0 ms when it is off, polarity from the pair.
-    """
-
-    crossovers = [float(value) for value in crossovers_hz]
-    if len(crossovers) != len(members) - 1:
-        raise ValueError(
-            "combine needs exactly one crossover between each adjacent member "
-            f"pair: {len(members)} members require {len(members) - 1} crossovers_hz"
-        )
-    gain: dict[str, Any] = {"mode": "auto"} if level_match else {"mode": "manual", "db": 0.0}
-    delay: dict[str, Any] = {"mode": "auto"} if align else {"mode": "manual", "ms": 0.0}
-    expanded: dict[str, dict[str, Any]] = {}
-    for index, name in enumerate(members):
-        expanded[name] = {
-            "hp": (
-                {"family": "lr", "order": 4, "fc_hz": crossovers[index - 1]}
-                if index > 0
-                else None
-            ),
-            "lp": (
-                {"family": "lr", "order": 4, "fc_hz": crossovers[index]}
-                if index < len(crossovers)
-                else None
-            ),
-            "gain": dict(gain),
-            "delay": dict(delay),
-            "invert": None,
-        }
-    return expanded
 
 
 def chain_weights(

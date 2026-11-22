@@ -15,7 +15,7 @@ from typing import Any
 
 from server.design.text_import import uses_current_ath_import
 
-from server.jobs.models import SolveOptions
+from server.contracts.solve_options import SolveOptions
 
 from .schema import DesignCommon, DesignConfig
 

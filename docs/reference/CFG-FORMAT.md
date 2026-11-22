@@ -451,7 +451,7 @@ merely incomplete.
 Not everything the application sends to a solve belongs in this file. The passive
 cardioid's fields — rear volume, port length and area, port-area provenance, foam
 resistance, coupled-output flag — are **job** fields on the imported-geometry wire
-model (`server/jobs/models.py`), not design fields. They are absent from the schema and
+model (`server/solve_request.py`), not design fields. They are absent from the schema and
 from this format by design: they describe one solve request against imported CAD, not
 the portable parametric design, and a `.cfg` that carried them would imply a
 reproducibility it cannot offer.

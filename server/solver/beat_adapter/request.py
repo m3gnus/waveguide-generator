@@ -14,7 +14,7 @@ import numpy as np
 from server.solver.acoustics import BEAT_AIR_DENSITY_KG_PER_M3, BEAT_SOUND_SPEED_M_PER_S
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
 from server.contracts.geometry import PLANE_BY_QUADRANTS
-from server.jobs.models import DriveChannel
+from server.solve_request import DriveChannel
 from server.solver.beat_runtime.paths import PROVIDER_ID
 from server.solver.context import SolverContext
 from server.solver.frequency_sweep import live_execution_frequencies

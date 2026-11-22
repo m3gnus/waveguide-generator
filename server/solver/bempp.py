@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from server.contracts.conventions import PHASE_TIME_CONVENTION
-from server.jobs.models import ImportedGeometrySource, SolveRequest
+from server.solve_request import ImportedGeometrySource, SolveRequest
 from server.platform.temp_session import spawned_directory_root
 from server.preview.translate import has_closed_outer_body
 

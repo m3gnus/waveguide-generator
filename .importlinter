@@ -25,6 +25,8 @@ layers =
     mesh
     preview
     integration
+    # Solve request schemas: read by jobs, the solvers and run provenance alike.
+    solve_request
     design
     charts | drivers | settings | workspace | protocol
     platform
@@ -42,40 +44,12 @@ ignore_imports =
     # cadlink -> exports: existing upward dependency.
     # Shared outbound operation; publication recovery still reaches Fusion.
     server.cadlink.onshape.api -> server.exports.wglink_service
-    # design -> jobs: existing upward dependency.
-    # Legacy use: SolveOptions.
-    server.design.solve_block -> server.jobs.models
-    # integration -> jobs: existing upward dependency.
-    # Legacy use: SolveRequest.
-    server.integration.provenance -> server.jobs.models
     # solver -> engines: existing upward dependency.
     # Legacy use: full3d_engine_order.
     server.solver.warmup -> server.engines.registry
     # solver -> jobs: existing upward dependency.
-    # Legacy use: DriveChannel.
-    server.solver.beat_adapter.capabilities -> server.jobs.models
-    # Legacy use: DriveChannel.
-    server.solver.beat_adapter.request -> server.jobs.models
-    # Legacy use: ImportedGeometrySource, SolveRequest.
-    server.solver.beat -> server.jobs.models
-    # Legacy use: ImportedGeometrySource, SolveRequest.
-    server.solver.beat_imported -> server.jobs.models
-    # Legacy use: ImportedGeometrySource, SolveRequest.
-    server.solver.bempp -> server.jobs.models
-    # Legacy use: ImportedGeometrySource, SolveRequest.
-    server.solver.bempp_imported -> server.jobs.models
-    # Legacy use: ImportedGeometrySource, PolarConfig, SolveRequest.
-    server.solver.context -> server.jobs.models
     # Legacy use: JobStore.
     server.solver.field_plane -> server.jobs.store
-    # Legacy use: ImportedGeometrySource.
-    server.solver.imported_channels -> server.jobs.models
-    # Legacy use: ImportedGeometrySource, passive_cardioid_apertures, SolveRequest.
-    server.solver.metal -> server.jobs.models
-    # Legacy use: ImportedGeometrySource, PolarConfig, SolveRequest.
-    server.solver.polar_arc -> server.jobs.models
-    # Legacy use: ChannelCombineSpec, ImportedGeometrySource, SolveRequest.
-    server.solver.recombine -> server.jobs.models
 
 # CAD Link lanes (S7-1). Highest to lowest; docs/architecture/CAD-OPERATIONS.md, "Server layout".
 # onshape sits above joblane|fusion and identity above interpretation only because of existing

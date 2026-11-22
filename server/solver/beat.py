@@ -22,7 +22,7 @@ from typing import Any, Mapping, Sequence
 
 from .acoustics import BEAT_SOUND_SPEED_M_PER_S
 from server.contracts.conventions import PHASE_TIME_CONVENTION
-from server.jobs.models import ImportedGeometrySource, SolveRequest
+from server.solve_request import ImportedGeometrySource, SolveRequest
 
 from .base import (
     FIELD_TRACES_KEY,

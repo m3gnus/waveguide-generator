@@ -1,8 +1,8 @@
 """The observation arc a solve actually uses.
 
-Kept apart from ``server.solver.context`` and free of module-level imports from
-``server.jobs``: the job runtime imports these helpers while ``server.jobs`` is
-still initialising, and ``context`` imports ``server.jobs.models``.
+Kept apart from ``server.solver.context`` and free of module-level imports of the
+request schemas: the job runtime imports these helpers while ``server.jobs`` is
+still initialising, and ``context`` imports ``server.solve_request``.
 """
 
 from __future__ import annotations
@@ -10,7 +10,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from server.jobs.models import PolarConfig, SolveRequest
+    from server.contracts.observations import PolarConfig
+    from server.solve_request import SolveRequest
 
 # The arc every client sends when the user has not touched the directivity
 # settings: the model default and the browser's ATH default agree on it.
@@ -58,7 +59,7 @@ def polar_config_for(polar: "PolarConfig", *, sim_type: int) -> dict[str, Any]:
 def effective_polar_config(request: "SolveRequest") -> dict[str, Any]:
     """The polar config a request will actually observe (see ``polar_config_for``)."""
 
-    from server.jobs.models import ImportedGeometrySource
+    from server.solve_request import ImportedGeometrySource
 
     polar = request.options.polar_config
     if isinstance(request.geometry, ImportedGeometrySource):
@@ -70,6 +71,6 @@ def effective_polar_config(request: "SolveRequest") -> dict[str, Any]:
 def effective_polar_grid(request: "SolveRequest") -> dict[str, Any]:
     """The polar grid a request will actually observe, as ``resolved_grid`` states it."""
 
-    from server.jobs.models import PolarConfig
+    from server.contracts.observations import PolarConfig
 
     return PolarConfig.model_validate(effective_polar_config(request)).resolved_grid()

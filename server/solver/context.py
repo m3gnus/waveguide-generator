@@ -14,7 +14,8 @@ from typing import Any
 from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig, Expr
 from server.design.source_motion import source_motion
-from server.jobs.models import ImportedGeometrySource, PolarConfig, SolveRequest
+from server.contracts.observations import PolarConfig
+from server.solve_request import ImportedGeometrySource, SolveRequest
 
 from .ground_plane import GroundPlane
 from .polar_arc import polar_config_for

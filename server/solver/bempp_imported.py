@@ -35,7 +35,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from server.contracts.conventions import PHASE_TIME_CONVENTION
-from server.jobs.models import ImportedGeometrySource, SolveRequest
+from server.solve_request import ImportedGeometrySource, SolveRequest
 from server.platform.temp_session import spawned_directory_root
 
 from . import bempp

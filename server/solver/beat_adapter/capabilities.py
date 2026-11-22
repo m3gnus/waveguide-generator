@@ -7,7 +7,7 @@ import inspect
 from typing import Any
 
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
-from server.jobs.models import DriveChannel
+from server.solve_request import DriveChannel
 from server.solver.beat_runtime.paths import PROVIDER_ID
 from server.solver.context import SolverContext
 from server.solver.ground_plane import GroundPlane

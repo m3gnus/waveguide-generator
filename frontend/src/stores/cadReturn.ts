@@ -1278,7 +1278,7 @@ export function passiveCardioidBlocker(
  * offering the section on a model with no port can only ever produce a
  * refusal. Hence the section, and the wire keys, are gated on this.
  *
- * Match passive_cardioid_apertures in server/jobs/models.py: canonical roles
+ * Match passive_cardioid_apertures in server/solve_request.py: canonical roles
  * first (including the PORT_EXIT role alias), then exact legacy source names.
  */
 export function hasPassiveCardioidSurface(

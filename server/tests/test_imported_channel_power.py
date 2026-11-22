@@ -32,7 +32,8 @@ import pytest
 
 from hornlab_metal_bem.bie import integrate_driven_surface_power
 from hornlab_metal_bem.observation import integrate_sphere_radiated_power
-from server.jobs.models import DesignConfig, SolveRequest
+from server.design.schema import DesignConfig
+from server.solve_request import SolveRequest
 from server.solver.context import SolverContext
 from server.solver.driver_lem import channel_drive_scaling
 from server.solver.imported_channels import apply_channel_driver, normalize_prescribed_result

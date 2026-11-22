@@ -14,7 +14,7 @@ from server.contracts.canonical import canonical_utf8_strict_bytes as _canonical
 from server.platform.paths import app_root
 
 if TYPE_CHECKING:
-    from server.jobs.models import SolveRequest
+    from server.solve_request import SolveRequest
 
 from .contracts import PROVENANCE_CONTRACT_VERSION
 from .installed import measure_installed_stack
