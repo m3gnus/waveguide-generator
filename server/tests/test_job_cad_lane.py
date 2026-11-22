@@ -188,6 +188,10 @@ def test_the_lane_uses_no_attempt_generation_and_writes_nothing_of_the_operation
         "record_snapshot", "record_legacy_outcome",
     ):
         monkeypatch.setattr(CadLinkStore, name, forbidden(name))
+    # Retired writers (now test-only, in cad_legacy_rows): fail if one comes back
+    # on the store and the lane calls it.
+    for name in ("advance_operation", "bind_request", "add_approvals", "record_preparation"):
+        monkeypatch.setattr(CadLinkStore, name, forbidden(name), raising=False)
 
     job_id = _accept_direct(h, setup_revision_id=revision)
     _settle(h)

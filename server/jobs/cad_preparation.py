@@ -9,7 +9,7 @@ accepts a solve by creating a job in status ``preparing`` that holds a typed
     retain -> setup -> ingest (mesh) -> frame and domain -> findings -> compose
 
 Only the bookkeeping differs. Nothing here reads or writes an attempt
-generation, ``stage`` or ``bind_request`` of a ``cad_operations`` row:
+generation, ``stage`` or the bound request of a ``cad_operations`` row:
 
 - every write of progress is a compare-and-set on the job's own row
   (``JobStore.advance_preparing_job`` and its siblings), so the lane is fenced
