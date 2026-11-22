@@ -34,33 +34,48 @@ each result and mesh file the archive wrote where it landed (`artifacts.files`, 
 `archive/<name>` for one that moved, beside the mesh and impedance entries; `run.json`
 itself and the run's CAD document are not listed). Because `run.json` is also written
 with `confirm`, re-archiving a run whose `run.json` an older version wrote places the
-new record at `archive/run.json` and leaves the older one in place.
+new record at `archive/run.json` and leaves the older one in place. A release after
+`finish`, or by any token that no longer owns the lane, is an idempotent success.
 
-Files the server already holds do not travel through the browser. The archive reads
-`GET /api/jobs/{id}/archive-snapshot`: one store transaction's snapshot, with the
-mesh, pressure bases and radiation matrix kept on the server under a `hold` id and
-listed by name and byte count (`members=held` is the only form; the base64 form is
-retired). Its first `write-export` request carries every held
-member, after the files built in the browser, by `member_source`
-(`{"hold": …, "member": …}`, one entry per `relative_path`; `"upload"` takes the next
-file part), so the server writes the very bytes the snapshot copied, all of them or
-none. The archive then releases the hold (`DELETE /api/jobs/{id}/archive-holds/{hold}`);
-an unreleased hold expires on a timer after 30 minutes, the oldest go first beyond 16
-holds or 1 GiB, and one snapshot over 1 GiB is refused (422). A write naming a hold
-that is gone writes nothing and answers `409`, `code: "server_member_unavailable"`; the
-archive then takes a fresh snapshot and tries once more, and after a second loss it
-fails like any archive and is tried again automatically. The automatic mesh save
-names the run's retained mesh (`{"member": "mesh"}`) the same way, and downloads and
-sends a mesh only when the server no longer holds one (an empty stored mesh counts as
-none), as when it must rebuild it. Server members are resolved before the run's folder
-is claimed, so a refusal leaves no trace.
+### Files the server already holds
 
-`write-export` takes only `multipart/form-data`; the JSON/base64 request form is
-retired and answers `415`. The 256 MB cap per request applies to the bytes actually
-uploaded. Members the server copies from its own data (`member_source`) are not
-uploaded and do not count, so an archive's held members, bounded by the 1 GiB hold
-limit, always go in its one request. A release after `finish`, or by any token that no
-longer owns the lane, is an idempotent success.
+The mesh, the pressure bases and the radiation matrix do not travel through the
+browser.
+
+1. The archive reads `GET /api/jobs/{id}/archive-snapshot`. One store transaction
+   copies the run's inputs; the server keeps those three kinds of file under a `hold`
+   id and the reply lists them by name and byte count.
+2. Its first `write-export` request names every held member, after the files built in
+   the browser, with `member_source`: one entry per `relative_path`, either `"upload"`
+   (the next file part) or `{"hold": …, "member": …}`. The server writes the very bytes
+   the snapshot copied, all of them or none.
+3. The archive then releases the hold (`DELETE /api/jobs/{id}/archive-holds/{hold}`).
+
+Limits and failures:
+
+- An unreleased hold expires on a timer after 30 minutes; beyond 16 holds or 1 GiB the
+  oldest go first, and one snapshot over 1 GiB is refused (422).
+- One request may name each held member, and the stored mesh, only once, and copy at
+  most 1 GiB of held files (422 otherwise).
+- A write naming a hold that is gone writes nothing and answers `409`,
+  `code: "server_member_unavailable"`. The archive takes a fresh snapshot and tries once
+  more; after a second loss it fails like any archive and is tried again automatically.
+- Server members are resolved before the run's folder is claimed, so a refusal leaves
+  no trace.
+
+The automatic mesh save names the run's retained mesh (`{"member": "mesh"}`) the same
+way. It downloads and sends a mesh only when the server no longer holds one (an empty
+stored mesh counts as none), as when it must rebuild it.
+
+### Request forms
+
+`write-export` takes only `multipart/form-data`. The 256 MB cap per request applies to
+the bytes actually uploaded; held members are not uploaded and do not count, so an
+archive's held members always go in its one request.
+
+Retired: the JSON/base64 `write-export` body (answers `415`) and the base64 `inline`
+archive snapshot (`members=inline` answers `422`, asking an outdated window to reload
+or update WG). `members=held` is the default and only form.
 
 Capability requests have a ten-second client timeout. Pending qualification, refresh
 failure and an interrupted backend connection have distinct notices. The server's

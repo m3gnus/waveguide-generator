@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Inventory measured Waveguide Generator archive and retention payload sizes.
 
+Historical: ``snapshot_*`` figures model the base64 ``inline`` archive snapshot,
+retired in November 2026 (see ``docs/validation/2026-08/ARTIFACT-SIZES.md``).
+
 This script intentionally reports observations, not policy.  It reads existing
 Workspace run directories and/or job databases without changing them.  Run it
 from the repository root with the project's Python environment when database

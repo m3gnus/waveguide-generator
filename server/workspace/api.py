@@ -220,8 +220,19 @@ def _resolve_server_members(
     so a refusal leaves no trace.
     """
 
-    from server.workspace.archive_holds import HoldUnavailable
+    from server.workspace.archive_holds import MAX_HELD_BYTES, HoldUnavailable
 
+    # Each held file, and the stored mesh, is written at most once per request,
+    # and what the server copies is bounded by the hold limit: a request that
+    # named one member many times could otherwise fill the disk.
+    named = [(content.hold, content.member) for _path, content in members if isinstance(content, ServerMember)]
+    repeated = sorted({member for (hold, member) in named if named.count((hold, member)) > 1})
+    if repeated:
+        raise ValueError(
+            f"Each server-held file can be written once per request; {', '.join(repeated)} "
+            "is named more than once."
+        )
+    resolved_bytes = 0
     resolved: list[tuple[str, bytes]] = []
     for relative_path, content in members:
         if isinstance(content, ServerMember):
@@ -245,6 +256,12 @@ def _resolve_server_members(
                     raise ValueError(
                         f"The archive snapshot holds no member {content.member!r}."
                     ) from exc
+            resolved_bytes += len(content)
+            if resolved_bytes > MAX_HELD_BYTES:
+                raise ValueError(
+                    f"The server-held files in this request exceed the {MAX_HELD_BYTES}-byte limit. "
+                    "Write them in separate requests."
+                )
         resolved.append((relative_path, content))
     return resolved
 

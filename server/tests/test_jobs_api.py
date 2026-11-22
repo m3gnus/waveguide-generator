@@ -192,7 +192,7 @@ def test_large_archive_snapshot_serialization_keeps_event_loop_responsive() -> N
         ticker_task = asyncio.create_task(ticker())
         await asyncio.sleep(0)
         try:
-            response = await route.endpoint("large")
+            response = await route.endpoint("large", members="held")
             body = b"".join([chunk async for chunk in response.body_iterator])
         finally:
             jobs_api._json_chunks = original_json_chunks

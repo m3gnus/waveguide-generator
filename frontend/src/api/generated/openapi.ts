@@ -10313,8 +10313,8 @@ export interface operations {
     job_archive_snapshot_api_jobs__job_id__archive_snapshot_get: {
         parameters: {
             query?: {
-                /** @description The mesh, pressure bases and radiation matrix stay on the server under `hold`, for POST /api/workspace/write-export to write by reference. `held` is the only form; the base64 form is retired. */
-                members?: "held";
+                /** @description The mesh, pressure bases and radiation matrix stay on the server under `hold`, for POST /api/workspace/write-export to write by reference. `held` (the default) is the only form; the base64 `inline` form is retired. */
+                members?: string;
             };
             header?: never;
             path: {

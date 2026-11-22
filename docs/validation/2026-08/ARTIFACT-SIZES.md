@@ -1,5 +1,7 @@
 # Result and archive size measurements
 
+> Historical record. The base64 `inline` archive snapshot it measures was retired in November 2026; archives now use the held snapshot (see `docs/reference/AUTOMATIC-EXPORT.md`).
+
 Date: 2026-08-20  
 Code baseline: `c8411ddc`  
 Host: Apple Silicon macOS

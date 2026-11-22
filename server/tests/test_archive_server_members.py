@@ -46,6 +46,44 @@ def _snapshot_fixture():
     }, motions
 
 
+def _npz_digest(content: bytes) -> str:
+    """sha256 over each array's name, dtype, shape and bytes, independent of zlib."""
+
+    import io
+
+    import numpy as np
+
+    digest = hashlib.sha256()
+    with np.load(io.BytesIO(content), allow_pickle=False) as archive:
+        for name in sorted(archive.files):
+            array = np.ascontiguousarray(archive[name])
+            digest.update(f"{name}|{array.dtype.str}|{array.shape}|".encode())
+            digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def test_held_members_match_digests_frozen_from_the_retired_inline_form(monkeypatch):
+    """Not circular: ``fixtures/archive-inline-member-digests.json`` was produced
+    at WG dev 96e8e33c7 by the retired ``_archive_snapshot_presentation`` on this
+    same fixture, base64-decoding each member it sent. The npz members are
+    compared by their arrays, so a platform's zlib cannot move the digest."""
+
+    from server.jobs.runtime import core
+
+    frozen = json.loads((Path(__file__).parent / "fixtures" / "archive-inline-member-digests.json").read_text())
+    snapshot, motions = _snapshot_fixture()
+    monkeypatch.setattr(core, "_request_motions", lambda _job: motions)
+    holds = ArchiveSnapshotHolds()
+    held = core._held_archive_snapshot_presentation("run", snapshot, holds)
+    members = [held["mesh_artifact"]["member"], *(base["member"] for base in held["pressure_bases"]),
+               held["radiation_impedance"]["member"]]
+    assert sorted(members) == sorted(frozen)
+    for member in members:
+        content = holds.lookup(held["hold"], "run", member)
+        digest = hashlib.sha256(content).hexdigest() if member == "mesh" else _npz_digest(content)
+        assert digest == frozen[member], member
+
+
 def test_held_snapshot_holds_exactly_the_bytes_the_inline_form_carried(monkeypatch):
     from server.jobs.radiation_impedance import radiation_impedance_presentation
     from server.jobs.runtime import core
@@ -413,8 +451,58 @@ def test_the_retired_inline_snapshot_form_is_refused(tmp_path, monkeypatch):
     async def scenario(client, job_id, workspace, job):
         refused = await client.get(f"/api/jobs/{job_id}/archive-snapshot", params={"members": "inline"})
         assert refused.status_code == 422
+        assert refused.json()["detail"] == (
+            "This WG window is older than its server and asked for a retired archive form. "
+            "Reload or reopen WG, or update it, then archive again."
+        )
         default = await client.get(f"/api/jobs/{job_id}/archive-snapshot")
         assert default.status_code == 200 and "hold" in default.json()
+
+    _with_archived_run(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.parametrize("named", ["held", "mesh"])
+def test_a_server_member_named_100_times_is_refused_without_writing(tmp_path, monkeypatch, named):
+    async def scenario(client, job_id, workspace, job):
+        run_folder = f"{job['archive_folder']}/{job['archive_run']}"
+        hold = (await client.get(f"/api/jobs/{job_id}/archive-snapshot")).json()["hold"]
+        source = {"hold": hold, "member": "radiation_impedance"} if named == "held" else {"member": "mesh"}
+        response = await _write(client, {
+            "subdirectory": run_folder, "existing": "merge_identical", "job_id": job_id,
+            "relative_path": [f"copy-{index}.bin" for index in range(100)],
+            "member_source": [json.dumps(source)] * 100,
+        })
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            f"Each server-held file can be written once per request; {source['member']} "
+            "is named more than once."
+        )
+        assert _tree(workspace) == {}
+        row = client.app.state.jobs_runtime.store.get_job_row(job_id)
+        assert "archived_path" not in (row.get("task_metadata") or {})
+
+    _with_archived_run(tmp_path, monkeypatch, scenario)
+
+
+def test_held_files_past_the_hold_limit_in_one_request_are_refused(tmp_path, monkeypatch):
+    async def scenario(client, job_id, workspace, job):
+        from server.workspace import archive_holds
+
+        run_folder = f"{job['archive_folder']}/{job['archive_run']}"
+        first = (await client.get(f"/api/jobs/{job_id}/archive-snapshot")).json()
+        second = (await client.get(f"/api/jobs/{job_id}/archive-snapshot")).json()
+        size = first["radiation_impedance"]["bytes"]
+        # Two holds' copies of one file: each fits the limit, together they do not.
+        monkeypatch.setattr(archive_holds, "MAX_HELD_BYTES", size * 2 - 1)
+        response = await _write(client, {
+            "subdirectory": run_folder, "existing": "merge_identical", "job_id": job_id,
+            "relative_path": ["one.npz", "two.npz"],
+            "member_source": [json.dumps({"hold": snapshot["hold"], "member": "radiation_impedance"})
+                              for snapshot in (first, second)],
+        })
+        assert response.status_code == 422
+        assert "exceed the" in response.json()["detail"] and "separate requests" in response.json()["detail"]
+        assert _tree(workspace) == {}
 
     _with_archived_run(tmp_path, monkeypatch, scenario)
 

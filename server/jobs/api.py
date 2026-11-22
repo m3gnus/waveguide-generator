@@ -735,18 +735,27 @@ def create_jobs_router(
     @router.get("/api/jobs/{job_id}/archive-snapshot", response_model=None)
     async def job_archive_snapshot(
         job_id: str,
-        members: Literal["held"] = Query(
+        members: str = Query(
             default="held",
             description=(
                 "The mesh, pressure bases and radiation matrix stay on the server "
                 "under `hold`, for POST /api/workspace/write-export to write by "
-                "reference. `held` is the only form; the base64 form is retired."
+                "reference. `held` (the default) is the only form; the base64 "
+                "`inline` form is retired."
             ),
         ),
     ) -> Response:
         """Return one retention-consistent set of permanent-archive inputs."""
 
-        del members  # Accepted so existing callers' `?members=held` still validates.
+        if members != "held":
+            # Only a page from an older WG still asks for the base64 form.
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "This WG window is older than its server and asked for a retired archive "
+                    "form. Reload or reopen WG, or update it, then archive again."
+                ),
+            )
         try:
             snapshot = await runtime.get_archive_snapshot(job_id)
         except HoldTooLarge as exc:

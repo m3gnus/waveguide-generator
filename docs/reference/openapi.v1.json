@@ -19329,14 +19329,13 @@
             }
           },
           {
-            "description": "The mesh, pressure bases and radiation matrix stay on the server under `hold`, for POST /api/workspace/write-export to write by reference. `held` is the only form; the base64 form is retired.",
+            "description": "The mesh, pressure bases and radiation matrix stay on the server under `hold`, for POST /api/workspace/write-export to write by reference. `held` (the default) is the only form; the base64 `inline` form is retired.",
             "in": "query",
             "name": "members",
             "required": false,
             "schema": {
-              "const": "held",
               "default": "held",
-              "description": "The mesh, pressure bases and radiation matrix stay on the server under `hold`, for POST /api/workspace/write-export to write by reference. `held` is the only form; the base64 form is retired.",
+              "description": "The mesh, pressure bases and radiation matrix stay on the server under `hold`, for POST /api/workspace/write-export to write by reference. `held` (the default) is the only form; the base64 `inline` form is retired.",
               "title": "Members",
               "type": "string"
             }
