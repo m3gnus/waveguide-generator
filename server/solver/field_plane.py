@@ -17,14 +17,13 @@ import struct
 import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
 
 from server.contracts.canonical import canonical_ascii_strict_json
 from server.contracts.observations import FieldPlaneRequest, FieldPlaneSpec
-from server.jobs.store import JobStore
 from server.mesh.artifact import mesh_text_sha256
 from server.platform.temp_session import temporary_directory_root
 
@@ -259,12 +258,24 @@ def encode_field_plane_response(
     return struct.pack("<I", len(header_bytes)) + header_bytes + pairs.tobytes(order="C")
 
 
+class FieldPlaneStore(Protocol):
+    """The job store reads field-plane evaluation needs (``server.jobs.store.JobStore``)."""
+
+    def get_job_row(self, job_id: str) -> dict[str, Any] | None: ...
+
+    def get_results(self, job_id: str) -> dict[str, Any] | None: ...
+
+    def load_field_traces(
+        self, job_id: str, frequency_index: int, channel_id: str
+    ) -> tuple[Any, ...]: ...
+
+
 class FieldPlaneService:
     """Load retained traces, synthesize a response, and evaluate one plane."""
 
     def __init__(
         self,
-        store: JobStore,
+        store: FieldPlaneStore,
         permit: MetalPermit,
         *,
         solve_queued: Callable[[], bool] | None = None,

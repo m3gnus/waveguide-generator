@@ -47,9 +47,6 @@ ignore_imports =
     # solver -> engines: existing upward dependency.
     # Legacy use: full3d_engine_order.
     server.solver.warmup -> server.engines.registry
-    # solver -> jobs: existing upward dependency.
-    # Legacy use: JobStore.
-    server.solver.field_plane -> server.jobs.store
 
 # CAD Link lanes (S7-1). Highest to lowest; docs/architecture/CAD-OPERATIONS.md, "Server layout".
 # onshape sits above joblane|fusion and identity above interpretation only because of existing
