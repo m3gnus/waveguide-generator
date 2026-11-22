@@ -2,7 +2,7 @@ import { importedSimulationSetup, useImportedSimulationSetup } from '../stores/i
 import { EmptyState } from '../shell/EmptyState';
 import { prefillExteriorDriver } from '../stores/exteriorTransducer';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { useSettled } from './useSettled';
+import { useFlushableSettled } from './useSettled';
 
 import {
   getDriver,
@@ -371,10 +371,15 @@ function DriverSearch({ channel, roleHint, counts, onPick, displayName }: {
 
   // One library search per pause in typing, not per keystroke: each search
   // also re-checks the library folder on the server.
-  const settledQuery = useSettled(query, DRIVER_SEARCH_DEBOUNCE_MS);
+  const [settledQuery, flushQuery] = useFlushableSettled(query, DRIVER_SEARCH_DEBOUNCE_MS);
+  // The search the shown hits answer, so Enter never picks a hit for text
+  // the user has already typed past.
+  const [answered, setAnswered] = useState<{ q: string; kind: DriverSearchKind } | null>(null);
+  const [pickOnAnswer, setPickOnAnswer] = useState(false);
   useEffect(() => {
     if (!open) return;
     const request = ++generation.current;
+    const asked = { q: settledQuery, kind };
     void searchDrivers({ q: settledQuery, kind, limit: 40 }).then(
       (result) => {
         if (request !== generation.current) return;
@@ -382,6 +387,7 @@ function DriverSearch({ channel, roleHint, counts, onPick, displayName }: {
         setHiddenIncomplete(result.hiddenIncomplete);
         setMatchesByKind(result.matchesByKind);
         setError(null);
+        setAnswered(asked);
       },
       (reason: unknown) => {
         if (request !== generation.current) return;
@@ -389,6 +395,7 @@ function DriverSearch({ channel, roleHint, counts, onPick, displayName }: {
         setHiddenIncomplete(0);
         setMatchesByKind({});
         setError(failureWords(reason));
+        setAnswered(asked);
       },
     );
     return () => { generation.current += 1; };
@@ -428,7 +435,8 @@ function DriverSearch({ channel, roleHint, counts, onPick, displayName }: {
       <ManualResultRow key="manual" query={query} active={active} id={id} onPick={pick} onHover={onHover}/>,
   }], [kind, matches, preferredKind, query]);
 
-  useEffect(() => setActiveIndex(0), [query, kind]);
+  useEffect(() => { setActiveIndex(0); setPickOnAnswer(false); }, [query, kind]);
+  const current = answered !== null && answered.q === query && answered.kind === kind;
 
   const pick = (candidate: Candidate | undefined) => {
     if (!candidate) return;
@@ -436,6 +444,12 @@ function DriverSearch({ channel, roleHint, counts, onPick, displayName }: {
     setQuery('');
     onPick(candidate.preset(), { edit: candidate.manual === true });
   };
+  useEffect(() => {
+    if (!pickOnAnswer || !current) return;
+    setPickOnAnswer(false);
+    pick(candidates[activeIndex]);
+  });
+
 
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === 'Escape') {
@@ -453,7 +467,11 @@ function DriverSearch({ channel, roleHint, counts, onPick, displayName }: {
       setActiveIndex((index) => (candidates.length ? (index - 1 + candidates.length) % candidates.length : 0));
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      pick(candidates[activeIndex]);
+      if (current) { pick(candidates[activeIndex]); return; }
+      // Typed faster than the search: ask for this text now, and pick from its answer.
+      setOpen(true);
+      flushQuery();
+      setPickOnAnswer(true);
     }
   };
 

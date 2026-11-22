@@ -79,6 +79,33 @@ describe('a design assembly in the shared Drivers section', () => {
     expect(vi.mocked(searchDrivers).mock.calls.map(([request]) => request?.q)).toEqual(['sb15']);
   });
 
+  it('picks the hit for the typed text when Enter beats the search pause', async () => {
+    const { searchDrivers } = await import('../api/drivers');
+    // Each search answers one hit named after its query.
+    vi.mocked(searchDrivers).mockImplementation(async (query) => { const q = query?.q ?? ''; return {
+      items: [{
+        id: `lib::${q}`, brand: 'Lib', model: q || 'any', z_ohm: 8, variants: [], kind: 'lf' as const, size: null,
+        completeness: 'full' as const,
+        spec: { sd_cm2: 220, bl_t_m: 9, re_ohm: q === 'sb15' ? 5.6 : 3.3, le_mh: 0.9, mmd_g: 30, cms_m_per_n: 0.0008, rms_kg_per_s: 1.2 },
+        display: {}, xo_min_hz: null, source: { file: 'woofers.csv' },
+      }],
+      hiddenIncomplete: 0, matchesByKind: { lf: 1 },
+    } as unknown as Awaited<ReturnType<typeof searchDrivers>>; });
+    act(() => solveDriver().click());
+    const search = host.querySelector<HTMLInputElement>('[role="combobox"][aria-label="Find driver for Woofer 1"]')!;
+    await act(async () => { search.focus(); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 200)); });
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    await act(async () => { setValue.call(search, 'sb1'); search.dispatchEvent(new Event('input', { bubbles: true })); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 200)); });
+    // 'sb1' answered; now type on and press Enter inside the pause.
+    await act(async () => { setValue.call(search, 'sb15'); search.dispatchEvent(new Event('input', { bubbles: true })); });
+    await act(async () => { search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(vi.mocked(searchDrivers).mock.calls.at(-1)?.[0]?.q).toBe('sb15');
+    expect(drivers()?.[woofer].exterior_transducer).toMatchObject({ re_ohm: 5.6 });
+  });
+
   it('lists the horn and each woofer by name before any build, with the build\'s fixed motion', () => {
     expect(host.querySelector('[data-channel-id="horn-throat"]')?.textContent).toContain('The horn\'s source moves at 1 m/s RMS');
     expect(section().textContent).toContain('Woofer 1');
