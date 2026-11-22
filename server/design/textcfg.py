@@ -49,7 +49,7 @@ from .schema import (
 )
 
 if TYPE_CHECKING:
-    from server.cadlink.identity import CadLink
+    from .cad_link import CadLink
 
 
 logger = logging.getLogger(__name__)
@@ -1762,7 +1762,7 @@ def _parse(text: str, *, migrate: bool = True, import_payload: PayloadImporter =
                     f"unsupported design format {version}; "
                     f"this application supports up to {_DESIGN_FORMAT}"
                 )
-    from server.cadlink.identity import CadLink
+    from .cad_link import CadLink
 
     cadlink: CadLink | None = None
     if raw_cadlink := blocks.get("CadLink"):
