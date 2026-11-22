@@ -645,7 +645,8 @@ def test_route_confirmation_write_lock_events_and_startup_order(tmp_path):
     import asyncio
     from fastapi import HTTPException
     from server.workspace.run_moves_api import create_run_moves_router, PreviewRunMove, ConfirmRunMove
-    from server.workspace.api import create_workspace_router, WorkspaceState, WriteExportRequest
+    from server.workspace.api import create_workspace_router, WorkspaceState
+    from server.tests._write_export import write_export_request
     from server.tests.test_cadlink_projects import app_with_runs
     manager, root, jobs, _ = setup(tmp_path)
     job_id, source = run(manager, root, key=KEY)
@@ -662,9 +663,9 @@ def test_route_confirmation_write_lock_events_and_startup_order(tmp_path):
     write = next(route.endpoint for route in create_workspace_router(state).routes if route.path.endswith('/write-export'))
     manager._block(plan)
     with pytest.raises(HTTPException) as locked:
-        asyncio.run(write(WriteExportRequest(subdirectory=f"{source.parent.name}/{source.name}", members=[{"relative_path":"one.csv", "text":"x"}])))
+        asyncio.run(write(write_export_request(subdirectory=f"{source.parent.name}/{source.name}", members=[{"relative_path":"one.csv", "text":"x"}])))
     assert locked.value.status_code == 409 and locked.value.detail == "WG is already moving runs. Wait for it to finish."
-    asyncio.run(write(WriteExportRequest(subdirectory="any/run", members=[{"relative_path":"one.csv", "text":"x"}])))
+    asyncio.run(write(write_export_request(subdirectory="any/run", members=[{"relative_path":"one.csv", "text":"x"}])))
     assert (root / "any/run/one.csv").read_text() == "x"
     result = asyncio.run(endpoint('/{move_id}/execute')(plan["id"], ConfirmRunMove(confirmed=True)))
     assert result["phase"] == "done"

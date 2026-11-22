@@ -12,6 +12,8 @@ from typing import Any
 import pytest
 
 from server.jobs.runtime.core import JobResourceUnavailableError, JobRuntime
+from server.tests._write_export import write_export_request
+from server.workspace.archive_holds import ArchiveSnapshotHolds
 
 
 def _runtime(snapshot: dict[str, Any] | None = None) -> Any:
@@ -25,6 +27,7 @@ def _runtime(snapshot: dict[str, Any] | None = None) -> Any:
         start=start,
         get_radiation_impedance=artifact,
         store=SimpleNamespace(get_archive_snapshot=lambda _job_id: snapshot),
+        archive_holds=ArchiveSnapshotHolds(),
     )
 
 
@@ -91,7 +94,7 @@ def test_the_logs_folder_failure_is_logged(tmp_path: Path, caplog: pytest.LogCap
 def test_an_unreadable_export_file_is_logged(tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import HTTPException
 
-    from server.tests.test_workspace_write_export import call, request, selected_state, workspace_api
+    from server.tests.test_workspace_write_export import call, request, selected_state
 
     state, workspace = selected_state(tmp_path)
     call(state, request("Horn_A", [("Horn_A.csv", "frequency,level\n100,90\n")]))
@@ -104,8 +107,8 @@ def test_an_unreadable_export_file_is_logged(tmp_path: Path, caplog: pytest.LogC
         return real_open(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", refuse)
-    payload = workspace_api.WriteExportRequest(subdirectory="Horn_A", existing="merge_identical",
-                                               members=[{"relative_path": "Horn_A.csv", "text": "frequency,level\n100,90\n"}])
+    payload = write_export_request(subdirectory="Horn_A", existing="merge_identical",
+                                   members=[{"relative_path": "Horn_A.csv", "text": "frequency,level\n100,90\n"}])
     with caplog.at_level(logging.WARNING), pytest.raises(HTTPException) as caught:
         call(state, payload)
     assert "Access refused by the test" not in str(caught.value.detail)

@@ -19329,17 +19329,14 @@
             }
           },
           {
-            "description": "inline: the mesh, pressure bases and radiation matrix in the response (base64). held: the server keeps them under `hold`, for POST /api/workspace/write-export to write by reference.",
+            "description": "The mesh, pressure bases and radiation matrix stay on the server under `hold`, for POST /api/workspace/write-export to write by reference. `held` is the only form; the base64 form is retired.",
             "in": "query",
             "name": "members",
             "required": false,
             "schema": {
-              "default": "inline",
-              "description": "inline: the mesh, pressure bases and radiation matrix in the response (base64). held: the server keeps them under `hold`, for POST /api/workspace/write-export to write by reference.",
-              "enum": [
-                "inline",
-                "held"
-              ],
+              "const": "held",
+              "default": "held",
+              "description": "The mesh, pressure bases and radiation matrix stay on the server under `hold`, for POST /api/workspace/write-export to write by reference. `held` is the only form; the base64 form is retired.",
               "title": "Members",
               "type": "string"
             }
@@ -22995,106 +22992,6 @@
         "operationId": "workspace_write_export_api_workspace_write_export_post",
         "requestBody": {
           "content": {
-            "application/json": {
-              "schema": {
-                "$defs": {
-                  "ExportMember": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "content_base64": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ],
-                        "title": "Content Base64"
-                      },
-                      "relative_path": {
-                        "minLength": 1,
-                        "title": "Relative Path",
-                        "type": "string"
-                      },
-                      "text": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ],
-                        "title": "Text"
-                      }
-                    },
-                    "required": [
-                      "relative_path"
-                    ],
-                    "title": "ExportMember",
-                    "type": "object"
-                  }
-                },
-                "additionalProperties": false,
-                "properties": {
-                  "destination": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "title": "Destination"
-                  },
-                  "existing": {
-                    "default": "reject",
-                    "enum": [
-                      "reject",
-                      "merge_identical",
-                      "overwrite",
-                      "confirm"
-                    ],
-                    "title": "Existing",
-                    "type": "string"
-                  },
-                  "job_id": {
-                    "anyOf": [
-                      {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "title": "Job Id"
-                  },
-                  "members": {
-                    "items": {
-                      "$ref": "#/$defs/ExportMember"
-                    },
-                    "maxItems": 100,
-                    "minItems": 1,
-                    "title": "Members",
-                    "type": "array"
-                  },
-                  "subdirectory": {
-                    "default": "",
-                    "title": "Subdirectory",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "members"
-                ],
-                "title": "WriteExportRequest",
-                "type": "object"
-              }
-            },
             "multipart/form-data": {
               "schema": {
                 "properties": {

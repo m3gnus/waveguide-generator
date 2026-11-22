@@ -8,7 +8,6 @@ import { samplingComments, samplingProvenance } from './sampling';
 import { buildGeometryExport, downloadBlob, downloadText, type GeometryExportFile } from '../api/designIo';
 import { ExportCollisionError, type ConfirmReplacements } from '../api/exportDestination';
 import {
-  WRITE_EXPORT_MAX_BYTES,
   writeToOutputFolder,
   type ExistingFilePolicy,
   type OutputFolderWrite,
@@ -1250,34 +1249,22 @@ async function writeArchiveFromSnapshot(
       replay = { filename: null, reason: error.message };
     }
   }
-  // The mesh joins the bundle's write when both fit in one request: then a
-  // lost held copy writes nothing at all. A bundle and mesh too big for one
-  // request take two, each with its own byte budget, as they always did; a
-  // copy lost before the second leaves the bundle, which the fresh snapshot's
-  // attempt finds byte-identical (`confirm` skips it) and completes.
-  const meshMember: WorkspaceFile[] = snapshot.mesh_artifact ? [{
-    filename: `${exportStemForJob(archiveJob)}.msh`,
-    server: held(snapshot.mesh_artifact.member),
-  }] : [];
-  const heldBytes = new Map<string, number>([
-    ...snapshot.pressure_bases.map(({ member, bytes }) => [member, bytes] as const),
-    ...(radiationImpedance ? [[radiationImpedance.member, radiationImpedance.bytes] as const] : []),
-  ]);
-  const bundleBytes = [...prepared.values()].reduce((total, { blob, server }) => (
-    total + (blob ? blob.size : heldBytes.get(server.member) ?? 0)
-  ), 0);
-  const together = bundleBytes + (snapshot.mesh_artifact?.bytes ?? 0) <= WRITE_EXPORT_MAX_BYTES;
-  const writes: WorkspaceFile[][] = together
-    ? [[...prepared.values(), ...meshMember]]
-    : [[...prepared.values()], meshMember];
-  const results: ArchiveWrite[] = [];
-  for (const members of writes) {
-    results.push(members.length
-      ? await writeArchiveMembers(subdirectory, members, fetcher, job.id)
-      : { files: [], moved: new Map<string, string>() });
-  }
+  // Every member the server holds goes in this one write, after the files
+  // built here: it writes all of them or, when a held copy is gone, nothing.
+  // Held members are not uploaded, so only the files built here count toward
+  // the per-request upload cap.
+  const members: WorkspaceFile[] = [
+    ...prepared.values(),
+    ...(snapshot.mesh_artifact ? [{
+      filename: `${exportStemForJob(archiveJob)}.msh`,
+      server: held(snapshot.mesh_artifact.member),
+    }] : []),
+  ];
+  const results = members.length
+    ? await writeArchiveMembers(subdirectory, members, fetcher, job.id)
+    : { files: [], moved: new Map<string, string>() };
   // The record names the artifacts it sits beside, wherever they landed.
-  const moved = new Map(results.flatMap((written) => [...written.moved]));
+  const moved = results.moved;
   const written = [
     ...[...prepared.values()].map(({ filename }) => filename),
     ...(snapshot.mesh_artifact ? [`${exportStemForJob(archiveJob)}.msh`] : []),
@@ -1297,5 +1284,5 @@ async function writeArchiveFromSnapshot(
     fetcher,
     job.id,
   );
-  return [...results.flatMap((written) => written.files), ...record.files];
+  return [...results.files, ...record.files];
 }

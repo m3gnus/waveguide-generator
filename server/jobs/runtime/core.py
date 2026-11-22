@@ -9,7 +9,6 @@ strong task references port v1 ``server/services/job_runtime.py:23-41,92-208,
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 from collections import deque
 from contextlib import asynccontextmanager
@@ -539,32 +538,6 @@ def _archive_snapshot_members(
     }
 
 
-def _archive_snapshot_presentation(
-    job_id: str, snapshot: Mapping[str, Any] | None
-) -> dict[str, Any]:
-    """Convert one copied retention-consistent snapshot on a worker thread."""
-
-    members = _archive_snapshot_members(job_id, snapshot)
-    radiation = members["radiation"]
-    return {
-        "schema_version": 1,
-        "results": members["results"],
-        "results_sha256": members["results_sha256"],
-        "mesh_artifact": members["mesh_text"],
-        "pressure_bases": [
-            {
-                "channel_id": channel_id,
-                "content_base64": base64.b64encode(content).decode("ascii"),
-            }
-            for channel_id, content in members["pressure_bases"]
-        ],
-        "radiation_impedance": None if radiation is None else {
-            "content_base64": base64.b64encode(radiation[0]).decode("ascii"),
-            "presentation": radiation[1],
-        },
-    }
-
-
 def _held_archive_snapshot_presentation(
     job_id: str, snapshot: Mapping[str, Any] | None, holds: ArchiveSnapshotHolds
 ) -> dict[str, Any]:
@@ -573,13 +546,13 @@ def _held_archive_snapshot_presentation(
     The browser receives what it builds files from (results, the radiation
     presentation) and, for each member it only writes, a name and a byte
     count. ``POST /api/workspace/write-export`` writes those members from the
-    hold: the same bytes the base64 form carries.
+    hold: the bytes this function's store read copied, unchanged.
     """
 
     members = _archive_snapshot_members(job_id, snapshot)
     radiation = members["radiation"]
     held: dict[str, bytes] = {}
-    # An empty stored mesh is no mesh, as the inline form's "" always read.
+    # An empty stored mesh is no mesh, as the archive has always treated it.
     mesh_text = members["mesh_text"] or None
     if mesh_text is not None:
         held[MESH_MEMBER] = mesh_text.encode("utf-8")
@@ -3226,17 +3199,8 @@ class JobRuntime:
         and public pressure-basis conversion happens afterwards from copied
         bytes, so retention is neither blocked by NumPy work nor able to make a
         multi-member archive observe a mixture of pre- and post-prune state.
-        """
-
-        await self.start()
-        snapshot = await asyncio.to_thread(self.store.get_archive_snapshot, job_id)
-        return await asyncio.to_thread(_archive_snapshot_presentation, job_id, snapshot)
-
-    async def get_held_archive_snapshot(self, job_id: str) -> dict[str, Any]:
-        """``get_archive_snapshot`` with the binary members held on the server.
-
-        Same store read and conversion; the mesh, pressure bases and radiation
-        matrix stay in ``archive_holds`` for write-export to copy by reference.
+        The mesh, pressure bases and radiation matrix stay in
+        ``archive_holds`` for write-export to copy by reference.
         """
 
         await self.start()

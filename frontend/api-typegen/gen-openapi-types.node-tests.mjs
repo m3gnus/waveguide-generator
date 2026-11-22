@@ -71,28 +71,3 @@ test('check detects a schema mutation and regeneration repairs the drift', async
   assert.match(await readFile(output, 'utf8'), /value: number;/);
   assert.equal(run('--check').status, 0);
 });
-
-test('embedded export-member definitions resolve without changing the input', async (t) => {
-  const { input, output, run, schema } = await fixture(t);
-  schema.paths['/api/workspace/write-export'] = { post: {
-    responses: { 200: { description: 'OK' } },
-    requestBody: { required: true, content: { 'application/json': { schema: {
-      type: 'object', required: ['members'],
-      $defs: { ExportMember: {
-        type: 'object', required: ['relative_path'],
-        properties: { relative_path: { type: 'string' }, text: { type: 'string' } },
-      } },
-      properties: { members: { type: 'array', items: { $ref: '#/$defs/ExportMember' } } },
-    } } } },
-  } };
-  const original = JSON.stringify(schema);
-  await writeFile(input, original);
-  const result = run('--write');
-  assert.equal(result.status, 0, result.stderr);
-  const rendered = await readFile(output, 'utf8');
-  assert.match(rendered, /relative_path: string;/);
-  assert.match(rendered, /text\?: string;/);
-  assert.doesNotMatch(rendered, /ExportMember/);
-  assert.equal(await readFile(input, 'utf8'), original);
-  assert.equal(run('--check').status, 0);
-});

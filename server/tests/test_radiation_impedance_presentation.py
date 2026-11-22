@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -140,10 +139,9 @@ def test_presentation_endpoint_reads_the_retained_artifact_and_404s_when_absent(
         assert response.in_phase_termination.aperture_names == ["PORT_L", "PORT_R"]
         snapshot = await runtime.get_archive_snapshot("cardioid")
         assert snapshot["radiation_impedance"]["presentation"]["units"] == "Pa*s/m^3"
-        assert (
-            base64.b64decode(snapshot["radiation_impedance"]["content_base64"])
-            == matrix
-        )
+        held = snapshot["radiation_impedance"]
+        assert held["bytes"] == len(matrix)
+        assert runtime.archive_holds.lookup(snapshot["hold"], "cardioid", held["member"]) == matrix
         with pytest.raises(HTTPException) as absent:
             await endpoint("ordinary")
         assert absent.value.status_code == 404

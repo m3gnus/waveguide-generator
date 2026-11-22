@@ -10313,8 +10313,8 @@ export interface operations {
     job_archive_snapshot_api_jobs__job_id__archive_snapshot_get: {
         parameters: {
             query?: {
-                /** @description inline: the mesh, pressure bases and radiation matrix in the response (base64). held: the server keeps them under `hold`, for POST /api/workspace/write-export to write by reference. */
-                members?: "inline" | "held";
+                /** @description The mesh, pressure bases and radiation matrix stay on the server under `hold`, for POST /api/workspace/write-export to write by reference. `held` is the only form; the base64 form is retired. */
+                members?: "held";
             };
             header?: never;
             path: {
@@ -13026,32 +13026,6 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /** Destination */
-                    destination?: string | null;
-                    /**
-                     * Existing
-                     * @default reject
-                     * @enum {string}
-                     */
-                    existing?: "reject" | "merge_identical" | "overwrite" | "confirm";
-                    /** Job Id */
-                    job_id?: string | null;
-                    /** Members */
-                    members: {
-                        /** Content Base64 */
-                        content_base64?: string | null;
-                        /** Relative Path */
-                        relative_path: string;
-                        /** Text */
-                        text?: string | null;
-                    }[];
-                    /**
-                     * Subdirectory
-                     * @default
-                     */
-                    subdirectory?: string;
-                };
                 "multipart/form-data": {
                     /** @description Handle from POST /api/workspace/export-destination. Absent writes into the workspace. */
                     destination?: string;

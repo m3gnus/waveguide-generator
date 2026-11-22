@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import io
 import os
@@ -15,13 +14,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
 from starlette.datastructures import FormData, UploadFile
 
 from server import app as app_module
 from server.platform import paths
 from server.workspace import api as workspace_api
 from server.tests._symlinks import requires_symlinks
+from server.tests._write_export import write_export_request
+from starlette.requests import Request
 
 
 def endpoint(state: workspace_api.WorkspaceState):
@@ -50,7 +50,7 @@ def select_endpoint(state: workspace_api.WorkspaceState):
 
 
 def request(subdirectory: str, members: list[tuple[str, str]]):
-    return workspace_api.WriteExportRequest(
+    return write_export_request(
         subdirectory=subdirectory,
         members=[{"relative_path": path, "text": text} for path, text in members],
     )
@@ -64,7 +64,7 @@ def selected_state(tmp_path: Path) -> tuple[workspace_api.WorkspaceState, Path]:
     return state, workspace.resolve()
 
 
-def call(state: workspace_api.WorkspaceState, payload: workspace_api.WriteExportRequest):
+def call(state: workspace_api.WorkspaceState, payload: Request):
     return asyncio.run(endpoint(state)(payload))
 
 
@@ -187,22 +187,19 @@ def test_output_only_legacy_selection_does_not_silently_configure_cad(
 
 def test_binary_auto_export_merges_new_files_and_accepts_identical_retries(tmp_path: Path) -> None:
     state, workspace = selected_state(tmp_path)
-    first = workspace_api.WriteExportRequest(
+    first = write_export_request(
         subdirectory="horn_1",
         existing="merge_identical",
         members=[
-            {
-                "relative_path": "horn_1_plot.png",
-                "content_base64": base64.b64encode(b"\x89PNG\r\n").decode("ascii"),
-            }
+            {"relative_path": "horn_1_plot.png", "content": b"\x89PNG\r\n"},
         ],
     )
     call(state, first)
-    retry = workspace_api.WriteExportRequest(
+    retry = write_export_request(
         subdirectory="horn_1",
         existing="merge_identical",
         members=[
-            first.members[0].model_dump(),
+            {"relative_path": "horn_1_plot.png", "content": b"\x89PNG\r\n"},
             {"relative_path": "horn_1.csv", "text": "frequency,level\n100,90\n"},
         ],
     )
@@ -399,13 +396,13 @@ def test_merge_refuses_to_overwrite_a_different_existing_export(tmp_path: Path) 
     state, workspace = selected_state(tmp_path)
     call(
         state,
-        workspace_api.WriteExportRequest(
+        write_export_request(
             subdirectory="horn_1",
             existing="merge_identical",
             members=[{"relative_path": "horn_1.csv", "text": "original"}],
         ),
     )
-    conflicting = workspace_api.WriteExportRequest(
+    conflicting = write_export_request(
         subdirectory="horn_1",
         existing="merge_identical",
         members=[{"relative_path": "horn_1.csv", "text": "replacement"}],
@@ -429,7 +426,7 @@ def test_repeat_manual_export_replaces_changed_files(tmp_path: Path) -> None:
     state, workspace = selected_state(tmp_path)
     call(
         state,
-        workspace_api.WriteExportRequest(
+        write_export_request(
             subdirectory="horn_1",
             existing="merge_identical",
             members=[{"relative_path": "horn_1.json", "text": '{"timestamp": "first"}'}],
@@ -438,7 +435,7 @@ def test_repeat_manual_export_replaces_changed_files(tmp_path: Path) -> None:
 
     response = call(
         state,
-        workspace_api.WriteExportRequest(
+        write_export_request(
             subdirectory="horn_1",
             existing="overwrite",
             members=[
@@ -461,7 +458,7 @@ def test_repeat_manual_export_replaces_changed_files(tmp_path: Path) -> None:
 def test_client_archive_pointers_are_reserved(tmp_path: Path, existing: str, member: str) -> None:
     state, workspace = selected_state(tmp_path)
     with pytest.raises(HTTPException, match="reserved") as caught:
-        call(state, workspace_api.WriteExportRequest(
+        call(state, write_export_request(
             subdirectory="Horn_A", existing=existing,
             members=[{"relative_path": member, "text": "{}"}],
         ))
@@ -508,7 +505,7 @@ def test_published_files_are_readable_by_more_than_their_writer() -> None:
         call(state, request("Horn_A", [("run.json", "{}")]))
         call(
             state,
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 subdirectory="Horn_A",
                 existing="overwrite",
                 members=[{"relative_path": "run.json", "text": "{ }"}],
@@ -531,7 +528,7 @@ def test_overwrite_refuses_to_replace_a_directory_with_a_file(tmp_path: Path) ->
     with pytest.raises(HTTPException, match="folder is in the way") as caught:
         call(
             state,
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 subdirectory="horn_1",
                 existing="overwrite",
                 members=[{"relative_path": "horn_1.json", "text": "replacement"}],
@@ -544,7 +541,7 @@ def test_overwrite_refuses_to_replace_a_directory_with_a_file(tmp_path: Path) ->
 
 def test_overwrite_leaves_no_staging_directory_behind(tmp_path: Path) -> None:
     state, workspace = selected_state(tmp_path)
-    payload = workspace_api.WriteExportRequest(
+    payload = write_export_request(
         subdirectory="horn_1",
         existing="overwrite",
         members=[{"relative_path": "horn_1.csv", "text": "frequency,level\n"}],
@@ -555,20 +552,6 @@ def test_overwrite_leaves_no_staging_directory_behind(tmp_path: Path) -> None:
 
     assert sorted(item.name for item in workspace.iterdir()) == ["horn_1"]
     assert sorted(item.name for item in (workspace / "horn_1").iterdir()) == ["horn_1.csv"]
-
-
-def test_write_export_rejects_invalid_binary_encoding_without_writing(tmp_path: Path) -> None:
-    state, workspace = selected_state(tmp_path)
-    payload = workspace_api.WriteExportRequest(
-        subdirectory="horn_1",
-        members=[{"relative_path": "bad.png", "content_base64": "not base64!"}],
-    )
-
-    with pytest.raises(HTTPException, match="invalid base64") as caught:
-        call(state, payload)
-
-    assert caught.value.status_code == 422
-    assert list(workspace.iterdir()) == []
 
 
 def test_write_export_uses_visible_default_without_folder_selection(tmp_path: Path) -> None:
@@ -708,10 +691,28 @@ def test_write_export_rejects_oversize_before_writing(tmp_path: Path, monkeypatc
     assert list(workspace.iterdir()) == []
 
 
-def test_workspace_export_request_envelope_accommodates_base64_expansion() -> None:
-    encoded_binary_limit = 4 * ((workspace_api.MAX_EXPORT_BYTES + 2) // 3)
+def test_workspace_export_request_envelope_holds_the_upload_cap_and_its_framing() -> None:
+    # Multipart framing and form fields ride on top of the uploaded bytes.
+    assert workspace_api.MAX_EXPORT_REQUEST_BODY_BYTES > workspace_api.MAX_EXPORT_BYTES
 
-    assert workspace_api.MAX_EXPORT_REQUEST_BODY_BYTES > encoded_binary_limit
+
+def test_the_retired_json_form_is_refused_without_writing(tmp_path: Path) -> None:
+    from starlette.requests import Request as StarletteRequest
+
+    state, workspace = selected_state(tmp_path)
+    body = json.dumps({"subdirectory": "horn_1", "members": [{"relative_path": "a.csv", "text": "x"}]}).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    legacy = StarletteRequest({
+        "type": "http", "method": "POST", "path": "/api/workspace/write-export",
+        "headers": [(b"content-type", b"application/json")],
+    }, receive)
+    with pytest.raises(HTTPException, match="multipart/form-data") as refused:
+        asyncio.run(endpoint(state)(legacy))
+    assert refused.value.status_code == 415
+    assert list(workspace.iterdir()) == []
 
 
 def test_request_body_middleware_uses_the_workspace_route_limit() -> None:
@@ -769,8 +770,9 @@ def test_request_body_middleware_uses_the_workspace_route_limit() -> None:
 
 def test_invalid_member_count_is_rejected_without_writing(tmp_path: Path) -> None:
     state, workspace = selected_state(tmp_path)
-    with pytest.raises(ValidationError):
-        request("horn_1", [])
+    with pytest.raises(HTTPException, match="file count") as refused:
+        call(state, request("horn_1", []))
+    assert refused.value.status_code == 422
     assert list(workspace.iterdir()) == []
 
 
@@ -1146,7 +1148,7 @@ def test_an_unreadable_export_file_is_refused_as_unreadable_not_as_different(
     with pytest.raises(HTTPException) as caught:
         call(
             state,
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 subdirectory="Horn_A",
                 existing="merge_identical",
                 members=[
@@ -1355,7 +1357,7 @@ def test_choosing_an_export_folder_leaves_the_workspace_where_it_was(
     assert chosen["path"] == str(elsewhere.resolve())
     written = asyncio.run(
         route_endpoint(router, "/api/workspace/write-export", "POST")(
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 existing="overwrite",
                 destination=chosen["token"],
                 members=[{"relative_path": "horn.stl", "text": "solid"}],
@@ -1390,7 +1392,7 @@ def test_the_next_export_defaults_to_the_folder_the_last_one_used(
     )
     asyncio.run(
         route_endpoint(router, "/api/workspace/write-export", "POST")(
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 existing="overwrite",
                 destination=chosen["token"],
                 members=[{"relative_path": "horn.stl", "text": "solid"}],
@@ -1443,7 +1445,7 @@ def test_confirm_writes_what_is_new_and_skips_what_is_identical(tmp_path: Path) 
 
     written = asyncio.run(
         route_endpoint(router, "/api/workspace/write-export", "POST")(
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 existing="confirm",
                 destination=token,
                 members=[
@@ -1479,7 +1481,7 @@ def test_confirm_refuses_and_names_every_file_it_would_replace(tmp_path: Path) -
 
     refused = asyncio.run(
         route_endpoint(router, "/api/workspace/write-export", "POST")(
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 existing="confirm",
                 destination=token,
                 members=[
@@ -1522,12 +1524,12 @@ def test_the_answered_question_is_repeated_as_an_overwrite(tmp_path: Path) -> No
     members = [{"relative_path": "one.txt", "text": "theirs"}]
 
     assert isinstance(
-        asyncio.run(write(workspace_api.WriteExportRequest(
+        asyncio.run(write(write_export_request(
             existing="confirm", destination=token, members=members,
         ))),
         JSONResponse,
     )
-    written = asyncio.run(write(workspace_api.WriteExportRequest(
+    written = asyncio.run(write(write_export_request(
         existing="overwrite", destination=token, members=members,
     )))
 
@@ -1548,7 +1550,7 @@ def test_confirm_refuses_a_directory_in_the_way_rather_than_listing_it(
     with pytest.raises(HTTPException) as caught:
         asyncio.run(
             route_endpoint(router, "/api/workspace/write-export", "POST")(
-                workspace_api.WriteExportRequest(
+                write_export_request(
                     existing="confirm",
                     destination=token,
                     members=[{"relative_path": "one.txt", "text": "theirs"}],
@@ -1569,7 +1571,7 @@ def test_confirm_into_an_empty_folder_asks_nothing(tmp_path: Path) -> None:
 
     written = asyncio.run(
         route_endpoint(router, "/api/workspace/write-export", "POST")(
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 existing="confirm",
                 destination=destinations.issue(elsewhere),
                 members=[{"relative_path": "horn.stl", "text": "solid"}],
@@ -1588,7 +1590,7 @@ def test_the_automatic_policy_still_refuses_on_the_first_difference(
     state, workspace = selected_state(tmp_path)
     call(
         state,
-        workspace_api.WriteExportRequest(
+        write_export_request(
             subdirectory="horn_1",
             existing="merge_identical",
             members=[{"relative_path": "a.csv", "text": "original"}],
@@ -1598,7 +1600,7 @@ def test_the_automatic_policy_still_refuses_on_the_first_difference(
     with pytest.raises(HTTPException, match="different file already exists"):
         call(
             state,
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 subdirectory="horn_1",
                 existing="merge_identical",
                 members=[{"relative_path": "a.csv", "text": "replacement"}],
@@ -1659,7 +1661,7 @@ def test_an_unknown_export_destination_handle_is_refused(tmp_path: Path) -> None
     with pytest.raises(HTTPException) as caught:
         asyncio.run(
             route_endpoint(router, "/api/workspace/write-export", "POST")(
-                workspace_api.WriteExportRequest(
+                write_export_request(
                     existing="overwrite",
                     destination="not-a-handle",
                     members=[{"relative_path": "horn.stl", "text": "solid"}],
@@ -1713,7 +1715,7 @@ def test_a_handle_to_a_deleted_folder_is_refused_rather_than_recreating_it(
     with pytest.raises(HTTPException) as caught:
         asyncio.run(
             route_endpoint(router, "/api/workspace/write-export", "POST")(
-                workspace_api.WriteExportRequest(
+                write_export_request(
                     existing="overwrite",
                     destination=token,
                     members=[{"relative_path": "horn.stl", "text": "solid"}],
@@ -1734,10 +1736,10 @@ def test_a_chosen_destination_cannot_be_escaped_by_a_member_path(
     destinations, router = destination_router(state, tmp_path)
     token = destinations.issue(elsewhere)
 
-    with pytest.raises((HTTPException, ValidationError)):
+    with pytest.raises(HTTPException):
         asyncio.run(
             route_endpoint(router, "/api/workspace/write-export", "POST")(
-                workspace_api.WriteExportRequest(
+                write_export_request(
                     existing="overwrite",
                     destination=token,
                     members=[{"relative_path": "../escaped.stl", "text": "solid"}],
@@ -1767,7 +1769,7 @@ def test_an_export_into_the_chosen_folder_never_replaces_the_folder(
     with pytest.raises(HTTPException) as caught:
         asyncio.run(
             route_endpoint(router, "/api/workspace/write-export", "POST")(
-                workspace_api.WriteExportRequest(
+                write_export_request(
                     existing="reject",
                     destination=token,
                     members=[{"relative_path": "horn.stl", "text": "solid"}],
@@ -1789,7 +1791,7 @@ def test_a_repeat_export_names_the_files_it_replaced(tmp_path: Path) -> None:
 
     written = asyncio.run(
         route_endpoint(router, "/api/workspace/write-export", "POST")(
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 existing="overwrite",
                 destination=token,
                 members=[{"relative_path": "horn.stl", "text": "newer"}],
@@ -1808,10 +1810,11 @@ def test_a_workspace_export_still_needs_a_subdirectory(tmp_path: Path) -> None:
     its files among the run archives.
     """
 
-    with pytest.raises(ValidationError):
-        workspace_api.WriteExportRequest(
-            members=[{"relative_path": "horn.stl", "text": "solid"}],
-        )
+    state, workspace = selected_state(tmp_path)
+    with pytest.raises(HTTPException, match="Choose a folder") as refused:
+        call(state, write_export_request(members=[{"relative_path": "horn.stl", "text": "solid"}]))
+    assert refused.value.status_code == 422
+    assert list(workspace.iterdir()) == []
 
 
 def test_a_chosen_destination_works_while_the_workspace_is_unavailable(
@@ -1837,7 +1840,7 @@ def test_a_chosen_destination_works_while_the_workspace_is_unavailable(
 
     written = asyncio.run(
         route_endpoint(router, "/api/workspace/write-export", "POST")(
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 existing="overwrite",
                 destination=token,
                 members=[{"relative_path": "horn.stl", "text": "solid"}],
@@ -1987,7 +1990,7 @@ def test_the_run_archive_and_automatic_export_never_refuse_each_other(
     def archive() -> None:
         call(
             state,
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 subdirectory="OSSE/9_OSSE",
                 existing="confirm",
                 members=[{"relative_path": name, "text": text} for name, text in _ARCHIVE_SET],
@@ -1998,7 +2001,7 @@ def test_the_run_archive_and_automatic_export_never_refuse_each_other(
         for members in _EXPORT_FORMATS:
             call(
                 state,
-                workspace_api.WriteExportRequest(
+                write_export_request(
                     subdirectory="OSSE/9_OSSE/exports",
                     existing="merge_identical",
                     members=[{"relative_path": name, "text": text} for name, text in members],
@@ -2035,7 +2038,7 @@ def test_an_archive_into_a_folder_an_older_export_wrote_moves_only_the_taken_nam
 
     refused = call(
         state,
-        workspace_api.WriteExportRequest(
+        write_export_request(
             subdirectory="OSSE/9_OSSE",
             existing="confirm",
             members=[{"relative_path": name, "text": text} for name, text in _ARCHIVE_SET],
@@ -2055,7 +2058,7 @@ def test_an_archive_into_a_folder_an_older_export_wrote_moves_only_the_taken_nam
     for _attempt in range(2):
         written = call(
             state,
-            workspace_api.WriteExportRequest(
+            write_export_request(
                 subdirectory="OSSE/9_OSSE",
                 existing="merge_identical",
                 members=moved,
@@ -2068,38 +2071,8 @@ def test_an_archive_into_a_folder_an_older_export_wrote_moves_only_the_taken_nam
     assert (run / "9_OSSE.csv").read_text() == _ARCHIVE_SET[1][1]
 
 
-def test_json_export_rejects_oversize_base64_before_decoding(monkeypatch):
-    from server.workspace import api
-    monkeypatch.setattr(api, "MAX_EXPORT_BYTES", 3)
-    monkeypatch.setattr(api.base64, "b64decode", lambda *_a, **_kw: pytest.fail("decoded oversized data"))
-    request = api.WriteExportRequest(subdirectory="test", members=[
-        api.ExportMember(relative_path="large.bin", content_base64="YWJjZA=="),
-    ])
-    with pytest.raises(ValueError, match="binary size limit"):
-        api._decode_json_export_request(request)
-
-
-def test_json_export_applies_cumulative_budget_before_next_decode(monkeypatch):
-    from server.workspace import api
-    monkeypatch.setattr(api, "MAX_EXPORT_BYTES", 4)
-    real_decode = api.base64.b64decode
-    decoded = []
-    def decode(value, **kwargs):
-        decoded.append(value)
-        return real_decode(value, **kwargs)
-    monkeypatch.setattr(api.base64, "b64decode", decode)
-    request = api.WriteExportRequest(subdirectory="test", members=[
-        api.ExportMember(relative_path="a.bin", content_base64="YWJj"),
-        api.ExportMember(relative_path="b.bin", content_base64="ZGU="),
-    ])
-    with pytest.raises(ValueError, match="binary size limit"):
-        api._decode_json_export_request(request)
-    assert decoded == ["YWJj"]
-
-
 @pytest.mark.parametrize("suffix", ["", "/exports"])
-@pytest.mark.parametrize("transport", ["json", "multipart"])
-def test_run_writes_follow_recorded_location_across_root_selection(tmp_path, suffix, transport):
+def test_run_writes_follow_recorded_location_across_root_selection(tmp_path, suffix):
     from server.jobs.store import JobStore
     from server.tests.test_archive_identity import row
 
@@ -2110,12 +2083,9 @@ def test_run_writes_follow_recorded_location_across_root_selection(tmp_path, suf
     runtime = SimpleNamespace(store=jobs, _serialize_job=lambda *args, **kwargs: {})
     app = SimpleNamespace(state=SimpleNamespace(jobs_runtime=runtime, cadlink_store=None))
     async def write(job_id="run", directory="Horn/1_Horn"):
-        payload = {"job_id": job_id, "subdirectory": directory + suffix, "existing": "merge_identical", "members": [{"relative_path": "result.txt", "text": "stable"}]}
-        async def body():
-            return json.dumps(payload).encode()
         async def form():
             return FormData([("job_id", job_id), ("subdirectory", directory + suffix), ("existing", "merge_identical"), ("relative_path", "result.txt"), ("file", UploadFile(filename="result.txt", file=io.BytesIO(b"stable")))])
-        return await endpoint(state)(SimpleNamespace(app=app, headers={"content-type": "multipart/form-data" if transport == "multipart" else "application/json"}, body=body, form=form))
+        return await endpoint(state)(SimpleNamespace(app=app, headers={"content-type": "multipart/form-data"}, form=form))
     first = asyncio.run(write())
     pinned = str(root_a / "Horn" / "1_Horn")
     assert jobs.get_job_row("run")["task_metadata"]["archived_path"] == pinned

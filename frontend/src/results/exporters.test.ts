@@ -1458,9 +1458,10 @@ describe('result exporters', () => {
   });
 
   it.each([
-    ['fits one request', 100, 100, 1],
-    ['300 MB class, over the per-request cap', 200, 100, 2],
-  ] as const)('writes the mesh with the bundle only when both fit one request (%s)', async (_case, basisMb, meshMb, requests) => {
+    ['small', 100, 100],
+    ['300 MB class, over the per-request upload cap', 200, 100],
+    ['near the 1 GiB hold limit', 700, 300],
+  ] as const)('writes every held member with the bundle in one request (%s)', async (_case, basisMb, meshMb) => {
     const MB = 1024 * 1024;
     const job = {
       id: 'archive-big', archive_folder: 'OSSE', archive_run: '9_OSSE', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
@@ -1492,10 +1493,10 @@ describe('result exporters', () => {
     const names = writes.map(({ members }) => members.map(({ relative_path }) => relative_path));
     const bundle = ['9_Mesh_Run.json', '9_Mesh_Run.csv', '9_Mesh_Run_derived_acoustics.csv',
       '9_Mesh_Run_derived_acoustics.json', '9_Mesh_Run_report.html', 'drive_pressure_basis.npz'];
-    expect(names).toEqual(requests === 1
-      ? [[...bundle, '9_Mesh_Run.msh'], ['run.json']]
-      : [bundle, ['9_Mesh_Run.msh'], ['run.json']]);
-    // Either way the same files, in the same order, and the same record.
+    // Held members are not uploaded, so their size never splits the write.
+    expect(names).toEqual([[...bundle, '9_Mesh_Run.msh'], ['run.json']]);
+    expect(writes[0].members.filter(({ server }) => server).map(({ relative_path }) => relative_path))
+      .toEqual(['drive_pressure_basis.npz', '9_Mesh_Run.msh']);
     expect(files.map((file) => file.split('/').at(-1))).toEqual([...bundle, '9_Mesh_Run.msh', 'run.json']);
     expect(JSON.parse(await writes.at(-1)!.members[0].blob.text()).artifacts.mesh).toBe('9_Mesh_Run.msh');
   });

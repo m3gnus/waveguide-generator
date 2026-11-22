@@ -511,15 +511,18 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         assert status == 200
         archive_snapshot = json.loads(raw)
         # An archive keeps the exact stored payload (test_run_archive.py); only
-        # the results endpoint adds the read-time excitation identity.
+        # the results endpoint adds the read-time excitation identity. The mesh
+        # stays on the server, held for write-export.
+        hold = archive_snapshot.pop("hold")
         assert archive_snapshot == {
             "schema_version": 1,
             "results": json.loads(stored_result[0]),
             "results_sha256": stored_result[1],
-            "mesh_artifact": stored_mesh,
+            "mesh_artifact": {"member": "mesh", "bytes": len(stored_mesh.encode("utf-8"))},
             "pressure_bases": [],
             "radiation_impedance": None,
         }
+        assert app.state.jobs_runtime.archive_holds.lookup(hold, job_id, "mesh") == stored_mesh.encode("utf-8")
         assert headers["cache-control"] == "no-store"
         assert headers["x-wg-archive-snapshot-version"] == "1"
         status, raw, headers = await _request_with_headers(

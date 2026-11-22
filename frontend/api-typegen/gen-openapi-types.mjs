@@ -13,15 +13,6 @@ if (!['--write', '--check'].includes(mode) || extra.length) {
   process.exitCode = 2;
 } else {
   const document = JSON.parse(await readFile(schema, 'utf8'));
-  // This embedded request schema uses a schema-local $defs reference. Resolve
-  // it before document-wide OpenAPI bundling, without changing the snapshot.
-  const exportSchema = document.paths['/api/workspace/write-export']?.post
-    ?.requestBody?.content?.['application/json']?.schema;
-  if (exportSchema?.properties?.members?.items?.$ref === '#/$defs/ExportMember'
-    && exportSchema.$defs?.ExportMember) {
-    exportSchema.properties.members.items = exportSchema.$defs.ExportMember;
-    delete exportSchema.$defs;
-  }
   // Defaults describe server behavior; only `required` makes a wire field mandatory.
   const rendered = header + astToString(await openapiTS(document, { defaultNonNullable: false }));
   if (mode === '--write') {

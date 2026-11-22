@@ -3,13 +3,14 @@
 ``GET /api/jobs/{id}/archive-snapshot?members=held`` keeps the mesh, pressure
 bases and radiation matrix on the server, and write-export names them as
 ``member_source`` entries. The archive folder must be byte for byte the one the
-inline (base64) snapshot writes when the browser uploads those bytes back.
+retired inline (base64) snapshot wrote when the browser uploaded those bytes
+back: the stored mesh text as UTF-8, each exported pressure basis, and the
+stored radiation matrix.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
 from dataclasses import dataclass
 import hashlib
 import json
@@ -45,31 +46,33 @@ def _snapshot_fixture():
     }, motions
 
 
-def test_held_snapshot_holds_exactly_the_inline_bytes(monkeypatch):
+def test_held_snapshot_holds_exactly_the_bytes_the_inline_form_carried(monkeypatch):
+    from server.jobs.radiation_impedance import radiation_impedance_presentation
     from server.jobs.runtime import core
+    from server.solver import pressure_basis
 
     snapshot, motions = _snapshot_fixture()
     monkeypatch.setattr(core, "_request_motions", lambda _job: motions)
     holds = ArchiveSnapshotHolds()
-    inline = core._archive_snapshot_presentation("run", snapshot)
     held = core._held_archive_snapshot_presentation("run", snapshot, holds)
 
-    assert held["results"] == inline["results"]
-    assert held["results_sha256"] == inline["results_sha256"]
+    # What the retired inline form sent, as base64, for the browser to upload.
+    assert held["results"] == json.loads(snapshot["results_text"])
+    assert held["results_sha256"] == snapshot["results_sha256"]
     mesh = holds.lookup(held["hold"], "run", held["mesh_artifact"]["member"])
-    assert mesh == inline["mesh_artifact"].encode("utf-8")
+    assert mesh == snapshot["mesh_text"].encode("utf-8")
     assert held["mesh_artifact"]["bytes"] == len(mesh)
-    assert [base["channel_id"] for base in held["pressure_bases"]] == [
-        base["channel_id"] for base in inline["pressure_bases"]
-    ] == ["normal", "axial", "request"]
-    for held_base, inline_base in zip(held["pressure_bases"], inline["pressure_bases"], strict=True):
-        content = holds.lookup(held["hold"], "run", held_base["member"])
-        assert content == base64.b64decode(inline_base["content_base64"])
-        assert held_base["bytes"] == len(content)
+    assert [base["channel_id"] for base in held["pressure_bases"]] == ["normal", "axial", "request"]
+    for base in held["pressure_bases"]:
+        content = holds.lookup(held["hold"], "run", base["member"])
+        assert content == pressure_basis.export_pressure_basis(
+            snapshot["channel_bases"], held["results"], base["channel_id"], motions,
+        ).content
+        assert base["bytes"] == len(content)
     radiation = holds.lookup(held["hold"], "run", held["radiation_impedance"]["member"])
-    assert radiation == base64.b64decode(inline["radiation_impedance"]["content_base64"])
+    assert radiation == snapshot["radiation_impedance"]
     assert held["radiation_impedance"]["bytes"] == len(radiation)
-    assert held["radiation_impedance"]["presentation"] == inline["radiation_impedance"]["presentation"]
+    assert held["radiation_impedance"]["presentation"] == radiation_impedance_presentation(radiation)
     # A hold belongs to its run only, and names only the members it copied.
     with pytest.raises(HoldUnavailable):
         holds.lookup(held["hold"], "other-run", "mesh")
@@ -88,7 +91,6 @@ def test_an_empty_stored_mesh_is_no_mesh(monkeypatch):
     monkeypatch.setattr(core, "_request_motions", lambda _job: motions)
     snapshot = {**snapshot, "mesh_text": ""}
     holds = ArchiveSnapshotHolds()
-    assert core._archive_snapshot_presentation("run", snapshot)["mesh_artifact"] == ""
     held = core._held_archive_snapshot_presentation("run", snapshot, holds)
     assert held["mesh_artifact"] is None
     with pytest.raises(KeyError):
@@ -181,14 +183,6 @@ class _Sized(bytes):
 
     def __len__(self):
         return self.size
-
-
-def test_the_client_mirrors_the_write_export_byte_cap():
-    # frontend/src/api/workspace.ts plans archive requests with this number.
-    from server.workspace.api import MAX_EXPORT_BYTES
-
-    source = (Path(__file__).resolve().parents[2] / "frontend/src/api/workspace.ts").read_text()
-    assert f"WRITE_EXPORT_MAX_BYTES = {MAX_EXPORT_BYTES // (1024 * 1024)} * 1024 * 1024;" in source
 
 
 @dataclass
@@ -328,14 +322,8 @@ def test_archive_written_by_reference_is_byte_identical_to_the_uploaded_archive(
 async def _byte_identical_archive(client, job_id, workspace, job):
     run_folder = f"{job['archive_folder']}/{job['archive_run']}"
 
-    # Today's path: the base64 snapshot's bytes, uploaded back.
-    inline = await client.get(f"/api/jobs/{job_id}/archive-snapshot")
-    assert inline.status_code == 200, inline.text
-    inline = inline.json()
-    uploads = [("mesh.msh", inline["mesh_artifact"].encode("utf-8"))]
-    uploads += [(f"{base['channel_id']}_pressure_basis.npz", base64.b64decode(base["content_base64"]))
-                for base in inline["pressure_bases"]]
-    uploads.append(("radiation.npz", base64.b64decode(inline["radiation_impedance"]["content_base64"])))
+    # The retired path: the bytes the inline snapshot carried, uploaded back.
+    uploads = _inline_bytes(client, job_id)
     uploads.append(("run.json", b'{"built": "in the browser"}\n'))
     uploaded = await _write(client, {
         "subdirectory": run_folder, "existing": "confirm", "job_id": job_id,
@@ -352,7 +340,6 @@ async def _byte_identical_archive(client, job_id, workspace, job):
     held = await client.get(f"/api/jobs/{job_id}/archive-snapshot", params={"members": "held"})
     assert held.status_code == 200, held.text
     held = held.json()
-    assert held["results"] == inline["results"]
     assert "content_base64" not in json.dumps(held)
     hold = held["hold"]
     sources = [json.dumps({"hold": hold, "member": held["mesh_artifact"]["member"]})]
@@ -374,6 +361,62 @@ async def _byte_identical_archive(client, job_id, workspace, job):
     }, [("file", ("run.json", uploads[-1][1], "application/json"))])
     assert again.status_code == 200 and again.json()["replaced"] == []
     assert _tree(workspace) == expected
+
+
+def _inline_bytes(client, job_id):
+    """The members the retired inline snapshot carried for this run, in its order."""
+
+    from server.jobs.runtime import core
+    from server.solver import pressure_basis
+
+    store = client.app.state.jobs_runtime.store
+    snapshot = store.get_archive_snapshot(job_id)
+    results = json.loads(snapshot["results_text"])
+    motions = core._request_motions(snapshot["job"])
+    uploads = [("mesh.msh", snapshot["mesh_text"].encode("utf-8"))]
+    uploads += [(f"{base.channel_id}_pressure_basis.npz", base.content)
+                for base in pressure_basis.export_pressure_bases(snapshot["channel_bases"], results, request_motions=motions)]
+    uploads.append(("radiation.npz", snapshot["radiation_impedance"]))
+    return uploads
+
+
+def test_held_members_do_not_count_toward_the_upload_cap(tmp_path, monkeypatch):
+    async def scenario(client, job_id, workspace, job):
+        from server.workspace import api as workspace_api
+
+        run_folder = f"{job['archive_folder']}/{job['archive_run']}"
+        uploads = _inline_bytes(client, job_id) + [("run.json", b"{}\n")]
+        # A cap smaller than any held member, but not than run.json.
+        monkeypatch.setattr(workspace_api, "MAX_EXPORT_BYTES", 64)
+        assert all(len(content) > 64 for _name, content in uploads[:-1])
+        everything = await _write(client, {
+            "subdirectory": run_folder, "existing": "confirm", "job_id": job_id,
+            "relative_path": [name for name, _ in uploads],
+        }, [("file", (name, content, "application/octet-stream")) for name, content in uploads])
+        assert everything.status_code == 422 and "size limit" in everything.text
+        assert _tree(workspace) == {}
+        held = (await client.get(f"/api/jobs/{job_id}/archive-snapshot")).json()
+        sources = [json.dumps({"hold": held["hold"], "member": held["mesh_artifact"]["member"]})]
+        sources += [json.dumps({"hold": held["hold"], "member": base["member"]}) for base in held["pressure_bases"]]
+        sources += [json.dumps({"hold": held["hold"], "member": held["radiation_impedance"]["member"]}), "upload"]
+        referenced = await _write(client, {
+            "subdirectory": run_folder, "existing": "confirm", "job_id": job_id,
+            "relative_path": [name for name, _ in uploads], "member_source": sources,
+        }, [("file", ("run.json", b"{}\n", "application/json"))])
+        assert referenced.status_code == 200, referenced.text
+        assert _tree(workspace) == {f"{run_folder}/{name}": content for name, content in uploads}
+
+    _with_archived_run(tmp_path, monkeypatch, scenario)
+
+
+def test_the_retired_inline_snapshot_form_is_refused(tmp_path, monkeypatch):
+    async def scenario(client, job_id, workspace, job):
+        refused = await client.get(f"/api/jobs/{job_id}/archive-snapshot", params={"members": "inline"})
+        assert refused.status_code == 422
+        default = await client.get(f"/api/jobs/{job_id}/archive-snapshot")
+        assert default.status_code == 200 and "hold" in default.json()
+
+    _with_archived_run(tmp_path, monkeypatch, scenario)
 
 
 def test_retained_mesh_is_written_by_reference_like_the_download(tmp_path, monkeypatch):

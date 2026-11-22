@@ -8,8 +8,6 @@ import asyncio
 from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
-import base64
-import binascii
 import hashlib
 import json
 import logging
@@ -25,7 +23,7 @@ import unicodedata
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import UploadFile
 
 from server.platform.paths import data_paths, proposed_cadlink_dir, default_folder_root
@@ -45,9 +43,9 @@ MAX_EXPORT_MEMBERS = 100
 # Automatic bundles can include tessellated STL/STEP geometry and rendered
 # plots, so the old text-export ceiling was too small for otherwise valid runs.
 MAX_EXPORT_BYTES = 256 * 1024 * 1024
-# Legacy JSON clients use base64 (4/3 expansion), while current clients send
-# multipart binary parts. Keep the larger route-only envelope for compatibility.
-MAX_EXPORT_REQUEST_BODY_BYTES = 384 * 1024 * 1024
+# The request envelope: the uploaded bytes plus multipart framing and the form
+# fields. Files the server already holds (``member_source``) are not in it.
+MAX_EXPORT_REQUEST_BODY_BYTES = MAX_EXPORT_BYTES + 16 * 1024 * 1024
 #: How long a chosen export destination stays usable, and how many are kept.
 #:
 #: A handle is **not** single-use. One export legitimately writes through it more
@@ -89,59 +87,6 @@ def _export_collision_response(exc: ExportCollision) -> JSONResponse:
             "paths": exc.paths,
         },
     )
-
-
-class ExportMember(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    relative_path: str = Field(min_length=1)
-    text: str | None = None
-    content_base64: str | None = None
-
-    @model_validator(mode="after")
-    def one_content_source(self) -> "ExportMember":
-        if (self.text is None) == (self.content_base64 is None):
-            raise ValueError("exactly one of text or content_base64 is required")
-        return self
-
-
-class WriteExportRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    #: Where inside the destination the set lands. Required for the workspace,
-    #: which is shared by every export and needs each one in its own folder.
-    #: Empty means "the destination itself", which only a ``destination`` handle
-    #: may ask for -- see ``ExportDestinationStore``.
-    subdirectory: str = ""
-    members: list[ExportMember] = Field(min_length=1, max_length=MAX_EXPORT_MEMBERS)
-    #: ``reject`` refuses an existing directory outright. ``merge_identical``
-    #: adds only what is missing and refuses to change a file that differs; it
-    #: is what automatic post-run export uses, so a background write can never
-    #: overwrite anything. ``overwrite`` replaces the members it is given and
-    #: is for a user asking for an export a second time: several builders stamp
-    #: the current time into their output, so a repeat export is *never* byte
-    #: identical and ``merge_identical`` rejected the whole bundle.
-    #:
-    #: ``confirm`` is ``overwrite`` with the replacements shown first. It writes
-    #: what is missing and skips what is byte identical, and if any member would
-    #: change a file that differs it writes **nothing** and names every one of
-    #: them, so the client can ask once and repeat the request as ``overwrite``.
-    #: A manual export now goes to a folder the user chose, which may hold files
-    #: WG never wrote; a basename collision there must not be settled by a
-    #: report after the fact.
-    existing: Literal["reject", "merge_identical", "overwrite", "confirm"] = "reject"
-    #: A handle from ``POST /api/workspace/export-destination``, naming the
-    #: folder the user chose for this one export. Absent means the workspace,
-    #: which is what every automatic export uses.
-    destination: str | None = None
-    #: Run owner. Without a chosen destination, resolve beneath its recorded location.
-    job_id: str | None = Field(default=None, min_length=1, max_length=200)
-
-    @model_validator(mode="after")
-    def subdirectory_or_destination(self) -> "WriteExportRequest":
-        if not self.subdirectory and self.destination is None:
-            raise ValueError("Choose a folder, then export again.")
-        return self
 
 
 class SelectCadWorkspaceRequest(BaseModel):
@@ -304,50 +249,30 @@ def _resolve_server_members(
     return resolved
 
 
-def _member_bytes(member: ExportMember, remaining: int = MAX_EXPORT_BYTES) -> bytes:
-    if member.text is not None:
-        content = member.text.encode("utf-8")
-        if len(content) > remaining:
-            raise ValueError("Export set exceeds the binary size limit")
-        return content
-    encoded = member.content_base64 or ""
-    padding = 2 if encoded.endswith("==") else int(encoded.endswith("="))
-    decoded_size = (len(encoded) // 4) * 3 - padding
-    if decoded_size > remaining:
-        raise ValueError("Export set exceeds the binary size limit")
-    try:
-        return base64.b64decode(encoded, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise ValueError(f"{member.relative_path!r} contains invalid base64 data") from exc
-
-
-
-def _decode_json_export_request(
-    payload: bytes | WriteExportRequest,
-) -> tuple[str, str, list[tuple[str, bytes]], str | None, str | None]:
-    request = (
-        payload
-        if isinstance(payload, WriteExportRequest)
-        else WriteExportRequest.model_validate_json(payload)
-    )
-    members = []
-    remaining = MAX_EXPORT_BYTES
-    for member in request.members:
-        content = _member_bytes(member, remaining)
-        remaining -= len(content)
-        members.append((member.relative_path, content))
-    return (
-        request.subdirectory,
-        request.existing,
-        members,
-        request.destination,
-        request.job_id,
-    )
-
-
 async def _decode_multipart_export_request(
     request: Request,
 ) -> tuple[str, str, list[tuple[str, bytes | ServerMember]], str | None, str | None]:
+    """Read one write-export request: the only request form the route takes.
+
+    ``subdirectory`` is where inside the destination the set lands; it is
+    required for the workspace, which every export shares, and empty means
+    "the destination itself", which only a ``destination`` handle (from
+    ``POST /api/workspace/export-destination``) may ask for. ``job_id`` names
+    the run whose recorded folder owns the write.
+
+    ``existing`` is what to do about files already there. ``reject`` refuses
+    an existing directory. ``merge_identical`` writes what is missing, skips
+    what is byte identical and refuses to change anything; automatic exports
+    and archives use it, so a background write never overwrites. ``overwrite``
+    replaces the members it is given, for a user asking for an export again.
+    ``confirm`` is ``overwrite`` with the replacements shown first: if any
+    member would change a file that differs it writes nothing and names every
+    one of them, so the client asks once and repeats as ``overwrite``.
+
+    Uploaded bytes are capped at ``MAX_EXPORT_BYTES`` per request. Members the
+    server already holds (``member_source``) are not uploaded and do not count.
+    """
+
     form = await request.form()
     subdirectory = form.get("subdirectory", "")
     existing = form.get("existing", "reject")
@@ -1135,8 +1060,9 @@ def _write_export_unlocked(
                 )
             export_directory = workspace_root
 
+        # Uploaded bytes were capped as they were read; members the server
+        # resolved from its own copies are not uploads and are not capped here.
         prepared: list[tuple[list[str], bytes, Path]] = []
-        total_bytes = 0
         seen: set[Path] = set()
         portable_seen: set[tuple[str, ...]] = set()
         for index, (relative_path, content) in enumerate(members):
@@ -1153,11 +1079,6 @@ def _write_export_unlocked(
                 raise ValueError(f"{label} duplicates another member path")
             seen.add(destination)
             portable_seen.add(portable_key)
-            total_bytes += len(content)
-            if total_bytes > MAX_EXPORT_BYTES:
-                raise ValueError(
-                    f"Export set exceeds the {MAX_EXPORT_BYTES}-byte binary size limit"
-                )
             prepared.append((segments, content, destination))
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1289,7 +1210,6 @@ _WRITE_EXPORT_OPENAPI = {
     "requestBody": {
         "required": True,
         "content": {
-            "application/json": {"schema": WriteExportRequest.model_json_schema()},
             "multipart/form-data": {
                 "schema": {
                     "type": "object",
@@ -1501,23 +1421,17 @@ def create_workspace_router(
 
     async def workspace_write_export_guarded(request: Request) -> Any:
         try:
-            if isinstance(request, WriteExportRequest):
-                # Direct endpoint calls in unit tests retain the legacy model
-                # shape; actual ASGI requests always take one branch below.
-                subdirectory, existing, members, destination, job_id = await asyncio.to_thread(
-                    _decode_json_export_request, request
-                )
-            elif request.headers.get("content-type", "").lower().startswith(
+            if not request.headers.get("content-type", "").lower().startswith(
                 "multipart/form-data"
             ):
-                subdirectory, existing, members, destination, job_id = (
-                    await _decode_multipart_export_request(request)
+                # The JSON/base64 form is retired; every client sends multipart.
+                raise HTTPException(
+                    status_code=415,
+                    detail="Send the export files as multipart/form-data (relative_path and file parts).",
                 )
-            else:
-                raw = await request.body()
-                subdirectory, existing, members, destination, job_id = await asyncio.to_thread(
-                    _decode_json_export_request, raw
-                )
+            subdirectory, existing, members, destination, job_id = (
+                await _decode_multipart_export_request(request)
+            )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1699,7 +1613,6 @@ __all__ = [
     "ExportCollision",
     "ExportDestinationStore",
     "CaptureDocumentRequest",
-    "WriteExportRequest",
     "SelectCadWorkspaceRequest",
     "SelectWorkspaceRequest",
     "create_workspace_router",

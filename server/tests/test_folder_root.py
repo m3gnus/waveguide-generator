@@ -520,8 +520,9 @@ def test_upgrade_matrix_preserves_035_effective_folders_without_creating_content
     assert content() == before
     if implicit_missing or explicit_missing:
         assert not runs.exists()
-        request = api.WriteExportRequest(subdirectory='first-run/exports',
-                                         members=[{'relative_path': 'result.txt', 'text': 'exported'}])
+        from server.tests._write_export import write_export_request
+        request = write_export_request(subdirectory='first-run/exports',
+                                       members=[{'relative_path': 'result.txt', 'text': 'exported'}])
         response = asyncio.run(endpoint(app, '/api/workspace/write-export')(request))
         if implicit_missing:
             assert isinstance(response, dict), response.body

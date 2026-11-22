@@ -16,11 +16,6 @@ This private frontend npm workspace shares the frontend lockfile. It keeps
 TypeScript 7 compiler, whose package does not expose that API. The generator's
 dependencies are development dependencies and do not enter the browser bundle.
 
-The snapshot embeds `ExportMember` under the JSON request schema for
-`/api/workspace/write-export`, but references it as `#/$defs/ExportMember`.
-The generator resolves that one local definition in memory before OpenAPI
-bundling. It preserves the member fields and leaves the committed JSON untouched.
-
 Generation preserves schema optionality: a default does not make a property
 required. Existing frontend types should derive from these declarations only
 where their shapes match, including optionality and nullability. Keep deliberate

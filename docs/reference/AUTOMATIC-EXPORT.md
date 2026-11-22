@@ -37,9 +37,10 @@ with `confirm`, re-archiving a run whose `run.json` an older version wrote place
 new record at `archive/run.json` and leaves the older one in place.
 
 Files the server already holds do not travel through the browser. The archive reads
-`GET /api/jobs/{id}/archive-snapshot?members=held`: the same one-transaction snapshot,
-with the mesh, pressure bases and radiation matrix kept on the server under a `hold`
-id instead of returned as base64. Its first `write-export` request carries every held
+`GET /api/jobs/{id}/archive-snapshot`: one store transaction's snapshot, with the
+mesh, pressure bases and radiation matrix kept on the server under a `hold` id and
+listed by name and byte count (`members=held` is the only form; the base64 form is
+retired). Its first `write-export` request carries every held
 member, after the files built in the browser, by `member_source`
 (`{"hold": …, "member": …}`, one entry per `relative_path`; `"upload"` takes the next
 file part), so the server writes the very bytes the snapshot copied, all of them or
@@ -52,7 +53,13 @@ fails like any archive and is tried again automatically. The automatic mesh save
 names the run's retained mesh (`{"member": "mesh"}`) the same way, and downloads and
 sends a mesh only when the server no longer holds one (an empty stored mesh counts as
 none), as when it must rebuild it. Server members are resolved before the run's folder
-is claimed, so a refusal leaves no trace. The inline (base64) snapshot and plain uploads still work. A release after `finish`, or by any token that no
+is claimed, so a refusal leaves no trace.
+
+`write-export` takes only `multipart/form-data`; the JSON/base64 request form is
+retired and answers `415`. The 256 MB cap per request applies to the bytes actually
+uploaded. Members the server copies from its own data (`member_source`) are not
+uploaded and do not count, so an archive's held members, bounded by the 1 GiB hold
+limit, always go in its one request. A release after `finish`, or by any token that no
 longer owns the lane, is an idempotent success.
 
 Capability requests have a ten-second client timeout. Pending qualification, refresh
