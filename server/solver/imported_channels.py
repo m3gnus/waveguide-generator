@@ -416,20 +416,35 @@ IMPEDANCE_OMITTED_WEIGHTED = (
 )
 
 
+# A patch weight this close to 1 is unit weight: assembly code derives weights.
+_UNIT_WEIGHT_TOLERANCE = 1e-9
+
+
 def impedance_omitted_reason(channel: Any) -> str | None:
     """Why a drive channel's raw acoustic impedance is not a channel impedance.
 
-    The one rule for every backend, live and final. The raw field is a single
-    tag's (Metal, BEMPP) or the unweighted union's (BEAT) area-mean pressure per
-    unit drive, so it is the channel impedance only for one source at unit
-    weight. ``None`` keeps the curve.
+    The one rule for every backend, live and final. The raw field is the
+    area-mean pressure per unit drive of a single tag (Metal, BEMPP) or of the
+    union of the channel's tags under their weighted summed pressure (BEAT), so
+    it is the channel impedance only for one source at unit weight. ``None``
+    keeps the curve.
     """
 
     if len(channel.source_ids) > 1:
         return IMPEDANCE_OMITTED_MULTI_SOURCE
-    if any(weight != 1 for weight in (getattr(channel, "patch_weights", None) or {}).values()):
+    if any(abs(float(weight) - 1.0) > _UNIT_WEIGHT_TOLERANCE
+           for weight in (channel.patch_weights or {}).values()):
         return IMPEDANCE_OMITTED_WEIGHTED
     return None
+
+
+def drop_live_impedance(channel: Any, channel_response: dict[str, Any]) -> None:
+    """Apply ``impedance_omitted_reason`` to one live frame, with its reason."""
+
+    omitted = impedance_omitted_reason(channel)
+    if omitted is not None:
+        channel_response.pop("impedance", None)
+        channel_response.setdefault("metadata", {})["impedance_omitted"] = omitted
 
 
 def finish_imported_channel_response(

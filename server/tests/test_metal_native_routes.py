@@ -139,3 +139,4 @@ def test_imported_metal_keeps_impedance_only_for_a_unit_weight_source_live_and_f
     else:
         assert "impedance" not in final and "impedance" not in live
         assert final["metadata"]["impedance_omitted"] == IMPEDANCE_OMITTED_WEIGHTED
+        assert live["metadata"]["impedance_omitted"] == IMPEDANCE_OMITTED_WEIGHTED

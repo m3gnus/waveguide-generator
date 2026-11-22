@@ -94,7 +94,7 @@ from .imported_channels import (
     channel_basis_metadata,
     channel_source_identity,
     finish_imported_channel_response,
-    impedance_omitted_reason,
+    drop_live_impedance,
     imported_combined_channel,
     imported_envelope,
     imported_validity_metadata,
@@ -1765,8 +1765,7 @@ def solve_imported_metal_from_msh_text(
                     "hornlab_metal_bem"
                 ),
             )
-            if impedance_omitted_reason(channel) is not None:
-                channel_response.pop("impedance", None)
+            drop_live_impedance(channel, channel_response)
             channel_response["metadata"].update(channel_identity[channel.id])
             provisional_channels[channel.id] = channel_response
         publish_imported(index, frequency_hz, provisional_channels)

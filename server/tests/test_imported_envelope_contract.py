@@ -147,6 +147,9 @@ def test_one_impedance_rule_for_every_backend() -> None:
 
     assert impedance_omitted_reason(_channel(["a"])) is None
     assert impedance_omitted_reason(_channel(["a"], {"a": 1.0})) is None
+    # Derived weights within float noise of 1 are unit weight.
+    assert impedance_omitted_reason(_channel(["a"], {"a": 1.0 + 1e-12})) is None
+    assert impedance_omitted_reason(_channel(["a"], {"a": 1.0 - 1e-6})) == IMPEDANCE_OMITTED_WEIGHTED
     assert impedance_omitted_reason(_channel(["a", "b"])) == IMPEDANCE_OMITTED_MULTI_SOURCE
     assert impedance_omitted_reason(_channel(["a", "b"], {"a": 1.0, "b": 0.5})) == IMPEDANCE_OMITTED_MULTI_SOURCE
     assert impedance_omitted_reason(_channel(["a"], {"a": 0.5})) == IMPEDANCE_OMITTED_WEIGHTED

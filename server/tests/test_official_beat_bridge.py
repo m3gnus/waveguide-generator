@@ -317,6 +317,42 @@ def test_an_old_beat_assembly_replay_converts_its_impedance_once(runtime, monkey
         assert old[name]["spl_on_axis"] == explicit[name]["spl_on_axis"]
 
 
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_weighted_single_source_live_frames_match_the_final_impedance_rule(runtime, monkeypatch, adaptive):
+    """A w != 1 patch's raw pressure is w*Z: no live curve that the final result then drops."""
+
+    from server.solver.imported_channels import IMPEDANCE_OMITTED_WEIGHTED
+
+    monkeypatch.setattr(bridge, "engine_version", lambda: "1.2.3")
+    channels = [{"id": "weighted", "source_ids": ["source-c"], "patch_weights": {"source-c": 0.5}},
+                {"id": "unit", "source_ids": ["source-a"], "patch_weights": {"source-a": 1.0}},
+                {"id": "other", "source_ids": ["source-b"], "patch_weights": {"source-b": 1.0}}]
+    request = cad._request(drive_channels=channels, required_features=["wg-design-assembly-v1"])
+    request.options.adaptive_frequency_sampling = adaptive
+    if adaptive:
+        request.options.frequency_range = [100., 1000.]
+        request.options.frequencies_hz = None
+        request.options.num_frequencies = 24
+    record = cad._record()
+    record["required_features"] = ["wg-design-assembly-v1"]
+    record["excitations"] = [{"id": c["id"], "source_ids": c["source_ids"], "motion": "normal",
+                              "patch_weights": c["patch_weights"]} for c in channels]
+    frames = []
+    result = beat_imported.solve_imported_beat_from_msh_text(
+        cad.MESH, request, record, backend="cpu",
+        result_callback=lambda i, frame: frames.append(frame),
+    )
+    live = [frame["channels"][name] for frame in frames for name in frame["channels"]
+            if name == "weighted"]
+    assert live, "the weighted channel streamed no live frames"
+    assert all("impedance" not in channel for channel in live)
+    assert all(channel["metadata"]["impedance_omitted"] == IMPEDANCE_OMITTED_WEIGHTED for channel in live)
+    assert any("impedance" in frame["channels"]["unit"] for frame in frames if "unit" in frame["channels"])
+    assert "impedance" not in result["channels"]["weighted"]
+    assert result["channels"]["weighted"]["metadata"]["impedance_omitted"] == IMPEDANCE_OMITTED_WEIGHTED
+    assert "impedance" in result["channels"]["unit"]
+
+
 @pytest.mark.parametrize("axial", [False, True])
 @pytest.mark.parametrize("channels", [
     [{"id": "left", "source_ids": ["source-a", "source-b"]},

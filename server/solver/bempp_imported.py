@@ -78,7 +78,7 @@ from .imported_channels import (
     prescribed_entry,
     channel_source_identity,
     finish_imported_channel_response,
-    impedance_omitted_reason,
+    drop_live_impedance,
     imported_combined_channel,
     imported_envelope,
     imported_validity_metadata,
@@ -426,8 +426,7 @@ def solve_imported_bempp_from_msh_text(
                     backend="bempp",
                     sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_bempp_bem"),
                 )
-                if impedance_omitted_reason(_channel) is not None:
-                    channel_response.pop("impedance", None)
+                drop_live_impedance(_channel, channel_response)
                 channel_metadata = channel_response.setdefault("metadata", {})
                 channel_metadata.update(channel_identity[_channel.id])
                 channel_metadata["observation_frame_basis"] = dict(frame_basis)
