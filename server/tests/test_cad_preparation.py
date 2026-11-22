@@ -1987,7 +1987,7 @@ def test_a_submission_refusal_is_named_by_type_and_exact_code(error: BaseExcepti
 @pytest.mark.parametrize('symmetry', ['auto', 'off'])
 def test_snapshot_mesh_overrides_a_saved_setup_and_is_frozen_in_the_job(harness: Harness, symmetry):
     from server.cadlink.snapshot_mesh import snapshot_mesh
-    from server.cadlink.wglink_protocol import default_mesh
+    from server.contracts.wglink_protocol import default_mesh
 
     bundle_path, _ = _write_return(harness.workspace)
     path = harness.workspace / bundle_path / 'wgreturn.json'

@@ -17,7 +17,7 @@ from typing import Any
 
 import logging
 
-from server.cadlink.wglink_protocol import blocking, finding_text, manifest_draft, preflight_findings
+from server.contracts.wglink_protocol import blocking, finding_text, manifest_draft, preflight_findings
 from server.platform.incidents import record_incident
 
 logger = logging.getLogger(__name__)

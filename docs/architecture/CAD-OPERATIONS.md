@@ -52,16 +52,17 @@ and exact-id return waiter on reconnect.
 
 `api.py` assembles the CAD Link routers at the top. `store.py` and `receipts.py`
 keep persistence; `identity.py` owns model identity. Root contracts remain in
-`wgreturn.py`, `operations.py`, `roles.py`, `usage.py`, `ipc.py`, `build_flags.py`,
-`wglink_protocol.py` and `limits.py`. The pinned `wglink_protocol.py` stays at its
-existing path. The parked `onshape/` adapter keeps its own package.
+`wgreturn.py`, `operations.py`, `roles.py`, `usage.py`, `ipc.py`, `build_flags.py`
+and `limits.py`. The pinned `wglink_protocol.py` is vendored byte for byte at
+`server/contracts/wglink_protocol.py`, below every server package that reads it
+(mesh and platform included). The parked `onshape/` adapter keeps its own package.
 `retained_files.py` owns the shared checksum verifier for retained CAD downloads
 and returned-STEP exports; it imports only the standard library.
 
 The `cadlink-lanes` contract in `.importlinter` enforces these layers, highest to
 lowest: `api`, `onshape`, independent `joblane | fusion`, `intake`, collaborating
 `store : receipts`, `identity`, `interpretation`, the root leaf contracts,
-`snapshot_mesh`, `wglink_protocol : limits`, then `retained_files`.
+`snapshot_mesh`, `limits`, then `retained_files`.
 Onshape and identity sit above the lanes and
 interpretation respectively because of existing indirect imports through other
 server packages. Fusion currently imports only persistence and root contracts.
@@ -1919,7 +1920,7 @@ finish, cancelled -- is in a second file beside it,
 receipt's bytes and meaning are unchanged, so an add-in that knows only schema 1 never
 sees the status. WGLink's shared protocol owns the contract -- its fields, validator,
 terminal states and every word a user reads (`request_status_text`) -- and WG vendors it
-as `server/cadlink/wglink_protocol.py`; WGLink's `docs/REQUEST-STATUS.md` is the field
+as `server/contracts/wglink_protocol.py`; WGLink's `docs/REQUEST-STATUS.md` is the field
 reference. `result.mesh` describes the measured triangle count and solved domain
 on a completed solve or a `needsYou(mesh_too_large)` hold. On the latter, the
 isolated mesher carries the domain with the ceiling refusal, preparation persists

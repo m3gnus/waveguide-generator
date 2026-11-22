@@ -43,9 +43,9 @@ To review and advance the pin:
 
 1. Land and test the compatible change in [`wglink`](https://github.com/m3gnus/wglink).
 2. Update the full commit and manifest `addinVersion` in `source.json`. Update
-   `server/cadlink/wglink_protocol.source.json` to the same repository and commit,
+   `server/contracts/wglink_protocol.source.json` to the same repository and commit,
    and verify its SHA-256 against the upstream protocol file. If its bytes changed,
-   review compatibility and copy it byte-for-byte to `server/cadlink/wglink_protocol.py`.
+   review compatibility and copy it byte-for-byte to `server/contracts/wglink_protocol.py`.
    Update the endpoint oracle's `PROVENANCE.json` `addin_commit` to the package pin.
    Keep `wg_commit` at the WG baseline that generated those fixtures; regenerate
    with `server/tests/tools/generate_cadlink_endpoint_oracle.py --regenerate` only

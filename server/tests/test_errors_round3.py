@@ -148,7 +148,7 @@ def test_imported_size_crosses_browser_prepare(tmp_path, monkeypatch):
 def test_instance_refusal_reaches_projector(selected):
     from server.cadlink.intake.ingest import _admit_return, IngestRefusal
     from server.cadlink.joblane.request_status import project_request_status
-    from server.cadlink.wglink_protocol import user_text_violations
+    from server.contracts.wglink_protocol import user_text_violations
 
     manifest = {
         "instances": [
@@ -260,7 +260,7 @@ def test_all_authored_ingest_refusals_pass_the_shared_guard():
     import ast
     import copy
     from server.cadlink.intake import ingest
-    from server.cadlink.wglink_protocol import user_text_violations
+    from server.contracts.wglink_protocol import user_text_violations
 
     tree = ast.parse(Path(ingest.__file__).read_text(encoding="utf-8"))
 
@@ -484,7 +484,7 @@ def test_fem_symmetry_refusal_crosses_the_projector(monkeypatch):
 )
 def test_dynamic_user_worded_scope_messages_pass_the_guard(group):
     from server.solver.coupled_admission import fem_group_options_problem
-    from server.cadlink.wglink_protocol import user_text_violations
+    from server.contracts.wglink_protocol import user_text_violations
 
     result = fem_group_options_problem(
         [

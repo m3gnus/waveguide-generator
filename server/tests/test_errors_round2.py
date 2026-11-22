@@ -67,7 +67,7 @@ def test_invalid_driver_size_is_user_action():
 
 def test_project_refusal_passes_the_shared_user_text_guard():
     from server.cadlink.intake.ingest import _admit_return, IngestRefusal
-    from server.cadlink.wglink_protocol import user_text_violations
+    from server.contracts.wglink_protocol import user_text_violations
     with pytest.raises(IngestRefusal) as error:
         _admit_return(SimpleNamespace(get_design=lambda _: None),
                       {'instances': [{'design_id': 'design-a'}]}, None, None)

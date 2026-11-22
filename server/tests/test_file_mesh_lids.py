@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from server.cadlink.store import CadLinkStore
-from server.cadlink.wglink_protocol import SOURCE_ROLES
+from server.contracts.wglink_protocol import SOURCE_ROLES
 from server.mesh.file_import import inspect_file_mesh, mesh_text, prepare_file_mesh
 from server.mesh.imported import SYMMETRY_SNAP_TOLERANCE_MM
 from test_file_mesh_roles_symmetry import box_mesh

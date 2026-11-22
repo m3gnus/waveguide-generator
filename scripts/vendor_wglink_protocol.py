@@ -4,7 +4,7 @@
     python scripts/vendor_wglink_protocol.py <WGLink checkout> [--commit <rev>]
 
 Copies ``fusion-addins/WGLink/wglink_protocol.py`` as committed at ``<rev>``
-(default: the checkout's HEAD) to ``server/cadlink/wglink_protocol.py`` and
+(default: the checkout's HEAD) to ``server/contracts/wglink_protocol.py`` and
 records the commit, path and SHA-256 in ``wglink_protocol.source.json``.
 Exports the shared history wording for the frontend from those same bytes. It
 reads the committed file, never the working tree, so the record always names
@@ -27,8 +27,8 @@ sys.path.insert(0, str(ROOT))
 from scripts.vendor_source import vendor_source  # noqa: E402
 
 SOURCE_PATH = "fusion-addins/WGLink/wglink_protocol.py"
-VENDORED = ROOT / "server/cadlink/wglink_protocol.py"
-MANIFEST = ROOT / "server/cadlink/wglink_protocol.source.json"
+VENDORED = ROOT / "server/contracts/wglink_protocol.py"
+MANIFEST = ROOT / "server/contracts/wglink_protocol.source.json"
 
 
 def main(argv: list[str] | None = None) -> int:

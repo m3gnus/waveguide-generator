@@ -20,7 +20,7 @@ import numpy as np
 
 from server.contracts.canonical import canonical_ascii_strict_json
 
-from server.cadlink.wglink_protocol import (
+from server.contracts.wglink_protocol import (
     MESH_DEFAULTS,
     SOURCE_ROLES,
     canonical_source_role as _protocol_source_role,

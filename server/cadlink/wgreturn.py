@@ -15,7 +15,7 @@ import re
 from typing import Any, Mapping
 import unicodedata
 
-from server.cadlink import wglink_protocol as protocol
+from server.contracts import wglink_protocol as protocol
 from server.cadlink.build_flags import fem_regions_enabled
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES, MAX_WGRETURN_JSON_BYTES
 

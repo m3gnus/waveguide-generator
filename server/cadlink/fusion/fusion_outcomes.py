@@ -27,7 +27,7 @@ from server.cadlink.operations import (
     UPDATE_LINK,
 )
 from server.cadlink.store import CadLinkStore
-from server.cadlink.wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
+from server.contracts.wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
 
 
 logger = logging.getLogger(__name__)

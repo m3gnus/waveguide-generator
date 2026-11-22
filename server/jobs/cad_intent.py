@@ -14,7 +14,7 @@ import copy
 from dataclasses import dataclass, replace
 from typing import Any
 
-from server.cadlink.wglink_protocol import ProtocolValidationError, request_solve_settings
+from server.contracts.wglink_protocol import ProtocolValidationError, request_solve_settings
 from server.jobs.solve_anyway import Answered, Pressed, carries
 from server.cadlink.operations import (
     PREPARE_AND_SOLVE,

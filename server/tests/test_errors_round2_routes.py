@@ -103,7 +103,7 @@ def test_real_file_import_inputs_keep_their_remedies(tmp_path):
 def test_project_gate_crosses_the_real_wglink_projector():
     from server.cadlink.intake.ingest import _admit_return, IngestRefusal
     from server.cadlink.joblane.request_status import project_request_status
-    from server.cadlink.wglink_protocol import user_text_violations
+    from server.contracts.wglink_protocol import user_text_violations
     with pytest.raises(IngestRefusal) as caught:
         _admit_return(SimpleNamespace(get_design=lambda _: None), {'instances': [{'design_id': 'design-a'}]}, None, None)
     words = user_error_message(caught.value)

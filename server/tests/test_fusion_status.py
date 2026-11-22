@@ -31,7 +31,7 @@ from server.cadlink.fusion.fusion_status import (
     read_fusion_status,
 )
 from server.cadlink.store import CadLinkStore
-from server.cadlink.wglink_protocol import user_text_violations
+from server.contracts.wglink_protocol import user_text_violations
 from server.design.schema import DesignConfig
 
 

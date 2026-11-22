@@ -228,7 +228,7 @@ WITHHELD_NOTE = (
 )
 #: Manifest values that are protocol vocabulary, never a user's words: a body
 #: named like one must not turn the manifest invalid. Every enumerated field
-#: of the wgreturn validator (``server.cadlink.wglink_protocol``) is here.
+#: of the wgreturn validator (``server.contracts.wglink_protocol``) is here.
 _MANIFEST_VOCABULARY = frozenset({
     "adapter", "adapter_version", "body_kind", "build_mode", "cad_app", "cad_version",
     "chirality", "external_reference", "formula", "handedness", "kind", "length_unit",

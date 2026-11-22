@@ -18,7 +18,7 @@ from server.cadlink.intake.ingest import IngestRefusal, ingest_bundle
 from server.cadlink.joblane.default_setup import default_mesh, solve_defaults
 from server.cadlink.snapshot_mesh import snapshot_mesh
 from server.cadlink.store import CadLinkStore
-from server.cadlink.wglink_protocol import MESH_DEFAULTS
+from server.contracts.wglink_protocol import MESH_DEFAULTS
 from server.cadlink.wgreturn import read_wgreturn, validate_manifest
 from server.jobs.imported_setup import setup_content, setup_digest, validate_setup
 from server.jobs.models import ImportedMeshSizes

@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from server.contracts.canonical import canonical_utf8_strict_json
 
-from .wglink_protocol import (
+from server.contracts.wglink_protocol import (
     LEGACY_SOURCE_ROLE_ALIASES,
     SOURCE_ROLES,
     canonical_source_role as _protocol_source_role,

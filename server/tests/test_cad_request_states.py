@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from server.cadlink.joblane.request_status import project_request_status
-from server.cadlink.wglink_protocol import user_text_violations
+from server.contracts.wglink_protocol import user_text_violations
 from server.jobs.cad_preparation import job_cad_state
 
 from cad_request_states_rows import FIXTURE, build

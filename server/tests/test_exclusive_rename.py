@@ -60,7 +60,7 @@ def test_the_posix_path_refuses_an_existing_target_too(tmp_path: Path, monkeypat
 
     from types import SimpleNamespace
 
-    from server.cadlink import wglink_protocol as exclusive_rename
+    from server.contracts import wglink_protocol as exclusive_rename
 
     monkeypatch.setattr(exclusive_rename, "sys", SimpleNamespace(platform="linux"))
     monkeypatch.setattr(exclusive_rename, "os", SimpleNamespace(

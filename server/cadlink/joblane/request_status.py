@@ -6,7 +6,7 @@ only says the delivery was accepted or refused) WG keeps
 preparing, needing the user, queued, solving, solved, could not finish, or
 cancelled. The contract (fields, validator, terminal states and every word a
 user reads) is WGLink's shared protocol, vendored as
-``server.cadlink.wglink_protocol``; docs/architecture/CAD-OPERATIONS.md,
+``server.contracts.wglink_protocol``; docs/architecture/CAD-OPERATIONS.md,
 "Request status file", is the WG side of it.
 
 Two halves:
@@ -63,7 +63,7 @@ from server.cadlink.operations import (
     USER_WORDED_FAILURE_CODES,
     effective_reason_code,
 )
-from server.cadlink.wglink_protocol import (
+from server.contracts.wglink_protocol import (
     REQUEST_STATUS_CONTRACT,
     REQUEST_STATUS_REFRESH_SECONDS as REFRESH_INTERVAL_S,
     REQUEST_STATUS_SCHEMA_VERSION,

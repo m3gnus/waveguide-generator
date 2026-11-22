@@ -13,7 +13,7 @@ import pytest
 
 from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME, read_fusion_status
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
-from server.cadlink.wglink_protocol import user_text_violations
+from server.contracts.wglink_protocol import user_text_violations
 from server.cadlink.wgreturn import (
     WgReturnError,
     read_wgreturn,

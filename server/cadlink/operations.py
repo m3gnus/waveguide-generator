@@ -11,7 +11,7 @@ from collections.abc import Mapping
 import hashlib
 from typing import Any, Literal
 
-from server.cadlink.wglink_protocol import (
+from server.contracts.wglink_protocol import (
     APP_NAME, MESH_TOO_LARGE_CODE, ProtocolValidationError, could_not_prepare_text, request_solve_settings,
 )
 from server.contracts.canonical import canonical_utf8_strict_json as canonical_json

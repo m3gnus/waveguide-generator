@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from server.cadlink import wglink_protocol as protocol
+from server.contracts import wglink_protocol as protocol
 from server.cadlink.fusion import fusion_delivery
 from server.cadlink.intake import solve_command
 from server.cadlink.intake.solve_command import (

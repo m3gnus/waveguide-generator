@@ -2419,7 +2419,7 @@ def _mesh_coupled_regions(
             )
 
     check_deadline()
-    from server.cadlink.wglink_protocol import source_physical_name
+    from server.contracts.wglink_protocol import source_physical_name
 
     recipe = exterior.get("viewport_recipe")
     if not isinstance(recipe, Mapping):

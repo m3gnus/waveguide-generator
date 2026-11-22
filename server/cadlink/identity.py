@@ -12,7 +12,7 @@ from typing import Literal, Mapping
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from server.design.schema import ConfigBlock, DesignConfig
-from .wglink_protocol import ASCII_NAN_PERMITTED, canonical_json
+from server.contracts.wglink_protocol import ASCII_NAN_PERMITTED, canonical_json
 
 
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"

@@ -55,7 +55,7 @@ def _cad_model(
     design_id, lineage = _project(harness, 90.0)
     bundle_path, manifest = _project_return(harness, name, design_id, lineage)
     if mesh_snapshot:
-        from server.cadlink.wglink_protocol import default_mesh
+        from server.contracts.wglink_protocol import default_mesh
         path = harness.workspace / bundle_path / 'wgreturn.json'
         value = json.loads(path.read_text())
         value['wgreturn_version'] = '1.1'

@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from server.cadlink.fusion.fusion_outcomes import RECOVERY_NOTICE_SCHEMA, recovery_document_id, settle_from_heartbeat
 from server.cadlink import ipc
 from server.cadlink.store import CadLinkStore
-from server.cadlink.wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
+from server.contracts.wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
 
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
 

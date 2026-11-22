@@ -12,7 +12,7 @@ import pytest
 from server.cadlink.fusion.fusion_delivery import capabilities
 from server.cadlink.intake.show_requests import read_show_requests, publish_show_request, remove_show_request
 from server.cadlink.ipc import ipc_folder
-from server.cadlink.wglink_protocol import SHOW_REQUEST_CAPABILITY, SHOW_REQUEST_EVENT, SHOW_REQUESTS_DIRECTORY
+from server.contracts.wglink_protocol import SHOW_REQUEST_CAPABILITY, SHOW_REQUEST_EVENT, SHOW_REQUESTS_DIRECTORY
 from server.jobs.runtime.events import EventBroker
 
 

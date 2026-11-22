@@ -41,7 +41,7 @@ from server.platform.private_paths import ensure_private_directory
 
 from server.cadlink.ipc import IPC_SUBDIRECTORY, ipc_folder
 from server.cadlink.build_flags import fem_regions_enabled
-from server.cadlink.wglink_protocol import (
+from server.contracts.wglink_protocol import (
     CAPABILITY_STOPPED_AT as STOPPED_AT,
     FUSION_REQUEST_DELIVERY_VERSION,
     REQUEST_STATUS_CAPABILITY,

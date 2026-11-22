@@ -22,7 +22,7 @@ from server.cadlink.fusion import fusion_status
 from server.cadlink.intake import ingest
 from server.cadlink import operations
 from server.cadlink.intake import step_evidence
-from server.cadlink import wglink_protocol
+from server.contracts import wglink_protocol
 from server.cadlink.fusion.fusion_delivery import capabilities
 from server.cadlink.ipc import ipc_folder
 from server.cadlink.store import CadLinkStore
@@ -34,8 +34,8 @@ from server.tests.test_wglink_packaged_pair import CORPUS, _from_package, _verdi
 
 ROOT = Path(__file__).resolve().parents[2]
 SHARED = ROOT / "server/tests/fixtures/wglink-shared-protocol"
-VENDORED = ROOT / "server/cadlink/wglink_protocol.py"
-SOURCE = json.loads((ROOT / "server/cadlink/wglink_protocol.source.json").read_text())
+VENDORED = ROOT / "server/contracts/wglink_protocol.py"
+SOURCE = json.loads((ROOT / "server/contracts/wglink_protocol.source.json").read_text())
 
 
 def _fetch_source(tmp_path: Path) -> Path:

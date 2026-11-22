@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from server.cadlink import wglink_protocol
+from server.contracts import wglink_protocol
 from server.cadlink.fusion.fusion_delivery import capabilities
 from server.cadlink.intake import solve_command
 from server.cadlink.intake.preflight import admission_refusal, blocking_findings

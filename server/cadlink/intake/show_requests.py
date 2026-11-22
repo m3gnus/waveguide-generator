@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from server.cadlink.ipc import ipc_folder
-from server.cadlink.wglink_protocol import (
+from server.contracts.wglink_protocol import (
     SHOW_REQUESTS_DIRECTORY, SHOW_REQUEST_EVENT, SHOW_REQUEST_MAX_AGE_SECONDS, validate_show_request,
 )
 

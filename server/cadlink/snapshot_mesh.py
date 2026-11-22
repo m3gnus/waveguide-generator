@@ -5,7 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from server.cadlink.wglink_protocol import MESH_SIZING_FEATURE
+from server.contracts.wglink_protocol import MESH_SIZING_FEATURE
 
 
 @dataclass(frozen=True)

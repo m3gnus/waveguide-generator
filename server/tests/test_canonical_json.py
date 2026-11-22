@@ -111,7 +111,7 @@ def test_persisted_canonical_bytes(site, case):
 
 
 def test_pinned_protocol_is_unchanged():
-    protocol = ROOT / "server" / "cadlink" / "wglink_protocol.py"
+    protocol = ROOT / "server" / "contracts" / "wglink_protocol.py"
     assert hashlib.sha256(protocol.read_bytes()).hexdigest() == GOLDENS["pinned_protocol_sha256"]
 
 

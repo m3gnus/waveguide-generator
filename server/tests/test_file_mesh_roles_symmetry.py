@@ -8,7 +8,7 @@ import pytest
 
 from server.cadlink.store import CadLinkStore
 from server.cadlink.roles import prepared_inventory_sha256
-from server.cadlink.wglink_protocol import source_physical_name
+from server.contracts.wglink_protocol import source_physical_name
 from server.mesh.imported import parse_source_physical_name
 from server.jobs.runtime.cad_lane import _imported_symmetry_metadata
 from server.solver.bempp_imported import imported_bempp_preflight

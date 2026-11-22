@@ -54,7 +54,7 @@ from server.cadlink.operations import (
     prepare_and_solve_request,
     request_digest,
 )
-from server.cadlink.wglink_protocol import (
+from server.contracts.wglink_protocol import (
     ACKNOWLEDGED_FIELD,
     SOLVE_SETTINGS_FIELD,
     REQUEST_STATUS_SUFFIX,

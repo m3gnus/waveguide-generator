@@ -36,7 +36,7 @@ from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
 from server.cadlink.roles import inventory_sha256, normalize_source_role, prepared_inventory_sha256
 from server.cadlink.intake.design_assembly import AssemblySuperseded, compile_design_assembly
 from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, StaleAttempt, design_model_id, file_model_id
-from server.cadlink.wglink_protocol import SOURCE_ROLES
+from server.contracts.wglink_protocol import SOURCE_ROLES
 from server.contracts.geometry import SYMMETRY_PLANE_AXIS, imported_symmetry_from_cut_planes
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
