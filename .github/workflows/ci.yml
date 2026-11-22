@@ -117,7 +117,7 @@ jobs:
     timeout-minutes: 10
     steps:
       # Needs full history and every remote branch: the signal is where a
-      # branch's merge base sits relative to main's first-parent chain.
+      # branch's merge base sits relative to dev's first-parent chain.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0

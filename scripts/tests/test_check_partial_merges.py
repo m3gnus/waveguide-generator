@@ -168,7 +168,12 @@ def test_default_upstream_is_dev_by_name_even_when_other_refs_exist(tmp_path, mo
 
 
 def test_base_ref_is_what_the_check_compares_against(tmp_path, monkeypatch, capsys):
-    """BASE_REF=dev, as the policy tells agents to run it, compares with origin/dev."""
+    """BASE_REF=dev, as the policy tells agents to run it, compares with origin/dev.
+
+    dev took a prefix of `topic` through a merge commit; main never saw `topic`. Against
+    origin/dev that is a partial merge (exit 1). The old code ignored BASE_REF and
+    compared with origin/main, where `topic` is simply unmerged, and passed.
+    """
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
@@ -176,9 +181,32 @@ def test_base_ref_is_what_the_check_compares_against(tmp_path, monkeypatch, caps
     _git(repo, "config", "user.name", "t")
     _commit(repo, "base")
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "topic")
+    _commit(repo, "topic-1")
+    first = _git(repo, "rev-parse", "HEAD").strip()
+    _commit(repo, "topic-2")
+    _git(repo, "update-ref", "refs/remotes/origin/topic", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "dev", "main")
     _commit(repo, "on-dev")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "take a prefix", first)
     _git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
     monkeypatch.chdir(repo)
     monkeypatch.setenv("BASE_REF", "dev")
-    assert main(["--acknowledged", str(tmp_path / "none.txt")]) == 0
-    assert "(1 checked)" in capsys.readouterr().out  # origin/main is a branch checked against origin/dev
+    assert main(["--acknowledged", str(tmp_path / "none.txt"), "origin/topic"]) == 1
+    assert "origin/topic is partially merged into origin/dev" in capsys.readouterr().out
+    monkeypatch.setenv("BASE_REF", "main")
+    assert main(["--acknowledged", str(tmp_path / "none.txt"), "origin/topic"]) == 0
+
+
+def test_a_missing_upstream_is_named_not_a_traceback(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    _commit(repo, "base")
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BASE_REF", "origin/dev")
+    assert main([]) == 2
+    err = capsys.readouterr().err
+    assert "No such upstream: origin/origin/dev" in err and "branch name such as 'dev'" in err and "--upstream" in err

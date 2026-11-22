@@ -1,4 +1,9 @@
-"""Refuse a branch that `main` has taken a prefix of.
+"""Refuse a branch that the working branch has taken a prefix of.
+
+The working branch is the upstream this checks against: `origin/dev` by default
+(GIT-WORKFLOW section 2), or `origin/$BASE_REF`, or ``--upstream``. The history
+below happened on `main` when `main` was the working branch; read "the upstream"
+for `main` in the signal.
 
 On 2026-08-26, PR #29 merged `work/windows-issue-260826` at `26f3a14c`, five
 commits short of its tip. It took the auto-split sweep default and left behind
@@ -9,14 +14,19 @@ written with the fix and stayed on the unmerged tail.
 
 Nothing in the toolchain looked at *how much* of a branch a merge took.
 
-THE SIGNAL. When a branch forks from `main` normally, the merge base is a commit
-on main's own first-parent chain. When `main` has absorbed part of a branch, the
-merge base is one of the branch's own commits, which reached `main` through the
-second parent of a merge and is therefore NOT on the first-parent chain. So a
-branch is partially merged when both hold:
+THE SIGNAL. When a branch forks from the upstream normally, the merge base is a
+commit on the upstream's own first-parent chain. When the upstream has absorbed
+part of a branch, the merge base is one of the branch's own commits, which reached
+the upstream through the second parent of a merge and is therefore NOT on the
+first-parent chain. So a branch is partially merged when both hold:
 
-    git rev-list --count origin/main..<branch>   is greater than zero
-    git merge-base origin/main <branch>          is not on main's first-parent chain
+    git rev-list --count <upstream>..<branch>   is greater than zero
+    git merge-base <upstream> <branch>          is not on the upstream's first-parent chain
+
+WHAT IT DOES NOT PROVE: that a branch is merged at its tip. A branch that is wholly
+unmerged, or fast-forwarded by hand to a middle commit (its merge base is then on
+the first-parent chain), passes. `git log <branch> ^dev` being empty is the proof
+the policy asks for; this is an extra check for merges that took a prefix.
 
 Replayed against the real refs this flags `work/windows-issue-260826` at the
 broken `main` (6070dab6) and flags none of the branches alive today.
@@ -133,6 +143,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.upstream is None:
         args.upstream = default_upstream()
+    verify = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{args.upstream}^{{commit}}"],
+                            capture_output=True, text=True, check=False)
+    if verify.returncode:
+        hint = (" (BASE_REF takes a branch name such as 'dev', not a ref like 'origin/dev')"
+                if args.upstream.startswith("origin/origin/") else "")
+        print(f"No such upstream: {args.upstream}{hint}. Fetch it, or name one with --upstream.", file=sys.stderr)
+        return 2
     excused = acknowledged(args.acknowledged)
 
     branches = args.branches or remote_branches(args.upstream)
