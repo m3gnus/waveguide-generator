@@ -6,7 +6,8 @@ files with the SHA256 hashes of the published distributions for those versions:
 
 - `requirements-hashed.txt` installs the source environment's locked closure.
 - `requirements-runtime-hashed.txt` excludes the five pytest-only distributions
-  from the shipped runtime. The builder runs `uv pip check` after installation.
+  and PyYAML, which only tests import, from the shipped runtime. The builder runs
+  `uv pip check` after installation.
 
 `--check` is offline and verifies the generated files and direct runtime pins
 against the plain lock. It does not accept newly published registry hashes. A

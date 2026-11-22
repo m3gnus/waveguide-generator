@@ -109,8 +109,8 @@ def _requirements(name: str) -> dict[str, tuple[str, str]]:
         if not line or line.startswith("#"):
             continue
         requirement, _, marker = line.partition(";")
-        # ``uvicorn[standard]`` is one distribution with an extra; the lock
-        # pins the distribution.
+        # A requirement with an extra is one distribution; the lock pins the
+        # distribution.
         distribution, _, version = requirement.strip().partition("==")
         pinned[distribution.split("[")[0].strip().casefold()] = (
             version.strip(),
