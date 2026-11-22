@@ -517,8 +517,9 @@ stores the decision on the record it prepared. The model's Model details shows t
 information with its one **Change** (a fallback adds one calm line, "WG chose +Z; change it if
 the model radiates another way."), never a confirmation Solve waits on. Saved manual
 choices take precedence (see "Automatic axis" below).
-`server/cadlink/interpretation/solver_frame.py` is the executable half of this section, and
-`server/cadlink/interpretation/frame_infer.py` the inference.
+`server/cadlink/interpretation/solver_frame.py` is the executable half of this section, with
+the contract's axis and matrix arithmetic in `server/contracts/solver_frame.py` (the mesher
+applies the same matrices), and `server/cadlink/interpretation/frame_infer.py` the inference.
 
 - **The frame.** The model axis that points out of the mouth, one of
   `+z -z +x -x +y -y`, is the solver's +Z; the origin is the model's own. Two contracts

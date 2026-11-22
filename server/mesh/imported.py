@@ -2836,7 +2836,7 @@ def build_imported_mesh(
     # in the solver frame its project confirmed (server/cadlink/interpretation/solver_frame.py),
     # the assembly frame as modelled (+z) until then. The one matrix producer is
     # ``spec_matrix``, which the preview reads as well.
-    from server.cadlink.interpretation.solver_frame import AS_MODELLED, spec_axis, spec_matrix
+    from server.contracts.solver_frame import AS_MODELLED, spec_axis, spec_matrix
 
     solver_frame = options.get("solver_frame")
     if solver_frame is not None and anchor_id is not None:
