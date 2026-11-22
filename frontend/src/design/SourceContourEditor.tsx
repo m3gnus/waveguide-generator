@@ -27,7 +27,8 @@ import { editRecord, type EditHost } from '../sketch/workspace/editRecord';
 import type { Command } from '../sketch/commands';
 import type { Diagnosis } from '../sketch/session';
 import { arcGeometry } from '../sketch/geometry';
-import { installSketchTest, registerSketchLoader, sketchPerfEnabled } from './sketchTestHarness';
+import { installSketchTest, registerSketchLoader } from './sketchTestHarness';
+import { sketchPerfEnabled } from '../sketch/sketchPerf';
 import './sourceContourEditor.css';
 import { failureWords } from '../api/httpError';
 

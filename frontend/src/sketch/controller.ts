@@ -9,6 +9,7 @@ import { materialiseContext, referencePointIds, type SketchContext } from './con
 import type { XY } from './solver/types';
 import { commandNotice } from './notices';
 import { displayName } from './displayName';
+import { sketchPerfEnabled } from './sketchPerf';
 
 import { constraintError, isConstraintConflict, type Authoring } from './workspace/sketchSolvePolicy';
 export { isConstraintConflict, type Authoring } from './workspace/sketchSolvePolicy';
@@ -46,7 +47,7 @@ export class SketchController<T> {
   }
   diagnosis?: Diagnosis;
   lastSolveMs?: number;
-  private readonly measureDrag = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('sketchPerf') === '1';
+  private readonly measureDrag = sketchPerfEnabled();
   private placedDimension?: { id: string; state: Authoring<T> };
   private context?: { replace: (state: Authoring<T>) => Authoring<T>; conflictPrefix?: string };
   constructor(private config: SketchControllerOptions<T>) {

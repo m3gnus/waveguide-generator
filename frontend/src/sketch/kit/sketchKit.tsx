@@ -45,6 +45,7 @@ import { sketchGeometry, selectedConstraintRefs } from '../sketchGeometry';
 import type { DisplayModel, DisplayUI, WorkspaceAxes } from '../workspace/types';
 import type { View } from '../view';
 import '../sketchCanvas.css';
+import { sketchPerfEnabled } from '../sketchPerf';
 
 export interface SketchCanvasProps {
   context?: SketchContext; contextStale?: boolean;
@@ -126,7 +127,7 @@ export function SketchKit({ presentation, slots, workflow, scaleToFit, context, 
   const drag = useRef<{ id: string; ready: Promise<void>; origin?: XY; points?: { id: string; x: number; y: number }[]; bend?: ArcBodyDrag } | undefined>(undefined);
   const gesture = useRef<{ id: string; screen: XY } | undefined>(undefined);
   const perf = useRef<{ start: number; solveMs: number } | undefined>(undefined);
-  const [perfEnabled] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('sketchPerf') === '1');
+  const [perfEnabled] = useState(sketchPerfEnabled);
   const alive = useRef(true);
   const latest = useRef({ sketch, session, context });
   const contextPicking = useRef(false);
