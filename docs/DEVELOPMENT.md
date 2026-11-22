@@ -160,11 +160,11 @@ contracts enforce the four lanes, keep interpretation free of persistence and
 lane imports (including indirect imports), and prevent preparation from importing
 job admission shims. See [Server layout](architecture/CAD-OPERATIONS.md#server-layout).
 
-Each current upward import is an exact, commented `ignore_imports` edge. New
-edges fail, and an exception whose import disappears fails too: remove it as
-part of the boundary cleanup. An exception covers all symbols on that module
-edge; adding another symbol on an existing edge is not detected. New server
-packages must be assigned a layer. The other two checks that
+No contract ignores an import: an upward import fails. Move the shared code
+down to the layer that owns it instead of adding an `ignore_imports` edge
+(request schemas live in `server/solve_request.py` and `server/contracts/`, the
+multi-engine warmup in `server/engines/`). New server packages must be assigned
+a layer. The other two checks that
 job runs are worth the same habit before a release:
 
 ```bash
