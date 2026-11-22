@@ -857,6 +857,21 @@ describe('impedance comparison subtitle', () => {
     expect(impedanceSubtitle([{ id: 'x', label: 'x', result: { frequencies: [500] } as ResultData }])).toBeNull();
   });
 
+  it('names a modal channel curve, which still shares the Z/ρc axis', () => {
+    const modal: NamedResult = {
+      id: 'pair', label: 'pair',
+      result: {
+        frequencies: [500],
+        impedance: { frequencies: [500], real: [0.4], imaginary: [0.3] },
+        metadata: { impedance_units: 'Z/(rho*c)', impedance_projection: 'modal_mean_square_velocity' },
+      } as unknown as JobResults,
+    };
+    expect(impedanceComparable([withImpedance('a', false), modal]).items).toHaveLength(2);
+    expect(impedanceSubtitle([withImpedance('a', false), modal])).toBe('modal over the channel\u2019s patches');
+    expect(impedanceSubtitle([withImpedance('a', true), modal]))
+      .toBe('1 Z/ρc run hidden · cannot share a Ω axis');
+  });
+
   it('keeps legacy impedance samples that use the top-level frequency grid', () => {
     const legacy = {
       id: 'legacy',

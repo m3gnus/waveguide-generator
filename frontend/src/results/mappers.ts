@@ -293,8 +293,28 @@ export const ELECTRICAL_IMPEDANCE: ImpedanceUnits = {
   electrical: true,
 };
 
+/**
+ * The channel's power-consistent modal impedance, sum w S <p> / sum w^2 S.
+ *
+ * The server reports it for a multi-source or weighted channel, where no single
+ * patch's impedance is the channel's, and tags it `impedance_projection`. It is
+ * still Z/ρc (radiated power over ρc ∫|v|² dS in its real part), so it shares
+ * the acoustic axis; only the name says what it is.
+ */
+export const MODAL_ACOUSTIC_IMPEDANCE: ImpedanceUnits = {
+  axis: 'Z/ρc',
+  spokenName: 'modal normalized acoustic impedance',
+  electrical: false,
+};
+
+export function isModalImpedance(result: ResultPayload): boolean {
+  return !hasElectricalImpedance(result)
+    && result.metadata?.impedance_projection === 'modal_mean_square_velocity';
+}
+
 export function impedanceUnits(result: ResultPayload): ImpedanceUnits {
-  return hasElectricalImpedance(result) ? ELECTRICAL_IMPEDANCE : NORMALIZED_ACOUSTIC_IMPEDANCE;
+  if (hasElectricalImpedance(result)) return ELECTRICAL_IMPEDANCE;
+  return isModalImpedance(result) ? MODAL_ACOUSTIC_IMPEDANCE : NORMALIZED_ACOUSTIC_IMPEDANCE;
 }
 
 /**
@@ -335,12 +355,17 @@ export function impedanceComparable(items: NamedResult[]): { items: NamedResult[
  * over per-driver curves invites reading them as the run's.
  */
 export function impedanceSubtitle(items: NamedResult[]): string | null {
-  const { units, excluded } = impedanceComparable(items);
+  const { items: comparable, units, excluded } = impedanceComparable(items);
   const perDriver = items.some(({ secondary }) => secondary) ? 'per driver' : null;
-  if (!excluded) return perDriver;
-  const other = units.electrical ? NORMALIZED_ACOUSTIC_IMPEDANCE : ELECTRICAL_IMPEDANCE;
-  const hidden = `${excluded} ${other.axis} run${excluded === 1 ? '' : 's'} hidden · cannot share a ${units.axis} axis`;
-  return perDriver ? `${perDriver} · ${hidden}` : hidden;
+  // A multi-patch or weighted channel's curve is its modal impedance over all
+  // its patches, not any one patch's; say so wherever one is drawn.
+  const modal = comparable.some(({ result }) => isModalImpedance(result as ResultPayload))
+    ? 'modal over the channel\u2019s patches' : null;
+  const hidden = excluded
+    ? `${excluded} ${(units.electrical ? NORMALIZED_ACOUSTIC_IMPEDANCE : ELECTRICAL_IMPEDANCE).axis} run${excluded === 1 ? '' : 's'} hidden · cannot share a ${units.axis} axis`
+    : null;
+  const parts = [perDriver, modal, hidden].filter((part): part is string => Boolean(part));
+  return parts.length ? parts.join(' · ') : null;
 }
 
 /** On-axis phase in engineering convention (as the FRD), referenced and detrended exactly as the exported PNG draws it. */

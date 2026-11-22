@@ -30,7 +30,7 @@ import { smoothedExportSeries } from './series';
 import { buildDerivedAcousticsCsv, buildDerivedAcousticsJson } from './derivedAcoustics';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
 import { withNormalizationAngle } from './normalization';
-import { impedanceUnits } from './mappers';
+import { impedanceUnits, isModalImpedance } from './mappers';
 import { polarValueDb } from './values';
 import { engineeringDisplayPhase } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
@@ -177,8 +177,14 @@ function joinSeries(series: ReturnType<typeof smoothedSeries>): JoinedRow[] {
   }));
 }
 
+/** The impedance unit an export writes, naming a modal channel curve as such. */
+function exportImpedanceUnit(result: ResultPayload): string {
+  if (impedanceUnits(result).electrical) return 'ohms';
+  return isModalImpedance(result) ? 'Z/(rho*c) modal' : 'Z/(rho*c)';
+}
+
 export function buildFrequencyCsv(result: ResultPayload, preferences: Preferences): string {
-  const unit = impedanceUnits(result).electrical ? 'ohms' : 'Z/(rho*c)';
+  const unit = exportImpedanceUnit(result);
   const rows = [`Frequency (Hz),SPL (dB),DI (dB),Impedance Real (${unit}),Impedance Imag (${unit})`];
   joinSeries(smoothedSeries(result, preferences)).forEach((row) => rows.push([
     row.frequency, csvCell(row.spl), csvCell(row.di), csvCell(row.impedanceReal), csvCell(row.impedanceImaginary),
@@ -204,10 +210,11 @@ export function buildSummaryText(result: ResultPayload, preferences: Preferences
   const rows = joinSeries(series);
   const frequencies = rows.map((row) => row.frequency);
   const electricalImpedance = impedanceUnits(result).electrical;
-  const impedanceUnit = electricalImpedance ? 'ohms' : 'Z/(rho*c)';
+  const impedanceUnit = exportImpedanceUnit(result);
+  const modal = isModalImpedance(result) ? '  (modal)' : '';
   const impedanceColumns = electricalImpedance
     ? 'Freq(Hz)  SPL(dB)  DI(dB)  Z_Re(ohms)  Z_Im(ohms)'
-    : 'Freq(Hz)  SPL(dB)  DI(dB)  Z_Re/(rho*c)  Z_Im/(rho*c)';
+    : `Freq(Hz)  SPL(dB)  DI(dB)  Z_Re/(rho*c)  Z_Im/(rho*c)${modal}`;
   const lines = ['BEM SIMULATION RESULTS', '=====================', '', `Generated: ${now.toISOString()}`, `Smoothing: ${preferences.smoothing}`];
   lines.push(frequencies.length ? `Frequency range: ${Math.min(...frequencies).toFixed(0)} - ${Math.max(...frequencies).toFixed(0)} Hz` : 'Frequency range: n/a');
   lines.push(`Number of points: ${frequencies.length}`, '');
@@ -276,7 +283,7 @@ export function buildPolarCsv(result: ResultPayload): string {
 
 export function buildImpedanceCsv(result: ResultPayload): string {
   const frequencies = result.impedance?.frequencies ?? result.frequencies;
-  const suffix = impedanceUnits(result).electrical ? 'Ohm' : 'Z_over_rho_c';
+  const suffix = impedanceUnits(result).electrical ? 'Ohm' : isModalImpedance(result) ? 'Z_over_rho_c_modal' : 'Z_over_rho_c';
   const rows = [`Freq_Hz,Z_Real_${suffix},Z_Imag_${suffix}`];
   frequencies.forEach((frequency, index) => rows.push(`${frequency},${csvCell(result.impedance?.real?.[index])},${csvCell(result.impedance?.imaginary?.[index])}`));
   return `${samplingComments(result)}${rows.join('\n')}\n`;

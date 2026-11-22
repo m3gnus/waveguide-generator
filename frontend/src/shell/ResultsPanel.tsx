@@ -1690,12 +1690,36 @@ function PolarResponseCard({ items, tokens, density, live }: { items: NamedResul
  * tag check below reads it as an unloaded waveguide. The server already wrote
  * the real reason in that field; nothing had read it.
  */
+/**
+ * Why this channel cannot take a driver model, when the solver would refuse one.
+ *
+ * A driver model drives exactly one source at unit weight; the server refuses
+ * one on a multi-source or weighted channel. Such a channel now shows its modal
+ * impedance instead of no impedance, so the generic "add a driver" advice would
+ * send the user into that refusal. Null when a driver could be added.
+ */
+export function driverRefusedChannelReason(result: ResultPayload): string | null {
+  const metadata = result.metadata ?? {};
+  const sources = Array.isArray(metadata.source_ids) ? metadata.source_ids.length : 0;
+  const weights = metadata.patch_weights && typeof metadata.patch_weights === 'object'
+    ? Object.values(metadata.patch_weights as Record<string, unknown>) : [];
+  if (sources > 1) {
+    return `and a driver model can drive only one source. This channel drives ${sources} sources together; give the driver's source its own channel to add one.`;
+  }
+  if (weights.some((weight) => typeof weight === 'number' && Math.abs(weight - 1) > 1e-9)) {
+    return 'and a driver model needs its source at unit weight. This channel scales its patch; drive the patch at weight 1 in its own channel to add one.';
+  }
+  return null;
+}
+
 export function driverChartMissingReason(result: ResultPayload, chart: string): string {
   const omitted = result.metadata?.impedance_omitted;
   if (typeof omitted === 'string' && omitted.trim()) {
     return `${chart} needs this channel's electrical impedance, which the solve did not produce -- ${omitted.trim()}.`;
   }
   if (!hasElectricalImpedance(result)) {
+    const refusal = driverRefusedChannelReason(result);
+    if (refusal) return `${chart} needs a driver model, ${refusal}`;
     return `${chart} needs a driver. Add one to this channel, then solve again.`;
   }
   if (!electricalDrive(result)) {

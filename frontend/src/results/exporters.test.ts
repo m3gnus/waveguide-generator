@@ -295,6 +295,19 @@ describe('result exporters', () => {
     expect(buildImpedanceCsv(result)).toContain('200,,-0.5');
   });
 
+  it('names a modal channel impedance as such in every export', () => {
+    const preferences = preferencesStore.getSnapshot();
+    const modal: ResultPayload = {
+      ...result,
+      metadata: { ...(result.metadata ?? {}), impedance_projection: 'modal_mean_square_velocity' },
+    };
+    expect(buildFrequencyCsv(modal, preferences)).toContain('Impedance Real (Z/(rho*c) modal)');
+    expect(buildImpedanceCsv(modal)).toContain('Z_Real_Z_over_rho_c_modal');
+    expect(buildSummaryText(modal, preferences, new Date('2026-08-04T10:00:00Z'))).toContain('Z_Im/(rho*c)  (modal)');
+    // An ordinary acoustic or electrical curve keeps its existing labels.
+    expect(buildImpedanceCsv(result)).toContain('Z_Real_Z_over_rho_c,');
+  });
+
   describe('polar frame/frequency alignment', () => {
     it('refuses fewer directivity frames than frequency labels', () => {
       const misaligned: ResultPayload = {

@@ -458,6 +458,28 @@ describe('driver-coupled chart stubs', () => {
     expect(reason).not.toContain('needs a driver');
   });
 
+  it('does not advise adding a driver where the server refuses one', () => {
+    // A multi-source or weighted channel now shows its modal impedance, so no
+    // impedance_omitted reason is left to quote; "add a driver" would be refused.
+    const modalPair = {
+      frequencies: [100],
+      impedance: { frequencies: [100], real: [0.4], imaginary: [0.3] },
+      metadata: { impedance_units: 'Z/(rho*c)', impedance_projection: 'modal_mean_square_velocity',
+        source_ids: ['hf', 'mf'] },
+    } as ResultPayload;
+    const pair = driverChartMissingReason(modalPair, 'Power & Current Draw');
+    expect(pair).not.toContain('Add one to this channel');
+    expect(pair).toContain('only one source');
+    expect(pair).toContain('2 sources');
+    const weighted = {
+      frequencies: [100],
+      metadata: { impedance_units: 'Z/(rho*c)', source_ids: ['hf'], patch_weights: { hf: 0.5 } },
+    } as ResultPayload;
+    expect(driverChartMissingReason(weighted, 'Cone Excursion')).toContain('unit weight');
+    const unit = { frequencies: [100], metadata: { source_ids: ['hf'], patch_weights: { hf: 1 } } } as ResultPayload;
+    expect(driverChartMissingReason(unit, 'Cone Excursion')).toContain('Add one to this channel');
+  });
+
   it('does not claim excursion was derived from impedance samples', () => {
     const driven = {
       frequencies: [100],
