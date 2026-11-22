@@ -1445,7 +1445,7 @@ class StatusController:
         caller, and this returns False. The server is not restarted for it --
         that would end running solves for a restart that installs nothing --
         and it does not stay latched: its latch expires on its own
-        (``RESTART_APPROVAL_TTL`` in ``server/updates/restart.py``). Callers
+        (``RESTART_APPROVAL_TTL`` in ``server/platform/restart.py``). Callers
         need do nothing more.
         """
 

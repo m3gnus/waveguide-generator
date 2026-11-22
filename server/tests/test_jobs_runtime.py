@@ -1913,7 +1913,7 @@ def test_a_stop_that_begins_during_an_approved_update_restart_is_marked_as_that(
     """
 
     from server.jobs.runtime.core import UPDATE_RESTART_MESSAGE, UPDATE_RESTART_STAGE_MESSAGE
-    from server.updates.restart import RestartApproval
+    from server.platform.restart import RestartApproval
 
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()

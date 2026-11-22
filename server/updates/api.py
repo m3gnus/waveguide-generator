@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from server.integration.contracts import error_envelope
 from server.settings.store import SettingsStore
 
-from .restart import UPDATE_RESTART_PENDING, RestartApproval
+from server.platform.restart import UPDATE_RESTART_PENDING, RestartApproval
 from .installer_service import InstallerUpdateService, UpdateChannelUnavailable, UpdateInstallUnavailable
 
 

@@ -51,11 +51,6 @@ ignore_imports =
     # integration -> jobs: existing upward dependency.
     # Legacy use: SolveRequest.
     server.integration.provenance -> server.jobs.models
-    # jobs -> updates: existing upward dependency.
-    # Legacy use: RestartApproval, UPDATE_RESTART_PENDING.
-    server.jobs.api -> server.updates.restart
-    # Legacy use: RestartApproval.
-    server.jobs.runtime.core -> server.updates.restart
     # mesh -> cadlink: existing upward dependency.
     # Legacy use: AS_MODELLED, spec_axis, spec_matrix.
     server.mesh.imported -> server.cadlink.interpretation.solver_frame

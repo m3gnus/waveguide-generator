@@ -15,7 +15,7 @@ from launchers.install_paths import ordinary_path
 from server.app import QUIET_REQUEST_ROUTES, create_app
 from server.jobs.store import JobStore
 from server.platform import paths
-from server.updates.restart import RestartApproval
+from server.platform.restart import RestartApproval
 
 from server.tests._asgi import SOLVE_BODY, _post
 

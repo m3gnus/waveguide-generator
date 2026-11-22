@@ -15,7 +15,7 @@ from launch.backend_lifetime import (
 )
 from launchers import backend_retire_request as files
 from server.jobs.store import JobStore
-from server.updates.restart import RestartApproval
+from server.platform.restart import RestartApproval
 
 from cad_backends import JobsHarness
 from test_cad_manual_solve import _create, _ingest

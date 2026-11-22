@@ -1807,7 +1807,7 @@ def test_the_delivery_loop_starts_nothing_while_an_update_restart_is_pending(
 ) -> None:
     from server.cadlink.api import _preparation_context
     from server.cadlink.joblane.job_shims import run_delivery_pass
-    from server.updates.restart import RestartApproval
+    from server.platform.restart import RestartApproval
 
     first_path, first_manifest = _write_return(harness.workspace, "first.wgreturn")
     _accept(harness.store, "cmd-1", first_path, first_manifest)  # received before the approval

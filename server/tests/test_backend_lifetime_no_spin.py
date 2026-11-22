@@ -10,7 +10,7 @@ import pytest
 from server.engines.dryrun import DryRunEngine
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.runtime import JobRuntime
-from server.updates.restart import RestartApproval
+from server.platform.restart import RestartApproval
 
 from cad_backends import JobsHarness
 from test_cad_preparation import _received, _revision, _setup

@@ -7,7 +7,7 @@
 > `statusapp/healthy_start.py`, `statusapp/updater.py`, `server/updates/service.py`
 > and the layer half of `server/updates/bundle.py`). Sections 1-3 and 5 describe
 > that removed code and are kept as a record. Section 4, the restart-approved
-> latch, still governs `server/updates/restart.py` and the routes and job
+> latch, still governs `server/platform/restart.py` and the routes and job
 > runtime that read it (tests: `server/tests/test_update_restart_latch.py`), and
 > the data-compatibility items of section 6 still apply. Updates are full
 > installers: [`INSTALLER-HANDOFF-CONTRACT.md`](INSTALLER-HANDOFF-CONTRACT.md).
@@ -54,7 +54,7 @@ the release owner that this contract records but does not design.
 | The launcher accepts the request only with exactly its five keys and staged paths inside the data directory. It deletes the request as it consumes it. | `launchers/statusapp/updater.py:108-175` |
 | The launcher runs the **staged** helper, `<staged app>/launchers/apply_update.py`, with `cwd` at the data directory. It checks containment again. | `updater.py:562-566`, `:571`, `:587-604`, `:611-616` |
 | The launcher consumes the request **before** it stops the server. | `launchers/statusapp/controller.py:1013-1026`; `view.py:141`, `:191-201` |
-| Writing the handoff request latches "restart approved" in the server (§4.2). While it is latched, `POST /api/solve`, `POST /api/models/{model_id}/solve`, `POST /api/jobs/{job_id}/retry`, `POST /api/updates/install`, `POST /api/cadlink/ingest` and the file preparations `POST /api/models/files` and `POST /api/models/{model_id}/prepare` answer 409 `update_restart_pending`. Saving a setup (`PUT /api/models/{model_id}/setup`) starts nothing and is never refused for it. | `server/updates/restart.py`; writers in `server/updates/bundle.py` and `server/updates/service.py`; refusals in `server/jobs/api.py`, `server/updates/api.py`, `server/app.py`, `server/jobs/models_api.py` and `server/jobs/model_solve.py` |
+| Writing the handoff request latches "restart approved" in the server (§4.2). While it is latched, `POST /api/solve`, `POST /api/models/{model_id}/solve`, `POST /api/jobs/{job_id}/retry`, `POST /api/updates/install`, `POST /api/cadlink/ingest` and the file preparations `POST /api/models/files` and `POST /api/models/{model_id}/prepare` answer 409 `update_restart_pending`. Saving a setup (`PUT /api/models/{model_id}/setup`) starts nothing and is never refused for it. | `server/platform/restart.py`; writers in `server/updates/bundle.py` and `server/updates/service.py`; refusals in `server/jobs/api.py`, `server/updates/api.py`, `server/app.py`, `server/jobs/models_api.py` and `server/jobs/model_solve.py` |
 
 After `8bccff0c`, the writing side of area 1 was implemented. `commit_transaction` writes
 the completion record (§2.2) before `remove_journal`, and healthy-start cleanup on both
@@ -530,7 +530,7 @@ product question this contract leaves open (§6).
   status control channel it already owns, and the server treats it as a failed attempt.
   A server must never stay latched with no handoff pending.
 
-In the code, the latch is `RestartApproval` in `server/updates/restart.py`, one per server
+In the code, the latch is `RestartApproval` in `server/platform/restart.py`, one per server
 process (`application.state.update_restart`):
 
 - The bundle installer and the checkout install set it just before they write the
@@ -591,7 +591,7 @@ process (`application.state.update_restart`):
   Try again."
 - **The request is taken back first.** When an approval comes down, the writer that
   approved it renames its own request, if it is still there, to `<request>.revoked`
-  (`revoke_request` in `server/updates/restart.py`) before it reports anything. The
+  (`revoke_request` in `server/platform/restart.py`) before it reports anything. The
   launcher reads a request and then deletes it, and a delete that finds the file gone
   hands off nothing, in this release and in v0.3.1 and v0.3.2 alike. So a launcher that
   comes back late, for example after the machine slept past the approval, cannot restart

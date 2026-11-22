@@ -37,7 +37,7 @@ from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
 from server.solver.base import EngineRunResult
 from server.tests._asgi import SOLVE_BODY, _post
-from server.updates.restart import RestartApproval
+from server.platform.restart import RestartApproval
 
 
 _FAKE_SERVER = textwrap.dedent(
@@ -250,7 +250,7 @@ def test_an_approved_restart_expires_when_no_handoff_follows(
     status shows the attempt as failed -- and logs one line.
     """
 
-    from server.updates import restart as restart_module
+    from server.platform import restart as restart_module
 
     warnings: list[tuple[object, ...]] = []
     monkeypatch.setattr(

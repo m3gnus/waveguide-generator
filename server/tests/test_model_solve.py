@@ -379,7 +379,7 @@ def test_refusals_of_the_press_itself(harness) -> None:
 
 
 def test_a_retirement_hold_and_an_update_restart_refuse_a_new_cad_solve(harness) -> None:
-    from server.updates.restart import RestartApproval
+    from server.platform.restart import RestartApproval
 
     app = _models_app(harness)
     model = _cad_model(harness)
@@ -856,7 +856,7 @@ def test_a_deduplicated_file_press_replays_to_its_job_after_it_ended(tmp_path) -
 
 
 def test_a_file_solve_is_refused_while_an_update_restart_is_pending(tmp_path) -> None:
-    from server.updates.restart import RestartApproval
+    from server.platform.restart import RestartApproval
 
     async def scenario(store, app, runtime):
         record = register_mesh(store, tmp_path, registration())

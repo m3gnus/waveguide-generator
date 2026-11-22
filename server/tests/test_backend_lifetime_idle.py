@@ -15,7 +15,7 @@ import pytest
 from launch import backend_lifetime as lifetime
 from launch.backend_lifetime import ActivityTracker, BackendLifetimeThread, IdleRetirement, ReleaseRequest
 from launchers import backend_retire_request as files
-from server.updates.restart import RestartApproval
+from server.platform.restart import RestartApproval
 
 
 class Clock:

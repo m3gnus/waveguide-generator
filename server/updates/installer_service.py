@@ -12,7 +12,7 @@ import stat
 
 from .installer_client import InstallerClient, VerifiedInstaller
 from .installer_checker import InstallerClientError
-from .restart import RestartApproval, RestartRelease, revoke_request
+from server.platform.restart import RestartApproval, RestartRelease, revoke_request
 
 
 class UpdateInstallUnavailable(RuntimeError):

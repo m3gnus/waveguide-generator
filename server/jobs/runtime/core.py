@@ -155,7 +155,7 @@ from .events import (
 
 if TYPE_CHECKING:
     from server.jobs.cad_preparation import CadPreparationHost
-    from server.updates.restart import RestartApproval
+    from server.platform.restart import RestartApproval
 
 
 MAX_LOG_LINES = 200

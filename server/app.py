@@ -52,7 +52,7 @@ from server.solver.symmetry import resolve_symmetry
 from server.workspace import mount_workspace
 from server.workspace.api import MAX_EXPORT_REQUEST_BODY_BYTES
 from server.updates import mount_updates
-from server.updates.restart import RestartApproval
+from server.platform.restart import RestartApproval
 from server.integration.contracts import error_envelope
 # Re-export for the launcher lifetime tracker.
 from server.request_middleware import QUIET_REQUEST_ROUTES as QUIET_REQUEST_ROUTES, RequestMiddleware

@@ -84,7 +84,7 @@ RECORDABLE_STATES = STATES - {RECEIVED, PROCESSING, CANCEL_REQUESTED}
 
 # The reason a solve waits when an approved update restart held it at submission
 # (docs/architecture/CAD-OPERATIONS.md, "Preparation"). The same string as the
-# jobs system's refusal code, ``server.updates.restart.UPDATE_RESTART_PENDING``.
+# jobs system's refusal code, ``server.platform.restart.UPDATE_RESTART_PENDING``.
 REASON_UPDATE_RESTART_PENDING = "update_restart_pending"
 # A return the shared preflight rules refuse (``server/cadlink/intake/preflight.py``).
 PREFLIGHT_BLOCKED = "preflight_blocked"

@@ -87,7 +87,7 @@ from server.cadlink.operations import TERMINAL_STATES
 from server.mesh.prepared_gc import PreparedMeshCollector
 from server.engines.registry import EngineRegistry
 from server.platform.origin import websocket_request_allowed
-from server.updates.restart import UPDATE_RESTART_PENDING, RestartApproval
+from server.platform.restart import UPDATE_RESTART_PENDING, RestartApproval
 
 logger = logging.getLogger(__name__)
 

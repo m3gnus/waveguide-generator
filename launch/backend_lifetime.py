@@ -20,7 +20,7 @@ from server.jobs.cad_intent import cad_of
 from server.platform.instance import StopSignal
 from server.solver.beat_runtime.clock import suspend_aware_monotonic
 from server.solver.beat_runtime import retire
-from server.updates.restart import RetirementHold
+from server.platform.restart import RetirementHold
 
 log = logging.getLogger("wg.launch")
 RETIRE_REASON = "the installer is replacing it"

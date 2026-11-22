@@ -51,7 +51,7 @@ the exception in `validation/`: it is a blank form to copy, not evidence.
 | [CAD connection setup](reference/CAD-CONNECTION-SETUP.md) | CAD Link and settings developers | Implemented contract | Implemented 2026-08-14 |
 | [Multi-instance CAD identity](reference/MULTI-INSTANCE-CAD-IDENTITY.md) | CAD adapter, server, and UI developers | Implemented first-slice contract | Fusion status, return listing/ingest, and UI, 2026-08-20 |
 | [Shutdown and recovery](reference/SHUTDOWN-AND-RECOVERY.md) | Server, launcher, and release maintainers | Current behaviour; process-level tests and an RC gate | `launch/serve.py`, `server/platform/`, 2026-09-13 |
-| [Update transaction contract](reference/UPDATE-TRANSACTION-CONTRACT.md) | Updater and launcher maintainers | Restart latch (section 4) and data compatibility (section 6) current; layer transaction historical, removed in 0.3.6 | `server/updates/restart.py`; status reviewed 2026-10-17 |
+| [Update transaction contract](reference/UPDATE-TRANSACTION-CONTRACT.md) | Updater and launcher maintainers | Restart latch (section 4) and data compatibility (section 6) current; layer transaction historical, removed in 0.3.6 | `server/platform/restart.py`; status reviewed 2026-10-17 |
 | [Signed full-installer client](reference/INSTALLER-CLIENT-CONTRACT.md) | Updater maintainers | Current client contract | `server/updates/installer_client.py` |
 | [Installer handoff](reference/INSTALLER-HANDOFF-CONTRACT.md) | Installer and updater maintainers | Current full-installer handoff contract | `server/updates/` and platform installers |
 | [Update signing runbook](reference/UPDATE-SIGNING.md) | Release maintainers | Current runbook | `SHA256SUMS` signing in the release workflow |

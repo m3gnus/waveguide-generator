@@ -11,7 +11,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from server.integration.contracts import error_envelope
 from server.platform.origin import local_request_host, request_origin_allowed
-from server.updates.restart import UPDATE_RESTART_PENDING
+from server.platform.restart import UPDATE_RESTART_PENDING
 
 
 request_log = logging.getLogger("wg.requests")

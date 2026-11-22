@@ -18,7 +18,7 @@ from launchers.full_installer import (
 )
 from server.updates.installer_client import VerifiedInstaller
 from server.updates.installer_service import InstallerUpdateService
-from server.updates.restart import RestartApproval
+from server.platform.restart import RestartApproval
 from server.tests._symlinks import requires_symlinks
 
 
