@@ -70,8 +70,6 @@ ignore_imports =
     # Legacy use: full3d_engine_order.
     server.solver.warmup -> server.engines.registry
     # solver -> jobs: existing upward dependency.
-    # Legacy use: SolveRequest.
-    server.solver.base -> server.jobs.models
     # Legacy use: DriveChannel.
     server.solver.beat_adapter.capabilities -> server.jobs.models
     # Legacy use: DriveChannel.

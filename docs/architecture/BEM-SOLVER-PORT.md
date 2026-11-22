@@ -1,7 +1,7 @@
 # HornLab full-3D BEM solver port
 
-`server.solver.base.Full3DSolverPort` is the application-facing boundary for
-BEAT and Metal. Both adapters expose `run(request, cancel_cb, stage_cb,
+The application-facing boundary for BEAT and Metal is a shared adapter shape
+(not a declared type): both adapters expose `run(request, cancel_cb, stage_cb,
 artifact_cb, result_cb, imported_record)` and return `EngineRunResult`. The job
 runner owns persistence, progress delivery and cancellation state; an adapter
 owns meshing, native submission, response mapping and its worker lifetime.

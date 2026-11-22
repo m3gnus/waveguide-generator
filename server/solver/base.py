@@ -8,10 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Awaitable, Callable, Mapping
-from typing import TYPE_CHECKING, Any, Protocol
-
-if TYPE_CHECKING:
-    from server.jobs.models import SolveRequest
+from typing import Any
 
 from .field_traces_store import FieldTraceArtifact
 
@@ -73,33 +70,6 @@ FIELD_TRACES_KEY = "_field_traces"
 FIELD_TRACE_UNAVAILABLE_REASON_KEY = "_field_trace_unavailable_reason"
 
 
-class Full3DSolverPort(Protocol):
-    """HornLab-facing contact point for an independently implemented solver.
-
-    BEAT, Metal and BEMPP share this application boundary, not a native worker API.
-    The optional imported record is rejected by engines that only accept
-    parametric geometry. Callback ownership stays with the job runner: a port
-    must check cancellation before expensive phases, emit progress and partial
-    results when available, and return an ``EngineRunResult``. The optional async
-    execution metadata callback records compiled backend decisions before native
-    execution, including when that execution later fails or is cancelled.
-    """
-
-    name: str
-
-    async def run(
-        self,
-        request: SolveRequest,
-        *,
-        cancel_cb: CancelCallback,
-        stage_cb: StageCallback,
-        artifact_cb: ArtifactCallback | None = None,
-        result_cb: ResultCallback | None = None,
-        imported_record: Mapping[str, Any] | None = None,
-        execution_metadata_cb: ExecutionMetadataCallback | None = None,
-    ) -> EngineRunResult: ...
-
-
 __all__ = [
     "ArtifactCallback",
     "CHANNEL_BASES_KEY",
@@ -109,7 +79,6 @@ __all__ = [
     "FIELD_TRACE_UNAVAILABLE_REASON_KEY",
     "RADIATION_IMPEDANCE_KEY",
     "ExecutionMetadataCallback",
-    "Full3DSolverPort",
     "ResultCallback",
     "StageCallback",
 ]
