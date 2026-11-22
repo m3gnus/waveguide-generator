@@ -140,18 +140,12 @@ def test_an_acknowledgement_without_a_reason_is_refused(repo: Path) -> None:
         acknowledged(note)
 
 
-def test_default_upstream_is_main_even_when_a_next_ref_still_exists(tmp_path, monkeypatch):
-    """The one-branch model retired `next`, but the ref outlives the decision.
+def test_default_upstream_is_dev_by_name_even_when_other_refs_exist(tmp_path, monkeypatch):
+    """`dev` is the working branch (GIT-WORKFLOW section 2), named outright, not probed for.
 
-    This pins the bug that the old "prefer origin/next when it exists" default became
-    on 2026-09-03: `next` stops moving while `main` advances, so probing for the ref
-    resolves the upstream to a frozen branch and every commit that lands on `main`
-    widens the gap. A hand-run then reports branches as partially merged against a ref
-    nothing merges into -- and this is the check people run by hand precisely when they
-    already distrust CI.
-
-    Deliberately constructed so the old implementation fails it: `origin/next` exists
-    and is reachable, so a `rev-parse --verify` probe would succeed and return it.
+    A frozen `origin/next` and an `origin/main` that moves only at releases both exist
+    here; a probe would pick one of them. The old default compared every branch with
+    `origin/main`, hundreds of commits behind `dev`, and ignored BASE_REF.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -159,10 +153,32 @@ def test_default_upstream_is_main_even_when_a_next_ref_still_exists(tmp_path, mo
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
     _commit(repo, "base")
-    # A frozen `next`, exactly as the migration leaves it: present, and behind.
     _git(repo, "update-ref", "refs/remotes/origin/next", "HEAD")
-    _commit(repo, "advance")
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _commit(repo, "advance")
+    _git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
 
     monkeypatch.chdir(repo)
+    monkeypatch.delenv("BASE_REF", raising=False)
+    assert default_upstream() == "origin/dev"
+    monkeypatch.setenv("BASE_REF", "main")
     assert default_upstream() == "origin/main"
+    monkeypatch.setenv("BASE_REF", " ")
+    assert default_upstream() == "origin/dev"
+
+
+def test_base_ref_is_what_the_check_compares_against(tmp_path, monkeypatch, capsys):
+    """BASE_REF=dev, as the policy tells agents to run it, compares with origin/dev."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    _commit(repo, "base")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _commit(repo, "on-dev")
+    _git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BASE_REF", "dev")
+    assert main(["--acknowledged", str(tmp_path / "none.txt")]) == 0
+    assert "(1 checked)" in capsys.readouterr().out  # origin/main is a branch checked against origin/dev

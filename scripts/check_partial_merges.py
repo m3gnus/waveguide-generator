@@ -43,6 +43,7 @@ Run with no arguments to check every remote branch, or pass branch names.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -102,26 +103,22 @@ def absorbed_prefix(branch: str, upstream: str) -> tuple[str, list[str]] | None:
 
 
 def default_upstream() -> str:
-    """The trunk work lands on: `origin/main`, in every repository.
+    """The branch work lands on: `origin/dev`, or `origin/$BASE_REF` when BASE_REF is set.
 
-    This mirrors what `.github/workflows/ci.yml` already does -- it passes
-    `origin/${BASE_REF:-main}` explicitly.
+    GIT-WORKFLOW section 2 makes `dev` the working branch here and has agents run
+    `BASE_REF=dev python scripts/check_partial_merges.py`; `main` moves only at a release,
+    so checking against it compared every branch with a ref hundreds of commits behind.
+    ``--upstream`` still overrides both.
 
-    It used to prefer `origin/next` when that ref existed, which was correct under the
-    2026-08-27 `next` model and became a bug on 2026-09-03 when the one-branch model
-    retired `next`. The ref is not deleted at the moment the model changes, so
-    "when it exists" kept resolving to a branch that had stopped moving: `main` advanced
-    past it and a hand-run silently compared every branch against a frozen ref, whose
-    every subsequent commit widened the gap and manufactured absorbed-prefix reports.
-
-    That is the same false positive the `origin/next` preference was introduced to fix,
-    in mirror image, and it arrives at the same worst moment: someone runs this by hand
-    precisely when they do not trust CI's verdict, and the natural response to a false
-    positive is to stop believing the guard entirely. Resolving a trunk by probing for a
-    ref is what made both directions possible -- so this now names the trunk outright,
-    and a future model change has to edit it rather than silently re-point it.
+    The trunk is named outright, never found by probing for a ref: the old "prefer
+    `origin/next` when it exists" default resolved to a frozen branch once the model
+    changed (2026-09-03), because a ref outlives the decision that retired it, and every
+    later landing widened the gap into false absorbed-prefix reports -- at the moment
+    someone runs this by hand because they distrust CI. A future model change edits this
+    function rather than silently re-pointing it.
     """
-    return "origin/main"
+    base = os.environ.get("BASE_REF", "").strip()
+    return f"origin/{base}" if base else "origin/dev"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -130,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--upstream",
         default=None,
-        help="default: origin/main",
+        help="default: origin/$BASE_REF, else origin/dev",
     )
     parser.add_argument("--acknowledged", type=Path, default=ACKNOWLEDGED_PATH)
     args = parser.parse_args(argv)
@@ -140,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
 
     branches = args.branches or remote_branches(args.upstream)
     if not branches:
-        print("No branches besides main; nothing to check.")
+        print(f"No branches besides {args.upstream}; nothing to check.")
         return 0
 
     failures = 0

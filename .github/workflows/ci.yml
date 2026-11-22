@@ -129,12 +129,10 @@ jobs:
       # PR #29 shipped a capability's consumer without its enabler and broke
       # every default solve of 80 or more frequencies on main. Review and CI
       # both passed, because the test that catches it was on the unmerged tail.
-      # The script resolves the upstream itself (`origin/next` while that
-      # ref existed, `origin/main` since the one-branch model), so CI and a
-      # hand-run agree. That
-      # divergence was the bug: CI overrode the upstream while the script default
-      # stayed `origin/main`, so running it by hand reported a branch fully merged
-      # into `next` as partially merged.
+      # The script resolves the upstream itself (`origin/$BASE_REF`, else
+      # `origin/dev`, the working branch), so CI and a hand-run agree. CI once
+      # overrode the upstream while the script default differed, so a hand-run
+      # reported a fully merged branch as partially merged.
       - name: Check for partially merged branches
         run: python scripts/check_partial_merges.py
 
