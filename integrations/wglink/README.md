@@ -98,6 +98,9 @@ The pinned source reads WGLink bundle format 1.2, which WG writes without
 newer WG with the update-the-add-in remedy, and keeps sharp corner rays when it
 thins a grid to Fusion's 64-point ring (Insert and Update pick the same rays).
 
+The pinned source is command-driven only: WG no longer asks Fusion for a return, and the
+add-in ignores (and logs once) an old setting that turned on automatic coordination.
+
 The current pin is the full commit in [`source.json`](source.json); its `note`
 says what that revision adds. The vendored shared protocol has its own source
 commit and SHA-256 in

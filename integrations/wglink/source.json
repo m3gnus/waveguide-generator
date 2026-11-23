@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "440a57402cebe6334b653d8e23b4d97f9d69ac88",
+  "commit": "450acc9010ca894bea906c857144471734fa3e83",
   "license": "AGPL-3.0-or-later",
   "addinVersion": "0.3.4",
-  "note": "Reads bundle format 1.2 (no STEP), names a too-new model with the update remedy, and keeps sharp corner rays when thinning to the 64-point ring. Shared protocol bytes unchanged from b67b7d2. WG open-document consumers remain separate held work."
+  "note": "Command-driven only: automatic coordination and WG-initiated return requests retired (old setting ignored and logged); headless audit/relink/set_link_name retired; Update identity refusals shown to the user; one Fusion survey per Send; add-in speed fixes; ingress counts a stale-link included body as degraded (protocol 986f177). Add-in 0.3.4."
 }

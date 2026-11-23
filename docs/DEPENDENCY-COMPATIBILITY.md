@@ -247,3 +247,13 @@ The vendored shared protocol was later refreshed from WGLink `986f177b8153eb3b15
 (SHA-256 `4849eb302874d67daa989c30f9f103bb8d3feb3d21941d4cf6c979fc68d83857`), so WG's ingress
 counts an included body from a stale external link as degraded, as the add-in writer does. The
 package pin above is unchanged.
+
+WGLink `450acc9010ca894bea906c857144471734fa3e83` (add-in 0.3.4) then became the package pin. It is
+the 23 Nov WG Link round rebased onto `986f177`: the add-in is command-driven only (automatic
+coordination and WG-initiated return requests are retired; an old settings file that turns them on
+is ignored and logged once), the head-less audit, relink and `set_link_name` calls are retired,
+Update shows its identity refusals to the user, Send surveys Fusion once, and the add-in speed fixes
+land. WG's side of the round (Pull retired from WG, server and frontend cleanup) lands with this pin.
+The vendored shared protocol now names the same commit; its bytes and SHA-256 are unchanged from
+`986f177`, as are the shared fixtures. The paired endpoint oracle keeps its WG capture, add-in
+capture identity and fixture digests.
