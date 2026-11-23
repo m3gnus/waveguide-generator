@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadOperationListener, JobItem, JobsSnapshot } from '../api/jobsSocket';
 import { createCadConnectionStore, type CadConnectionStatus } from '../stores/cadConnection';
 import { expectNoJargon } from '../testing/expectNoJargon';
-import { connectCadObservation, type CadObservationActivity } from './cadObservation';
+import { CAD_OBSERVATION_INTERVALS, connectCadObservation, type CadObservationActivity } from './cadObservation';
 import { agedFusionStatus, fusionWorkflowView } from './cadWorkflowView';
 
 function status(overrides: Partial<CadConnectionStatus> = {}): CadConnectionStatus {
@@ -197,6 +197,21 @@ describe('CAD observation scheduler without the coordinator', () => {
     change({ observationKey: 'design-2:instance-2' }); await vi.advanceTimersByTimeAsync(0);
     expect(reads()).toEqual([before[0] + 1, before[1]]);
     const changed = reads(); await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(changed);
+  });
+
+  it('off: a burst of design edits reads status at its start and once after it settles (B1)', async () => {
+    await mount(); const before = reads();
+    for (let revision = 2; revision <= 20; revision += 1) {
+      change({ observationKey: `design-${revision}` });
+      await vi.advanceTimersByTimeAsync(CAD_OBSERVATION_INTERVALS.contextReadMs / 3);
+    }
+    expect(reads()).toEqual([before[0] + 1, before[1]]);
+    expect(connection.getState().fusionStatus).toBeNull();
+    await vi.advanceTimersByTimeAsync(CAD_OBSERVATION_INTERVALS.contextReadMs);
+    expect(reads()).toEqual([before[0] + 2, before[1]]);
+    expect(connection.getState().fusionStatus).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads()).toEqual([before[0] + 2, before[1]]);
   });
 
   it('off: a stalled design-status read preserves the known inbox declaration and idle silence', async () => {

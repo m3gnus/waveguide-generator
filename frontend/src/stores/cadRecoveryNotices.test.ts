@@ -113,6 +113,22 @@ describe('recovery notices without the coordinator', () => {
     await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(afterHello + 1));
     stop();
   });
+  it('a design edit (invalidate, then a new report) reads notices once (B1)', async () => {
+    const manager = { subscribeCadOperations: vi.fn(() => vi.fn()) } as Pick<JobsSocketManager, 'subscribeCadOperations'>;
+    const connection = createCadConnectionStore();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => json({ notices: [] }));
+    const stop = connectCadRecoveryNotices(manager, createCadRecoveryNoticesStore(), fetcher, connection);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    const report = { state: 'current', running: true, link: null, documentId: 'doc', updatedAt: new Date().toISOString(), statusTtlSeconds: 20 } as CadConnectionStatus;
+    await connection.read(async () => report);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    connection.invalidate();
+    await connection.read(async () => ({ ...report }));
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    stop(); connection.invalidate();
+  });
   it('refreshes status-file changes and held-status expiry, coalesces bursts, and never polls idle', async () => {
     vi.useFakeTimers();
     vi.setSystemTime('2026-10-11T12:00:00Z');

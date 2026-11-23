@@ -108,8 +108,10 @@ export function connectCadRecoveryNotices(
   });
   // The existing connection owner ages its held report once at expiry. This
   // also wakes document/evidence changes without introducing an idle poller.
+  // An invalidation (no status) carries no evidence: the read that follows it
+  // publishes the next report, and that report wakes the one notice read.
   const stopConnection = connection.subscribe((state, previous) => {
-    if (state.fusionStatus !== previous.fusionStatus) read();
+    if (state.fusionStatus !== previous.fusionStatus && state.fusionStatus !== null) read();
   });
   const mount = read();
   if (mount) startup.mountRead(mount);

@@ -8,6 +8,8 @@ import { cadStartupHello } from '../stores/cadStartupHello';
 export const CAD_OBSERVATION_INTERVALS = {
   returnsMs: 2_500, returnsIdleMs: 30_000,
   fusionStatusMs: 2_500, fusionStatusIdleMs: 30_000, quietMs: 30_000,
+  /** A burst of design edits (a slider drag) reads Fusion status at its start and once after it settles. */
+  contextReadMs: 300,
 } as const;
 export const CAD_RECONNECT_RETRY_DELAYS_MS = [5_000, 30_000, 120_000] as const;
 
@@ -95,6 +97,23 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     return Promise.resolve();
   };
   const readStatus = () => readStatusAnswered().catch(() => undefined);
+  // Each context change fences the previous read, so a burst needs only its
+  // first read and one after the last change; the ones between are discarded.
+  let contextRead: ReturnType<typeof setTimeout> | null = null;
+  let contextReadOwed = false;
+  const readStatusSettled = () => {
+    if (contextRead !== null) {
+      contextReadOwed = true;
+      clearTimeout(contextRead); timers.delete(contextRead);
+    } else void readStatus();
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      contextRead = null;
+      if (contextReadOwed) { contextReadOwed = false; readStatusSettled(); }
+    }, CAD_OBSERVATION_INTERVALS.contextReadMs);
+    contextRead = timer;
+    timers.add(timer);
+  };
   const readReturns = () => {
     if (active && visible() && options.getActivity().cadApplication === 'fusion360') {
       return options.reloadReturns().catch(() => undefined);
@@ -224,7 +243,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       // clocks for an add-in already known to deliver through the inbox.
       connection.invalidate();
       if (applicationChanged) invalidateDeclaration();
-      if (!(folderChanged || enteredCad || applicationChanged)) readStatus();
+      if (!(folderChanged || enteredCad || applicationChanged)) readStatusSettled();
     }
     if ((folderChanged && !folderDiscovered) || enteredCad || applicationChanged) wake();
     else if (contextChanged || folderChanged || coordinationChanged || modeChanged || pullChanged || workChanged) restart();
