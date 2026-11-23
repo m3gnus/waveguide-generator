@@ -292,6 +292,19 @@ describe('CAD observation scheduler without the coordinator', () => {
     expect(reads()[1] - running[1]).toBeGreaterThan(20);
   });
 
+  it.each(['listing change', 'Send'])('off: %s resets the quiet clock of legacy discovery; coarse job notifications do not (row 10)', async () => {
+    activity.workspaceMode = 'parametric'; activity.activityRevision = 0;
+    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false, addinInboxTransfer: false }));
+    await mount(); await vi.advanceTimersByTimeAsync(60_000);
+    for (let tick = 0; tick < 4; tick += 1) { jobsChanged(); await vi.advanceTimersByTimeAsync(2_500); }
+    const quiet = reads();
+    await vi.advanceTimersByTimeAsync(10_000); expect(reads()).toEqual(quiet);
+    change({ activityRevision: 1 });
+    await vi.advanceTimersByTimeAsync(2_500); expect(reads()).toEqual([quiet[0], quiet[1] + 1]);
+    await vi.advanceTimersByTimeAsync(27_500); const quietAgain = reads();
+    await vi.advanceTimersByTimeAsync(29_999); expect(reads()).toEqual(quietAgain);
+  });
+
   it('a job ends while disconnected: reconnect reloads jobs and exact awaited receipt IDs before pending reload drops them', async () => {
     activity.requests = [{ id: 'send-exact', state: 'processing' }]; snapshot.jobs = [cadJob('running')];
     refreshJobs.mockImplementation(async () => { snapshot.jobs = [cadJob('complete', 'accepted')]; jobsChanged(); });
