@@ -121,7 +121,6 @@ def publish_fusion_handoff(
         )
         if result == "conflict":
             raise ValueError(f"Fusion request id {request_id!r} names another operation.")
-        store.make_durable()
         return row, result
 
     def publication_failed(receipt: object, _exc: BaseException) -> None:

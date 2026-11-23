@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
+import sqlite3
 import subprocess
 import sys
-from unittest.mock import Mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -201,21 +202,15 @@ def test_historical_recovery_is_quiet_when_its_mark_is_gone(tmp_path, applying):
     store.close()
 
 
-def test_dismissal_flushes_the_committed_tombstone_before_success(tmp_path, monkeypatch):
+def test_dismissal_commits_the_tombstone_before_success(tmp_path):
     store = CadLinkStore.for_data_dir(tmp_path)
     accept(store)
-    def flush():
-        assert not store._connect().in_transaction
-        assert store._connect().execute("SELECT dismissed_at FROM cad_recovery_notices").fetchone()[0]
-        raise OSError("checkpoint failed")
-    durable = Mock(side_effect=flush)
-    monkeypatch.setattr(store, "make_durable", durable)
-    with pytest.raises(OSError, match="checkpoint failed"):
-        dismiss_recovery_notice(store, "mutation")
-    durable.assert_called_once()
-    durable.side_effect = None
     assert dismiss_recovery_notice(store, "mutation").dismissed
-    assert durable.call_count == 2
+    assert not store._connect().in_transaction
+    # A second connection sees only committed rows; the CAD store commits with
+    # synchronous=FULL, so the tombstone survives a power cut once committed.
+    with closing(sqlite3.connect(store.db_path)) as conn:
+        assert conn.execute("SELECT dismissed_at FROM cad_recovery_notices").fetchone()[0]
     store.close()
 
 

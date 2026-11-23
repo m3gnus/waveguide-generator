@@ -171,7 +171,6 @@ def publish_locator(store: CadLinkStore, row: Mapping[str, Any]) -> None:
         if not candidates:
             return  # Legacy stable folders have no locator.
         latest = max(candidates, key=lambda candidate: candidate["sequence"])
-        store.make_durable()
         locator = root / f"{_component(latest['design_id'])}.latest.json"
         if locator.is_symlink():
             raise PublicationConflict("CAD-link locator is a symlink")
@@ -229,9 +228,8 @@ def publish_bundle(
     if cancel_cb is not None:
         cancel_cb()
     # Reservations and snapshots must survive power loss before their bytes
-    # become visible. The store commits with synchronous=FULL, so they already
-    # do; this marks the boundary.
-    store.make_durable()
+    # become visible: they are committed by now, and the CAD store commits with
+    # synchronous=FULL.
     destination = root / f"{_component(facts['exportId'])}.wglink"
     folder = _journal_folder(store)
     folder.mkdir(parents=True, exist_ok=True)
@@ -328,7 +326,6 @@ def finish_publication(
     store: CadLinkStore, row: Mapping[str, Any], *, deliver_handoff: bool = True,
 ) -> dict[str, Any]:
     """Repair durable boundaries; only a live request may deliver its handoff."""
-    store.make_durable()
     publish_locator(store, row)
     journal = _journal_folder(store) / f"{_component(row['export_id'])}.json"
     with _LOCK:
@@ -391,7 +388,6 @@ def finish_publication(
                     expected_instance_id=handoff.get("instanceId"),
                     expected_return_state_hash=handoff.get("returnStateHash"),
                 )
-            store.make_durable()
             if published is not None:
                 _sync_directory(published.path.parent)
         atomic_json(journal, {**intent, "done": True,

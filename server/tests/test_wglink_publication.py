@@ -1,10 +1,12 @@
 """Crash boundaries and monotonic locators use immutable, checksummed artifacts."""
 
+from contextlib import closing
 import errno
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import sqlite3
 import stat
 
 import pytest
@@ -260,23 +262,28 @@ def test_idempotency_identity_conflict_is_409(monkeypatch, tmp_path):
     assert len(writes) == 1
 
 
-def test_publication_order_is_durable_bundle_row_locator_handoff(monkeypatch, tmp_path):
+def _committed_export(store, export_id):
+    # A second connection sees only committed rows; the CAD store commits with
+    # synchronous=FULL, so a committed row survives a power cut.
+    with closing(sqlite3.connect(store.db_path)) as conn:
+        return conn.execute(
+            "SELECT bundle_path FROM exports WHERE export_id = ?", (export_id,)
+        ).fetchone()
+
+
+def test_publication_order_is_committed_bundle_row_locator_handoff(monkeypatch, tmp_path):
     store, saved, workspace, _ = setup(monkeypatch, tmp_path)
     events = []
-    real_durable = store.make_durable
     real_json = publication.atomic_json
     real_handoff = cad_handoff.publish_fusion_handoff
-
-    def durable():
-        events.append("durable")
-        real_durable()
 
     def atomic(path, payload):
         if path.name.endswith(".latest.json"):
             row = store.get_export(payload["exportId"])
             assert row is not None
             assert Path(row["bundle_path"]).is_dir()
-            assert events[-1] == "durable"
+            committed = _committed_export(store, payload["exportId"])
+            assert committed is not None and committed[0] == row["bundle_path"]
             events.append("locator")
         real_json(path, payload)
 
@@ -285,7 +292,6 @@ def test_publication_order_is_durable_bundle_row_locator_handoff(monkeypatch, tm
         events.append("handoff")
         return real_handoff(*args, **kwargs)
 
-    monkeypatch.setattr(store, "make_durable", durable)
     monkeypatch.setattr(publication, "atomic_json", atomic)
     monkeypatch.setattr(cad_handoff, "publish_fusion_handoff", handoff)
     service.export_wglink_sync(
@@ -330,25 +336,22 @@ def test_mount_registers_startup_recovery(monkeypatch, tmp_path):
     assert calls == [store]
 
 
-def test_checkpoint_failure_keeps_locator_retryable(monkeypatch, tmp_path):
-    import sqlite3
-
+def test_a_reader_pinning_the_log_does_not_fail_a_send(monkeypatch, tmp_path):
+    # Finding R8a: a read snapshot (the prepared-mesh GC's scan) used to make the
+    # durability checkpoint report busy, and Send to CAD answered 503.
     store, saved, workspace, _ = setup(monkeypatch, tmp_path)
     a = service.export_wglink_sync(_request(saved), store, workspace, "A")
-    before = locator(a).read_bytes()
-    real = store.make_durable
-
-    def busy():
-        raise sqlite3.OperationalError("checkpoint busy")
-
-    monkeypatch.setattr(store, "make_durable", busy)
-    with pytest.raises(HTTPException) as error:
-        service.export_wglink_sync(_request(saved), store, workspace, "B")
-    assert error.value.status_code == 503
-    assert locator(a).read_bytes() == before
-    monkeypatch.setattr(store, "make_durable", real)
-    b = service.export_wglink_sync(_request(saved), store, workspace, "B")
-    assert b["sequence"] == 2
+    reader = sqlite3.connect(f"file:{store.db_path}?mode=ro", uri=True)
+    try:
+        reader.execute("BEGIN")
+        reader.execute("SELECT COUNT(*) FROM exports").fetchone()
+        b = service.export_wglink_sync(_request(saved), store, workspace, "B")
+    finally:
+        reader.rollback()
+        reader.close()
+    assert b["sequence"] == a["sequence"] + 1
+    assert json.loads(locator(b).read_text())["exportId"] == b["exportId"]
+    assert _committed_export(store, b["exportId"]) is not None
 
 
 @pytest.mark.parametrize("value", [[], {}, {"designId": "wrong"}])

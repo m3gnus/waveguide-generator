@@ -144,7 +144,6 @@ def dismiss_recovery_notice(store: CadLinkStore, notice_id: str) -> RecoveryDism
                      "ON CONFLICT(notice_id) DO UPDATE SET "
                      "dismissed_at = COALESCE(cad_recovery_notices.dismissed_at, excluded.dismissed_at)",
                      (notice_id, datetime.now(timezone.utc).isoformat()))
-    store.make_durable()
     return RecoveryDismissalResponse(id=notice_id)
 
 

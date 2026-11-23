@@ -255,39 +255,33 @@ def test_a_snapshot_rejected_at_acceptance_is_acknowledged_as_refused(
     assert _delivery_files(data_dir) == []
 
 
-def test_the_acceptance_is_made_durable_before_its_acknowledgement_is_written(
+def test_the_acceptance_is_committed_before_its_acknowledgement_is_written(
     data_dir, workspace, store, monkeypatch
 ) -> None:
+    import sqlite3
+    from contextlib import closing
+
     bundle_path, manifest = _bundle(workspace)
     _file(data_dir, "cmd-1", bundle_path, manifest)
-    order: list[str] = []
-    real_durable = CadLinkStore.make_durable
+    seen: list[str] = []
+    real_write = solve_command.write_acknowledgement
 
-    def durable(self):
-        order.append(f"durable(ack={'yes' if _ack(data_dir, 'cmd-1') else 'no'})")
-        return real_durable(self)
+    def write(data, command_id, *args, **kwargs):
+        # A second connection sees only committed rows; the CAD store commits
+        # with synchronous=FULL, so a committed acceptance survives a power cut.
+        with closing(sqlite3.connect(store.db_path)) as conn:
+            row = conn.execute(
+                "SELECT state FROM cad_operations WHERE operation_id = ?", (command_id,)
+            ).fetchone()
+        seen.append(row[0] if row else "missing")
+        return real_write(data, command_id, *args, **kwargs)
 
-    monkeypatch.setattr(CadLinkStore, "make_durable", durable)
+    monkeypatch.setattr(solve_command, "write_acknowledgement", write)
 
     _poll(data_dir, store)
 
-    assert order == ["durable(ack=no)"]
+    assert seen and "missing" not in seen
     assert _ack(data_dir, "cmd-1")["outcome"] == "accepted"
-
-
-def test_an_acceptance_that_cannot_be_made_durable_keeps_the_request(
-    data_dir, workspace, store, monkeypatch
-) -> None:
-    bundle_path, manifest = _bundle(workspace)
-    _file(data_dir, "cmd-1", bundle_path, manifest)
-
-    def broken(self):
-        raise OSError("disk")
-
-    monkeypatch.setattr(CadLinkStore, "make_durable", broken)
-    _poll(data_dir, store)
-
-    assert _ack(data_dir, "cmd-1") is None and len(_delivery_files(data_dir)) == 1
 
 
 def test_the_acknowledgement_folder_is_flushed_after_the_replace(
@@ -538,24 +532,18 @@ def test_a_command_id_that_names_no_safe_file_is_not_acknowledged_and_not_held(
     assert not _acks(data_dir).exists() or not list(_acks(data_dir).iterdir())
 
 
-def test_the_store_commits_with_synchronous_full_and_make_durable_runs_no_checkpoint(
+def test_the_store_commits_with_synchronous_full_and_runs_no_checkpoint(
     data_dir, store, workspace
 ) -> None:
-    # Each commit fsyncs the log (synchronous=FULL), so make_durable has nothing
-    # left to do: it must not checkpoint, and so cannot report a busy log.
+    # Each commit fsyncs the log (synchronous=FULL), so nothing checkpoints the
+    # store on the acknowledgement path, and nothing can report a busy log.
     bundle_path, manifest = _bundle(workspace)
     _file(data_dir, "cmd-1", bundle_path, manifest)
     _poll(data_dir, store)
     conn = store._connect()
     assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     assert conn.execute("PRAGMA synchronous").fetchone()[0] == 2  # FULL
-    statements: list[str] = []
-    conn.set_trace_callback(statements.append)
-    try:
-        store.make_durable()
-    finally:
-        conn.set_trace_callback(None)
-    assert statements == []
+    assert not hasattr(CadLinkStore, "make_durable")
     # The committed frames are still in the log: nothing was checkpointed.
     with store._lock:
         busy, log_frames, checkpointed = conn.execute(

@@ -88,7 +88,7 @@ def test_granted_wal_keeps_the_measured_fast_path(tmp_path: Path) -> None:
 
 def test_cadlink_store_commits_with_synchronous_full_on_wal(tmp_path: Path) -> None:
     # The CAD store trades the fast path for per-commit durability: with FULL
-    # every commit fsyncs the log, so make_durable needs no checkpoint.
+    # every commit fsyncs the log, so no checkpoint is needed for durability.
     store = CadLinkStore(tmp_path / "cadlink.db")
     store.initialize()
     try:

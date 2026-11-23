@@ -375,8 +375,6 @@ def settle_from_heartbeat(
         elif row["state"] == PROCESSING:
             # A missed single-slot lastRequest is deliberately not guessed.
             logger.debug("Fusion operation %s is still awaiting an outcome.", operation_id)
-    if changed:
-        store.make_durable()
     return changed
 
 
@@ -444,8 +442,6 @@ def settle_abandoned_live_claims(
         message = "The legacy Fusion live request was interrupted and reported no outcome."
         value = _record(store, row, RECOVERY_REQUIRED, outcome={"message": message})
         changed += value is not None
-    if changed:
-        store.make_durable()
     return changed
 
 
@@ -482,7 +478,6 @@ def retire_return_requests(store: CadLinkStore) -> int:
                 continue
             changed += value is not None
         if changed:
-            store.make_durable()
             logger.info("Cancelled %d unfinished Pull from WG request(s); Pull from WG is retired.", changed)
     except sqlite3.Error as exc:
         logger.warning("Could not settle retired Fusion return requests: %s", exc)

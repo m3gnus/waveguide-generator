@@ -187,9 +187,9 @@ REQUEST_STATUS_RETENTION_SECONDS = 14 * 24 * 3600
 REQUEST_STATUS_UNKNOWN_STATE_SECONDS = 30 * 24 * 3600
 # An acknowledgement that cannot be written keeps its claim for this many passes
 # (about half a minute at the loop's cadence). Then WG gives it up, once and
-# loudly, and consumes the request: the operation was made durable first, and a
-# producer that finds no acknowledgement says so rather than waiting. A claim
-# whose operation could not be made durable is never given up.
+# loudly, and consumes the request: the operation's row was committed first (the
+# CAD store commits with synchronous=FULL, so it survives a power cut), and a
+# producer that finds no acknowledgement says so rather than waiting.
 ACK_FAILURE_PASSES = 30
 # Pruning runs at most this often, from the delivery pass.
 ACK_PRUNE_INTERVAL_SECONDS = 60.0
@@ -904,8 +904,8 @@ def _ack_written(claim_name: str, written: bool | None) -> bool:
 
     A failed write keeps the claim for ``ACK_FAILURE_PASSES`` passes; then it is
     given up once, with an error, and the request is consumed without one.
-    ``None`` means admission is pending or the operation could not be made
-    durable: the claim is kept however often, until an outcome is durable.
+    ``None`` means admission is pending: the claim is kept however often, until
+    an outcome is committed.
     """
 
     if written is None:
@@ -1168,26 +1168,18 @@ def _publish_acknowledgement(
     command: PendingSolveCommand,
 ) -> bool | None:
     """Publish what became of a delivered request. False: not written yet.
-    None: admission is pending or the operation could not be made durable, so
-    nothing may be consumed.
+    None: admission is pending, so nothing may be consumed.
 
     The operation's own row is the acknowledgement, so a redelivery replays it,
     and a different request under an id the store holds -- a conflict -- speaks
-    for the operation, never against it. The row is forced durable first: an
+    for the operation, never against it. The row is committed, and so durable
+    (the CAD store commits with synchronous=FULL), before this runs: an
     acknowledgement must not outlive an acceptance a power cut can undo.
     """
 
     row = store.get_operation(command.command_id)
     if row is None:
         return True
-    try:
-        store.make_durable()
-    except Exception:  # noqa: BLE001 - an acknowledgement is never owed on a row that may vanish
-        logger.warning(
-            "Could not make the acceptance of solve command %s durable.",
-            command.command_id, exc_info=True,
-        )
-        return None
     # Cancellation before admission has no job and must retain its reason.
     refused_outcome = row["state"] in {REJECTED, "cancelled"} or (
         row["kind"] == RECEIVE_SNAPSHOT and row["state"] != ACCEPTED

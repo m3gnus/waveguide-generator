@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 import json
+import sqlite3
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -261,41 +263,32 @@ def reset_collector(monkeypatch):
     return commands
 
 
-def test_refusal_is_durable_before_push_ack_and_consumption(store, tmp_path, monkeypatch):
+def committed_refusals(store):
+    # A second connection sees only committed rows; the CAD store commits with
+    # synchronous=FULL, so a committed row survives a power cut.
+    with closing(sqlite3.connect(store.db_path)) as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM cad_send_receipts WHERE receipt_id LIKE 'intake:%'"
+        ).fetchone()[0]
+
+
+def test_refusal_is_committed_before_push_ack_and_consumption(store, tmp_path, monkeypatch):
     commands = reset_collector(monkeypatch)
     store.initialize()
     data, inbox = bad_delivery(tmp_path)
     events = []
-    durable = store.make_durable
-    def sync():
-        events.append('durable')
-        durable()
-    monkeypatch.setattr(store, 'make_durable', sync)
+    def push(_):
+        assert committed_refusals(store) == 1
+        events.append('push')
     acknowledgement = commands.write_acknowledgement
     def ack(*args, **kwargs):
-        assert events == ['durable', 'push']
+        assert events == ['push']
         events.append('ack')
         return acknowledgement(*args, **kwargs)
     monkeypatch.setattr(commands, 'write_acknowledgement', ack)
-    collect_solve_deliveries(data, store, refuse=lambda _: events.append('push'))
-    assert events == ['durable', 'push', 'ack']
+    collect_solve_deliveries(data, store, refuse=push)
+    assert events == ['push', 'ack']
     assert not list(inbox.iterdir())
-
-
-def test_failed_refusal_durability_keeps_claim_unacknowledged(store, tmp_path, monkeypatch):
-    commands = reset_collector(monkeypatch)
-    store.initialize()
-    data, inbox = bad_delivery(tmp_path)
-    def fail():
-        raise RuntimeError('checkpoint busy')
-    monkeypatch.setattr(store, 'make_durable', fail)
-    pushed = []
-    ack = []
-    monkeypatch.setattr(commands, 'write_acknowledgement', lambda *a, **k: ack.append(a))
-    with pytest.raises(RuntimeError, match='checkpoint busy'):
-        collect_solve_deliveries(data, store, refuse=pushed.append)
-    assert len(list(inbox.iterdir())) == 1
-    assert not pushed and not ack
 
 
 def test_interrupted_refusal_replays_original_after_restart_and_distinct_same_slot_claim(store, tmp_path, monkeypatch):
@@ -378,12 +371,10 @@ def test_evicted_pending_claim_replays_without_reentering_log(store):
     assert receipt_page(store) == before
 
 
-def test_feed_identity_is_durable_stable_and_database_scoped(store, tmp_path, monkeypatch):
-    calls = []
-    durable = store.make_durable
-    monkeypatch.setattr(store, 'make_durable', lambda: (calls.append('durable'), durable()))
+def test_feed_identity_is_committed_stable_and_database_scoped(store, tmp_path):
     identity = receipt_page(store)['feed_id']
-    assert calls == ['durable']
+    with closing(sqlite3.connect(store.db_path)) as conn:
+        assert conn.execute('SELECT feed_id FROM cad_receipt_meta').fetchone()[0] == identity
     path = store.db_path
     store.close()
     reopened = CadLinkStore(path)
@@ -499,24 +490,6 @@ def test_claim_uuid_is_synced_before_receipt_persistence(store, tmp_path, monkey
     monkeypatch.setattr(receipts, 'record_refusal', persist)
     collect_solve_deliveries(data, store)
     assert not list(inbox.iterdir())
-
-
-def test_feed_identity_checkpoint_failure_remains_retryable(store, monkeypatch):
-    sync = store.make_durable
-    calls = []
-    def unavailable():
-        calls.append('failed')
-        raise RuntimeError('checkpoint busy')
-    monkeypatch.setattr(store, 'make_durable', unavailable)
-    with pytest.raises(RuntimeError, match='checkpoint busy'):
-        receipt_page(store)
-    identity = store._connect().execute('SELECT feed_id FROM cad_receipt_meta').fetchone()[0]
-    def durable():
-        calls.append('durable')
-        sync()
-    monkeypatch.setattr(store, 'make_durable', durable)
-    assert receipt_page(store)['feed_id'] == identity
-    assert calls == ['failed', 'durable']
 
 
 def test_feed_reads_run_no_schema_statement_and_still_discover_settlements(store):

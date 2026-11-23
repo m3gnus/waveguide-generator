@@ -988,12 +988,9 @@ class CadLinkStore:
             archive_identity.initialize_registry(conn)
             _migrate_legacy_file_setups(conn)
             imported_ledger = _import_legacy_solve_ledger(conn, self.legacy_solve_ledger)
-            receipt_feed_created = receipts.initialize(conn)
-            self._receipt_feed_needs_sync = receipt_feed_created or getattr(self, "_receipt_feed_needs_sync", False)
+            receipts.initialize(conn)
             conn.execute(f"PRAGMA user_version = {STORE_FORMAT_VERSION}")
         self._initialized = True
-        # A new receipt feed id is made durable by receipt_page before any
-        # client sees it, not here: opening the store adds no checkpoint.
         if imported_ledger and self.legacy_solve_ledger is not None:
             _retire_legacy_solve_ledger(self.legacy_solve_ledger)
 
@@ -2976,9 +2973,12 @@ class CadLinkStore:
                     return next(iter(self._connections))
         conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        # synchronous=FULL: every commit fsyncs the log before it returns, so a
-        # committed CAD write survives a power cut without a checkpoint. The
-        # CAD store's writes are few and small; the jobs store keeps NORMAL.
+        # synchronous=FULL: every commit fsyncs the log (or, on a refused WAL,
+        # the database) before it returns, so a committed CAD write survives a
+        # power cut with no further step. Callers that must not let a file or a
+        # response outlive a row only need the row committed first. The CAD
+        # store's writes are few and small; the jobs store keeps NORMAL and its
+        # checkpointing make_durable.
         self.journal_mode_status = configure_connection(
             conn,
             db_path=str(self.db_path),
@@ -2989,17 +2989,6 @@ class CadLinkStore:
         with self._connections_lock:
             self._connections.add(conn)
         return conn
-
-    def make_durable(self) -> None:
-        """Return once every committed write survives a power cut: at once.
-
-        The store runs WAL with ``synchronous=FULL`` (``FULL`` also when WAL is
-        refused), so each commit has already fsynced the log -- or, on a
-        rollback journal, the database -- before ``commit()`` returned. There is
-        nothing left to flush. Callers keep calling this at their durability
-        boundaries; it used to checkpoint the log, which cost a full database
-        sync and could report busy while a reader pinned the log.
-        """
 
     def _read_one(self, sql: str, parameters: tuple[object, ...]) -> dict[str, Any] | None:
         """Read without creating a registry merely because a file was opened."""

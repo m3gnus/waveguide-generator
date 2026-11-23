@@ -150,7 +150,6 @@ def record_refusal(store: CadLinkStore, refusal: Mapping[str, Any], *,
             "SELECT cursor FROM cad_send_receipts WHERE receipt_id LIKE 'intake:%' "
             "ORDER BY cursor DESC LIMIT -1 OFFSET 20)"
         )
-    store.make_durable()
     return original
 
 
@@ -164,10 +163,6 @@ def receipt_page(store: CadLinkStore, *, after: int = 0, limit: int = 50) -> dic
     if after < 0 or not 1 <= limit <= 200:
         raise ValueError("after must be non-negative and limit must be 1..200")
     store.initialize()
-    # Another thread may observe initialized while its first checkpoint waits.
-    if getattr(store, "_receipt_feed_needs_sync", False):
-        store.make_durable()
-        store._receipt_feed_needs_sync = False
     with store._lock, store._transaction() as conn:
         # The tables and the feed id exist from store.initialize().
         discover_settlements(conn)
