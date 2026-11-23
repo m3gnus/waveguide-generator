@@ -251,6 +251,9 @@ function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
   // Sketches and planes are never part of a STEP body: not news.
   const skipped = (record.scope.skipped ?? []).filter((item) => item.kind !== 'construction');
   const scopeFindings = record.findings.filter((finding) => finding.kind === 'scope-degradation');
+  // Linked bodies that are out of date in Fusion degrade the scope without a
+  // skip; their note below says which and how to update them.
+  const staleLinks = record.findings.filter((finding) => finding.kind === 'stale-linked-body').length;
   checks.push({
     key: 'scope',
     name: 'Scope',
@@ -259,7 +262,9 @@ function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
       ? included.length
         ? `${pluralized(included.length, 'body', 'bodies')} exported, nothing skipped`
         : 'the exported exterior was complete'
-      : `${pluralized(record.scope.degraded_skip_count, 'object')} skipped — solve is degraded`,
+      : record.scope.degraded_skip_count === 0 && staleLinks > 0
+        ? `${pluralized(staleLinks, 'linked body', 'linked bodies')} out of date in Fusion — solve is degraded`
+        : `${pluralized(record.scope.degraded_skip_count, 'object')} skipped — solve is degraded`,
     title: 'Everything the CAD document exported for the acoustic exterior, and anything it had to skip.',
     detail: (included.length || skipped.length || scopeFindings.length) ? <>
       {included.map((item, index) => <p key={`${String(item.object_id)}-${index}`} className="cad-detail"><b>Included · {String(item.name ?? item.object_id ?? 'Unnamed object')}</b>{item.body_kind ? ` — ${item.body_kind}` : ''}</p>)}

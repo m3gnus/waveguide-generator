@@ -2273,6 +2273,34 @@ describe('CadLinkPanel', () => {
     expect(scope.textContent).toContain('Skipped · Body B');
   });
 
+  it('says a linked body is out of date, not that nothing was skipped, and how to update it', async () => {
+    const reason = 'baffle comes from a linked component that is out of date in Fusion, so WG solves the copy Fusion shows now. '
+      + 'To solve the latest version, update the out-of-date link in Fusion and send the model again.';
+    const staleRecord: CadReturnIngestRecord = {
+      ...record,
+      scope: {
+        status: 'degraded',
+        degraded_skip_count: 0,
+        included: [{ object_id: 'body-b', name: 'baffle', body_kind: 'solid', external_reference: 'resolved-stale', severity: 'degraded' }],
+        skipped: [],
+      },
+      findings: [...record.findings, { id: 'finding-stale-linked-body-1', kind: 'stale-linked-body', blocking: false, object_id: 'body-b', reason }],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/returns')) return json(listing);
+      if (String(input).endsWith('/fusion-status')) return json(closedFusion);
+      return json(staleRecord);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+
+    const checks = host.querySelector<HTMLElement>('.cad-checks')!;
+    expect(checks.textContent).toContain('1 linked body out of date in Fusion — solve is degraded');
+    expect(checks.textContent).not.toContain('0 objects skipped');
+    expect(checks.textContent).toContain('A linked body is out of date in Fusion');
+    expect(checks.textContent).toContain(reason);
+  });
+
   it('shows symmetry residuals in millimetres to two significant figures, and a rejected candidate as information', async () => {
     preferencesStore.update({ showDeveloperDetails: true });
     const stepUnitRecord = {

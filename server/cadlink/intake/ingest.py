@@ -464,6 +464,38 @@ def _scope_findings(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     return findings
 
 
+def _stale_link_findings(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """A note for each included body the add-in marked degraded.
+
+    The add-in marks an included body degraded when it comes from a linked
+    component that is out of date in Fusion: the STEP holds the copy Fusion
+    shows, so it solves, but the user must hear why the scope is degraded
+    and how to bring the link up to date.
+    """
+
+    findings = []
+    for index, item in enumerate(manifest["scope"]["included"]):
+        if item.get("severity") != "degraded" and item.get("external_reference") != "resolved-stale":
+            continue
+        name = item.get("name") or item.get("object_id") or "A body"
+        identity = {"index": index, "object_id": item.get("object_id")}
+        findings.append(
+            {
+                "id": _finding_id("stale-linked-body", identity),
+                "kind": "stale-linked-body",
+                "blocking": False,
+                "evidence_path": f"$.scope.included[{index}]",
+                "object_id": item.get("object_id"),
+                "reason": (
+                    f"{name} comes from a linked component that is out of date in Fusion, "
+                    "so WG solves the copy Fusion shows now. To solve the latest version, "
+                    "update the out-of-date link in Fusion and send the model again."
+                ),
+            }
+        )
+    return findings
+
+
 CAD_DOCUMENT_PURPOSE = "cad-document"
 
 
@@ -1961,6 +1993,7 @@ def _ingest_bundle(
     freshness = compute_freshness(manifest, store, recompute=recompute_freshness)
 
     findings = list(scope_findings)
+    findings.extend(_stale_link_findings(manifest))
     for note in fem_symmetry_notes:
         findings.append({"id": _finding_id("fem-symmetry-fallback", note),
                          "kind": "fem-symmetry-fallback", "blocking": False, **note})
