@@ -79,29 +79,29 @@ latest export through its locator and check the handoff's export id. Add-ins wit
 the `immutableBundles` capability keep automatic Send; WG asks them to update for a
 manual Update.
 
-The reviewed source pin `ae201fe33cf4f739aee9ea51cb6a1e0667c66c71` picks up explicit Send to CAD requests
-with coordination off, reports correlated outcomes, and creates a separate Design
-for a new Insert. Unconfirmed solve-setting edits survive refusal/retry until WG
-reports the saved setup. The add-in uses its existing atomic writer for that
-optional pending-edit record; history written by the previous add-in is not
-migrated into pending edits. Real Fusion acceptance of this exact revision
-remains separate from source/package qualification.
+The pinned source picks up explicit Send to CAD requests with coordination off,
+reports correlated outcomes, and creates a separate Design for a new Insert.
+Unconfirmed solve-setting edits survive refusal/retry until WG reports the saved
+setup. The add-in uses its existing atomic writer for that optional pending-edit
+record; history written by an add-in before 0.3.4 is not migrated into pending
+edits. Real Fusion acceptance of a pinned revision remains separate from
+source/package qualification.
 
 The pinned source shows a WG-inserted horn’s linked throat in the default HF row
 of Sources & Mesh, while preserving user-picked sources and linked read-only faces.
 
 WGLink 0.3.4 names affected bodies and their corrective actions in scope
-refusals before Send or Solve. Its shared protocol bytes remain identical
-at this package pin.
+refusals before Send or Solve.
 
-The current pin `6df604a` retains the qualified 0.3.4 protocol and scope
-wording while improving detach, unsaved document identity, metadata access,
-request-history locking and dialog cleanup. Handoff claims and cloud open-document
-features remain excluded. The shared protocol bytes and frozen endpoint fixtures
-are unchanged; their source identity follows this exact packaged commit.
-
-The current pin `440a574` reads WGLink bundle format 1.2, which WG writes without
+The pinned source reads WGLink bundle format 1.2, which WG writes without
 `waveguide.step` (Fusion always lofted `point-grid.json`), names a model from a
 newer WG with the update-the-add-in remedy, and keeps sharp corner rays when it
 thins a grid to Fusion's 64-point ring (Insert and Update pick the same rays).
-The shared protocol bytes and frozen endpoint fixtures are unchanged.
+
+The current pin is the full commit in [`source.json`](source.json); its `note`
+says what that revision adds. The vendored shared protocol has its own source
+commit and SHA-256 in
+[`server/contracts/wglink_protocol.source.json`](../../server/contracts/wglink_protocol.source.json),
+which may be later than the package pin when WG needs a protocol fix first.
+[`docs/DEPENDENCY-COMPATIBILITY.md`](../../docs/DEPENDENCY-COMPATIBILITY.md)
+records each pin move, each protocol refresh and what stayed held.
