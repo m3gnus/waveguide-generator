@@ -1,7 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { CadLinkApiError, getFusionCadStatus, type CadReturnBundle, type CadReturnIngestRecord } from '../api/cadlink';
 import { getOnshapeConnection, getOnshapeStatus } from '../api/onshape';
-import { cadCoordinationStore } from '../api/cadCoordination';
 import { jobsSocket } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
 import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
@@ -175,7 +174,7 @@ export function mountCadWorkspaceOwners(): () => void {
       activityRevision,
       cadApplication: preferencesStore.getSnapshot().cadApplication,
       cadFolderConfigured: cadFolderConfigured.current,
-      coordination: cadCoordinationStore.getSnapshot(), workspaceMode: workspaceModeStore.getSnapshot().mode,
+      workspaceMode: workspaceModeStore.getSnapshot().mode,
       // No progress, receipt cursor or mesh generation in the context key.
       observationKey: JSON.stringify([useDocumentStore.getState().identity, useDesignStore.getState().designRevision,
         documentSettingsSignature(), useCadReturnStore.getState().selectedBundle?.bundlePath, fusionInstance]),
@@ -411,7 +410,7 @@ export function mountCadWorkspaceOwners(): () => void {
     useCadReturnStore.subscribe(contextChanged), useSolveOptionsStore.subscribe(contextChanged), useImportedSolveOptionsStore.subscribe(contextChanged),
     workspaceModeStore.subscribe(() => { changed(); autoIngestSelected(); }), preferencesStore.subscribe(subscribeContext),
     useImportedModelStore.subscribe(autoIngestSelected),
-    cadCoordinationStore.subscribe(changed), cadWorkspaceSelection.subscribe(() => observation.refresh()),
+    cadWorkspaceSelection.subscribe(() => observation.refresh()),
     subscribeRevision((event) => {
       if (event.reason === 'load') return;
       const feedback = cadWorkspace.getSnapshot();

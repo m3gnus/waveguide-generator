@@ -46,7 +46,7 @@ describe('CAD observation scheduler without the coordinator', () => {
     vi.useFakeTimers(); vi.setSystemTime('2026-10-11T12:00:00Z');
     visible = true;
     vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visible ? 'visible' : 'hidden');
-    activity = { cadApplication: 'fusion360', cadFolderConfigured: true, coordination: 'off',
+    activity = { cadApplication: 'fusion360', cadFolderConfigured: true,
       workspaceMode: 'cad', observationKey: 'design-1', requests: [], awaitingReturn: false };
     snapshot = { connection: 'disconnected', jobs: [], epoch: null, cursor: null, error: null };
     connection = createCadConnectionStore();
@@ -84,14 +84,6 @@ describe('CAD observation scheduler without the coordinator', () => {
     expect(refreshJobs).not.toHaveBeenCalled(); expect(reloadReceipts).not.toHaveBeenCalled();
   });
 
-  it.each(['unknown', 'off'] as const)('%s: defaults to silence until coordination is explicitly on', async (coordination) => {
-    activity.coordination = coordination;
-    await mount(); const mounted = reads();
-    await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(mounted);
-    change({ coordination: 'on' }); await vi.advanceTimersByTimeAsync(5_000);
-    expect(readStatus.mock.calls.length).toBeGreaterThan(mounted[0]);
-  });
-
   it.each(['needs_user_input', 'recovery_required'])('off: parked %s requests stay quiet and moving them resumes reads', async (state) => {
     activity.requests = [{ id: 'request-1', state }];
     await mount(); const mounted = reads();
@@ -126,27 +118,6 @@ describe('CAD observation scheduler without the coordinator', () => {
     await vi.advanceTimersByTimeAsync(5_000); expect(reads()).toEqual(before.map((count) => count + 2));
     change({ awaitingReturn: false }); const ended = reads();
     await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(ended);
-  });
-
-  it.each(['listing change', 'Send'])('on: %s resets the quiet clock without changing context (row 10)', async () => {
-    activity.coordination = 'on'; activity.workspaceMode = 'parametric'; activity.activityRevision = 0;
-    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false }));
-    await mount(); await vi.advanceTimersByTimeAsync(60_000); const quiet = reads();
-    change({ activityRevision: 1 });
-    await vi.advanceTimersByTimeAsync(2_500); expect(reads()).toEqual(quiet.map((count) => count + 1));
-    await vi.advanceTimersByTimeAsync(27_500); const quietAgain = reads();
-    await vi.advanceTimersByTimeAsync(29_999); expect(reads()).toEqual(quietAgain);
-  });
-
-  it('on: quiet observations widen to 30 seconds and focus immediately wakes them', async () => {
-    activity.coordination = 'on'; activity.workspaceMode = 'parametric';
-    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false }));
-    await mount(); await vi.advanceTimersByTimeAsync(30_000); const quiet = reads();
-    await vi.advanceTimersByTimeAsync(29_999); expect(reads()).toEqual(quiet);
-    await vi.advanceTimersByTimeAsync(1); expect(reads()).toEqual(quiet.map((count) => count + 1));
-    window.dispatchEvent(new Event('focus')); await vi.advanceTimersByTimeAsync(0);
-    expect(reads()).toEqual(quiet.map((count) => count + 2));
-    await vi.advanceTimersByTimeAsync(2_500); expect(reads()).toEqual(quiet.map((count) => count + 3));
   });
 
   it.each(['focus', 'cad-mode', 'folder', 'addin-session'])('off: %s wakes idle reads once without restarting routine reads', async (event) => {
@@ -321,13 +292,6 @@ describe('CAD observation scheduler without the coordinator', () => {
     expect(reads()[1] - running[1]).toBeGreaterThan(20);
   });
 
-  it('on: with no folder, status clocks stop and discovery uses the idle rate', async () => {
-    activity.coordination = 'on'; activity.workspaceMode = 'parametric'; activity.cadFolderConfigured = false;
-    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false }));
-    await mount(); const before = reads(); await vi.advanceTimersByTimeAsync(30_000);
-    expect(reads()).toEqual([before[0], before[1] + 1]);
-  });
-
   it('a job ends while disconnected: reconnect reloads jobs and exact awaited receipt IDs before pending reload drops them', async () => {
     activity.requests = [{ id: 'send-exact', state: 'processing' }]; snapshot.jobs = [cadJob('running')];
     refreshJobs.mockImplementation(async () => { snapshot.jobs = [cadJob('complete', 'accepted')]; jobsChanged(); });
@@ -417,26 +381,6 @@ describe('CAD observation scheduler without the coordinator', () => {
     finish(new Set()); await vi.advanceTimersByTimeAsync(0);
     const stopped = reads(); window.dispatchEvent(new Event('focus')); await vi.advanceTimersByTimeAsync(600_000);
     expect(reads()).toEqual(stopped); expect(connection.getState().fusionStatus).toBeNull(); expect(vi.getTimerCount()).toBe(0);
-  });
-  it('on: moving jobs and coarse notifications do not hold the base rate or reset the quiet clock', async () => {
-    activity.coordination = 'on'; activity.workspaceMode = 'parametric';
-    readStatus.mockResolvedValue(status({ state: 'closed', processRunning: false, running: false }));
-    snapshot.jobs = [cadJob()];
-    await mount();
-    for (let tick = 0; tick < 16; tick += 1) {
-      activityChanged(); jobsChanged();
-      await vi.advanceTimersByTimeAsync(2_500);
-    }
-    const quiet = reads();
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(reads()).toEqual(quiet);
-    change({ awaitingReturn: true });
-    await vi.advanceTimersByTimeAsync(2_500);
-    expect(reads()[0]).toBe(quiet[0] + 1);
-    change({ awaitingReturn: false });
-    const settled = reads();
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(reads()).toEqual(settled);
   });
 
 });

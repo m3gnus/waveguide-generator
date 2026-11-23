@@ -5,7 +5,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing, FusionCadStatus } from '../api/cadlink';
-import { resetCadCoordinationForTests } from '../api/cadCoordination';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
@@ -38,7 +37,6 @@ import { fusionAddinNeedsInstall, fusionWorkflowView, onshapeWorkflowView } from
 
 const listing: CadReturnListing = {
   cadFolderConfigured: true,
-  coordination: 'on',
   items: [{
     name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
     documentName: 'Speaker', requestId: null, sourceCount: 1, instanceCount: 1,
@@ -122,7 +120,6 @@ describe('CadLinkPanel', () => {
     useCadConnectionStore.setRecoveryError(null); cadReceiptsStore.setState({ recoveryError: null });
     fixtureOperations = {}; reportedRecovery = null; cadRecoveryNoticesStore.setState({ notices: {}, recoveryError: null });
 
-    resetCadCoordinationForTests('on');
     workspaceModeStore.setMode('parametric');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
@@ -278,7 +275,7 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/install-addin')) return json({ verdict: 'pending', detail: 'Close Fusion to finish installing the Waveguide Generator add-in in Fusion.' });
       if (path.endsWith('/fusion-status')) return json({ ...closedFusion, cadFolderConfigured: false, addinRefresh: { verdict: 'not-in-use', detail: 'No signal' } });
-      if (path.endsWith('/returns')) return json({ items: [], cadFolderConfigured: false, coordination: 'off' });
+      if (path.endsWith('/returns')) return json({ items: [], cadFolderConfigured: false });
       return json(record);
     });
     vi.stubGlobal('fetch', fetcher);
@@ -2828,18 +2825,15 @@ describe('CadLinkPanel', () => {
     expect(linkedCard.querySelector('.cad-primary-action')?.textContent).toBe('Open in Fusion 360');
   });
 
-  it('mentions background coordination only when it is off', async () => {
-    preferencesStore.update({ showDeveloperDetails: true });
+  it('mentions that background checks are off only in developer details', async () => {
     const { CadCoordinationNote } = await import('./CadLinkPanel');
-    const { resetCadCoordinationForTests } = await import('../api/cadCoordination');
-    resetCadCoordinationForTests('on');
+    preferencesStore.update({ showDeveloperDetails: false });
     await act(async () => { root.render(<CadCoordinationNote/>); });
     expect(host.textContent).toBe('');
-    resetCadCoordinationForTests('off');
+    preferencesStore.update({ showDeveloperDetails: true });
     await act(async () => { root.render(<CadCoordinationNote/>); });
     expect(host.textContent).toContain('Background checks are off');
     expect(host.textContent).not.toContain('WG2_CAD_COORDINATION');
-    resetCadCoordinationForTests();
   });
 
   it('flags only mistakes in the checks: a declared cut that fails, never a candidate plane, hidden skips of construction, or double counts', async () => {

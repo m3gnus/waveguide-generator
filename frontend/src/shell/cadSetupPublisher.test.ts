@@ -3,7 +3,6 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket } from '../api/jobsSocket';
-import { resetCadCoordinationForTests } from '../api/cadCoordination';
 import { Shell } from './Shell';
 import { useCadSetupPublisherStore, useCadFeedbackError } from './cadSetupPublisher';
 import { useCadConnectionStore } from '../stores/cadConnection';
@@ -728,7 +727,6 @@ describe('shell-owned CAD setup publisher', () => {
     resetDocumentStore();
     resetSolveOptionsStore();
 
-    resetCadCoordinationForTests('off');
     useCadSetupPublisherStore.setState({ errors: {} });
     useCadConnectionStore.setRecoveryError(null);
     cadReceiptsStore.setState({ recoveryError: null });
@@ -746,7 +744,7 @@ describe('shell-owned CAD setup publisher', () => {
         if (failures-- > 0) throw new Error('offline');
       }
       if (path.includes('/operations')) return json({ operations: [] });
-      if (path.endsWith('/returns')) return json({ items: [], cadFolderConfigured: false, coordination: 'off' });
+      if (path.endsWith('/returns')) return json({ items: [], cadFolderConfigured: false });
       if (path.endsWith('/fusion-status')) return json({ running: false, state: 'addin_offline' });
       return json({ consumer: 'running', recentRefusals: [] });
     }));
@@ -760,7 +758,6 @@ describe('shell-owned CAD setup publisher', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
-    resetCadCoordinationForTests();
     workspaceModeStore.setMode('parametric');
   });
   const advance = async (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });

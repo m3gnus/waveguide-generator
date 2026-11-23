@@ -400,8 +400,6 @@ describe('the CAD Link panel says why the listing still runs (review F5)', () =>
   ])('with the add-in declaring the inbox transfer = %s, says the listing is needed = %s', async (declares, needed) => {
     const { CadCoordinationNote } = await import('./CadLinkPanel');
     const { cadWorkspace } = await import('../stores/cadWorkspace');
-    const { resetCadCoordinationForTests } = await import('../api/cadCoordination');
-    resetCadCoordinationForTests('off');
     preferencesStore.update({ showDeveloperDetails: true });
     vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
       ...cadWorkspace.getSnapshot(),
@@ -414,7 +412,6 @@ describe('the CAD Link panel says why the listing still runs (review F5)', () =>
     expect(host.textContent?.includes('older Fusion add-in needs WG to keep checking')).toBe(needed);
     act(() => root.unmount());
     host.remove();
-    resetCadCoordinationForTests();
     vi.restoreAllMocks();
   });
 });

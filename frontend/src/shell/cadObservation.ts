@@ -1,5 +1,4 @@
 import type { CadOperationSummary } from '../api/cadOperations';
-import type { CadCoordination } from '../api/cadCoordination';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { useCadConnectionStore, type CadConnectionStore, type CadConnectionStatus } from '../stores/cadConnection';
 import { cadStartupHello } from '../stores/cadStartupHello';
@@ -21,7 +20,6 @@ export interface CadObservationActivity {
   activityRevision?: number;
   cadApplication: string;
   cadFolderConfigured: boolean | null;
-  coordination: CadCoordination;
   workspaceMode: string;
   /** Design/settings/selected-instance generation. Changing it fences old reads. */
   observationKey: string;
@@ -82,7 +80,9 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     if (input.cadApplication !== 'fusion360' || !visible()) return null;
     const base = listing ? CAD_OBSERVATION_INTERVALS.returnsMs : CAD_OBSERVATION_INTERVALS.fusionStatusMs;
     const idle = listing ? CAD_OBSERVATION_INTERVALS.returnsIdleMs : CAD_OBSERVATION_INTERVALS.fusionStatusIdleMs;
-    if (input.coordination !== 'on' && !(listing && !declaredInbox)) return working() ? base : null;
+    // Idle observation stops unless an older add-in needs the folder listing
+    // to discover what it sends (it does not declare the inbox transfer).
+    if (!listing || declaredInbox) return working() ? base : null;
     // CAD mode keeps the base rate while Fusion may deliver. Once Fusion reports it
     // is closed, nothing can arrive until it starts again, which its add-in push,
     // focus or a quiet-rate listing notices; until then quiet cadence applies.
@@ -236,7 +236,6 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     const folderChanged = next.cadFolderConfigured !== activity.cadFolderConfigured;
     const folderDiscovered = activity.cadFolderConfigured === null && folderChanged;
     const enteredCad = next.workspaceMode === 'cad' && activity.workspaceMode !== 'cad';
-    const coordinationChanged = next.coordination !== activity.coordination;
     const pullChanged = next.awaitingReturn !== activity.awaitingReturn;
     const modeChanged = next.workspaceMode !== activity.workspaceMode;
     const nextWorking = working();
@@ -253,7 +252,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       if (!(folderChanged || enteredCad || applicationChanged)) readStatusSettled();
     }
     if ((folderChanged && !folderDiscovered) || enteredCad || applicationChanged) wake();
-    else if (contextChanged || folderChanged || coordinationChanged || modeChanged || pullChanged || workChanged) restart();
+    else if (contextChanged || folderChanged || modeChanged || pullChanged || workChanged) restart();
   });
   const unsubscribeConnection = connection.subscribe((state) => {
     const next = state.fusionStatus;

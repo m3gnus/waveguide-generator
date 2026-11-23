@@ -36,7 +36,6 @@ import { RootFolderControls } from './RootFolderControls';
 import { requestSettings } from './settingsNavigation';
 import { workspaceNavigation } from './workspaceNavigation';
 import { usePanelVisible } from './panelVisibility';
-import { cadCoordinationStore } from '../api/cadCoordination';
 import './cadLinkPanel.css';
 
 // Kept as public panel helpers for existing callers; implementation lives next
@@ -93,14 +92,12 @@ function CadModelDeveloperDetails({ staleReason }: { staleReason: string | null 
 
 /** Explain the file transport's idle observation policy. */
 export function CadCoordinationNote() {
-  const state = useSyncExternalStore(cadCoordinationStore.subscribe, cadCoordinationStore.getSnapshot, cadCoordinationStore.getSnapshot);
   const coordinator = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot);
   // How the transport polls is developer detail.
   const developerDetails = useDeveloperDetails();
-  // Wait until the returns listing has reported its compatibility policy.
-  if (!developerDetails || state === 'unknown' || state === 'on') return null;
+  if (!developerDetails) return null;
   const inbox = coordinator.fusionStatus?.addinInboxTransfer === true;
-  return <p className="cad-detail cad-coordination-state" data-coordination={state}>
+  return <p className="cad-detail cad-coordination-state" data-coordination="off">
     {inbox
       ? 'Background checks are off. WG checks models from CAD and Fusion status while CAD work is in progress, and when you act.'
       : 'Background checks are off. This older Fusion add-in needs WG to keep checking the WGLink folder for models you send.'}
