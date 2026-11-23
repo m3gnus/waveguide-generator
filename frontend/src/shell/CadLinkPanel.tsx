@@ -23,7 +23,7 @@ import { useDocumentStore } from '../stores/document';
 import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { returnBelongsToProject } from './cadlink/arrivals';
-import { fusionAddinNeedsInstall, fusionAddinTooOldForUpdate, fusionLinkDisplayName, fusionParameterDriftDetail, fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
+import { fusionAddinNeedsInstall, fusionAddinTooOldForUpdate, fusionLinkDisplayName, fusionParameterDriftDetail, fusionWorkflowView, onshapeWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
@@ -50,10 +50,6 @@ import { failureWords } from '../api/httpError';
 const DOCUMENT_LINK_STATES: ReadonlySet<string> = new Set([
   'not-linked', 'no-document', 'current', 'stale', 'unmeasured', 'refresh-needed', 'instance-selection',
 ]);
-
-// The workflow views moved beside the coordinator's unified send path; the
-// re-export keeps this module the panel-facing home for existing callers.
-export { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView };
 
 function returnDisplayName(bundle: CadReturnBundle): string {
   if (bundle.documentName) return bundle.documentName;

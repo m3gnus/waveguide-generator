@@ -67,16 +67,16 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     expectNoJargon(text);
     expect(exportsFrom(fetcher)).toHaveLength(0);
   });
-  it.each(['sendWgToFusion', 'confirmFusionConflict'] as const)('%s shares every guard and refuses unavailable evidence', async (entry) => {
+  it.each([false, true])('a send (confirmed: %s) shares every guard and refuses unavailable evidence', async (confirmed) => {
     const { controller, reader, fetcher } = setup(); reader.mockRejectedValueOnce(new Error('offline'));
-    await expect(controller[entry]()).rejects.toThrow('could not check');
+    await expect(controller.sendWgToFusion({ confirmed })).rejects.toThrow('could not check');
     expect(exportsFrom(fetcher)).toHaveLength(0);
   });
   it.each(['current', 'addin_offline', 'addin_outdated', 'instance_selection_required'] as const)(
     'refuses %s at both public entry points', async (state) => {
       const { controller, fetcher } = setup(status({ state }));
       await expect(controller.sendWgToFusion()).rejects.toThrow();
-      await expect(controller.confirmFusionConflict()).rejects.toThrow();
+      await expect(controller.sendWgToFusion({ confirmed: true })).rejects.toThrow();
       expect(exportsFrom(fetcher)).toHaveLength(0);
     });
   it.each([
@@ -114,9 +114,9 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     expect(controller.getState().pendingFusionConflict).toBe(true);
     controller.cancelFusionConflict(); expect(controller.getState().pendingFusionConflict).toBe(false);
     // Direct confirmation without a displayed conflict cannot overwrite Fusion.
-    expect(await controller.confirmFusionConflict()).toBeNull();
+    expect(await controller.sendWgToFusion({ confirmed: true })).toBeNull();
     expect(exportsFrom(fetcher)).toHaveLength(0);
-    await controller.confirmFusionConflict(); expect(exportsFrom(fetcher)).toHaveLength(1);
+    await controller.sendWgToFusion({ confirmed: true }); expect(exportsFrom(fetcher)).toHaveLength(1);
   });
   it.each(['target', 'WG revision', 'WG settings', 'refusal'] as const)('rechecks a confirmation after changed %s', async (change) => {
     const { controller, fetcher, setStatus } = setup(status({ fusionChangesAvailable: true }));
@@ -125,8 +125,8 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     else if (change === 'WG settings') useSolveOptionsStore.getState().updatePolar({ distance: 4 });
     else setStatus(status({ fusionChangesAvailable: true, ...(change === 'target'
       ? { documentId: 'another' } : { state: 'addin_outdated' }) }));
-    if (change === 'refusal' || change === 'WG revision') await expect(controller.confirmFusionConflict()).rejects.toThrow();
-    else expect(await controller.confirmFusionConflict()).toBeNull();
+    if (change === 'refusal' || change === 'WG revision') await expect(controller.sendWgToFusion({ confirmed: true })).rejects.toThrow();
+    else expect(await controller.sendWgToFusion({ confirmed: true })).toBeNull();
     expect(exportsFrom(fetcher)).toHaveLength(0);
   });
   it('runs all guards against the folder picker result and exports the latest name', async () => {
@@ -139,7 +139,7 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     useDocumentStore.getState().setDesignName('New horn');
     setStatus(status({ fusionChangesAvailable: true })); pick.resolve(json({ selected: true }));
     expect(await sending).toBeNull(); expect(exportsFrom(fetcher)).toHaveLength(0);
-    await controller.confirmFusionConflict();
+    await controller.sendWgToFusion({ confirmed: true });
     const body = JSON.parse(String(exportsFrom(fetcher)[0][1]?.body));
     expect(body.baseName).toBe('New_horn'); expect(body.design.R).toBe(useDesignStore.getState().design.R);
     expect(body.designRevision).toBe(useDesignStore.getState().designRevision); expect(reader).toHaveBeenCalledTimes(3);
@@ -327,7 +327,7 @@ describe.each(['file', 'cad', 'another parametric model'] as const)('current-mod
     const { controller, reader, fetcher } = setup(status({ fusionChangesAvailable: true }));
     expect(await controller.sendWgToFusion()).toBeNull();
     switchModel();
-    await expect(controller.confirmFusionConflict()).rejects.toThrow();
+    await expect(controller.sendWgToFusion({ confirmed: true })).rejects.toThrow();
     expect(reader).toHaveBeenCalledOnce();
     expectStopped(controller, fetcher);
   });
@@ -337,7 +337,7 @@ describe.each(['file', 'cad', 'another parametric model'] as const)('current-mod
     const { controller, reader, fetcher } = setup(status({ fusionChangesAvailable: true }));
     await controller.sendWgToFusion();
     reader.mockReturnValueOnce(pending.promise);
-    const sending = controller.confirmFusionConflict();
+    const sending = controller.sendWgToFusion({ confirmed: true });
     switchModel(); pending.resolve(status({ fusionChangesAvailable: true }));
     await expect(sending).rejects.toThrow();
     expectStopped(controller, fetcher);
@@ -358,14 +358,14 @@ describe.each(['file', 'cad', 'another parametric model'] as const)('current-mod
 });
 
 describe.each(['file', 'cad'] as const)('send guard begun on imported %s', (kind) => {
-  it.each(['sendWgToFusion', 'confirmFusionConflict'] as const)('refuses %s before reading status', async (entry) => {
+  it.each([false, true])('refuses a send (confirmed: %s) before reading status', async (confirmed) => {
     const { controller, reader, fetcher } = setup();
     workspaceModeStore.setImportedInput(kind);
     workspaceModeStore.setMode('cad');
     const reason = kind === 'file'
       ? 'STEP export is not available for imported mesh models.'
       : 'STEP export is not available for imported models.';
-    await expect(controller[entry]()).rejects.toThrow(reason);
+    await expect(controller.sendWgToFusion({ confirmed })).rejects.toThrow(reason);
     expect(reader).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
   });
 });

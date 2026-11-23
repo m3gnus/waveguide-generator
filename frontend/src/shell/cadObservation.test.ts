@@ -177,9 +177,7 @@ describe('CAD observation scheduler without the coordinator', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(readStatus).toHaveBeenCalledTimes(2);
     expect(connection.getState().fusionStatus).toBe(held.fusionStatus);
-    expect(connection.getState().receivedAt).toBe(held.receivedAt);
-    expect(connection.getState().expiresAt).toBe(held.expiresAt);
-    expect(connection.getState().linkName).toBe('Upper horn');
+    expect(connection.getState().fusionStatus?.link?.linkName).toBe('Upper horn');
     expect(connection.getState().fusionStatus?.processRunning).toBe(true);
     expect(fusionWorkflowView(connection.getState().fusionStatus).state).toBe('current');
     await vi.advanceTimersByTimeAsync(14_999);
@@ -188,7 +186,7 @@ describe('CAD observation scheduler without the coordinator', () => {
     expect(connection.getState().fusionStatus?.statusObserved).toBe(false);
     expect(fusionWorkflowView(connection.getState().fusionStatus).headline).toContain('last reported');
     expect(connection.getState().fusionStatus?.processRunning).toBe(true);
-    expect(connection.getState().linkName).toBe('Upper horn');
+    expect(connection.getState().fusionStatus?.link?.linkName).toBe('Upper horn');
     expect(readStatus).toHaveBeenCalledTimes(2);
   });
 

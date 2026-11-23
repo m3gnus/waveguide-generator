@@ -11,9 +11,6 @@ export type CadConnectionStatus = Omit<FusionCadStatus, 'link' | 'matchingLinks'
 
 interface CadConnectionState {
   fusionStatus: CadConnectionStatus | null;
-  receivedAt: number | null;
-  expiresAt: number | null;
-  linkName: string | null;
   recoveryError: string | null;
 }
 
@@ -26,7 +23,7 @@ const VALID_STATES = new Set(['closed', 'addin_offline', 'addin_outdated', 'no_d
  * use the returned read, never a previously held status, to guard a command. */
 export function createCadConnectionStore(now: () => number = Date.now) {
   const store = create<CadConnectionState>(() => ({
-    fusionStatus: null, receivedAt: null, expiresAt: null, linkName: null, recoveryError: null,
+    fusionStatus: null, recoveryError: null,
   }));
   let generation = 0;
   let commandGeneration: number | null = null;
@@ -39,10 +36,7 @@ export function createCadConnectionStore(now: () => number = Date.now) {
     clearExpiry();
     const expiresAt = statusExpiresAt(status);
     const held = expiresAt !== null && expiresAt <= now() ? agedFusionStatus(status) : status;
-    store.setState({
-      fusionStatus: held, receivedAt: now(), expiresAt,
-      linkName: (held.link as CadConnectionLink | null)?.linkName ?? null,
-    });
+    store.setState({ fusionStatus: held });
     if (expiresAt !== null && expiresAt > now()) {
       expiryTimer = setTimeout(() => {
         expiryTimer = null;
@@ -95,7 +89,7 @@ export function createCadConnectionStore(now: () => number = Date.now) {
       generation += 1;
       commandGeneration = null;
       clearExpiry();
-      store.setState({ fusionStatus: null, receivedAt: null, expiresAt: null, linkName: null });
+      store.setState({ fusionStatus: null });
     },
     setRecoveryError(recoveryError: string | null) { store.setState({ recoveryError }); },
   });

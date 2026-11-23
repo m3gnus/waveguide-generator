@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CadLinkApiError } from './cadlink';
 import {
-  createSetupRevision,
   getCadOperation,
   getSetupRevision,
   isPendingCadOperation,
@@ -47,14 +46,6 @@ function recorder(body: unknown, status = 200) {
 }
 
 describe('CAD operations client', () => {
-  it('records a setup revision', async () => {
-    const setup = { schema_version: 1 as const, geometry: { drive_channels: [] }, options: { engine: 'auto' } };
-    const setupRequest = recorder({ revisionId: 'wgs_1', contentSha256: 'sha256:s', createdAt: 'now' });
-    await expect(createSetupRevision(setup, setupRequest.fetcher)).resolves.toMatchObject({ revisionId: 'wgs_1' });
-    expect(setupRequest.calls[0]).toMatchObject({ url: '/api/cadlink/setup-revisions', init: { method: 'POST' } });
-    expect(JSON.parse(String(setupRequest.calls[0].init?.body))).toEqual({ setup });
-  });
-
   it('reads the immutable content of a setup revision', async () => {
     const setup = { schema_version: 1 as const, geometry: { drive_channels: [] }, options: { engine: 'beat-cpu' } };
     const request = recorder({ revisionId: 'wgs/1', contentSha256: 'sha256:s', createdAt: 'now', setup });

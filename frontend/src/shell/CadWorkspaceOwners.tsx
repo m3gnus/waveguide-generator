@@ -399,7 +399,7 @@ export function mountCadWorkspaceOwners(): () => void {
       if (state.outboundOperations !== previous.outboundOperations) Object.values(state.outboundOperations).forEach(outbound.observeOperation);
     }), connectCadRecoveryNotices(),
     observeCadProjectLoads({ enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refusedForeignReturn,
-      returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns }, selectBundleRef: { current: selectBundle },
+      returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns },
       setError: reportError, setStatus: reportStatus }),
     observeFileDriverBaseRefresh(),
     observeLastModel({ reportStatus, reportError, refusedForeignReturn, selectBundle: (bundle, project) => selectBundle(bundle, project, true),

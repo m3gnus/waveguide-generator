@@ -481,19 +481,13 @@ function EarlierRequests({ requests, requestActions }: { requests: CadRequest[];
   </details>;
 }
 
-/** Whether an operation is about what is in front of the user: a solve of the
- * model on screen (the same snapshot), or a recovery the active Fusion
- * document still reports. */
-function aboutWhatIsOnScreen(
+/** Whether a solve is of the model on screen (the same snapshot). */
+function solvesWhatIsOnScreen(
   operation: CadOperationSummary,
   record: CadReturnIngestRecord | null,
-  reportedRecovery: string | null,
 ): boolean {
-  if (operation.kind === 'prepare_and_solve') {
-    const manifest = operation.snapshot?.manifestSha256 ?? null;
-    return Boolean(record && manifest && record.manifest_sha256 === manifest);
-  }
-  return reportedRecovery !== null && operation.operationId === reportedRecovery;
+  const manifest = operation.snapshot?.manifestSha256 ?? null;
+  return Boolean(record && manifest && record.manifest_sha256 === manifest);
 }
 
 /** The waiting or running solves of the model on screen. */
@@ -502,7 +496,7 @@ export function onScreenSolves(
   record: CadReturnIngestRecord | null,
 ): CadOperationSummary[] {
   return Object.values(operations).filter(isPendingCadOperation)
-    .filter((operation) => operation.kind === 'prepare_and_solve' && aboutWhatIsOnScreen(operation, record, null));
+    .filter((operation) => operation.kind === 'prepare_and_solve' && solvesWhatIsOnScreen(operation, record));
 }
 
 /** The waiting or running solves of the model on screen, under its status

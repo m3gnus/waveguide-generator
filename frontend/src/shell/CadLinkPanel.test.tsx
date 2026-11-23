@@ -24,7 +24,7 @@ import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
-import { CadLinkPanel, declaredDomainPhrase, fusionWorkflowView, onshapeWorkflowView } from './CadLinkPanel';
+import { CadLinkPanel, declaredDomainPhrase } from './CadLinkPanel';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { newestReturnArrival } from './cadlink/arrivals';
 import { showIngestedMeshInViewport } from './cadlink/artifactLoader';
@@ -34,7 +34,7 @@ import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
 import { SolveActions } from './TopBar';
 import { CurrentModelStatus } from './CurrentModelStatus';
 import { workspaceNavigation } from './workspaceNavigation';
-import { fusionAddinNeedsInstall } from './cadWorkflowView';
+import { fusionAddinNeedsInstall, fusionWorkflowView, onshapeWorkflowView } from './cadWorkflowView';
 
 const listing: CadReturnListing = {
   cadFolderConfigured: true,

@@ -12,13 +12,12 @@ export const useCadDeliveryHealthStore = create<{
   refusals: CadInboxRefusal[];
   unseenRefusals: number;
   outboundOperations: Record<string, CadOperationSummary>;
-  waiting: boolean;
   recoveryError: string | null;
   setStatus: (status: CadDeliveryStatus) => void;
   mergeRefusals: (refusals: CadInboxRefusal[]) => void;
   acknowledgeRefusals: () => void;
 }>((set, get) => ({
-  status: null, refusals: [], unseenRefusals: 0, outboundOperations: {}, waiting: false, recoveryError: null,
+  status: null, refusals: [], unseenRefusals: 0, outboundOperations: {}, recoveryError: null,
   setStatus: (status) => { set({ status }); get().mergeRefusals(status.recentRefusals ?? []); },
   mergeRefusals: (refusals) => {
     const known = new Set(get().refusals.map(refusalKey));
@@ -77,10 +76,11 @@ export function connectCadDeliveryHealth(): () => void {
     });
     return status;
   };
+  let waiting = false;
   const updateWaiting = () => {
-    const waiting = [...intake.values()].some((item) => item.state === 'received');
-    if (waiting === useCadDeliveryHealthStore.getState().waiting) return;
-    useCadDeliveryHealthStore.setState({ waiting });
+    const next = [...intake.values()].some((item) => item.state === 'received');
+    if (next === waiting) return;
+    waiting = next;
     if (timer !== null) clearInterval(timer);
     timer = waiting ? setInterval(read, WAITING_READ_MS) : null;
     read();
@@ -126,10 +126,9 @@ export function connectCadDeliveryHealth(): () => void {
     refresh = null;
     unsubscribe();
     if (timer !== null) clearInterval(timer);
-    useCadDeliveryHealthStore.setState({ waiting: false });
   };
 }
 
 export function resetCadDeliveryHealthStore(): void {
-  useCadDeliveryHealthStore.setState({ status: null, refusals: [], unseenRefusals: 0, outboundOperations: {}, waiting: false, recoveryError: null });
+  useCadDeliveryHealthStore.setState({ status: null, refusals: [], unseenRefusals: 0, outboundOperations: {}, recoveryError: null });
 }

@@ -67,7 +67,6 @@ describe('delivery-health reads in flight', () => {
     listener.operation(waiting);
     await vi.advanceTimersByTimeAsync(3 * WAITING_READ_MS);
     listener.operation({ ...waiting, state: 'processing', attemptGeneration: 1 });
-    expect(useCadDeliveryHealthStore.getState().waiting).toBe(false);
     expect(answers).toHaveLength(1);
     respond(0, status('Old waiting snapshot.'));
     await flush();
