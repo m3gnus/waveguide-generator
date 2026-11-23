@@ -64,12 +64,18 @@ function setReadyRun(jobId: string | null): void {
 
 // An offered run shown by any route (the run list, the palette, the chip) has
 // been taken: it is not offered again when the person later selects another.
-compareSelection.subscribe(() => {
-  if (offeredRun !== null && compareSelection.getSnapshot().primary === offeredRun) {
-    offeredRun = null;
-    emit();
-  }
-});
+// Subscribed at the first offer, so importing this module reads no results store.
+let watchingSelection = false;
+function watchOfferedSelection(): void {
+  if (watchingSelection) return;
+  watchingSelection = true;
+  compareSelection.subscribe(() => {
+    if (offeredRun !== null && compareSelection.getSnapshot().primary === offeredRun) {
+      offeredRun = null;
+      emit();
+    }
+  });
+}
 
 // Seeing Results by any route answers "where did my solve go?".
 workspaceNavigation.subscribe(() => {
@@ -176,6 +182,7 @@ export const solveAttention = {
   offerRun(jobId: string): void {
     if (offeredRuns.has(jobId)) return;
     offeredRuns.add(jobId);
+    watchOfferedSelection();
     if (compareSelection.getSnapshot().primary === jobId) return;
     offeredRun = jobId;
     emit();
