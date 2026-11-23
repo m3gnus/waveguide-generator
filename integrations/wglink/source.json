@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "b67b7d26b443d12c5f6cdb4ef727544d6b3e2c31",
+  "commit": "440a57402cebe6334b653d8e23b4d97f9d69ac88",
   "license": "AGPL-3.0-or-later",
   "addinVersion": "0.3.4",
-  "note": "Send-to-CAD retry/discovery and Solid-tab dispatch guards; retained claims keep the original monotonic receipt lifetime. WG open-document consumers remain separate held work."
+  "note": "Reads bundle format 1.2 (no STEP), names a too-new model with the update remedy, and keeps sharp corner rays when thinning to the 64-point ring. Shared protocol bytes unchanged from b67b7d2. WG open-document consumers remain separate held work."
 }

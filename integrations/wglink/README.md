@@ -99,3 +99,9 @@ wording while improving detach, unsaved document identity, metadata access,
 request-history locking and dialog cleanup. Handoff claims and cloud open-document
 features remain excluded. The shared protocol bytes and frozen endpoint fixtures
 are unchanged; their source identity follows this exact packaged commit.
+
+The current pin `440a574` reads WGLink bundle format 1.2, which WG writes without
+`waveguide.step` (Fusion always lofted `point-grid.json`), names a model from a
+newer WG with the update-the-add-in remedy, and keeps sharp corner rays when it
+thins a grid to Fusion's 64-point ring (Insert and Update pick the same rays).
+The shared protocol bytes and frozen endpoint fixtures are unchanged.
