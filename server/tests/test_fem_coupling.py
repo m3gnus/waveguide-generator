@@ -1667,3 +1667,64 @@ def test_overlap_area_is_the_same_when_evaluated_in_blocks(monkeypatch):
     whole = fem_coupling._overlap_area(polygons, -1.)
     monkeypatch.setattr(fem_coupling, "FACING_OVERLAP_BLOCK", 1)
     assert whole == pytest.approx(42.) and fem_coupling._overlap_area(polygons, -1.) == pytest.approx(whole)
+
+
+def _reference_outward_facets(points, triangles, tetrahedra):
+    """The per-tetrahedron loop ``_outward_facets`` replaced, kept as its oracle."""
+
+    import numpy as np
+
+    owners = {}
+    for tetra in tetrahedra:
+        for opposite in range(4):
+            face = tuple(sorted(np.delete(tetra, opposite).tolist()))
+            owners.setdefault(face, []).append(int(tetra[opposite]))
+    result = triangles.copy()
+    for index, triangle in enumerate(triangles):
+        opposite = owners.get(tuple(sorted(triangle.tolist())), [])
+        if len(opposite) != 1:
+            raise ValueError("not one owner")
+        a, b, c = points[triangle]
+        if np.dot(np.cross(b - a, c - a), points[opposite[0]] - a) > 0:
+            result[index] = triangle[[0, 2, 1]]
+    return result
+
+
+def test_outward_facets_matches_the_per_tetrahedron_loop() -> None:
+    import numpy as np
+
+    from server.mesh.fem_coupling import FemRegionMeshError, _outward_facets
+
+    rng = np.random.default_rng(7)
+    n = 4
+    grid = np.stack(np.meshgrid(*(np.arange(n + 1.0),) * 3, indexing="ij"), axis=-1).reshape(-1, 3)
+    points = grid + rng.uniform(-0.1, 0.1, grid.shape)
+    index = np.arange(len(grid)).reshape(n + 1, n + 1, n + 1)
+    tetrahedra = []
+    for i in range(n):
+        for j in range(n):
+            for k in range(n):
+                c = [index[i + di, j + dj, k + dk] for di in (0, 1) for dj in (0, 1) for dk in (0, 1)]
+                # Six tetrahedra around the cube diagonal c[0]-c[7].
+                for a, b in ((1, 3), (3, 2), (2, 6), (6, 4), (4, 5), (5, 1)):
+                    tetrahedra.append([c[0], c[a], c[b], c[7]])
+    tetrahedra = np.asarray(tetrahedra, dtype=np.int64)
+    faces = {}
+    for tetra in tetrahedra:
+        for opposite in range(4):
+            key = tuple(sorted(np.delete(tetra, opposite).tolist()))
+            faces[key] = faces.get(key, 0) + 1
+    boundary = np.asarray([face for face, count in faces.items() if count == 1], dtype=np.int64)
+    # Arbitrary windings, so both outcomes of the orientation test occur.
+    flip = rng.random(len(boundary)) < 0.5
+    boundary[flip] = boundary[flip][:, [0, 2, 1]]
+
+    expected = _reference_outward_facets(points, boundary, tetrahedra)
+    assert np.array_equal(_outward_facets(points, boundary, tetrahedra), expected)
+    assert not np.array_equal(expected, boundary)
+
+    interior = np.asarray([next(face for face, count in faces.items() if count == 2)])
+    with pytest.raises(FemRegionMeshError, match="exactly one tetrahedron"):
+        _outward_facets(points, np.concatenate([boundary, interior]), tetrahedra)
+    with pytest.raises(FemRegionMeshError, match="exactly one tetrahedron"):
+        _outward_facets(points, np.asarray([[0, 1, 2 * n * n + 7]]), tetrahedra)

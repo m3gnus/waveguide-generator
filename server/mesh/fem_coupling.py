@@ -618,22 +618,54 @@ def _outward_facets(
     points: np.ndarray, triangles: np.ndarray, tetrahedra: np.ndarray
 ) -> np.ndarray:
     """Orient each boundary triangle away from its owning tetrahedron."""
-    owners: dict[tuple[int, int, int], list[int]] = {}
-    for tetra in tetrahedra:
-        for opposite in range(4):
-            face = tuple(sorted(np.delete(tetra, opposite).tolist()))
-            owners.setdefault(face, []).append(int(tetra[opposite]))
+    owner_count, owner_vertex = _facet_owners(triangles, tetrahedra)
+    if np.any(owner_count != 1):
+        raise FemRegionMeshError(
+            "FEM boundary triangle does not bound exactly one tetrahedron."
+        )
     result = triangles.copy()
     for index, triangle in enumerate(triangles):
-        opposite = owners.get(tuple(sorted(triangle.tolist())), [])
-        if len(opposite) != 1:
-            raise FemRegionMeshError(
-                "FEM boundary triangle does not bound exactly one tetrahedron."
-            )
         a, b, c = points[triangle]
-        if np.dot(np.cross(b - a, c - a), points[opposite[0]] - a) > 0:
+        if np.dot(np.cross(b - a, c - a), points[owner_vertex[index]] - a) > 0:
             result[index] = triangle[[0, 2, 1]]
     return result
+
+
+def _facet_owners(
+    triangles: np.ndarray, tetrahedra: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """For each triangle: how many tetrahedron faces it is, and the vertex opposite one.
+
+    Integer bookkeeping only, done in bulk: every tetrahedron face and every
+    triangle, as sorted vertex triples, are sorted together, so equal triples
+    sit side by side. The orientation test itself stays per triangle in the
+    caller, with exactly the arithmetic it always had.
+    """
+
+    triangles = np.asarray(triangles, dtype=np.int64).reshape(-1, 3)
+    tetrahedra = np.asarray(tetrahedra, dtype=np.int64).reshape(-1, 4)
+    count = np.zeros(len(triangles), dtype=np.int64)
+    vertex = np.full(len(triangles), -1, dtype=np.int64)
+    if not len(triangles) or not len(tetrahedra):
+        return count, vertex
+    faces = np.concatenate([np.delete(tetrahedra, opposite, axis=1) for opposite in range(4)])
+    opposite_vertex = np.concatenate([tetrahedra[:, opposite] for opposite in range(4)])
+    rows = np.sort(np.concatenate([faces, triangles]), axis=1)
+    is_face = np.arange(len(rows)) < len(faces)
+    order = np.lexsort((rows[:, 2], rows[:, 1], rows[:, 0]))
+    ordered = rows[order]
+    starts = np.ones(len(ordered), dtype=bool)
+    starts[1:] = np.any(ordered[1:] != ordered[:-1], axis=1)
+    group = np.cumsum(starts) - 1
+    face_in_order = is_face[order]
+    faces_per_group = np.bincount(group, weights=face_in_order, minlength=int(group[-1]) + 1)
+    group_vertex = np.full(len(faces_per_group), -1, dtype=np.int64)
+    group_vertex[group[face_in_order]] = opposite_vertex[order[face_in_order]]
+    triangle_rows = order[~face_in_order] - len(faces)
+    triangle_groups = group[~face_in_order]
+    count[triangle_rows] = faces_per_group[triangle_groups].astype(np.int64)
+    vertex[triangle_rows] = group_vertex[triangle_groups]
+    return count, vertex
 
 
 def _closed(points: np.ndarray, triangles: np.ndarray, planes: Sequence[str] = ()) -> np.ndarray:
