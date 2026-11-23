@@ -2434,8 +2434,12 @@ def _deliver_solve_commands(application: FastAPI):
                         status.pass_started()
                         workspace_root = await asyncio.to_thread(selected_workspace_root, state)
                         try:
+                            # The add-in writes its heartbeat under WG's data
+                            # dir, not the CAD workspace.
+                            data_dir = getattr(state, "data_dir", None)
                             next_addin_signature = await asyncio.to_thread(
-                                addin_inbox_session_signature, workspace_root
+                                addin_inbox_session_signature,
+                                Path(data_dir) if data_dir is not None else None,
                             )
                             if (
                                 next_addin_signature is not None
