@@ -84,7 +84,18 @@ def initialize(conn: sqlite3.Connection) -> bool:
     # Only surviving claims need a replay record beyond the bounded health log.
     conn.execute("CREATE TABLE IF NOT EXISTS cad_receipt_claims "
                  "(claim_id TEXT PRIMARY KEY, refusal_json TEXT NOT NULL)")
-    # Discover older-app settlements without decoding already projected Sends.
+    discover_settlements(conn)
+    return created
+
+
+def discover_settlements(conn: sqlite3.Connection) -> None:
+    """Project terminal Sends no receipt names yet: ones an older app settled.
+
+    The store's own outcomes record their receipt in the same transaction. A
+    build without receipts may share the database (one opened before this one,
+    or a development server beside it), so each feed read looks again, without
+    decoding the Sends already projected.
+    """
     for row in conn.execute(
         "SELECT rowid AS accepted_seq, * FROM cad_operations AS operation "
         "WHERE kind = 'receive_snapshot' AND state IN ('accepted', 'rejected') "
@@ -96,8 +107,6 @@ def initialize(conn: sqlite3.Connection) -> bool:
             record_operation(conn, dict(row))
         except (ValueError, TypeError, AttributeError, KeyError):
             logger.warning("Skipping malformed terminal Send %s", row["operation_id"], exc_info=True)
-
-    return created
 
 
 def record_refusal(store: CadLinkStore, refusal: Mapping[str, Any], *,
@@ -160,7 +169,8 @@ def receipt_page(store: CadLinkStore, *, after: int = 0, limit: int = 50) -> dic
         store.make_durable()
         store._receipt_feed_needs_sync = False
     with store._lock, store._transaction() as conn:
-        initialize(conn)
+        # The tables and the feed id exist from store.initialize().
+        discover_settlements(conn)
         feed_id = conn.execute("SELECT feed_id FROM cad_receipt_meta").fetchone()[0]
         rows = conn.execute(
             "SELECT cursor, payload_json FROM cad_send_receipts "

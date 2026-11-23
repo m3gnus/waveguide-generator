@@ -517,3 +517,19 @@ def test_feed_identity_checkpoint_failure_remains_retryable(store, monkeypatch):
     monkeypatch.setattr(store, 'make_durable', durable)
     assert receipt_page(store)['feed_id'] == identity
     assert calls == ['failed', 'durable']
+
+
+def test_feed_reads_run_no_schema_statement_and_still_discover_settlements(store):
+    accept(store, "send")
+    receipt_page(store)
+    accept(store, "later", settle=False)
+    with store._lock, store._transaction() as conn:
+        conn.execute("UPDATE cad_operations SET state = 'accepted' WHERE operation_id = 'later'")
+    statements: list[str] = []
+    store._connect().set_trace_callback(statements.append)
+    try:
+        page = receipt_page(store)
+    finally:
+        store._connect().set_trace_callback(None)
+    assert [item["send_id"] for item in page["receipts"]] == ["send", "later"]
+    assert statements and not [text for text in statements if text.lstrip().upper().startswith("CREATE")]
