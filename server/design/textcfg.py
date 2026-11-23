@@ -1716,13 +1716,15 @@ PayloadImporter = Callable[[Mapping[str, Any]], tuple[dict[str, Any], list[Migra
 
 _REREAD = threading.local()
 #: What the mesher's text parser says about a design's own ATH bookkeeping:
-#: the items it ignores and the axial rule it picks. WG records them itself
-#: (``ParsedDesign.ignored_profile``, ``ath_axial_sampling_rule``), so they are
+#: the items it ignores and the axial rule it picks, which WG records itself
+#: (``ParsedDesign.ignored_profile``, ``ath_axial_sampling_rule``), and the
+#: Mesh.RearShape = 3 wall clamp, which is the same on every read. They are
 #: news once, when an ATH file is first imported.
 _REREAD_NOTICES = (
     "[hornlab-mesher] ignoring ",
     "[hornlab-mesher] NAC present: ",
     "[hornlab-mesher] ATH axial sampling rule ",
+    "[hornlab-mesher] Mesh.RearShape = 3 clamps ",
     "[hornlab-mesher] saved v1 geometry retains",
 )
 
@@ -2017,7 +2019,9 @@ def _parse(text: str, *, migrate: bool = True, import_payload: PayloadImporter =
                 flat, blocks, comments, payload, ignored_profile,
                 preserve_passthrough=uses_ath_v3_import(version),
             )
-            with _saved_design_reread(not fresh_ath):
+            # Only a text WG saved (it carries WG's geometry stamp) is a
+            # re-read; any unstamped text keeps every notice.
+            with _saved_design_reread(version is not None):
                 mesher_config = parse_text_config(validation_text)
             if uses_ath_v3_import(import_version):
                 from hornlab_mesher.text_import import ATH_AXIAL_RULE_KEY

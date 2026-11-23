@@ -258,7 +258,7 @@ def test_a_repeated_design_hash_is_the_same_bytes_without_a_second_round_trip(mo
     assert calls == []
 
     # Uncached, the same bytes.
-    identity._DESIGN_HASHES.clear()
+    identity.clear_design_hashes()
     assert design_hash(design) == first
     assert len(calls) == 1
 

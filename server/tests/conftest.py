@@ -226,6 +226,17 @@ def _no_test_inherits_a_claimed_session():
 
 
 @pytest.fixture(autouse=True)
+def _design_hashes_start_empty():
+    """``design_hash`` keeps results by payload; no test sees another's."""
+
+    from server.cadlink.identity import clear_design_hashes
+
+    clear_design_hashes()
+    yield
+    clear_design_hashes()
+
+
+@pytest.fixture(autouse=True)
 def _sigpipe_stays_ignored():
     restore_sigpipe_ignore()
     try:

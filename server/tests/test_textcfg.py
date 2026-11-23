@@ -924,3 +924,14 @@ def test_a_saved_design_is_reread_without_repeating_its_import_notices(caplog) -
         reread = parse(saved)
     assert [record.getMessage() for record in caplog.records if record.name == parser_log] == []
     assert reread.design == parse(saved).design
+
+    # Only a text WG stamped is a re-read: the unstamped file read again is
+    # read as the import it is, notices and all.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger=parser_log):
+        parse(text)
+    assert any(
+        record.getMessage().startswith("[hornlab-mesher] ignoring Output.STL")
+        for record in caplog.records
+        if record.name == parser_log
+    )

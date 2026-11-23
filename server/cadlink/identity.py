@@ -71,7 +71,7 @@ OpenClassification = Literal[
 #: Recent design hashes by the canonical payload they were computed from. The
 #: round trip below costs ~130 ms on an imported ATH design, and the CAD status
 #: and send paths ask again for the same, unchanged design.
-_DESIGN_HASHES: OrderedDict[str, str] = OrderedDict()
+_DESIGN_HASHES: OrderedDict[bytes, str] = OrderedDict()
 _DESIGN_HASHES_LIMIT = 64
 _DESIGN_HASHES_LOCK = threading.Lock()
 
@@ -88,7 +88,10 @@ def design_hash(design: DesignConfig) -> str:
     by that payload: a repeat is the same hash, byte for byte, without it.
     """
 
-    key = canonical_json(design.model_dump(mode="json"), ASCII_NAN_PERMITTED)
+    # Keyed by the payload's digest, so the cache never holds whole designs.
+    key = hashlib.sha256(
+        canonical_json(design.model_dump(mode="json"), ASCII_NAN_PERMITTED).encode("utf-8")
+    ).digest()
     with _DESIGN_HASHES_LOCK:
         cached = _DESIGN_HASHES.get(key)
         if cached is not None:
@@ -106,6 +109,13 @@ def design_hash(design: DesignConfig) -> str:
         while len(_DESIGN_HASHES) > _DESIGN_HASHES_LIMIT:
             _DESIGN_HASHES.popitem(last=False)
     return value
+
+
+def clear_design_hashes() -> None:
+    """Forget every kept design hash (tests that change how a design hashes)."""
+
+    with _DESIGN_HASHES_LOCK:
+        _DESIGN_HASHES.clear()
 
 
 def truncated_design_hash(full_hash: str) -> str:
