@@ -1220,6 +1220,48 @@ def test_a_leaking_declared_half_is_refused_instead_of_solved_whole(
             _ingest(tmp_path, bundle)
 
 
+def test_a_leaking_declared_quarter_is_refused_without_meshing_it_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WG cut nothing here, so there is no WG cut to give up.
+
+    Every plane of a declared quarter is the author's. The auto-cut fallback
+    would re-mesh the same model with the same declared planes only for the
+    refusal after it to reject it again, so it is skipped and the one mesh's
+    verdict is refused directly.
+    """
+
+    pytest.importorskip("gmsh")
+
+    from hornlab_mesher import step_import
+
+    from server.mesh.imported import ImportedMeshError, build_imported_mesh
+    from server.tests.child_fault_fixtures import install_reduced_domain_leak
+
+    monkeypatch.setattr(step_import, "postprocess_mesh", step_import.postprocess_mesh)
+    install_reduced_domain_leak()
+    leaking = step_import.postprocess_mesh
+    calls: list[object] = []
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs.get("symmetry_planes"))
+        return leaking(*args, **kwargs)
+
+    monkeypatch.setattr(step_import, "postprocess_mesh", counted)
+    bundle = _reduced_bundle(tmp_path, "quarter", planes=("x0", "y0"))
+    manifest = json.loads((bundle / "wgreturn.json").read_text(encoding="utf-8"))
+    with pytest.raises(ImportedMeshError, match="the meshed boundary denies it"):
+        _run_in_gmsh_session(
+            build_imported_mesh,
+            bundle / "assembly.step",
+            manifest,
+            _SIZES,
+            options={"symmetry_mode": "auto", "declared_cut_planes": ["x0", "y0"]},
+            include_viewport_mesh=False,
+        )
+    assert len(calls) == 1
+
+
 def test_a_capped_declared_half_is_refused_because_a_cap_is_a_wall(
     tmp_path: Path,
 ) -> None:

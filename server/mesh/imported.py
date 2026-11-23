@@ -4093,11 +4093,17 @@ def build_imported_mesh(
     # costs the 2-4x the reduction was worth. Refusing instead would strand the
     # user in CAD with nothing to try, so the return solves and the finding
     # says what was given up and why (``server/cadlink/intake/ingest.py``).
+    #
+    # Only a WG cut can be given up. When WG cut nothing, every plane in the
+    # domain was declared, and the rebuild below keeps the declared planes: it
+    # would mesh the identical model only for the refusal after it to reject it
+    # again, so that refusal is reached directly.
     verification = result.get("symmetry_verification")
     if (
         symmetry_mode == "auto"
         and isinstance(verification, Mapping)
         and not verification.get("verified", True)
+        and (not declared_cut_planes or bool((result.get("symmetry") or {}).get("cut_planes")))
     ):
         rejected = dict(verification)
         result, healing = build(allow_symmetry_reduction=False)
