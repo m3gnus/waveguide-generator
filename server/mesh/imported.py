@@ -2197,7 +2197,9 @@ def occ_body_groups(gmsh: Any, roots: Sequence[tuple[int, int]]) -> list[list[tu
     return groups
 
 
-def _step_text_without_comments(assembly_path: str | Path) -> str:
+def _step_text_without_comments(
+    assembly_path: str | Path, *, step_text: str | None = None
+) -> str:
     """Read a STEP file with its ``/* */`` comments removed, strings intact.
 
     Comments and strings are removed before any entity is counted. A body name
@@ -2210,7 +2212,9 @@ def _step_text_without_comments(assembly_path: str | Path) -> str:
 
     from hornlab_mesher.step_text import read_step_text, strip_step_comments
 
-    return strip_step_comments(read_step_text(Path(assembly_path)))
+    if step_text is None:
+        step_text = read_step_text(Path(assembly_path))
+    return strip_step_comments(step_text)
 
 
 #: The two entity types CAD counts a body by. Deliberately the same rule and
@@ -2259,7 +2263,9 @@ def step_void_solid_labels(assembly_path: str | Path) -> list[str]:
     return labels
 
 
-def declared_step_bodies(assembly_path: str | Path) -> dict[str, int]:
+def declared_step_bodies(
+    assembly_path: str | Path, *, step_text: str | None = None
+) -> dict[str, int]:
     """How many bodies the STEP file itself declares, counted by entity.
 
     **By entity, never by name.** ``parse_named_shell_faces`` is the right tool
@@ -2280,11 +2286,14 @@ def declared_step_bodies(assembly_path: str | Path) -> dict[str, int]:
     manifest, and here. ``void_solids`` is a subset of that total reported
     separately, and it is not a body count -- it is the answer to a different
     question, asked by :func:`apply_occ_healing_options`.
+
+    ``step_text`` is the file's text when the caller has already read it
+    (``read_step_text``), so one build reads the file once.
     """
 
     from hornlab_mesher.step_text import blank_step_strings
 
-    text = blank_step_strings(_step_text_without_comments(assembly_path))
+    text = blank_step_strings(_step_text_without_comments(assembly_path, step_text=step_text))
     void_solids = len(_STEP_VOID_SOLID_BODY.findall(text))
     return {
         "surface_models": len(_STEP_SURFACE_BODY.findall(text)),
@@ -2704,8 +2713,6 @@ def build_imported_mesh(
             gmsh_surface_geometries,
             gmsh_surface_tags,
             mesh_frequency_validation,
-            parse_named_shell_faces,
-            parse_styled_face_groups,
             postprocess_mesh,
             run_occ_healing_fallbacks,
         )
@@ -2910,7 +2917,23 @@ def build_imported_mesh(
     # The file's own body inventory, read once: the scope gate reads it below,
     # and the healing options read it before the import that the gate then
     # measures. Both readings must come from the same scan of the same file.
-    declared_bodies = declared_step_bodies(assembly_path)
+    #
+    # The file is read once for every text reading this build makes: the body
+    # inventory and the named and styled face groups depend only on its bytes,
+    # so they are the same for every attempt of the healing ladder and every
+    # fallback rebuild. The text itself is not kept: it is up to the size
+    # limit of the file, and meshing runs under a memory budget.
+    from hornlab_mesher.step_text import (
+        parse_named_shell_faces_from_text,
+        parse_styled_face_groups_from_text,
+        read_step_text,
+    )
+
+    step_text = read_step_text(Path(assembly_path))
+    declared_bodies = declared_step_bodies(assembly_path, step_text=step_text)
+    named_step = parse_named_shell_faces_from_text(step_text)
+    styled_step = parse_styled_face_groups_from_text(step_text)
+    del step_text
 
     # The unhealed import supplies the topology reference used by the fallback
     # ladder.  Only mesh-generation failure is allowed to enter that ladder.
@@ -3036,8 +3059,6 @@ def build_imported_mesh(
                     }
                 )
         face_to_surface = dict(zip(face_order, ordered_surfaces, strict=True))
-        named_step = parse_named_shell_faces(Path(assembly_path))
-        styled_step = parse_styled_face_groups(Path(assembly_path))
         named = {name: [face_to_surface[face] for face in faces if face in face_to_surface] for name, faces in named_step.items()}
         styled = {name: [face_to_surface[face] for face in faces if face in face_to_surface] for name, faces in styled_step.items()}
 
