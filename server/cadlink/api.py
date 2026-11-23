@@ -71,7 +71,9 @@ from server.cadlink.fusion.fusion_status import (
     fusion_process_running,
     read_fusion_status,
 )
-from server.cadlink.fusion.fusion_status import heartbeat_now, select_heartbeat, settleable_heartbeat
+from server.cadlink.fusion.fusion_status import (
+    heartbeat_now, read_heartbeat_report, select_heartbeat, settleable_heartbeat,
+)
 from server.cadlink.fusion.fusion_outcomes import (
     FUSION_KINDS, settle_from_heartbeat, settle_abandoned_live_claims,
     settle_abandoned_file_returns,
@@ -746,12 +748,15 @@ async def fusion_status(
         Path(request.app.state.data_dir),
         record_expired=lambda operation_id: _record_expired_insert(store, operation_id),
     )
-    # One selection at one instant for this answer: settlement and the status
-    # below see the same file heartbeat, even if it changes or ages out while
-    # settlement runs.
+    # One read and one selection at one instant for this answer: settlement
+    # and the status below see the same file heartbeat, even if it changes or
+    # ages out while settlement runs.
     checked_at = heartbeat_now()
-    selected_heartbeat = await asyncio.to_thread(
-        select_heartbeat, Path(request.app.state.data_dir), checked_at
+    heartbeat_report = await asyncio.to_thread(
+        read_heartbeat_report, Path(request.app.state.data_dir)
+    )
+    selected_heartbeat = select_heartbeat(
+        Path(request.app.state.data_dir), checked_at, report=heartbeat_report
     )
     heartbeat = settleable_heartbeat(selected_heartbeat)
     if heartbeat is not None:
@@ -772,11 +777,17 @@ async def fusion_status(
         current_formula=payload.design.root.formula,
         design_id=payload.identity.design_id if payload.identity else None,
         instance_id=payload.instance_id,
-        process_running=await asyncio.to_thread(fusion_process_running),
+        # A fresh heartbeat already proves Fusion runs; ask the OS only when
+        # there is none.
+        process_running=(
+            selected_heartbeat[0] is not None
+            or await asyncio.to_thread(fusion_process_running)
+        ),
         returned_bundle=returned_bundle,
         returned_manifest=returned_manifest,
         now=checked_at,
         heartbeat=selected_heartbeat,
+        report=heartbeat_report,
     )
     # WGLink activation waits for Fusion to close, and while WG runs this poll
     # is what finishes it (server/cadlink/fusion/addin_update.py). Once WG has decided,
@@ -795,7 +806,9 @@ async def fusion_status(
         # snapshot the activation pass stored when it decided.
         status["addinRefresh"] = report
         if report is not None:
-            report["loadedIdentity"] = loaded_addin_identity(Path(request.app.state.data_dir))
+            report["loadedIdentity"] = loaded_addin_identity(
+                Path(request.app.state.data_dir), heartbeat=selected_heartbeat
+            )
     status["cadFolderConfigured"] = selected is not None
     status["cadFolderPath"] = str(selected) if selected is not None else None
     missing = workspace.missing_path()
@@ -2434,8 +2447,12 @@ def _deliver_solve_commands(application: FastAPI):
                         status.pass_started()
                         workspace_root = await asyncio.to_thread(selected_workspace_root, state)
                         try:
+                            # The add-in writes its heartbeat under WG's data
+                            # dir, not the CAD workspace.
+                            data_dir = getattr(state, "data_dir", None)
                             next_addin_signature = await asyncio.to_thread(
-                                addin_inbox_session_signature, workspace_root
+                                addin_inbox_session_signature,
+                                Path(data_dir) if data_dir is not None else None,
                             )
                             if (
                                 next_addin_signature is not None

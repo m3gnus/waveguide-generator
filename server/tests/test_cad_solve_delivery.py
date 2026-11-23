@@ -33,6 +33,7 @@ from server.cadlink.joblane.preparation import (
 )
 from server.cadlink.intake import solve_command
 from server.cadlink.intake.solve_command import collect_solve_deliveries, record_outcome
+from server.cadlink.ipc import ipc_folder
 from server.cadlink.store import CadLinkStore
 
 
@@ -725,7 +726,8 @@ def test_delivery_loop_pushes_when_addin_session_or_declaration_changes(
 
     monkeypatch.setattr(api, "run_delivery_pass", empty_pass)
 
-    marker = workspace / "ipc" / "wglink" / FUSION_STATUS_FILENAME
+    # The add-in writes its heartbeat under the data dir, never the CAD workspace.
+    marker = ipc_folder(data_dir) / FUSION_STATUS_FILENAME
 
     async def wait_for_events(count: int) -> None:
         for _ in range(100):
@@ -769,7 +771,8 @@ def test_malformed_addin_declaration_does_not_stop_delivery(
     from server.cadlink import api
     from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME
 
-    marker = workspace / "ipc" / "wglink" / FUSION_STATUS_FILENAME
+    # The add-in writes its heartbeat under the data dir, never the CAD workspace.
+    marker = ipc_folder(data_dir) / FUSION_STATUS_FILENAME
     marker.parent.mkdir(parents=True)
     marker.write_text(json.dumps({
         "sessionId": "malformed-session",
@@ -870,7 +873,8 @@ def test_transient_partial_heartbeat_does_not_publish_addin_transition(
     from server.cadlink import api
     from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME
 
-    marker = workspace / "ipc" / "wglink" / FUSION_STATUS_FILENAME
+    # The add-in writes its heartbeat under the data dir, never the CAD workspace.
+    marker = ipc_folder(data_dir) / FUSION_STATUS_FILENAME
     marker.parent.mkdir(parents=True)
     payload = {
         "sessionId": "stable-session",

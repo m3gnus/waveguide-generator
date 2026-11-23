@@ -26,6 +26,7 @@ from server.cadlink.operations import (
     FUSION_STAGES,
     UPDATE_LINK,
 )
+from server.cadlink.fusion.fusion_status import FusionStatusUnreadable, delivers_requests, read_status_file
 from server.cadlink.store import CadLinkStore
 from server.contracts.wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
 
@@ -476,16 +477,12 @@ def settle_return_from_file(
 ) -> dict[str, Any] | None:
     """Persist exact return outcomes, including an old command-time report."""
     request_id = str(row["operation_id"])
-    marker = ipc / ".fusion-status.json"
     try:
-        if marker.is_symlink() or marker.stat().st_size > 256 * 1024:
-            raise ValueError("Unsafe Fusion status file")
-        report = json.loads(marker.read_text(encoding="utf-8"))
-        if not isinstance(report, dict):
-            raise ValueError("Invalid Fusion status")
+        report = read_status_file(ipc)
+        if report is None:
+            raise ValueError("No usable Fusion status file")
         updated = datetime.fromisoformat(str(report.get("updatedAt", "")).replace("Z", "+00:00"))
-        if (report.get("schemaVersion") != 1 or report.get("cadApplication") != "fusion360"
-                or (type(report.get("deliveryVersion")) is not int or report["deliveryVersion"] < FUSION_REQUEST_DELIVERY_VERSION)
+        if (not delivers_requests(report)
                 or updated.tzinfo is None or updated > (now or datetime.now(timezone.utc)) + timedelta(seconds=5)):
             raise ValueError("Unsupported Fusion status")
         diagnostics = report.get("diagnostics")
@@ -506,7 +503,7 @@ def settle_return_from_file(
                 if changed is not None:
                     store.make_durable()
                 return changed
-    except (OSError, UnicodeError, ValueError, TypeError, OverflowError):
+    except (FusionStatusUnreadable, OSError, UnicodeError, ValueError, TypeError, OverflowError):
         pass  # Missing or invalid evidence never implies refusal or success.
     return None
 

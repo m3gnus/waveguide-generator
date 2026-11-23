@@ -80,6 +80,33 @@ def test_shared_ingress_oracle():
         assert _verdict(lambda: validate_manifest(case["manifest"])) == case["expected"], case["name"]
 
 
+@pytest.mark.parametrize(
+    "included_reason",
+    [{"external_reference": "resolved-stale"}, {"severity": "degraded"}],
+    ids=["stale_external_reference", "degraded_included_body"],
+)
+def test_ingress_accepts_writer_degraded_status_for_included_reasons(included_reason):
+    """A design with a stale external reference must still Send and Solve.
+
+    The add-in writer marks scope.status degraded for an included body that is
+    degraded or comes from a stale external link; WG's ingress must agree. The
+    same contract is tested in WGLink's tests/test_wglink_protocol.py.
+    """
+    base = json.loads((SHARED / "wg_ingress_cases.json").read_text())[0]["manifest"]
+    for status, accepted in (("degraded", True), ("clean", False)):
+        manifest = deepcopy(base)
+        manifest["scope"]["included"][0].update(included_reason)
+        manifest["scope"]["status"] = status
+        for profile in (wglink_protocol.ADDIN_WRITER, wglink_protocol.WG_INGRESS):
+            try:
+                wglink_protocol.validate_structure(manifest, profile)
+                verdict = True
+            except wglink_protocol.ProtocolValidationError:
+                verdict = False
+            assert verdict is accepted, (profile, status)
+        assert _verdict(lambda: validate_manifest(manifest))["accepted"] is accepted, status
+
+
 def test_production_hash_profiles_against_addin_goldens():
     for row in json.loads((SHARED / "goldens.json").read_text()):
         name = row["name"]
@@ -300,6 +327,11 @@ def test_wg_ingress_literals_match_the_pre_consolidation_reader():
     assert _profile_literals(frozen, "_wg_", namespace) == expected
     actual = _profile_literals(VENDORED.read_text(), "_wg_", vars(wglink_protocol))
     expected["functions"]["_number"].insert(2, "must be finite")
+    # Ingress counts the writer's included degraded reasons too (stale external
+    # references); the error text itself is unchanged.
+    manifest_literals = expected["functions"]["validate_manifest"]
+    status_at = manifest_literals.index("$.scope.status")
+    manifest_literals[status_at:status_at] = ["degraded", "resolved-stale", "severity", "external_reference"]
     # W1 factors source evidence into a shared helper and permits the two mesh
     # paths. Every unaffected historical message and constant stays pinned.
     for name, literals in expected["functions"].items():

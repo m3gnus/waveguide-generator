@@ -578,3 +578,30 @@ def test_send_stop_at_durability_boundary(monkeypatch, tmp_path, stop_at, direct
             assert store.get_export(result["exportId"])
     finally:
         store.close()
+
+
+def test_startup_does_not_rehash_a_bundle_its_locator_already_names(monkeypatch, tmp_path):
+    store, saved, workspace, _ = setup(monkeypatch, tmp_path)
+    try:
+        result = service.export_wglink_sync(_request(saved), store, workspace, "rehash")
+        real_products = publication.bundle_products
+        hashed = []
+
+        def products(path, facts):
+            hashed.append(Path(path))
+            return real_products(path, facts)
+
+        monkeypatch.setattr(publication, "bundle_products", products)
+        recovered = CadLinkStore(store.db_path)
+        try:
+            assert publication.recover_publications(recovered) == []
+            assert hashed == []
+            # A lost locator is still rebuilt, from a validated bundle.
+            locator(result).unlink()
+            assert publication.recover_publications(recovered) == []
+            assert hashed == [Path(result["bundlePath"])]
+            assert json.loads(locator(result).read_text())["exportId"] == result["exportId"]
+        finally:
+            recovered.close()
+    finally:
+        store.close()

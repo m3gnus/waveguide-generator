@@ -15,6 +15,7 @@ import platform
 import shutil
 import subprocess
 
+from server.platform.child_process import start_popen, windows_creation_flags
 from server.platform.process import background_process_kwargs
 
 
@@ -68,6 +69,33 @@ def _run_command(command: list[str], system: str) -> subprocess.CompletedProcess
     )
 
 
+def _start_detached(command: list[str]) -> str:
+    """Start Fusion.exe on its own and return without waiting for it.
+
+    Fusion360.exe is the application itself, not a launcher that exits, so
+    waiting on it would hold Send to CAD until a timeout, and a timeout would
+    kill the Fusion this call just started. The new process leaves WG's job
+    object where Windows allows it, so quitting WG does not close Fusion.
+    """
+
+    try:
+        start_popen(
+            command,
+            {
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+                "close_fds": True,
+                "creationflags": windows_creation_flags(breakaway=True),
+            },
+            retry_windows=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.info("Could not bring Fusion forward: %s", exc)
+        return "failed"
+    return "launched"
+
+
 def open_cad_document(document: Path, *, system: str | None = None) -> None:
     """Import an archived .f3d through Fusion or the OS file association.
 
@@ -108,6 +136,8 @@ def focus_cad(*, system: str | None = None, environ: dict[str, str] | None = Non
     command = _command(resolved)
     if command is None:
         return f"unsupported:{resolved.lower() or 'unknown'}"
+    if resolved == "Windows":
+        return _start_detached(command)
     try:
         completed = _run_command(command, resolved)
     except (OSError, subprocess.SubprocessError) as exc:

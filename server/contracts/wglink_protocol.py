@@ -1091,6 +1091,8 @@ def _addin_validate_return_manifest(manifest: Mapping[str, Any]) -> None:
         if record['severity'] not in {'info', 'degraded'}:
             raise ProtocolValidationError(f'scope.skipped[{index}].severity is invalid')
         degraded_reasons += record['severity'] == 'degraded'
+    # WG_INGRESS (_wg_validate_manifest) counts the same included reasons;
+    # change both together.
     for record in included:
         degraded_reasons += record.get('severity') == 'degraded'
         degraded_reasons += record.get('external_reference') == 'resolved-stale'
@@ -1647,6 +1649,13 @@ def _wg_validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         if severity not in {'info', 'degraded'}:
             _wg__fail(f'$.scope.skipped[{index}].severity', "must be 'info' or 'degraded'")
         degraded = degraded or severity == 'degraded'
+    # The writer (ADDIN_WRITER above) also marks a Send degraded for an
+    # included body that is degraded or comes from a stale external link, so
+    # ingress counts the same included reasons or it refuses the writer's own
+    # manifests. The error text predates this and is frozen in the shared
+    # oracle fixtures.
+    for item in included:
+        degraded = degraded or item.get('severity') == 'degraded' or item.get('external_reference') == 'resolved-stale'
     status = _wg__string(_wg__required(scope, 'status', '$.scope'), '$.scope.status')
     if status not in {'clean', 'degraded'}:
         _wg__fail('$.scope.status', "must be 'clean' or 'degraded'")

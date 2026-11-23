@@ -46,6 +46,7 @@ from server.cadlink.intake.ingest import (
     ingest_bundle,
     instance_identity_inventory,
     _scope_findings,
+    _stale_link_findings,
     resolve_deferred_viewport,
     validate_registry_echoes,
 )
@@ -230,6 +231,30 @@ def test_a_degraded_non_hidden_skip_remains_a_blocking_finding() -> None:
     assert len(findings) == 1
     assert findings[0]["kind"] == "scope-degradation"
     assert findings[0]["blocking"] is True
+
+
+def test_a_stale_linked_body_is_a_note_that_says_what_and_how() -> None:
+    manifest = {
+        "scope": {
+            "included": [
+                {"object_id": "body-1", "name": "horn", "external_reference": "none", "severity": "info"},
+                {"object_id": "body-2", "name": "baffle", "external_reference": "resolved-stale",
+                 "severity": "degraded"},
+            ],
+            "skipped": [],
+        }
+    }
+
+    findings = _stale_link_findings(manifest)
+
+    assert _scope_findings(manifest) == []
+    assert len(findings) == 1
+    [finding] = findings
+    assert finding["kind"] == "stale-linked-body"
+    assert finding["blocking"] is False
+    assert finding["evidence_path"] == "$.scope.included[1]"
+    assert finding["reason"].startswith("baffle comes from a linked component that is out of date in Fusion")
+    assert "update the out-of-date link in Fusion and send the model again" in finding["reason"]
 
 
 def test_consistency_contradiction_is_corruption() -> None:

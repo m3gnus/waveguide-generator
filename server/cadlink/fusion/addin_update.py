@@ -90,7 +90,7 @@ from server.cadlink.fusion.fusion_status import (
     fusion_process_state,
     read_fusion_status,
 )
-from server.cadlink.fusion.fusion_status import select_heartbeat
+from server.cadlink.fusion.fusion_status import SelectedHeartbeat, select_heartbeat
 from server.cadlink.usage import cadlink_in_use
 from server.platform.paths import app_root, resolve_data_dir
 from server.platform.warmup import DRAIN_TIMEOUT_SECONDS, BackgroundWarmup
@@ -362,16 +362,19 @@ def _describe(build: object) -> str:
     return text
 
 
-def loaded_addin_identity(data_dir: Path | None = None) -> dict[str, Any] | None:
+def loaded_addin_identity(
+    data_dir: Path | None = None, *, heartbeat: SelectedHeartbeat | None = None,
+) -> dict[str, Any] | None:
     """Identity reported by a fresh file heartbeat, without inferring a commit.
 
     Managed add-ins report adapterVersion but no source commit. Development
     builds may also report diagnostics.source.sourceCommit. Missing details
     stay unknown; the installed marker cannot prove what Fusion loaded.
+    ``heartbeat`` is a selection the caller already made for this answer.
     """
     if data_dir is None:
         return None
-    payload, _transport = select_heartbeat(data_dir)
+    payload, _transport = heartbeat if heartbeat is not None else select_heartbeat(data_dir)
     if payload is None:
         return None
     version = payload.get("adapterVersion")

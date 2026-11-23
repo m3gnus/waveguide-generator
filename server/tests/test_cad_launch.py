@@ -80,9 +80,66 @@ def test_windows_picks_the_newest_webdeploy_build(monkeypatch, tmp_path) -> None
 
         os.utime(exe, (mtime, mtime))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    calls = _capture(monkeypatch)
+    started = _capture_detached(monkeypatch)
     assert cad_launch.focus_cad(system="Windows", environ={}) == "launched"
-    assert calls == [[str(newer / "Fusion360.exe")]]
+    assert [command for command, _kwargs in started] == [[str(newer / "Fusion360.exe")]]
+
+
+class _NeverWaited:
+    def __init__(self, command, **kwargs) -> None:
+        self.command = command
+        self.kwargs = kwargs
+
+    def wait(self, *_args, **_kwargs):
+        raise AssertionError("Send to CAD must not wait for Fusion")
+
+    communicate = wait
+
+
+def _capture_detached(monkeypatch) -> list[tuple[list[str], dict]]:
+    started: list[tuple[list[str], dict]] = []
+
+    def fake_popen(command, **kwargs):
+        started.append((list(command), kwargs))
+        return _NeverWaited(command, **kwargs)
+
+    def no_run(*_args, **_kwargs):
+        raise AssertionError("Windows must not run Fusion360.exe to completion")
+
+    monkeypatch.setattr(cad_launch.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(cad_launch.subprocess, "run", no_run)
+    return started
+
+
+def _fusion_install(monkeypatch, tmp_path) -> None:
+    folder = tmp_path / "Autodesk" / "webdeploy" / "production" / "build"
+    folder.mkdir(parents=True)
+    (folder / "Fusion360.exe").write_bytes(b"")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
+
+def test_windows_starts_fusion_detached_and_does_not_wait(monkeypatch, tmp_path) -> None:
+    # Fusion360.exe is the app, not a launcher: waiting held Send to CAD for
+    # 15 s, and the timeout killed the Fusion it had just started.
+    _fusion_install(monkeypatch, tmp_path)
+    started = _capture_detached(monkeypatch)
+    assert cad_launch.focus_cad(system="Windows", environ={}) == "launched"
+    [(_command, kwargs)] = started
+    assert "timeout" not in kwargs
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    assert kwargs["stdout"] is subprocess.DEVNULL and kwargs["stderr"] is subprocess.DEVNULL
+    # Out of WG's job object, so quitting WG does not close Fusion.
+    assert kwargs["creationflags"] & 0x01000000
+
+
+def test_windows_start_failure_is_reported_not_raised(monkeypatch, tmp_path) -> None:
+    _fusion_install(monkeypatch, tmp_path)
+
+    def refuse(_command, **_kwargs):
+        raise OSError("access denied")
+
+    monkeypatch.setattr(cad_launch.subprocess, "Popen", refuse)
+    assert cad_launch.focus_cad(system="Windows", environ={}) == "failed"
 
 
 def test_windows_without_an_install_is_unsupported_not_a_crash(monkeypatch, tmp_path) -> None:

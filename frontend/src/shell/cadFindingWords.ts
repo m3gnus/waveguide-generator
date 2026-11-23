@@ -47,6 +47,8 @@ function wordsFor(finding: CadReturnFinding): FindingWords | undefined {
 /** What a finding of a kind is called, in words, never by id. */
 const FINDING_TITLE: Record<string, string> = {
   fem_termination_with_exterior: 'FEM termination requires an interior-only solve',
+  // Its reason names the body and how to update it.
+  'stale-linked-body': 'A linked body is out of date in Fusion',
   'stale-detection-unavailable': 'WG cannot tell whether this model is out of date',
   // Its detail, written from the domain actually solved, is the server's.
   'symmetry-cut-unverified': 'WG could not reduce this model any further',
