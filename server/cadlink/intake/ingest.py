@@ -2522,6 +2522,52 @@ def _mesh_coupled_regions(
     return retained, coupled["regions"]
 
 
+def _fem_region_lookup_key(
+    region: Mapping[str, Any], member: Mapping[str, Any], exterior: Mapping[str, Any] | None,
+    *, coupled_sha256: str | None = None,
+) -> str:
+    """The inputs a FEM region mesh is named by (and, coupled, the coupled mesh's bytes)."""
+
+    return hashlib.sha256(_canonical({
+        "pipeline_contract": "wg-import-fem-v1",
+        "region": region, "member": member, "mesher": mesher_identity(),
+        "symmetry": (exterior or {}).get("symmetry"),
+        "normalisation_matrix": ((exterior or {}).get("normalisation") or {}).get("matrix"),
+        **({"coupled_sha256": coupled_sha256} if coupled_sha256 is not None else {}),
+    })).hexdigest()
+
+
+def _cached_fem_region(
+    imports_root: Path, index_path: Path, region: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """A region mesh this index names, when its bytes still are what it was named for.
+
+    The index is a shortcut, not evidence, exactly as for the exterior mesh: the
+    artifact's own name must be reproduced from the index's lookup key and the
+    digest of the bytes read back, and the sidecar must name the same digest.
+    Read as bytes, since it was written as exact bytes.
+    """
+
+    key = _read_cas_index(index_path)
+    if key is None:
+        return None
+    path = imports_root / "meshes" / key / "fem" / f"region-{region['region_id']}.msh"
+    try:
+        metadata = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+        msh_text = path.read_bytes().decode("utf-8")
+    except (OSError, ValueError):
+        return None
+    digest = mesh_text_sha256(msh_text)
+    lookup_key = index_path.name.removesuffix(".txt")
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("content_sha256") != digest
+        or hashlib.sha256(_canonical({"lookup_key": lookup_key, "sha256": digest})).hexdigest() != key
+    ):
+        return None
+    return {**metadata, "msh_text": msh_text}
+
+
 def _mesh_fem_regions(
     bundle: WgReturnBundle, imports_root: Path, coupled: Mapping[str, Any] | None = None,
     *, deadline: float | None = None, exterior: Mapping[str, Any] | None = None,
@@ -2550,8 +2596,18 @@ def _mesh_fem_regions(
     for region in regions:
         check_deadline(region)
         member = bundle.manifest["files"][region["file"]]
+        is_coupled = region["region_id"] in (coupled or {})
+        # A region meshed on its own is named by its inputs alone, so its
+        # cached artifact is found before any child is started. (A coupled
+        # region's name also binds the coupled mesh, built by the caller.)
+        cached_index = None if is_coupled else (
+            imports_root / "meshes" / "index" / f"{_fem_region_lookup_key(region, member, exterior)}.txt"
+        )
         try:
             built = (coupled or {}).get(region["region_id"])
+            if built is None and cached_index is not None:
+                built = _cached_fem_region(imports_root, cached_index, region)
+            cache_hit = built is not None and not is_coupled
             if built is None:
                 built = build_fem_region_mesh_isolated(
                     bundle.members[region["file"]], region,
@@ -2573,19 +2629,18 @@ def _mesh_fem_regions(
             ) from exc
         check_deadline(region)
         digest = mesh_text_sha256(built["msh_text"])
-        lookup_key = hashlib.sha256(_canonical({
-            "pipeline_contract": "wg-import-fem-v1",
-            "region": region, "member": member, "mesher": mesher_identity(),
-            "symmetry": (exterior or {}).get("symmetry"),
-            "normalisation_matrix": ((exterior or {}).get("normalisation") or {}).get("matrix"),
-            **({"coupled_sha256": digest} if region["region_id"] in (coupled or {}) else {}),
-        })).hexdigest()
+        lookup_key = _fem_region_lookup_key(
+            region, member, exterior, coupled_sha256=digest if is_coupled else None,
+        )
         # Bind the path to output bytes as well as inputs: a later meshing run
         # cannot overwrite the artifact named by an immutable older record.
         key = hashlib.sha256(_canonical({"lookup_key": lookup_key, "sha256": digest})).hexdigest()
         path = imports_root / "meshes" / key / "fem" / f"region-{region['region_id']}.msh"
         try:
-            _write_cache(path, path.with_suffix(".json"), built, exact_bytes=True)
+            if not cache_hit:
+                _write_cache(path, path.with_suffix(".json"), built, exact_bytes=True)
+                if cached_index is not None:
+                    _write_cas_index(cached_index, key)
             retained = {
                 **region,
                 "member_sha256": member["sha256"],

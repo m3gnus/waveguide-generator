@@ -431,3 +431,29 @@ def test_one_total_budget_covers_all_regions_and_publication(tmp_path, monkeypat
         ingest._mesh_fem_regions(bundle, tmp_path)
     assert "Simplify these regions in CAD, then send the model again." in str(refusal.value)
     assert called == ([10.0, 10.0] if exhaustion == "during-child" else [10.0])
+
+
+def test_a_region_mesh_already_built_from_the_same_inputs_is_not_built_again(tmp_path, monkeypatch):
+    """The region cache is looked up before a child starts, and serves the same bytes."""
+
+    bundle = _bundle(tmp_path / "returns")
+    first = _ingest(bundle, tmp_path)
+    calls = []
+    region_mesh = ingest.build_fem_region_mesh_isolated
+
+    def region_call(*args, **kwargs):
+        calls.append(args[1]["region_id"])
+        return region_mesh(*args, **kwargs)
+
+    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", region_call)
+    second = _ingest(bundle, tmp_path)
+    assert calls == []
+    assert second["fem_regions"] == first["fem_regions"]
+    assert second["solve_model_sha256"] == first["solve_model_sha256"]
+
+    # An artifact that no longer is the bytes it was named for is a miss.
+    path = Path(first["fem_regions"][0]["mesh_store_path"])
+    path.write_bytes(path.read_bytes().replace(b"4.1", b"4.2", 1))
+    third = _ingest(bundle, tmp_path)
+    assert calls == ["rear-chamber"]
+    assert third["fem_regions"] == first["fem_regions"]
