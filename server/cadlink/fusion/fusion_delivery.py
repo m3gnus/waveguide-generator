@@ -449,6 +449,20 @@ def expire_unstarted_insert_handoffs(
     return tuple(expired)
 
 
+def _cleanup_directories(folder: Path) -> list[tuple[FusionRequestChannel, Path]]:
+    """Each channel folder startup clears, with the retired Pull from WG folder.
+
+    The retired folder is skipped when it is itself a symbolic link: WG never
+    made one, and clearing it would delete files wherever it points.
+    """
+
+    return [
+        (channel, folder / channel.directory)
+        for channel in (*CHANNELS, RETIRED_RETURN_REQUESTS)
+        if channel != RETIRED_RETURN_REQUESTS or not (folder / channel.directory).is_symlink()
+    ]
+
+
 def recover_staged_fusion_requests(data_dir: Path) -> tuple[str, ...]:
     """Remove request files staged before a backend interruption.
 
@@ -463,8 +477,7 @@ def recover_staged_fusion_requests(data_dir: Path) -> tuple[str, ...]:
     removed: list[str] = []
     folder = ipc_folder(data_dir)
     with _LOCK:
-        for channel in (*CHANNELS, RETIRED_RETURN_REQUESTS):
-            directory = folder / channel.directory
+        for channel, directory in _cleanup_directories(folder):
             try:
                 staged = [
                     path
@@ -500,8 +513,7 @@ def _remove_older_delivery(folder: Path) -> list[str]:
     for name in LEGACY_SLOT_FILENAMES:
         if _remove(folder / name) == "removed":
             removed.append(name)
-    for channel in (*CHANNELS, RETIRED_RETURN_REQUESTS):
-        directory = folder / channel.directory
+    for channel, directory in _cleanup_directories(folder):
         if _remove(directory / LEGACY_RECORD_FILENAME) == "removed":
             removed.append(f"{channel.directory}/{LEGACY_RECORD_FILENAME}")
         for path in _request_files(directory):

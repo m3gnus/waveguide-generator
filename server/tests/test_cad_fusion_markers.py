@@ -468,3 +468,28 @@ def test_startup_removes_unstarted_pull_requests_an_earlier_wg_left(
     assert not unstarted.exists()
     assert not staged.exists()
     assert claim.exists()
+
+
+def test_startup_never_follows_a_linked_pull_request_folder(
+    data_dir: Path, workspace: Path, tmp_path: Path
+) -> None:
+    """WG never makes the retired Pull from WG folder a link; if one is there,
+    clearing it would delete files wherever it points, so it is left alone."""
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    body = {"schemaVersion": 3, "target": "fusion360", "requestId": "pull-1",
+            "operationId": "pull-1", "sessionId": SESSION, SEQUENCE: 1}
+    kept = [elsewhere / "notes.json", elsewhere / KINDS[RETURNS][1],
+            elsewhere / ".pull-2.json.abc.tmp"]
+    kept[0].write_text(json.dumps(body))
+    kept[1].write_text("{}")
+    kept[2].write_text(json.dumps({**body, "requestId": "pull-2", "operationId": "pull-2"}))
+    folder = _folder(RETURNS, data_dir)
+    folder.parent.mkdir(parents=True)
+    folder.symlink_to(elsewhere, target_is_directory=True)
+
+    _run_cadlink_startup(data_dir, workspace)
+
+    assert folder.is_symlink()
+    assert [path for path in kept if not path.exists()] == []
