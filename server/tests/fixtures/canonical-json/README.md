@@ -68,3 +68,7 @@ path `fusion-addins/WGLink/wglink_protocol.py`, SHA-256
 `cbff5fca26971d811cacc2b6425b9c6f90798a60e82e77ef45f37be8673179c5`. The previous qualified file hash was
 `afce1630cb2464244cb8a22d52182c42050242a28eb4807dbb3c1a286716a857`. Only pinned source provenance changes;
 all original serializer expressions, byte cases, errors and their baseline remain unchanged.
+
+The vendored protocol was then refreshed from WGLink `986f177b8153eb3b15fdc73ea1c9a9b47abff6a4`, which
+makes WG ingress count included degraded reasons (stale external references) as the writer does. Its
+SHA-256 is `4849eb302874d67daa989c30f9f103bb8d3feb3d21941d4cf6c979fc68d83857`; the WGLink package pin above is unchanged, and so are all serializer cases.
