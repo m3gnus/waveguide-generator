@@ -2311,11 +2311,12 @@ unknown edit states defer pickup even with no tool running. `SurfaceTab` also
 occurs during Base Feature edits with a Component edit object, so it does not
 prove an idle Design. A non-Design product
 does not add an edit deferral. Other Fusion commands are never ended for it.
-With automatic coordination off (the unchanged default), the owner uses a
-two-second file-only poll of `.fusion-handoffs`: an empty folder reads no JSON,
-makes no Fusion call, raises no event and publishes no status. Work is coalesced
-through the existing follow-up event and runs under `command:wg-send`. With
-coordination on, the existing tick serves handoffs; there is no second service.
+The add-in is command-driven: the owner uses a two-second file-only poll of
+`.fusion-handoffs`: an empty folder reads no JSON, makes no Fusion call, raises no
+event and publishes no status. Work is coalesced through the existing follow-up
+event and runs under `command:wg-send`. The add-in's automatic coordination is gone;
+its heartbeat still reports `diagnostics.activation.automaticCoordination: false`,
+and WG reads an older add-in that reports `true` the same way.
 Unusable unchanged files are memoized; deferred or temporarily unclaimable requests
 remain eligible. A standby registration never runs this service.
 
@@ -2402,7 +2403,7 @@ summaries and show completion only after `fusionDelivery: applied`.
 | `recentOutcomes: discarded` (`_sweep_leftover_claims`) | `cancelled` / `adapter_not_started` |
 | `recentOutcomes: reconciled` (`_apply_pending_handoff`, `_sweep_leftover_claims`) | reconciled `accepted`, using the operation's export identity |
 | `recentOutcomes: recoveryRequired` (`_apply_pending_handoff`, `_sweep_leftover_claims`) | `recovery_required` for Insert/Update only |
-| `recentOutcomes: wgOutdated` (`_notice_outdated_wg`) | logged and ignored |
+| `recentOutcomes: wgOutdated` (older add-ins only) | logged and ignored |
 | `recentOutcomes: notTaken` (`_pickup_check`, `_startup_pickup_check`) | ignored for Fusion-bound rows |
 | `lastRequest: refused` (`_apply_pending_handoff`) | `rejected` / `adapter_refused`, unless document evidence already accepted it |
 | `lastRequest: applied` (`_apply_pending_handoff`) | ignored; a mutation requires document evidence |
