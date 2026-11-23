@@ -907,6 +907,22 @@ describe('result exporters', () => {
     expect(beam.series.map(({ y }) => y)).toEqual([[120, 90], [100, 80]]);
   });
 
+  it('names a modal channel impedance in impedance.png, as the card does, and only then', async () => {
+    const impedanceSpec = async (metadata: Record<string, unknown>) => {
+      reportChart.render.mockClear();
+      const run = { ...result, metadata: { ...result.metadata, ...metadata } } as ResultPayload;
+      await runExportFormat('png', { jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), result: run, fetcher: vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ image: 'data:image/png;base64,Ag==' }), { status: 200 })), saveBlob: vi.fn() });
+      const specs = reportChart.render.mock.calls.map((call) => (call as unknown as [{ title: string; subtitle?: string; y: { label: string } }])[0]);
+      return specs.find(({ title }) => title === 'Impedance')!;
+    };
+    const modal = await impedanceSpec({ impedance_units: 'Z/(rho*c)', impedance_projection: 'modal_mean_square_velocity' });
+    expect(modal.subtitle).toContain('modal over the channel’s patches');
+    expect(modal.y.label).toContain('Z/ρc');
+    // A single-patch curve, and a driver's electrical impedance, say nothing of modes.
+    expect((await impedanceSpec({ impedance_units: 'Z/(rho*c)' })).subtitle ?? '').not.toContain('modal');
+    expect((await impedanceSpec({ impedance_units: 'ohms', impedance_projection: 'modal_mean_square_velocity' })).subtitle ?? '').not.toContain('modal');
+  });
+
   it('dispatches one on-axis FRD download per result channel', async () => {
     const wrapped: ResultPayload = {
       frequencies: [], channel_order: ['drive-hf', 'drive-mf'],
