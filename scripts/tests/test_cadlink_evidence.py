@@ -85,8 +85,8 @@ def test_ipc_files_are_read_from_the_data_directory_not_the_cadlink_exchange_fol
     """``ipc/wglink`` is rooted at the app data directory, never at
     ``cadLinkPath``.
 
-    Every real caller of ``advertise_fusion_delivery``, ``publish_return_request``
-    and ``publish_fusion_handoff`` (``server/cadlink/api.py``,
+    Every real caller of ``advertise_fusion_delivery`` and
+    ``publish_fusion_handoff`` (``server/cadlink/api.py``,
     ``server/exports/api.py``) passes ``application.state.data_dir`` -- the WG
     application data directory -- not the user's chosen CAD-link exchange
     folder. A collector that looked under the exchange folder instead would
