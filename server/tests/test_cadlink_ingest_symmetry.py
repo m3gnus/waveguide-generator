@@ -132,6 +132,7 @@ _RETURN_IDS = {
     "placed": "wgr_01J5A8QK3M9T2XVBH0RD7NWEE0",
     "sent": "wgr_01J5A8QK3M9T2XVBH0RD7NWEF0",
     "sent-centred": "wgr_01J5A8QK3M9T2XVBH0RD7NWEG0",
+    "legacy": "wgr_01J5A8QK3M9T2XVBH0RD7NWEH0",
 }
 
 
@@ -194,7 +195,11 @@ def _horn_bundle(
     vertical_offset_mm: float = 0.0,
     placed: bool = False,
     source_shape: int = FLAT_THROAT_DISC,
+    echoed_offset_mm: float | None = None,
 ) -> Path:
+    """``echoed_offset_mm`` is the design's offset at return time, when it was
+    changed in WG after the link was inserted with ``vertical_offset_mm``."""
+
     bundle = tmp_path / "workspace" / "wgreturn" / f"{name}.wgreturn"
     bundle.mkdir(parents=True)
     info = _write_horn_step(
@@ -216,7 +221,9 @@ def _horn_bundle(
         name,
         bbox_mm=bbox_mm,
         assembly_from_link=assembly_from_link,
-        config=echoed_design_config(vertical_offset_mm),
+        config=echoed_design_config(
+            vertical_offset_mm if echoed_offset_mm is None else echoed_offset_mm
+        ),
         source_contract={
             "role": "HF",
             "throat_z_mm": throat["centre"][2],
@@ -795,6 +802,35 @@ def test_a_sent_offset_quarter_design_comes_back_as_a_quarter(tmp_path: Path) ->
     assert bounds["max_y"] == pytest.approx(0.090, abs=1.0e-4)
 
 
+def test_a_legacy_offset_link_is_recentred_after_the_design_offset_changed(
+    tmp_path: Path,
+) -> None:
+    """A link keeps the offset it was inserted with; the design may not.
+
+    The body came back with its throat at y = 80, as the link was built, but
+    the design now records Mesh.VerticalOffset 0. Reading the design's offset
+    would leave the body where it is and solve the full domain; the returned
+    throat says where the mirror plane is.
+    """
+
+    pytest.importorskip("gmsh")
+    record = _ingest(
+        tmp_path,
+        _horn_bundle(tmp_path, "legacy", vertical_offset_mm=80.0, echoed_offset_mm=0.0),
+    )
+
+    recentre = record["normalisation"]["vertical_recentre"]
+    assert recentre["recorded_offset_mm"] == 0.0
+    assert recentre["throat_centre_y_mm"] == pytest.approx(80.0, abs=1.0e-6)
+    assert recentre["applied"] is True
+    assert recentre["applied_offset_mm"] == pytest.approx(80.0, abs=1.0e-6)
+    assert record["symmetry"]["cut_planes"] == ["x0", "y0"]
+    assert record["symmetry_verification"]["verified"] is True
+    assert record["mesh"]["stats"]["domain_multiplier"] == 4.0
+    frame = record["anchor"]["throat_frame"]
+    assert frame["origin_m"] == pytest.approx([0.0, 0.0, 0.0], abs=1.0e-9)
+
+
 def test_a_throat_centred_return_of_an_offset_design_is_not_moved(tmp_path: Path) -> None:
     """A link built with the throat at the origin must not be recentred again.
 
@@ -831,10 +867,9 @@ def test_a_throat_centred_return_of_an_offset_design_is_not_moved(tmp_path: Path
 
     recentre = record["normalisation"]["vertical_recentre"]
     assert recentre["recorded_offset_mm"] == 80.0
-    assert recentre["model_y_midpoint_mm"] == pytest.approx(80.0, abs=0.1)
     assert recentre["throat_centre_y_mm"] == pytest.approx(0.0, abs=1.0e-9)
     assert recentre["applied"] is False
-    assert "where the returned throat is" in recentre["reason"]
+    assert "already on y = 0" in recentre["reason"]
     assert record["normalisation"]["matrix"][1][3] == pytest.approx(0.0, abs=1.0e-12)
 
     frame = record["anchor"]["throat_frame"]
@@ -895,7 +930,11 @@ def test_a_return_moved_in_cad_is_normalised_back_with_its_throat_intact(
     placed_recentre = placed["normalisation"]["vertical_recentre"]
     unplaced_recentre = unplaced["normalisation"]["vertical_recentre"]
     assert placed_recentre["applied"] is unplaced_recentre["applied"] is bool(vertical_offset_mm)
-    assert placed_recentre["applied_offset_mm"] == unplaced_recentre["applied_offset_mm"]
+    # The move is the returned throat's y, measured through the placement's
+    # rotation, so it carries that rotation's round-off.
+    assert placed_recentre["applied_offset_mm"] == pytest.approx(
+        unplaced_recentre["applied_offset_mm"], rel=0.0, abs=1.0e-9
+    )
 
     # The same domain: the placement undone leaves the body on its mirrors.
     for key in ("cut_planes", "candidate_planes"):

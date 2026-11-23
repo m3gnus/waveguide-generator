@@ -397,14 +397,21 @@ def test_recorded_vertical_offset_reads_the_echoed_design_config() -> None:
     assert recorded_vertical_offset_mm({"config": echoed}) is None
 
 
-def test_vertical_recentre_needs_the_geometry_to_agree_with_the_config() -> None:
+def test_vertical_recentre_follows_the_returned_throat() -> None:
     body = (-100.0, -20.0, 0.0, 100.0, 180.0, 300.0)
     placed = resolve_vertical_recentre(80.0, bounds_mm=body, throat_centre_y_mm=80.0)
     assert placed["applied"] is True
     assert placed["applied_offset_mm"] == 80.0
 
-    # Same recorded offset, a body that is not centred on it: the config
-    # describes some other design and must not move this one.
+    # A legacy link keeps the offset it was inserted with: the design's offset
+    # changed to 0 since, and the returned throat still decides the move.
+    legacy = resolve_vertical_recentre(0.0, bounds_mm=body, throat_centre_y_mm=80.0)
+    assert legacy["applied"] is True
+    assert legacy["applied_offset_mm"] == 80.0
+    assert legacy["recorded_offset_mm"] == 0.0
+
+    # A throat off y = 0 in a body not centred on it: no mirror plane through
+    # the throat to put on y = 0, so nothing moves.
     wrong = resolve_vertical_recentre(
         80.0, bounds_mm=(-100.0, -20.0, 0.0, 100.0, 60.0, 300.0), throat_centre_y_mm=80.0
     )
@@ -414,20 +421,17 @@ def test_vertical_recentre_needs_the_geometry_to_agree_with_the_config() -> None
 
     # A link built with its throat at the origin, returning an offset design
     # whose body happens to have its y midpoint at the offset: the throat is
-    # already where the solver wants it, so nothing moves.
-    centred = resolve_vertical_recentre(80.0, bounds_mm=body, throat_centre_y_mm=0.0)
-    assert centred["applied"] is False
-    assert centred["applied_offset_mm"] == 0.0
-    assert "where the returned throat is" in centred["reason"]
+    # already where the solver wants it, so nothing moves and no bounds are
+    # needed.
+    for bounds in (body, None):
+        centred = resolve_vertical_recentre(80.0, bounds_mm=bounds, throat_centre_y_mm=0.0)
+        assert centred["applied"] is False
+        assert centred["applied_offset_mm"] == 0.0
+        assert "already on y = 0" in centred["reason"]
     unknown = resolve_vertical_recentre(80.0, bounds_mm=body, throat_centre_y_mm=None)
     assert unknown["applied"] is False
-
-    for absent in (
-        resolve_vertical_recentre(None, bounds_mm=(0.0,) * 6, throat_centre_y_mm=None),
-        resolve_vertical_recentre(0.0, bounds_mm=(0.0,) * 6, throat_centre_y_mm=0.0),
-    ):
-        assert absent["applied"] is False
-        assert absent["applied_offset_mm"] == 0.0
+    with pytest.raises(ValueError, match="bounds"):
+        resolve_vertical_recentre(80.0, bounds_mm=None, throat_centre_y_mm=80.0)
 
 
 _QUARTER_BOX_POINTS = np.asarray(

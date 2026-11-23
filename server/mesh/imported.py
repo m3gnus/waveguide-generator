@@ -122,10 +122,11 @@ NORMAL_ANGLE_DEG = 0.1
 # (``symmetry_snap_tolerance`` below), so the free-edge detector only needs a
 # band wide enough to absorb float noise.
 SYMMETRY_SNAP_TOLERANCE_MM = 1.0e-4
-# ``mesh.vertical_offset`` is recorded in the design config the CAD app echoes
-# back, but the geometry decides: a mirror plane at the recorded offset must at
-# least be the model's own y midpoint. The band matches the auto-cutter's own
-# mirror tolerance so a recentring can never be looser than the test it feeds.
+# A linked return is recentred by where its throat came back, and only where a
+# mirror plane through that throat is at least the model's own y midpoint. The
+# band matches the auto-cutter's own mirror tolerance so a recentring can never
+# be looser than the test it feeds; the absolute floor also says when a throat
+# is already on y = 0.
 VERTICAL_OFFSET_MIDPOINT_TOLERANCE_REL = 5.0e-4
 VERTICAL_OFFSET_MIDPOINT_TOLERANCE_MM = 0.05
 # Not the solver path's dial any more -- the sagitta field below supplies that
@@ -1215,9 +1216,11 @@ def recorded_vertical_offset_mm(instance: Mapping[str, Any] | None) -> float | N
     export: ``DesignConfig.model_dump(mode="json", by_alias=True)`` in
     ``server/exports/wglink_geometry.py``. ``DesignConfig`` is a root model,
     so that dump is the formula config itself -- ``mesh`` is a top-level key,
-    with no ``root`` wrapper. The offset is recorded rather than inferred. It
-    is opaque to the return schema, so every level is tolerated as missing
-    and nothing here may raise.
+    with no ``root`` wrapper. It is the design's offset at the time of this
+    return, which a link inserted earlier need not carry, so the recentre is
+    read from the returned throat and this value is recorded beside it for a
+    reader. It is opaque to the return schema, so every level is tolerated as
+    missing and nothing here may raise.
     """
 
     if not isinstance(instance, Mapping):
@@ -1235,32 +1238,45 @@ def recorded_vertical_offset_mm(instance: Mapping[str, Any] | None) -> float | N
     return value if math.isfinite(value) else None
 
 
+def throat_is_off_the_mirror_plane(throat_centre_y_mm: float | None) -> bool:
+    """Whether a returned throat sits off ``y = 0`` far enough to recentre."""
+
+    return (
+        throat_centre_y_mm is not None
+        and abs(float(throat_centre_y_mm)) > VERTICAL_OFFSET_MIDPOINT_TOLERANCE_MM
+    )
+
+
 def resolve_vertical_recentre(
     recorded_offset_mm: float | None,
     *,
-    bounds_mm: tuple[float, ...],
+    bounds_mm: tuple[float, ...] | None,
     throat_centre_y_mm: float | None,
 ) -> dict[str, Any]:
     """Decide whether to move a placed CAD return back onto its mirror plane.
 
-    ``mesh.vertical_offset`` is a rigid +y placement the CAD exports keep on
-    purpose (``server/exports/core.py``), and ingest normalisation is a rigid
-    re-anchor, so the returned model's horizontal mirror plane sits at
-    ``y = offset``. The native solvers can only mirror across coordinate
-    planes, so an offset return used to lose the quarter reduction outright --
-    the exact regression ``server/solver/symmetry.py`` was fixed for on the
-    parametric side. Folding ``-offset`` into the normalisation puts the solve
-    frame back at the origin, which is where the parametric solve frame has
-    always been (commit 3a3e803), and every frame derived from the same matrix
-    -- throat datum, observation origin, viewport -- moves with it.
+    A linked return arrives with its throat wherever the CAD link put it. A
+    link inserted with ``mesh.vertical_offset`` baked in has its horizontal
+    mirror plane at the throat, ``y = offset`` -- and keeps that offset for
+    life, whatever the design's offset is changed to later in WG. A link built
+    with the throat at the origin has it at ``y = 0``. The native solvers can
+    only mirror across coordinate planes, so an offset return used to lose the
+    quarter reduction outright -- the exact regression
+    ``server/solver/symmetry.py`` was fixed for on the parametric side.
 
-    The recorded value is preferred and the geometry is the gate, twice: a
-    mirror plane at ``y = offset`` must be the model's own y midpoint, and the
-    returned throat -- where the anchor's throat axis pierces its throat plane
-    (:func:`throat_disc`) -- must sit on it. A config that does not describe
-    this body cannot move it, and neither can a body whose midpoint happens to
-    equal the offset while its throat is already at the origin, which is how
-    a link built with the throat at the origin returns an offset design.
+    So the move is read from the returned geometry, not from the design: it is
+    the y of the returned throat -- where the anchor's throat axis pierces its
+    throat plane (:func:`throat_disc`) -- and it is made only where the
+    model's own y midpoint confirms a mirror plane through that throat.
+    Folding it into the normalisation puts the solve frame back at the origin,
+    where the parametric solve frame has always been (commit 3a3e803), and
+    every frame derived from the same matrix -- throat datum, observation
+    origin, viewport -- moves with it. A throat already at ``y = 0`` is never
+    moved, whatever the body's midpoint or the recorded offset says. The
+    design's recorded offset is kept in the record for a reader only.
+
+    ``bounds_mm`` (the normalised model's) is needed only for a throat off
+    ``y = 0``; see :func:`throat_is_off_the_mirror_plane`.
     """
 
     record: dict[str, Any] = {
@@ -1269,12 +1285,15 @@ def resolve_vertical_recentre(
         "applied": False,
         "throat_centre_y_mm": throat_centre_y_mm,
     }
-    if recorded_offset_mm is None:
-        record["reason"] = "no mesh.vertical_offset in the returned design config"
+    if throat_centre_y_mm is None:
+        record["reason"] = "the returned throat's position is not known"
         return record
-    if recorded_offset_mm == 0.0:
-        record["reason"] = "design is not vertically offset"
+    if not throat_is_off_the_mirror_plane(throat_centre_y_mm):
+        record["reason"] = "the returned throat is already on y = 0"
         return record
+    if bounds_mm is None:
+        raise ValueError("an off-axis throat needs the model's bounds to confirm its mirror plane")
+    throat_y = float(throat_centre_y_mm)
     lower = np.asarray(bounds_mm[:3], dtype=float)
     upper = np.asarray(bounds_mm[3:], dtype=float)
     midpoint = 0.5 * float(lower[1] + upper[1])
@@ -1283,7 +1302,7 @@ def resolve_vertical_recentre(
         VERTICAL_OFFSET_MIDPOINT_TOLERANCE_MM,
         VERTICAL_OFFSET_MIDPOINT_TOLERANCE_REL * diagonal,
     )
-    residual = abs(midpoint - float(recorded_offset_mm))
+    residual = abs(midpoint - throat_y)
     record.update(
         {
             "model_y_midpoint_mm": midpoint,
@@ -1293,31 +1312,15 @@ def resolve_vertical_recentre(
     )
     if residual > tolerance:
         record["reason"] = (
-            "recorded mesh.vertical_offset "
-            f"{float(recorded_offset_mm):.9g} mm is not the returned model's y "
-            f"midpoint {midpoint:.9g} mm"
-        )
-        return record
-    if throat_centre_y_mm is None:
-        record["reason"] = "the returned throat's position is not known"
-        return record
-    throat_residual = abs(float(throat_centre_y_mm) - float(recorded_offset_mm))
-    record["throat_residual_mm"] = throat_residual
-    if throat_residual > tolerance:
-        record["reason"] = (
-            "recorded mesh.vertical_offset "
-            f"{float(recorded_offset_mm):.9g} mm is not where the returned throat "
-            f"is (y = {float(throat_centre_y_mm):.9g} mm)"
+            f"the returned throat at y = {throat_y:.9g} mm is not the returned "
+            f"model's y midpoint {midpoint:.9g} mm"
         )
         return record
     record.update(
         {
-            "applied_offset_mm": float(recorded_offset_mm),
+            "applied_offset_mm": throat_y,
             "applied": True,
-            "reason": (
-                "recorded placement confirmed by the returned model's y midpoint "
-                "and its throat"
-            ),
+            "reason": "the returned throat is the returned model's y midpoint",
         }
     )
     return record
@@ -3045,7 +3048,7 @@ def build_imported_mesh(
     def anchor_throat_centre_y_mm(applied: np.ndarray) -> float | None:
         """Where the anchor's throat is, in y, in the normalised model."""
 
-        if not recorded_offset_mm or anchor_id is None:
+        if anchor_id is None:
             return None
         instance = instance_by_id[str(anchor_id)]
         contract = instance.get("source_contract")
@@ -3058,9 +3061,9 @@ def build_imported_mesh(
             return None
         return float(disc.centre_mm[1])
 
-    def recentre_bounds_mm() -> tuple[float, ...]:
-        if not recorded_offset_mm:
-            return (0.0,) * 6
+    def recentre_bounds_mm(throat_centre_y_mm: float | None) -> tuple[float, ...] | None:
+        if not throat_is_off_the_mirror_plane(throat_centre_y_mm):
+            return None
         if not recentre_bounds:
             recentre_bounds.append(tessellated_bounds_mm(gmsh, assembly_path, normalization))
         return recentre_bounds[0]
@@ -3096,12 +3099,13 @@ def build_imported_mesh(
         # and in the viewport rebuild, because the viewport verifies the
         # geometry fingerprint of this model bit for bit: composing them into
         # one move on one side only would round differently and fail that
-        # check. The recentre reads the bounds of the normalised model, and
-        # only an offset return has its bounds measured (once, above).
+        # check. The recentre reads the returned throat and, only for a throat
+        # off y = 0, the bounds of the normalised model (measured once, above).
+        throat_centre_y_mm = anchor_throat_centre_y_mm(applied_normalization)
         recentre = resolve_vertical_recentre(
             recorded_offset_mm,
-            bounds_mm=recentre_bounds_mm(),
-            throat_centre_y_mm=anchor_throat_centre_y_mm(applied_normalization),
+            bounds_mm=recentre_bounds_mm(throat_centre_y_mm),
+            throat_centre_y_mm=throat_centre_y_mm,
         )
         solver_from_assembly = applied_normalization
         if recentre["applied"]:

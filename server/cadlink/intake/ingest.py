@@ -154,9 +154,9 @@ def meshing_semantics() -> dict[str, Any]:
         "precut_section_contract": "planar-line-moments-v1",
         # Failed cut recovery discards provisional cuts before domain gates.
         "cut_recovery_fallback": "full-domain-v1",
-        # A linked return is recentred by the offset read from its flat echoed
-        # config, and its observation origin is the throat axis's pierce point
-        # of the throat plane. Before this an offset WGLink return kept its
+        # A linked return is recentred by the y of its returned throat -- the
+        # throat axis's pierce point of the throat plane, which is also its
+        # observation origin. Before this an offset WGLink return kept its
         # placement, so it was meshed as a half where its design solves as a
         # quarter; those cached halves must not be served again.
         "linked_return_frame": "recentred-throat-centre-v1",
