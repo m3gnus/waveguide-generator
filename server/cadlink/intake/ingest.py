@@ -671,6 +671,13 @@ def _stage_bundle_cas(
     destination = imports_root / "bundles" / f"{bundle.manifest_sha256.removeprefix('sha256:')}.wgreturn"
     replacing = False
     if destination.is_dir():
+        if Path(bundle.path).resolve() == destination.resolve():
+            # The bundle *is* WG's retained copy, verified when it was read for
+            # this ingest. Re-reading it here could not put verified bytes in
+            # its place (they would come from the same directory), and nothing
+            # meshed reads it unverified: the mesh child hashed its STEP, and
+            # every later preparation verifies the copy before using it.
+            return destination, None, None, False
         if _is_the_bundle(destination, bundle):
             # Content addressing doing its job: the same return is kept once.
             return destination, None, None, False
@@ -1520,6 +1527,7 @@ def _ingest_bundle(
     resolve_confirmed_frame: bool = False,
     validate_record: Callable[[dict[str, Any]], None] | None = None,
     reuse_existing: bool = False,
+    verified_bundle: WgReturnBundle | None = None,
 ) -> dict[str, Any]:
     """Run the nine ingestion stages and persist the immutable WG verdict.
 
@@ -1543,12 +1551,22 @@ def _ingest_bundle(
     downstream of the record needs it, so waiting for it only delays the moment
     the user can see the geometry they asked WG to solve. A cached display
     artifact is still adopted here: it costs a file read, not a mesh.
+
+    ``verified_bundle`` is ``bundle_path`` already read and verified by the
+    caller in this same preparation pass (``preparation_inputs._verified_copy``);
+    stage 1 adopts it instead of hashing every member again. The STEP it names
+    is still hashed by the mesh child that opens it.
     """
 
-    try:
-        bundle = read_snapshot(bundle_path, retained=retained_copy)
-    except Exception as exc:
-        raise IngestRefusal("stage 1 bundle validation", str(exc)) from exc
+    if verified_bundle is not None:
+        if Path(verified_bundle.path).resolve() != Path(bundle_path).resolve():
+            raise ValueError("verified_bundle was read from another path than bundle_path")
+        bundle = verified_bundle
+    else:
+        try:
+            bundle = read_snapshot(bundle_path, retained=retained_copy)
+        except Exception as exc:
+            raise IngestRefusal("stage 1 bundle validation", str(exc)) from exc
     manifest = bundle.manifest
     # Portable replay asks this same owner to adopt an intact preparation of
     # the originals. Its callback checks the entire requested interpretation,

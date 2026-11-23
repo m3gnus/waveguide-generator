@@ -49,7 +49,12 @@ from server.cadlink.intake.readings import (
     record_solved_frame_provenance,
 )
 from server.cadlink.store import UNFILED_MODEL_ID, CadLinkStore
-from server.cadlink.wgreturn import SnapshotUnavailable as SnapshotUnavailable, WgReturnError
+from server.cadlink.wgreturn import (
+    SnapshotUnavailable as SnapshotUnavailable,
+    WgReturnBundle,
+    WgReturnError,
+    WgReturnIntegrityError,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -147,7 +152,11 @@ def _retained(data_dir: Path, row: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _load_setup(
-    ctx: SnapshotContext, revision_id: str | None, retained: Mapping[str, Any]
+    ctx: SnapshotContext,
+    revision_id: str | None,
+    retained: Mapping[str, Any],
+    *,
+    manifest: Mapping[str, Any] | None = None,
 ) -> tuple[CadSolveSetup, str] | None:
     """The setup this preparation uses, and its revision id.
 
@@ -155,6 +164,9 @@ def _load_setup(
     engine selected in WG (CAD-OPERATIONS.md, "Project setups"). None when the
     project has none for these sources yet -- the caller then uses WG's
     default settings -- or when the revision named is gone.
+
+    ``manifest`` is the retained copy's manifest when the caller has just
+    verified the copy (``_verified_copy``); otherwise the copy is read here.
     """
 
     if revision_id:
@@ -164,7 +176,8 @@ def _load_setup(
         loaded = validate_setup(json.loads(row["setup_json"])), str(row["revision_id"])
         if loaded[0].origin != DEFAULTS_ORIGIN:
             return loaded
-    manifest = read_snapshot(str(retained["retained_path"]), retained=True).manifest
+    if manifest is None:
+        manifest = read_snapshot(str(retained["retained_path"]), retained=True).manifest
     lineage_id = snapshot_project(ctx.store, manifest)
     if lineage_id is None:
         return loaded if revision_id else None
@@ -260,6 +273,25 @@ def _retain_from_return(ctx: SnapshotContext, row: Mapping[str, Any]) -> dict[st
     )
 
 
+def _verified_copy(retained: Mapping[str, Any]) -> WgReturnBundle:
+    """Read the whole retained copy, verified, or raise saying why it is not the bundle.
+
+    The one full verification a preparation pass makes: it hashes every member
+    against the manifest and the manifest against the copy's own name. The
+    verified bundle is then what the pass reads its manifest from and what it
+    hands the ingest, so neither reads and hashes the same copy again.
+    """
+
+    path = Path(str(retained["retained_path"]))
+    found = read_snapshot(path, retained=True)
+    if found.manifest_sha256 != "sha256:" + path.name.removesuffix(".wgreturn"):
+        raise WgReturnIntegrityError(
+            "WG's saved copy of this model is not the return it was kept for. "
+            "Send it again from Fusion."
+        )
+    return found
+
+
 def _copy_is_whole(retained: Mapping[str, Any]) -> bool:
     """Whether every member of the retained copy is still what the manifest declares.
 
@@ -272,17 +304,17 @@ def _copy_is_whole(retained: Mapping[str, Any]) -> bool:
     that blamed the user's return while the good one sat in the WGLink folder.
     """
 
-    path = Path(str(retained["retained_path"]))
     try:
-        found = read_snapshot(path, retained=True)
+        # The name comparison inside is defence in depth, and no more than
+        # that: every caller reaches this only through ``_retained``, which has
+        # already compared the manifest's hash to this same name. ``_retained``'s
+        # gate is the one holding the identity requirement up -- a later
+        # simplification of it would take the real check away, and this would
+        # not notice.
+        _verified_copy(retained)
     except (WgReturnError, OSError, ValueError):
         return False
-    # Defence in depth, and no more than that: every caller reaches this only
-    # through ``_retained``, which has already compared the manifest's hash to
-    # this same name. ``_retained``'s gate is the one holding the identity
-    # requirement up -- a later simplification of it would take the real check
-    # away, and this line would not notice.
-    return found.manifest_sha256 == "sha256:" + path.name.removesuffix(".wgreturn")
+    return True
 
 
 def _document_name(manifest: Mapping[str, Any] | None) -> str | None:
@@ -383,7 +415,10 @@ class _DefaultsUnavailable(ValueError):
 
 
 def _default_setup(
-    ctx: SnapshotContext, retained: Mapping[str, Any]
+    ctx: SnapshotContext,
+    retained: Mapping[str, Any],
+    *,
+    manifest: Mapping[str, Any] | None = None,
 ) -> tuple[CadSolveSetup, str]:
     """WG's default setup for a first-time model, as a setup revision.
 
@@ -392,7 +427,8 @@ def _default_setup(
     it and the run names exactly what it solved.
     """
 
-    manifest = read_snapshot(str(retained["retained_path"]), retained=True).manifest
+    if manifest is None:
+        manifest = read_snapshot(str(retained["retained_path"]), retained=True).manifest
     try:
         setup = default_setup(manifest, solver_selection(ctx.store))
     except SolveDefaultsDamaged:

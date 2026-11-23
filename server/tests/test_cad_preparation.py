@@ -268,6 +268,32 @@ def test_a_first_cad_authored_model_is_solved_with_wg_default_settings(harness: 
     assert revision["origin"] == "wg_defaults"
 
 
+def test_a_preparation_pass_verifies_the_retained_copy_once(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One full read of WG's copy per pass: settings and ingest reuse it."""
+
+    _received(harness)
+    bundles = harness.data_dir / "imports" / "bundles"
+    reads: list[Path] = []
+    real_read = ingest_module.read_wgreturn
+
+    def counting(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if Path(path).parent == bundles:
+            reads.append(Path(path))
+        return real_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(ingest_module, "read_wgreturn", counting)
+    summary = harness.prepare()
+
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
+    assert summary["setupDefaults"] is True
+    assert len(reads) == 1
+    call = harness.ingest.calls[0]
+    assert call["verified_bundle"] is not None
+    assert Path(call["verified_bundle"].path) == Path(call["bundle_path"])
+
+
 @pytest.mark.parametrize("origin", [None, "wg_defaults"])
 def test_user_or_unknown_ownership_mesh_sizes_are_not_replaced(harness: Harness, origin) -> None:
     """No project selection: even a defaults origin cannot prove edit status."""
@@ -915,6 +941,34 @@ def test_a_retained_copy_whose_bytes_were_damaged_is_replaced_not_handed_out(
     assert again == retained
     assert read_snapshot(copy, retained=True).manifest_sha256 == retained["manifest_sha256"]
     assert _staging_roots(harness) == []
+
+
+@backend_free
+def test_staging_the_retained_copy_itself_does_not_read_it_again(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ingest of WG's own copy already verified it; staging adopts it as is.
+
+    A bundle read from anywhere else is still checked against the copy under
+    its digest, which is what replaces a damaged copy above.
+    """
+
+    _source, retained = _write_and_retain(harness)
+    copy = Path(retained["retained_path"])
+    bundle = read_snapshot(copy, retained=True)
+    reads: list[Path] = []
+    real_read = ingest_module.read_wgreturn
+
+    def counting(path: Any, *args: Any, **kwargs: Any) -> Any:
+        reads.append(Path(path))
+        return real_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(ingest_module, "read_wgreturn", counting)
+
+    staged = ingest_module._stage_bundle_cas(bundle, harness.data_dir / "imports")
+
+    assert staged == (copy, None, None, False)
+    assert reads == []
 
 
 @backend_free

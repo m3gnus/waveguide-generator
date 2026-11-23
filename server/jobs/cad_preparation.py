@@ -78,7 +78,6 @@ from server.cadlink.joblane.preparation_inputs import (
     DAMAGED_COPY_MESSAGE,
     SnapshotContext,
     _DefaultsUnavailable,
-    _copy_is_whole,
     _default_setup,
     _load_setup,
     _project_gate,
@@ -89,6 +88,7 @@ from server.cadlink.joblane.preparation_inputs import (
     _retained_manifest,
     _snapshot_record,
     _submission_refusal_reason,
+    _verified_copy,
     cad_provenance_record,
     resumable_record,
 )
@@ -112,7 +112,7 @@ from server.cadlink.intake.readings import (
     store_frame_decision,
 )
 from server.cadlink.store import CadLinkStore, StaleAttempt
-from server.cadlink.wgreturn import WgReturnError
+from server.cadlink.wgreturn import WgReturnBundle, WgReturnError
 from server.jobs.cad_intent import (
     BIND_BLOCKED,
     BIND_STOPPED,
@@ -595,7 +595,17 @@ def prepare_job_sync(
     # None: WG decides, whichever way the solve was asked for.
     expected_frame_axis = intent.frame_axis
     retained = _retained(host.data_dir, ledger)
-    if retained is not None and not _copy_is_whole(retained):
+    # The one full verification of WG's copy this pass makes. The manifest the
+    # settings are read from and the bundle the ingest meshes are this one
+    # reading, so neither hashes the whole copy again; the mesh child still
+    # hashes the STEP it opens.
+    verified: WgReturnBundle | None = None
+    if retained is not None:
+        try:
+            verified = _verified_copy(retained)
+        except (WgReturnError, OSError, ValueError):
+            verified = None
+    if retained is not None and verified is None:
         # WG's own copy is no longer the bundle its digest names: replaced from
         # the return, never meshed from and never blamed on the user's return.
         logger.warning(
@@ -629,12 +639,24 @@ def prepare_job_sync(
         run.advance(cad={"snapshot": _snapshot_record(store, retained)})
 
     named_revision = _named_setup_revision(intent, run.cad)
+    if verified is None:
+        # Just retained: its copy is read once, here. A copy damaged between
+        # retaining and this read is WG's copy, never blamed on the user's
+        # return -- the same refusal as a manifest WG cannot read back below.
+        try:
+            verified = _verified_copy(retained)
+        except (WgReturnError, OSError, ValueError) as exc:
+            logger.info("CAD job %s: the copy just retained cannot be read: %s", run.job_id, exc)
+            return run.refuse(
+                "return_unavailable",
+                "WG could not read its saved copy of this model. Send it again from Fusion.",
+            )
     try:
-        loaded = _load_setup(context, named_revision, retained)
+        loaded = _load_setup(context, named_revision, retained, manifest=verified.manifest)
         if loaded is None and named_revision is None:
             # A first-time model -- no settings recorded for its project and
             # these sources: WG's default settings, never another project's.
-            loaded = _default_setup(context, retained)
+            loaded = _default_setup(context, retained, manifest=verified.manifest)
     except SolveDefaultsDamaged as exc:
         logger.error("WG's default solve settings cannot be used: %s", exc)
         return run.refuse("setup_required", DAMAGED_DEFAULTS_MESSAGE)
@@ -773,6 +795,7 @@ def prepare_job_sync(
                 commit_guard=lambda _conn: run.is_held(),
                 retained_copy=True,
                 defer_viewport=True,
+                verified_bundle=verified,
                 **_project_gate(retained),
             )
         except StaleAttempt as exc:

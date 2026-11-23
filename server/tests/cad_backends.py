@@ -50,7 +50,7 @@ class FakeIngest:
     def __call__(
         self, bundle_path, mesh, skipped, store, data_dir, *, prep_options, commit_guard,
         retained_copy=False, defer_viewport=False, expected_design_id=None,
-        expected_instance_id=None,
+        expected_instance_id=None, verified_bundle=None,
     ):
         self.calls.append(
             {
@@ -61,10 +61,15 @@ class FakeIngest:
                 "defer_viewport": defer_viewport,
                 "expected_design_id": expected_design_id,
                 "expected_instance_id": expected_instance_id,
+                "verified_bundle": verified_bundle,
             }
         )
         # Stage 1 exactly as ingest_bundle reads it.
-        bundle = ingest_module.read_snapshot(bundle_path, retained=retained_copy)
+        bundle = (
+            verified_bundle
+            if verified_bundle is not None
+            else ingest_module.read_snapshot(bundle_path, retained=retained_copy)
+        )
         if self.during is not None:
             self.during()
         if self.error is not None:
