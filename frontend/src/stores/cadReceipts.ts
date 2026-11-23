@@ -3,6 +3,7 @@ import { useStore } from 'zustand';
 import { jobsSocket, type JobsSocketManager } from '../api/jobsSocket';
 import type { CadInboxRefusal } from '../api/cadOperations';
 import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
+import { cadStartupHello } from './cadStartupHello';
 import { failureWords, ProgramFault } from '../api/httpError';
 
 export type ReceiptOutcome = 'accepted' | 'refused' | 'missing_source' | 'unreadable' | 'retained_copy';
@@ -221,33 +222,36 @@ export function useCadReceiptsStore<T>(selector: (state: CadReceiptsState) => T)
  * HTTP remains authoritative, so pushes never advance this feed's cursor.
  * Shell mounts this source.
  */
-export function connectCadReceipts(manager: Pick<JobsSocketManager, 'subscribeCadOperations'> = jobsSocket,
+export function connectCadReceipts(
+  manager: Pick<JobsSocketManager, 'subscribeCadOperations'> & Partial<Pick<JobsSocketManager, 'getSnapshot'>> = jobsSocket,
   store = cadReceiptsStore, fetcher: typeof fetch = fetch): () => void {
   let active = true;
-  let startup = true;
-  void Promise.resolve().then(() => { startup = false; });
+  const startup = cadStartupHello(manager);
   let reading = false;
   let again = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const read = (attempt = 0) => {
-    if (!active) return;
-    if (reading) { again = true; return; }
+  const read = (attempt = 0): Promise<void> | null => {
+    if (!active) return null;
+    if (reading) { again = true; return null; }
     if (timer !== null) clearTimeout(timer);
     timer = null;
     reading = true;
-    void store.getState().load(fetcher).catch(() => {
+    const load = store.getState().load(fetcher);
+    void load.catch(() => {
       if (active && RETRY_MS[attempt] !== undefined) timer = setTimeout(() => read(attempt + 1), RETRY_MS[attempt]);
     }).finally(() => {
       reading = false;
       if (active && again) { again = false; read(); }
     });
+    return load;
   };
   const unsubscribe = manager.subscribeCadOperations({
     operation: (operation) => { if (operation.kind === 'receive_snapshot') read(); },
     refusal: (refusal) => { useCadDeliveryHealthStore.getState().mergeRefusals([refusal]); read(); },
-    resync: () => { const coalesced = startup && reading; startup = false; if (!coalesced) read(); },
+    resync: () => { if (startup.resync()) read(); },
   });
-  read();
+  const mount = read();
+  if (mount) startup.mountRead(mount);
   return () => { active = false; unsubscribe(); if (timer !== null) clearTimeout(timer); };
 }
 

@@ -98,6 +98,21 @@ describe('recovery notices without the coordinator', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+  it.each([['answered', 1], ['failed', 2]] as const)('the first hello of a starting socket reuses a mount read that %s; reconnects read again (D5)', async (outcome, afterHello) => {
+    let handlers!: Parameters<JobsSocketManager['subscribeCadOperations']>[0];
+    const snapshot = { connection: 'connecting' } as ReturnType<JobsSocketManager['getSnapshot']>;
+    const manager = { getSnapshot: () => snapshot,
+      subscribeCadOperations: vi.fn((value) => { handlers = value; return vi.fn(); }) } as Pick<JobsSocketManager, 'subscribeCadOperations' | 'getSnapshot'>;
+    const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(async () => outcome === 'answered' ? json({ notices: [] }) : new Response('{}', { status: 503 }))
+      .mockImplementation(async () => json({ notices: [] }));
+    const stop = connectCadRecoveryNotices(manager, createCadRecoveryNoticesStore(), fetcher, createCadConnectionStore());
+    await vi.waitFor(() => expect(useCadDeliveryHealthStore.getState().recoveryError).toEqual(outcome === 'answered' ? null : expect.any(String)));
+    handlers.resync();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(afterHello));
+    handlers.resync();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(afterHello + 1));
+    stop();
+  });
   it('refreshes status-file changes and held-status expiry, coalesces bursts, and never polls idle', async () => {
     vi.useFakeTimers();
     vi.setSystemTime('2026-10-11T12:00:00Z');

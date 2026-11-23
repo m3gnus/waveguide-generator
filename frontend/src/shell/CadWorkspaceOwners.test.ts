@@ -639,12 +639,29 @@ it('a return landing after the pull timeout is available to discovery (rows 5, 2
   expect(useCadReturnStore.getState().selectedBundle?.requestId).toBe('pull-1');
 });
 
-it('coalesces mount discovery/status and the initial socket hello (row 10)', async () => {
+/** The owners mount while the jobs socket is still connecting; its first hello follows. */
+function socketStarting() {
+  (jobsSocket as unknown as { snapshot: ReturnType<typeof jobsSocket.getSnapshot> }).snapshot = {
+    connection: 'connecting', epoch: null, cursor: null, jobs: [], error: null };
+}
+
+it.each(['in flight', 'answered'])('coalesces mount discovery/status and the initial socket hello with mount reads %s (row 10, D5)', async (when) => {
+  socketStarting();
   stop = mountCadWorkspaceOwners();
+  if (when === 'answered') await flush();
   channels.forEach((channel) => channel.resync()); await flush();
   expect(calls('/api/cadlink/fusion-status')).toHaveLength(1);
   expect(calls('/api/cadlink/returns')).toHaveLength(1);
+  // The mount read, then one read woken by the first published status.
+  expect(calls('/api/cadlink/recovery-notices')).toHaveLength(2);
   expect(fetcher.mock.calls.filter(([input]) => String(input).includes('/receipts?'))).toHaveLength(1);
+  expect(jobsSocket.refresh).not.toHaveBeenCalled();
+  // A later hello is a reconnect: it reads everything again.
+  channels.forEach((channel) => channel.resync()); await flush();
+  expect(calls('/api/cadlink/fusion-status')).toHaveLength(2);
+  expect(calls('/api/cadlink/recovery-notices').length).toBeGreaterThan(2);
+  expect(fetcher.mock.calls.filter(([input]) => String(input).includes('/receipts?')).length).toBeGreaterThanOrEqual(2);
+  expect(jobsSocket.refresh).toHaveBeenCalledOnce();
 });
 
 it.each(['listing change', 'Send'])('coordination on: %s resets quiet observation in the mounted owners (row 10)', async (activity) => {
@@ -760,6 +777,7 @@ it('coalesces a delayed initial hello with mount status and discovery reads stil
   const statusRead = deferred<Response>(); const returnRead = deferred<Response>();
   fetcher.mockImplementation((input, init) => String(input).endsWith('/fusion-status') ? statusRead.promise
     : String(input).endsWith('/returns') ? returnRead.promise : base(input, init));
+  socketStarting();
   stop = mountCadWorkspaceOwners(); await flush();
   channels.forEach((channel) => channel.resync()); await flush();
   expect(calls('/api/cadlink/fusion-status')).toHaveLength(1);

@@ -207,6 +207,39 @@ describe('CAD observation scheduler without the coordinator', () => {
     expect(reads()).toEqual(changed);
   });
 
+  it.each(['in flight', 'answered'])('the first hello of a socket starting at mount shares the mount reads %s; reconnects read again (D5)', async (when) => {
+    snapshot = { ...snapshot, connection: 'connecting' };
+    let answer!: (value: CadConnectionStatus) => void;
+    if (when === 'in flight') readStatus.mockImplementationOnce(() => new Promise((done) => { answer = done; }));
+    stop = connectCadObservation({
+      getActivity: () => activity,
+      subscribeActivity: (listener) => { activityChanged = listener; return vi.fn(); },
+      readFusionStatus: () => readStatus(), reloadReturns: () => reloadReturns(),
+      reloadReceipts: (ids) => reloadReceipts(ids), connection,
+      manager: { getSnapshot: () => snapshot, subscribe: () => vi.fn(),
+        subscribeCadOperations: (listener) => { channel = listener; return vi.fn(); }, refresh: () => refreshJobs() },
+    });
+    if (when === 'answered') await vi.advanceTimersByTimeAsync(0);
+    snapshot = { ...snapshot, connection: 'connected' }; channel.resync();
+    await vi.advanceTimersByTimeAsync(0);
+    if (when === 'in flight') { answer(status()); await vi.advanceTimersByTimeAsync(0); }
+    expect(reads()).toEqual([1, 1]);
+    expect(refreshJobs).not.toHaveBeenCalled(); expect(reloadReceipts).not.toHaveBeenCalled();
+    await reconnect();
+    expect(reads()).toEqual([2, 2]);
+    expect(refreshJobs).toHaveBeenCalledOnce(); expect(reloadReceipts).toHaveBeenCalledOnce();
+  });
+
+  it('the first hello reads again when the mount status read went unanswered (D5)', async () => {
+    snapshot = { ...snapshot, connection: 'connecting' };
+    readStatus.mockRejectedValueOnce(new Error('offline'));
+    await mount();
+    expect(reads()).toEqual([1, 1]);
+    await reconnect();
+    expect(reads()).toEqual([2, 2]);
+    expect(refreshJobs).toHaveBeenCalledOnce();
+  });
+
   it('suppresses hidden-page reads even with moving work, and resumes on visibility', async () => {
     activity.awaitingReturn = true; visible = false;
     await mount(); await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual([0, 0]);

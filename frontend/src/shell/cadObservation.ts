@@ -2,6 +2,7 @@ import type { CadOperationSummary } from '../api/cadOperations';
 import type { CadCoordination } from '../api/cadCoordination';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { useCadConnectionStore, type CadConnectionStore, type CadConnectionStatus } from '../stores/cadConnection';
+import { cadStartupHello } from '../stores/cadStartupHello';
 
 // CAD observation and idle backoff cadences.
 export const CAD_OBSERVATION_INTERVALS = {
@@ -84,12 +85,16 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     if (input.cadFolderConfigured === false) return listing ? idle : null;
     return now() - lastActivityAt >= CAD_OBSERVATION_INTERVALS.quietMs ? idle : base;
   };
-  const readStatus = () => {
+  /** Rejects when an attempted read published no report (failed or fenced). */
+  const readStatusAnswered = () => {
     if (active && visible() && options.getActivity().cadApplication === 'fusion360') {
-      return connection.read(options.readFusionStatus).then(() => undefined);
+      return connection.read(options.readFusionStatus).then((status) => {
+        if (!status) throw new Error('Fusion status read was not answered');
+      });
     }
     return Promise.resolve();
   };
+  const readStatus = () => readStatusAnswered().catch(() => undefined);
   const readReturns = () => {
     if (active && visible() && options.getActivity().cadApplication === 'fusion360') {
       return options.reloadReturns().catch(() => undefined);
@@ -151,10 +156,11 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       }, wait);
     });
   };
-  let firstWake = true;
-  let firstResync = true;
   const startupKey = activity.observationKey;
-  let startupReads: Promise<unknown> | null = null;
+  const startup = cadStartupHello(manager);
+  // The mount wake's reads start in a microtask; a hello before then shares them.
+  let mountReads: ((reads: Promise<unknown>) => void) | null = null;
+  startup.mountRead(new Promise((resolve) => { mountReads = resolve; }));
   let wakeScheduled = false;
   let wakeListing = false;
   const wake = (listing = true) => {
@@ -166,13 +172,10 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       wakeScheduled = false;
       if (!active) return;
       const listingRequested = wakeListing; wakeListing = false;
-      const reads = [listingRequested ? readReturns() : Promise.resolve(), readStatus()];
-      if (firstWake) {
-        firstWake = false;
-        const batch = Promise.allSettled(reads);
-        startupReads = batch;
-        void batch.finally(() => { if (startupReads === batch) startupReads = null; });
-      }
+      const status = readStatusAnswered();
+      const reads = Promise.all([listingRequested ? readReturns() : Promise.resolve(), status]);
+      void reads.catch(() => undefined);
+      mountReads?.(reads); mountReads = null;
     });
   };
   const invalidateDeclaration = () => {
@@ -185,12 +188,14 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     operation: (operation) => options.observeOperation?.(operation),
     addinStatusChanged: () => { invalidateDeclaration(); wake(); },
     resync: () => {
-      // The initial hello shares a still-running mount batch for this context.
-      // Later reconnects always fence and read again.
-      const coalesced = firstResync && startupReads !== null && options.getActivity().observationKey === startupKey;
-      firstResync = false;
+      // The first hello of a socket still starting at mount is answered by the
+      // mount batch for this context (running or answered): the socket sends its
+      // own jobs snapshot after every hello, and nothing awaited can be owed yet.
+      // Later reconnects always fence, read again and recover.
+      const fresh = startup.resync();
+      const coalesced = !fresh && options.getActivity().observationKey === startupKey;
       if (!coalesced) { invalidateDeclaration(); wake(); }
-      recover();
+      if (!coalesced || unresolved.size || options.getActivity().requests.some(pendingRequest)) recover();
     },
   });
   const unsubscribeJobs = manager.subscribe(() => {
