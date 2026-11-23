@@ -869,6 +869,22 @@ def _transform_direction(matrix: np.ndarray, direction: Iterable[float]) -> np.n
     return matrix[:3, :3] @ np.asarray(tuple(direction), dtype=float)
 
 
+def transformed_source_contract(
+    contract: Mapping[str, Any], total: np.ndarray
+) -> dict[str, Any]:
+    """A link-space source contract's throat datums moved by ``total``."""
+
+    plane = contract["throat_plane_link"]
+    axis = contract["axis_link"]
+    return {
+        **contract,
+        "plane_origin_mm": _transform_point(total, plane["origin_mm"]),
+        "plane_normal": _transform_direction(total, plane["normal"]),
+        "axis_origin_mm": _transform_point(total, axis["origin_mm"]),
+        "axis_direction": _transform_direction(total, axis["direction"]),
+    }
+
+
 class ThroatDisc(NamedTuple):
     """The disc a throat contract describes: its centre (mm), its unit normal,
     and how far the contract's axis is tilted from that normal (degrees)."""
@@ -1223,6 +1239,7 @@ def resolve_vertical_recentre(
     recorded_offset_mm: float | None,
     *,
     bounds_mm: tuple[float, ...],
+    throat_centre_y_mm: float | None,
 ) -> dict[str, Any]:
     """Decide whether to move a placed CAD return back onto its mirror plane.
 
@@ -1237,15 +1254,20 @@ def resolve_vertical_recentre(
     always been (commit 3a3e803), and every frame derived from the same matrix
     -- throat datum, observation origin, viewport -- moves with it.
 
-    The recorded value is preferred and the geometry is the gate: a mirror
-    plane at ``y = offset`` must be the model's own y midpoint, so a config
-    that does not describe this body cannot move it.
+    The recorded value is preferred and the geometry is the gate, twice: a
+    mirror plane at ``y = offset`` must be the model's own y midpoint, and the
+    returned throat -- where the anchor's throat axis pierces its throat plane
+    (:func:`throat_disc`) -- must sit on it. A config that does not describe
+    this body cannot move it, and neither can a body whose midpoint happens to
+    equal the offset while its throat is already at the origin, which is how
+    a link built with the throat at the origin returns an offset design.
     """
 
     record: dict[str, Any] = {
         "recorded_offset_mm": recorded_offset_mm,
         "applied_offset_mm": 0.0,
         "applied": False,
+        "throat_centre_y_mm": throat_centre_y_mm,
     }
     if recorded_offset_mm is None:
         record["reason"] = "no mesh.vertical_offset in the returned design config"
@@ -1276,11 +1298,26 @@ def resolve_vertical_recentre(
             f"midpoint {midpoint:.9g} mm"
         )
         return record
+    if throat_centre_y_mm is None:
+        record["reason"] = "the returned throat's position is not known"
+        return record
+    throat_residual = abs(float(throat_centre_y_mm) - float(recorded_offset_mm))
+    record["throat_residual_mm"] = throat_residual
+    if throat_residual > tolerance:
+        record["reason"] = (
+            "recorded mesh.vertical_offset "
+            f"{float(recorded_offset_mm):.9g} mm is not where the returned throat "
+            f"is (y = {float(throat_centre_y_mm):.9g} mm)"
+        )
+        return record
     record.update(
         {
             "applied_offset_mm": float(recorded_offset_mm),
             "applied": True,
-            "reason": "recorded placement confirmed by the returned model's y midpoint",
+            "reason": (
+                "recorded placement confirmed by the returned model's y midpoint "
+                "and its throat"
+            ),
         }
     )
     return record
@@ -3005,6 +3042,22 @@ def build_imported_mesh(
     # the STEP a second time again.
     recentre_bounds: list[tuple[float, ...]] = []
 
+    def anchor_throat_centre_y_mm(applied: np.ndarray) -> float | None:
+        """Where the anchor's throat is, in y, in the normalised model."""
+
+        if not recorded_offset_mm or anchor_id is None:
+            return None
+        instance = instance_by_id[str(anchor_id)]
+        contract = instance.get("source_contract")
+        if contract is None:
+            return None
+        placement = np.asarray(instance["assembly_from_link"], dtype=float)
+        try:
+            disc = throat_disc(transformed_source_contract(contract, applied @ placement))
+        except RoleResolutionError:
+            return None
+        return float(disc.centre_mm[1])
+
     def recentre_bounds_mm() -> tuple[float, ...]:
         if not recorded_offset_mm:
             return (0.0,) * 6
@@ -3048,6 +3101,7 @@ def build_imported_mesh(
         recentre = resolve_vertical_recentre(
             recorded_offset_mm,
             bounds_mm=recentre_bounds_mm(),
+            throat_centre_y_mm=anchor_throat_centre_y_mm(applied_normalization),
         )
         solver_from_assembly = applied_normalization
         if recentre["applied"]:
@@ -3159,17 +3213,9 @@ def build_imported_mesh(
             # included: the throat frame is the observation origin, so a datum
             # left at the CAD placement would put the polar origin one vertical
             # offset away from the throat it names.
-            total = solver_from_assembly @ placement
-            plane = contract["throat_plane_link"]
-            axis = contract["axis_link"]
-            transformed = {
-                **contract,
-                "plane_origin_mm": _transform_point(total, plane["origin_mm"]),
-                "plane_normal": _transform_direction(total, plane["normal"]),
-                "axis_origin_mm": _transform_point(total, axis["origin_mm"]),
-                "axis_direction": _transform_direction(total, axis["direction"]),
-            }
-            transformed_contracts[str(instance["instance_id"])] = transformed
+            transformed_contracts[str(instance["instance_id"])] = transformed_source_contract(
+                contract, solver_from_assembly @ placement
+            )
         if anchor_id is not None:
             anchor_contract = transformed_contracts.get(str(anchor_id))
             if anchor_contract is None:

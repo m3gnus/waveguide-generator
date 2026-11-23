@@ -131,6 +131,7 @@ _RETURN_IDS = {
     "full": "wgr_01J5A8QK3M9T2XVBH0RD7NWED0",
     "placed": "wgr_01J5A8QK3M9T2XVBH0RD7NWEE0",
     "sent": "wgr_01J5A8QK3M9T2XVBH0RD7NWEF0",
+    "sent-centred": "wgr_01J5A8QK3M9T2XVBH0RD7NWEG0",
 }
 
 
@@ -623,7 +624,24 @@ def test_the_fusion_datum_model_matches_a_live_wglink_return() -> None:
     assert _fusion_throat_datums([0.0, 80.0, 0.0]) == live
 
 
-def _sent_design_bundle(tmp_path: Path, design: Any) -> Path:
+def _translate_step(path: Path, offset_mm: tuple[float, float, float]) -> None:
+    """Move every body of a written STEP rigidly, as CAD moves a body."""
+
+    import gmsh
+
+    gmsh.option.setNumber("General.Terminal", 0)
+    gmsh.clear()
+    gmsh.model.occ.importShapes(str(path), highestDimOnly=True)
+    gmsh.model.occ.synchronize()
+    gmsh.model.occ.translate(gmsh.model.getEntities(3), *offset_mm)
+    gmsh.model.occ.synchronize()
+    gmsh.write(str(path))
+    gmsh.clear()
+
+
+def _sent_design_bundle(
+    tmp_path: Path, design: Any, *, throat_at_origin: bool = False, name: str = "sent"
+) -> Path:
     """Send ``design`` to CAD and return what WGLink sends back, unedited.
 
     The outbound leg is real: the export serializer writes the WGLink bundle
@@ -633,6 +651,10 @@ def _sent_design_bundle(tmp_path: Path, design: Any) -> Path:
     same CAD geometry written as a solid with its throat closed, and the
     source contract is read off the construction ``wglink_core._build_datums``
     builds from the bundle's datums (see :func:`_fusion_throat_datums`).
+
+    ``throat_at_origin`` returns it the way a link built with the throat at
+    the origin does: the body moved down by its design's vertical offset, the
+    datums with it, and the design config echoed unchanged.
     """
 
     from hornlab_mesher.cad import write_step
@@ -665,7 +687,7 @@ def _sent_design_bundle(tmp_path: Path, design: Any) -> Path:
     datums = outbound["datums"]
     parameters = {item["name"]: item for item in outbound["parameters"]}
 
-    bundle = tmp_path / "workspace" / "wgreturn" / "sent.wgreturn"
+    bundle = tmp_path / "workspace" / "wgreturn" / f"{name}.wgreturn"
     bundle.mkdir(parents=True)
     # WGLink closes the lofted throat with a planar patch: the face its
     # ``_throat_faces`` tags and the contract describes.
@@ -684,10 +706,17 @@ def _sent_design_bundle(tmp_path: Path, design: Any) -> Path:
         float(datums["WG_GEOM_MIDPLANE_Y"]["origin_mm"][1]),
         float(datums["WG_THROAT_PLANE"]["origin_mm"][2]),
     ]
+    bbox_mm = [list(info.bounding_box_mm[0]), list(info.bounding_box_mm[1])]
+    if throat_at_origin:
+        shift = -centre[1]
+        _run_in_gmsh_session(_translate_step, bundle / "assembly.step", (0.0, shift, 0.0))
+        centre[1] = 0.0
+        for corner in bbox_mm:
+            corner[1] += shift
     return _write_return(
         bundle,
-        "sent",
-        bbox_mm=[list(info.bounding_box_mm[0]), list(info.bounding_box_mm[1])],
+        name,
+        bbox_mm=bbox_mm,
         assembly_from_link=np.eye(4),
         config=outbound["design"]["config"],
         source_contract={
@@ -764,6 +793,55 @@ def test_a_sent_offset_quarter_design_comes_back_as_a_quarter(tmp_path: Path) ->
     assert bounds["min_x"] == pytest.approx(0.0, abs=1.0e-9)
     assert bounds["min_y"] == pytest.approx(0.0, abs=1.0e-9)
     assert bounds["max_y"] == pytest.approx(0.090, abs=1.0e-4)
+
+
+def test_a_throat_centred_return_of_an_offset_design_is_not_moved(tmp_path: Path) -> None:
+    """A link built with the throat at the origin must not be recentred again.
+
+    The design still records Mesh.VerticalOffset 80, and its enclosure is
+    160 mm taller above the throat than below, so the returned body's y
+    midpoint is exactly 80 mm: the midpoint alone would have moved it 80 mm
+    down and put the observation origin 80 mm below the throat. The returned
+    throat is at y = 0, which decides it.
+    """
+
+    pytest.importorskip("gmsh")
+    from server.design.schema import DesignConfig
+
+    design = DesignConfig.model_validate(
+        {
+            "formula": "OSSE",
+            "L": 60,
+            "a": 45,
+            "r0": 12.7,
+            "mesh": {"vertical_offset": 80, "quadrants": 1},
+            "enclosure": {
+                "depth": 120,
+                "space_l": 25,
+                "space_r": 25,
+                "space_t": 185,
+                "space_b": 25,
+            },
+        }
+    )
+    record = _ingest(
+        tmp_path,
+        _sent_design_bundle(tmp_path, design, throat_at_origin=True, name="sent-centred"),
+    )
+
+    recentre = record["normalisation"]["vertical_recentre"]
+    assert recentre["recorded_offset_mm"] == 80.0
+    assert recentre["model_y_midpoint_mm"] == pytest.approx(80.0, abs=0.1)
+    assert recentre["throat_centre_y_mm"] == pytest.approx(0.0, abs=1.0e-9)
+    assert recentre["applied"] is False
+    assert "where the returned throat is" in recentre["reason"]
+    assert record["normalisation"]["matrix"][1][3] == pytest.approx(0.0, abs=1.0e-12)
+
+    frame = record["anchor"]["throat_frame"]
+    for key in ("origin_m", "source_center_m"):
+        assert frame[key] == pytest.approx([0.0, 0.0, 0.0], abs=1.0e-9), key
+    # Taller above than below, so only the x0 mirror holds.
+    assert record["symmetry"]["cut_planes"] == ["x0"]
 
 
 @pytest.mark.parametrize(

@@ -398,20 +398,33 @@ def test_recorded_vertical_offset_reads_the_echoed_design_config() -> None:
 
 
 def test_vertical_recentre_needs_the_geometry_to_agree_with_the_config() -> None:
-    placed = resolve_vertical_recentre(80.0, bounds_mm=(-100.0, -20.0, 0.0, 100.0, 180.0, 300.0))
+    body = (-100.0, -20.0, 0.0, 100.0, 180.0, 300.0)
+    placed = resolve_vertical_recentre(80.0, bounds_mm=body, throat_centre_y_mm=80.0)
     assert placed["applied"] is True
     assert placed["applied_offset_mm"] == 80.0
 
     # Same recorded offset, a body that is not centred on it: the config
     # describes some other design and must not move this one.
-    wrong = resolve_vertical_recentre(80.0, bounds_mm=(-100.0, -20.0, 0.0, 100.0, 60.0, 300.0))
+    wrong = resolve_vertical_recentre(
+        80.0, bounds_mm=(-100.0, -20.0, 0.0, 100.0, 60.0, 300.0), throat_centre_y_mm=80.0
+    )
     assert wrong["applied"] is False
     assert wrong["applied_offset_mm"] == 0.0
     assert "y midpoint" in wrong["reason"]
 
+    # A link built with its throat at the origin, returning an offset design
+    # whose body happens to have its y midpoint at the offset: the throat is
+    # already where the solver wants it, so nothing moves.
+    centred = resolve_vertical_recentre(80.0, bounds_mm=body, throat_centre_y_mm=0.0)
+    assert centred["applied"] is False
+    assert centred["applied_offset_mm"] == 0.0
+    assert "where the returned throat is" in centred["reason"]
+    unknown = resolve_vertical_recentre(80.0, bounds_mm=body, throat_centre_y_mm=None)
+    assert unknown["applied"] is False
+
     for absent in (
-        resolve_vertical_recentre(None, bounds_mm=(0.0,) * 6),
-        resolve_vertical_recentre(0.0, bounds_mm=(0.0,) * 6),
+        resolve_vertical_recentre(None, bounds_mm=(0.0,) * 6, throat_centre_y_mm=None),
+        resolve_vertical_recentre(0.0, bounds_mm=(0.0,) * 6, throat_centre_y_mm=0.0),
     ):
         assert absent["applied"] is False
         assert absent["applied_offset_mm"] == 0.0
