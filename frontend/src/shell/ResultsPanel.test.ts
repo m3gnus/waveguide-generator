@@ -904,7 +904,12 @@ describe('results chart layouts', () => {
     const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
     await act(async () => { drawChart(target, splOption([{ id: 'primary', label: 'Run', result: chartResult, primary: true }], tokens, 'none', 'regular')); });
     let signal: AbortSignal | undefined;
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+    const otherFetch = globalThis.fetch;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      // Only the chart drawing is held open. A debounced settings write from the preceding
+      // test's reset can land while this spy is installed and must neither replace the signal
+      // under test nor be left pending.
+      if (input !== '/api/render-chart') return otherFetch(input, init);
       signal = init?.signal ?? undefined;
       return new Promise<Response>((_resolve, reject) => {
         signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
@@ -929,7 +934,8 @@ describe('results chart layouts', () => {
     act(() => root.render(createElement(ResultsChartGrid, { chartTypes: ['frequency_response'], result: chartResult, named: [], tokens })));
     const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
     await act(async () => { drawChart(target, splOption([{ id: 'primary', label: 'Run', result: chartResult, primary: true }], tokens, 'none', 'regular')); });
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => new Promise<Response>((_resolve, reject) => {
+    const otherFetch = globalThis.fetch;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => input !== '/api/render-chart' ? otherFetch(input, init) : new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
     }));
     chartImageMocks.render.mockImplementation(async (_spec, _theme, fetcher) => {
