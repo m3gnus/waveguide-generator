@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-import hashlib
 import json
 import logging
 from pathlib import Path
@@ -13,6 +12,7 @@ from typing import Any
 from server.jobs.models import SolveRequest
 
 from server.cadlink.intake.ingest import (
+    copy_manifest_bytes,
     read_snapshot,
     retain_snapshot,
     retained_snapshot_path,
@@ -243,7 +243,7 @@ def _retained_manifest(retained: Mapping[str, Any], *, strict_io: bool = False) 
 
     try:
         path = Path(str(retained["retained_path"]))
-        raw = (path / "wgreturn.json").read_bytes()
+        raw = copy_manifest_bytes(path)
     except FileNotFoundError:
         return None
     except OSError:
@@ -252,7 +252,7 @@ def _retained_manifest(retained: Mapping[str, Any], *, strict_io: bool = False) 
         return None
     except (KeyError, TypeError):
         return None
-    if hashlib.sha256(raw).hexdigest() != path.name.removesuffix(".wgreturn"):
+    if raw is None:
         logger.warning("The retained copy %s does not hash to its own name.", path.name)
         return None
     try:
@@ -280,6 +280,14 @@ def _verified_copy(retained: Mapping[str, Any]) -> WgReturnBundle:
     against the manifest and the manifest against the copy's own name. The
     verified bundle is then what the pass reads its manifest from and what it
     hands the ingest, so neither reads and hashes the same copy again.
+
+    ``_retained_manifest`` settles the copy's *identity* for the price of one
+    small hash, which is what every other caller needs. This is the rest of the
+    claim, and only preparation needs it, because preparation is what is about
+    to mesh from those bytes: a torn write lands on the big STEP far more often
+    than on the tiny manifest, and the manifest alone cannot see that. The name
+    comparison here is defence in depth: ``_retained`` has already compared the
+    manifest's hash to this same name.
     """
 
     path = Path(str(retained["retained_path"]))
@@ -290,31 +298,6 @@ def _verified_copy(retained: Mapping[str, Any]) -> WgReturnBundle:
             "Send it again from Fusion."
         )
     return found
-
-
-def _copy_is_whole(retained: Mapping[str, Any]) -> bool:
-    """Whether every member of the retained copy is still what the manifest declares.
-
-    ``_retained_manifest`` settles the copy's *identity* for the price of one
-    small hash, which is what every caller needs. This is the rest of the
-    claim, and only preparation needs it, because preparation is what is about
-    to mesh from those bytes: a torn write lands on the big STEP far more often
-    than on the tiny manifest, and the manifest alone cannot see that. Left to
-    the ingest, the same damage surfaced as a terminal ``snapshot_invalid``
-    that blamed the user's return while the good one sat in the WGLink folder.
-    """
-
-    try:
-        # The name comparison inside is defence in depth, and no more than
-        # that: every caller reaches this only through ``_retained``, which has
-        # already compared the manifest's hash to this same name. ``_retained``'s
-        # gate is the one holding the identity requirement up -- a later
-        # simplification of it would take the real check away, and this would
-        # not notice.
-        _verified_copy(retained)
-    except (WgReturnError, OSError, ValueError):
-        return False
-    return True
 
 
 def _document_name(manifest: Mapping[str, Any] | None) -> str | None:

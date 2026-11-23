@@ -459,7 +459,7 @@ def settle_snapshot_operation(
         # names: what is established here is the copy's *identity*, which is
         # all this path needs, because nothing here ingests, meshes or solves.
         # A member damaged inside an otherwise intact copy is caught by
-        # ``_copy_is_whole`` before preparation meshes from it.
+        # ``preparation_inputs._verified_copy`` before preparation meshes from it.
         retention = RETAIN_TRANSIENT
     if retention == RETAINED:
         state, reason, message = ACCEPTED, None, SNAPSHOT_ACCEPTED_MESSAGE

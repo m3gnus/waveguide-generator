@@ -970,6 +970,12 @@ def test_staging_the_retained_copy_itself_does_not_read_it_again(
     assert staged == (copy, None, None, False)
     assert reads == []
 
+    # A copy whose manifest no longer hashes to its name takes the full check.
+    (copy / "wgreturn.json").write_bytes(b"{ not json")
+    with pytest.raises(WgReturnError):
+        ingest_module._stage_bundle_cas(bundle, harness.data_dir / "imports")
+    assert reads
+
 
 @backend_free
 def test_a_retained_copy_whose_manifest_is_unreadable_is_replaced(harness: Harness) -> None:

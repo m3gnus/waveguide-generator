@@ -457,3 +457,35 @@ def test_a_region_mesh_already_built_from_the_same_inputs_is_not_built_again(tmp
     third = _ingest(bundle, tmp_path)
     assert calls == ["rear-chamber"]
     assert third["fem_regions"] == first["fem_regions"]
+
+
+@pytest.mark.parametrize("change", ["gmsh", "mesher", "fem-code", "no-source"])
+def test_a_region_mesh_made_by_other_meshing_code_is_not_served(tmp_path, monkeypatch, change):
+    """The index names everything a region mesh depends on, not only the record's key."""
+
+    bundle = _bundle(tmp_path / "returns")
+    first = _ingest(bundle, tmp_path)
+    calls = []
+    region_mesh = ingest.build_fem_region_mesh_isolated
+
+    def region_call(*args, **kwargs):
+        calls.append(args[1]["region_id"])
+        return region_mesh(*args, **kwargs)
+
+    monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", region_call)
+    if change in {"gmsh", "mesher"}:
+        package = {"gmsh": "gmsh", "mesher": "hornlab-waveguide-mesher"}[change]
+        real_version = ingest._package_version
+        monkeypatch.setattr(
+            ingest, "_package_version",
+            lambda name: "0.0.0-other" if name == package else real_version(name),
+        )
+    else:
+        monkeypatch.setattr(
+            ingest, "_fem_meshing_fingerprint",
+            lambda: None if change == "no-source" else "sha256:" + "0" * 64,
+        )
+    second = _ingest(bundle, tmp_path)
+    assert calls == ["rear-chamber"]
+    # The record names the artifact exactly as before: same lookup key, same bytes.
+    assert second["fem_regions"] == first["fem_regions"]

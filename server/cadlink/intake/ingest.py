@@ -663,6 +663,25 @@ def _sweep_abandoned_staging(parent: Path, keep: Path, *, cache_json: bool = Fal
             shutil.rmtree(candidate, ignore_errors=True)
 
 
+def copy_manifest_bytes(copy: Path) -> bytes | None:
+    """A retained copy's ``wgreturn.json``, when it still hashes to the copy's own name.
+
+    The directory's name *is* the manifest's sha256 (``retained_snapshot_path``),
+    so this one small hash is what makes the path a claim about the content.
+    None on a mismatch; an ``OSError`` reading it propagates.
+    """
+
+    raw = (copy / "wgreturn.json").read_bytes()
+    return raw if hashlib.sha256(raw).hexdigest() == copy.name.removesuffix(".wgreturn") else None
+
+
+def _manifest_names_copy(copy: Path) -> bool:
+    try:
+        return copy_manifest_bytes(copy) is not None
+    except OSError:
+        return False
+
+
 def _stage_bundle_cas(
     bundle: WgReturnBundle, imports_root: Path
 ) -> tuple[Path, Path | None, Path | None, bool]:
@@ -671,12 +690,14 @@ def _stage_bundle_cas(
     destination = imports_root / "bundles" / f"{bundle.manifest_sha256.removeprefix('sha256:')}.wgreturn"
     replacing = False
     if destination.is_dir():
-        if Path(bundle.path).resolve() == destination.resolve():
+        if Path(bundle.path).resolve() == destination.resolve() and _manifest_names_copy(destination):
             # The bundle *is* WG's retained copy, verified when it was read for
             # this ingest. Re-reading it here could not put verified bytes in
             # its place (they would come from the same directory), and nothing
             # meshed reads it unverified: the mesh child hashed its STEP, and
-            # every later preparation verifies the copy before using it.
+            # every later preparation verifies the copy before using it. Its
+            # manifest is re-hashed against the directory name, for one small
+            # read: a copy replaced meanwhile takes the full check below.
             return destination, None, None, False
         if _is_the_bundle(destination, bundle):
             # Content addressing doing its job: the same return is kept once.
@@ -975,12 +996,23 @@ def _judge_cached_reduced_winding(
     return accepted
 
 
-def _load_cached_mesh(mesh_path: Path, metadata_path: Path) -> dict[str, Any] | None:
+def _load_cached_mesh(
+    mesh_path: Path, metadata_path: Path, *, exact_bytes: bool = False,
+) -> dict[str, Any] | None:
+    """A cached mesh and its sidecar, when the bytes still hash to the sidecar's digest.
+
+    ``exact_bytes`` reads an artifact :func:`_write_cache` wrote with
+    ``exact_bytes=True`` as those bytes, without newline translation.
+    """
     if not mesh_path.is_file() or not metadata_path.is_file():
         return None
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        msh_text = mesh_path.read_text(encoding="utf-8")
+        msh_text = (
+            mesh_path.read_bytes().decode("utf-8")
+            if exact_bytes
+            else mesh_path.read_text(encoding="utf-8")
+        )
         expected = str(metadata["content_sha256"])
         if mesh_text_sha256(msh_text) != expected:
             return None
@@ -1763,7 +1795,7 @@ def _ingest_bundle(
             try:
                 chosen = mesh_for(
                     mirrored_options,
-                    include_viewport=viewport_for(mirrored_options)[5] is None and not defer_viewport,
+                    include_viewport=not defer_viewport and viewport_for(mirrored_options)[5] is None,
                 )
             except IngestRefusal as exc:
                 if plan.strict:
@@ -2537,35 +2569,75 @@ def _fem_region_lookup_key(
     })).hexdigest()
 
 
+def _fem_meshing_fingerprint() -> str | None:
+    """A digest of WG's own code that turns a FEM region member into its mesh.
+
+    Region meshing lives in WG (``fem_regions``, run by the child's
+    ``_task_fem_region``), not in the mesher, and no hand-kept version string
+    has ever tracked it. So the cache index is keyed by the code itself: any
+    edit to it is a miss, which costs at most the rebuild every ingest made
+    before the index existed. None when the source cannot be read (a build
+    without sources), and then nothing is served from the index.
+    """
+
+    import inspect
+
+    from server.cadlink.intake import child_main
+    from server.mesh import fem_regions, imported
+
+    try:
+        sources = [
+            inspect.getsource(fem_regions),
+            inspect.getsource(child_main._task_fem_region),
+            inspect.getsource(imported.apply_rigid_normalisation),
+        ]
+    except (OSError, TypeError):
+        return None
+    return "sha256:" + hashlib.sha256("\0".join(sources).encode("utf-8")).hexdigest()
+
+
+def _fem_region_index_path(imports_root: Path, lookup_key: str) -> Path | None:
+    """Where a region mesh's cache index lives, or None when it may not be served.
+
+    The record's ``mesh_lookup_key`` names the artifact and stays exactly what
+    it was. The index is keyed by more: everything else a region mesh depends
+    on -- gmsh, the mesher package, and WG's own region meshing code -- so a
+    change to any of them is a miss, never an old mesh served for new code.
+    """
+
+    fingerprint = _fem_meshing_fingerprint()
+    if fingerprint is None:
+        return None
+    index_key = hashlib.sha256(_canonical({
+        "pipeline_contract": "wg-import-fem-index-v1",
+        "lookup_key": lookup_key,
+        "gmsh_version": _package_version("gmsh"),
+        "mesher_version": _package_version("hornlab-waveguide-mesher"),
+        "fem_meshing": fingerprint,
+    })).hexdigest()
+    return imports_root / "meshes" / "index" / f"{index_key}.txt"
+
+
 def _cached_fem_region(
-    imports_root: Path, index_path: Path, region: Mapping[str, Any]
+    imports_root: Path, index_path: Path, lookup_key: str, region: Mapping[str, Any]
 ) -> dict[str, Any] | None:
     """A region mesh this index names, when its bytes still are what it was named for.
 
-    The index is a shortcut, not evidence, exactly as for the exterior mesh: the
-    artifact's own name must be reproduced from the index's lookup key and the
-    digest of the bytes read back, and the sidecar must name the same digest.
-    Read as bytes, since it was written as exact bytes.
+    The index is a shortcut, not evidence, exactly as for the exterior mesh:
+    the artifact's own name must be reproduced from the record's lookup key and
+    the digest of the bytes read back.
     """
 
     key = _read_cas_index(index_path)
     if key is None:
         return None
     path = imports_root / "meshes" / key / "fem" / f"region-{region['region_id']}.msh"
-    try:
-        metadata = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
-        msh_text = path.read_bytes().decode("utf-8")
-    except (OSError, ValueError):
+    built = _load_cached_mesh(path, path.with_suffix(".json"), exact_bytes=True)
+    if built is None or hashlib.sha256(
+        _canonical({"lookup_key": lookup_key, "sha256": built["content_sha256"]})
+    ).hexdigest() != key:
         return None
-    digest = mesh_text_sha256(msh_text)
-    lookup_key = index_path.name.removesuffix(".txt")
-    if (
-        not isinstance(metadata, dict)
-        or metadata.get("content_sha256") != digest
-        or hashlib.sha256(_canonical({"lookup_key": lookup_key, "sha256": digest})).hexdigest() != key
-    ):
-        return None
-    return {**metadata, "msh_text": msh_text}
+    return built
 
 
 def _mesh_fem_regions(
@@ -2600,13 +2672,15 @@ def _mesh_fem_regions(
         # A region meshed on its own is named by its inputs alone, so its
         # cached artifact is found before any child is started. (A coupled
         # region's name also binds the coupled mesh, built by the caller.)
-        cached_index = None if is_coupled else (
-            imports_root / "meshes" / "index" / f"{_fem_region_lookup_key(region, member, exterior)}.txt"
+        own_lookup_key = None if is_coupled else _fem_region_lookup_key(region, member, exterior)
+        cached_index = (
+            None if own_lookup_key is None
+            else _fem_region_index_path(imports_root, own_lookup_key)
         )
         try:
             built = (coupled or {}).get(region["region_id"])
             if built is None and cached_index is not None:
-                built = _cached_fem_region(imports_root, cached_index, region)
+                built = _cached_fem_region(imports_root, cached_index, own_lookup_key, region)
             cache_hit = built is not None and not is_coupled
             if built is None:
                 built = build_fem_region_mesh_isolated(
