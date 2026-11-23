@@ -32,8 +32,10 @@ export function reportFusionDisplayDiagnostic(jobId: string, reason: string, err
 }
 
 type Intent = { sendAt?: number; navigation: number; edits: number; choice: number; document: ReturnType<typeof currentDocumentLoad> };
-/** Why a display stopped that are the person moving on: a finished solve is then offered, never imposed. */
-const MOVED_ON = new Set(['navigation', 'edited', 'document', 'model-choice']);
+/** Why an automatic display stands down. */
+type BlockReason = 'disposed' | 'inactive' | 'superseded' | 'newer-request' | 'navigation' | 'edited' | 'document' | 'model-choice';
+/** The reasons that are the person moving on: a finished solve is then offered, never imposed. */
+const MOVED_ON: ReadonlySet<BlockReason> = new Set<BlockReason>(['navigation', 'edited', 'document', 'model-choice']);
 const DISPLAY_FAILURE = 'WG could not show the Fusion model. It tries again when the request updates or when you return to CAD or Results.';
 
 /** Fusion Solve alone owns its request's model, from preparation through results.
@@ -151,7 +153,29 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
     && display.newestSendAt() <= (explicitIntent.sendAt ?? 0) && isCurrentDocumentLoad(explicitIntent.document)
     && useCadReturnStore.getState().isCurrentModelChoice(explicitIntent.choice);
 
+  /** A Fusion solve is bringing its own model to the screen: it entered CAD
+   * mode for that, so an automatic restore must not open another model. */
+  const ownsDisplay = () => {
+    if (disposed || !following || !following.current()) return false;
+    const id = following.id;
+    const job = latestJobs.find((item) => item.id === id);
+    return inFlight.has(id) || (!!job && isActiveJobStatus(job.status));
+  };
+  const ownershipListeners = new Set<() => void>();
+  let owned = false;
+  /** Tell restores when the claim ends (shown, superseded, failed or cancelled), so an empty view is filled again. */
+  const noteOwnership = () => {
+    const now = ownsDisplay();
+    if (now === owned) return;
+    owned = now;
+    if (!now) ownershipListeners.forEach((listener) => listener());
+  };
+
   async function observe(jobs: readonly JobItem[]): Promise<void> {
+    try { await follow(jobs); } finally { noteOwnership(); }
+  }
+
+  async function follow(jobs: readonly JobItem[]): Promise<void> {
     latestJobs = jobs;
     cancelObsoleteOpen();
     if (disposed) return;
@@ -193,7 +217,7 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
     newestSentAt = Math.max(newestSentAt, sentAt); newestId = job.id;
     display.onIntent();
     const intent = observed.get(job.id)!;
-    const blocked = (): string | null => disposed ? 'disposed' : !display.isActive() ? 'inactive'
+    const blocked = (): BlockReason | null => disposed ? 'disposed' : !display.isActive() ? 'inactive'
       : (explicit && generation !== showGeneration) || newestId !== job.id || (!explicit && !latestJobs.some((item) => item.id === job.id)) ? 'superseded'
       : (explicit ? display.newestSendAt() > (intent.sendAt ?? 0)
         : latestJobs.some((item) => Date.parse(item.created_at) > sentAt) || display.newestSendAt() > sentAt) ? 'newer-request'
@@ -202,14 +226,14 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
       : !isCurrentDocumentLoad(intent.document) ? 'document'
       : !useCadReturnStore.getState().isCurrentModelChoice(intent.choice) ? 'model-choice' : null;
     const current = () => blocked() === null;
+    const accepted = job.cad_state?.state === 'accepted' && job.run_number != null && !!job.cad_source?.ingest_id;
     if (!current()) {
       const reason = blocked()!;
       if (following?.id === job.id) following = null;
       diagnostic(job.id, reason);
       // The person chose something else meanwhile. Their screen stays theirs;
       // the finished solve waits one click away instead of being dropped.
-      if (MOVED_ON.has(reason) && job.status === 'complete' && job.has_results && job.run_number != null
-        && job.cad_state?.state === 'accepted') solveAttention.offerRun(job.id);
+      if (MOVED_ON.has(reason) && accepted && job.status === 'complete' && job.has_results) solveAttention.offerRun(job.id);
       return;
     }
     // Claimed before CAD mode is entered: entering it must not restore another model.
@@ -236,7 +260,6 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
         intent.choice = useCadReturnStore.getState().captureModelChoice();
       }
     }
-    const accepted = job.cad_state?.state === 'accepted' && job.run_number != null && !!job.cad_source?.ingest_id;
     const preparedId = accepted ? job.cad_source!.ingest_id : job.cad_state?.preparation?.ingest_id;
     if (!preparedId) return;
     const key = `${job.id}:${accepted ? 'run' : 'preparation'}:${preparedId}`;
@@ -352,13 +375,11 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   const stopShowRequest = jobsSocket.subscribeCadShowRequest((request) => { void showRequest(request); });
   return {
     latestSentAt: () => newestSentAt, observe, resume, showRequest,
-    /** A Fusion solve is bringing its own model to the screen: it entered CAD
-     * mode for that, so an automatic restore must not open another model. */
-    ownsDisplay: () => {
-      if (disposed || !following || !following.current()) return false;
-      const id = following.id;
-      const job = latestJobs.find((item) => item.id === id);
-      return inFlight.has(id) || (!!job && isActiveJobStatus(job.status));
+    ownsDisplay,
+    /** Called when the display claim ends; a restore may then fill an empty view. */
+    subscribeOwnership: (listener: () => void) => {
+      ownershipListeners.add(listener);
+      return () => { ownershipListeners.delete(listener); };
     },
     // Hold only returns that predate the show. A new Send must stay eligible
     // even when its receipt arrives before discovery sees the return.

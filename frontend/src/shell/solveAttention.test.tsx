@@ -255,6 +255,9 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     expect(host.querySelector('[data-attention="fusion-solve-offered"]')).not.toBeNull();
     act(() => compareSelection.setPrimary(run.id));
     expect(host.querySelector('[data-attention="fusion-solve-offered"]')).toBeNull();
+    // Seen is taken: selecting another run later does not bring the offer back.
+    act(() => compareSelection.setPrimary('another-run'));
+    expect(host.querySelector('[data-attention="fusion-solve-offered"]')).toBeNull();
     compareSelection.clear();
   });
 

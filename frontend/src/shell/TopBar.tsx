@@ -19,7 +19,6 @@ import { selectCadRequests, useCadRecoveryNotices } from '../stores/cadRecoveryN
 import { cadRequestsChipLabel } from '../stores/cadModelStatusLine';
 import type { FusionCadStatus } from '../api/cadlink';
 import { solveAttention, useFailedAction, useOfferedRun, useReadyRun } from './solveAttention';
-import { compareSelection } from '../api/results';
 import { noteExplicitNavigation } from './workspaceNavigation';
 import { useDesignStore, type DesignDocument, type DesignFamily } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -283,7 +282,6 @@ export function AttentionNotices() {
   const developerDetails = useDeveloperDetails();
   const readyRun = useReadyRun();
   const offeredRun = useOfferedRun();
-  const shownRun = useSyncExternalStore(compareSelection.subscribe, () => compareSelection.getSnapshot().primary);
   const failedAction = useFailedAction();
   const jobs = useJobsApartFromProgress();
   const model = useCadModelStateApartFromProgress();
@@ -313,8 +311,8 @@ export function AttentionNotices() {
   // for developers only: Fusion tells the user why it was refused.
   const showRefused = developerDetails && unseenRefusals > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('geometry'));
   const readyJob = readyRun ? jobs.find((job) => job.id === readyRun) ?? null : null;
-  // A Fusion solve finished while another model was chosen: offered until shown.
-  const offeredJob = offeredRun && offeredRun !== shownRun ? jobs.find((job) => job.id === offeredRun) ?? null : null;
+  // A Fusion solve finished after the person moved on: offered until shown.
+  const offeredJob = offeredRun ? jobs.find((job) => job.id === offeredRun) ?? null : null;
   const first = waiting[0]?.operation;
   const waitingLabel = !first && !Object.keys(notices).length ? ''
     : cadRequestsChipLabel(waiting.map(request => request.operation), { otherModels: onScreen });
@@ -350,7 +348,7 @@ export function AttentionNotices() {
       type="button"
       className="attention-notice attention-ready"
       data-attention="fusion-solve-offered"
-      title={`${runDisplayName(offeredJob)} finished in Fusion while you had another model open. Show it in the viewport and Results.`}
+      title={`${runDisplayName(offeredJob)} finished in Fusion. Show it in the viewport and Results.`}
       onClick={() => {
         solveAttention.dismissOffer(offeredJob.id);
         selectJob(offeredJob);

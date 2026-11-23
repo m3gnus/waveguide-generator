@@ -795,3 +795,32 @@ it('does not count an automatic restore as the person choosing a model', async (
   expect(compareSelection.getSnapshot().awaiting).toBe(run.id);
   expect(f.display.reportDiagnostic.mock.calls).toEqual([]);
 });
+
+it.each(['navigation', 'edited', 'document'] as const)('offers a Fusion solve finished after the person moved on (%s)', async (change) => {
+  const f = fixture(); await f.observe([preparing(null)]);
+  if (change === 'navigation') noteExplicitNavigation();
+  if (change === 'edited') useCadReturnStore.getState().setDriveVoltage(7);
+  if (change === 'document') resetDesignStore();
+  const run = { ...external(), run_number: 147 };
+  await f.observe([{ ...run, status: 'complete', has_results: true }]);
+  expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
+  expect(compareSelection.getSnapshot().awaiting).toBeNull();
+  expect(solveAttention.getOfferedRun()).toBe(run.id);
+});
+
+it.each(['error', 'cancelled'] as const)('releases the view to the last-model restore when the Fusion solve ends %s before showing anything', async (status) => {
+  const activate = vi.fn((_panel: string) => true); disposers.push(bindWorkspaceNavigation(activate));
+  resetImportedModelStore(); workspaceModeStore.setMode('parametric');
+  rememberLastModel({ model_id: 'wgl_earlier', input: 'cad' });
+  const f = fixture(); const reads = earlierModelReads();
+  disposers.push(observeLastModel({ fetcher: reads, displayClaimed: f.ownsDisplay, subscribeDisplayClaim: f.subscribeOwnership }));
+  const request = preparing(null);
+  await f.observe([request]);
+  expect(f.ownsDisplay()).toBe(true);
+  expect(modelReads(reads)).toBe(0);
+  await f.observe([{ ...request, status, cad_state: { ...request.cad_state!, state: status === 'error' ? 'rejected' : 'cancelled' } }]);
+  expect(f.ownsDisplay()).toBe(false);
+  await vi.waitFor(() => expect(useImportedModelStore.getState()).toMatchObject({ phase: 'ready', modelId: 'wgl_earlier' }));
+  // The restore is automatic: Results, which shows why the solve ended, stays in front.
+  expect(activate.mock.calls.map(([panel]) => panel)).toEqual(['results']);
+});

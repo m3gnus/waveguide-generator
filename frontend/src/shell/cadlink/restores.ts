@@ -106,7 +106,10 @@ export const cadImportedView: ImportedView = {
     const job = source.kind === 'run' || source.kind === 'cad-preparation' ? source.job : null;
     const displayName = job ? job.cad_source?.document_name || job.cad_state?.snapshot?.document_name || job.label || 'the Fusion model' : 'this model';
     const from = job?.run_number != null ? ` from run #${job.run_number}` : '';
-    const enter = display.enterCadWorkspace ?? enterCadWorkspace;
+    // An automatic open keeps the panel on screen (a Fusion solve may have
+    // fronted Results); only a person's open brings the CAD rail forward.
+    const enter = display.enterCadWorkspace
+      ?? (display.automatic ? () => workspaceModeStore.setMode('cad') : enterCadWorkspace);
     const reportStatus = display.reportStatus ?? (() => undefined);
     const reportViewportNotice = display.reportViewportNotice ?? (() => undefined);
     const showIngestedMesh = display.showIngestedMesh ?? showIngestedMeshInViewport;
@@ -258,7 +261,7 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
 export function observeLastModel({
   reportStatus = () => undefined, reportError = () => undefined, fetcher = fetch, selectBundle,
   refusedForeignReturn = { current: false }, jobLinkPending = () => false, displayClaimed = () => false,
-  settings = durableSettings, restorePending = { current: false }, onSettled = () => undefined,
+  subscribeDisplayClaim = () => () => undefined, settings = durableSettings, restorePending = { current: false }, onSettled = () => undefined,
 }: {
   reportStatus?(message: string): void;
   reportError?(message: string): void;
@@ -269,6 +272,8 @@ export function observeLastModel({
   jobLinkPending?(): boolean;
   /** Another owner is bringing its own model to the view (a Fusion solve). */
   displayClaimed?(): boolean;
+  /** Notifies when that claim ends without the view being filled (failed, cancelled, superseded). */
+  subscribeDisplayClaim?(listener: () => void): () => void;
   /** Where a late-hydrated pointer is announced; the shared instance unless a test brings its own. */
   settings?: Pick<typeof durableSettings, 'subscribe'>;
   /** Discovery waits for this attempt, then retries an initial choice if still empty. */
@@ -344,6 +349,7 @@ export function observeLastModel({
   attempt();
   const stops = [
     workspaceModeStore.subscribe(attempt),
+    subscribeDisplayClaim(attempt),
     ...(['lastModel', 'meshImport', 'cadProject'] as const).map((namespace) => settings.subscribe(namespace, attempt)),
   ];
   return () => { active = false; stops.forEach((stop) => stop()); };

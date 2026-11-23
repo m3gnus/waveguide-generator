@@ -5,6 +5,7 @@ import type { CadOperationSummary } from '../api/cadOperations';
 import { isPendingCadOperation, operationNeedsUser } from '../api/cadOperations';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { navigationGeneration, workspaceNavigation } from './workspaceNavigation';
+import { compareSelection } from '../api/results';
 
 /**
  * When a solve's outcome may move the dock, and when it may only say so.
@@ -60,6 +61,15 @@ function setReadyRun(jobId: string | null): void {
   readyRun = jobId;
   emit();
 }
+
+// An offered run shown by any route (the run list, the palette, the chip) has
+// been taken: it is not offered again when the person later selects another.
+compareSelection.subscribe(() => {
+  if (offeredRun !== null && compareSelection.getSnapshot().primary === offeredRun) {
+    offeredRun = null;
+    emit();
+  }
+});
 
 // Seeing Results by any route answers "where did my solve go?".
 workspaceNavigation.subscribe(() => {
@@ -166,6 +176,7 @@ export const solveAttention = {
   offerRun(jobId: string): void {
     if (offeredRuns.has(jobId)) return;
     offeredRuns.add(jobId);
+    if (compareSelection.getSnapshot().primary === jobId) return;
     offeredRun = jobId;
     emit();
   },

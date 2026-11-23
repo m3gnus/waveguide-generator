@@ -351,7 +351,7 @@ export function mountCadWorkspaceOwners(): () => void {
     observeFileDriverBaseRefresh(),
     observeLastModel({ reportStatus, reportError, refusedForeignReturn, selectBundle: (bundle, project) => selectBundle(bundle, project, true),
       jobLinkPending: () => jobIdFromLink(window.location.search) !== null,
-      displayClaimed: fusionSolves.ownsDisplay,
+      displayClaimed: fusionSolves.ownsDisplay, subscribeDisplayClaim: fusionSolves.subscribeOwnership,
       restorePending: lastModelRestorePending, onSettled: refreshOwedInitialChoice }),
     jobsSocket.subscribe(followFusionSolve), () => fusionSolves.dispose(),
     jobsSocket.subscribe(settleModels), solvedCadModels.subscribe(settleModels),
