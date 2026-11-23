@@ -90,10 +90,14 @@ def test_solve_mesh_is_recentred_in_every_domain(quadrants: int) -> None:
 
 
 @pytest.mark.parametrize("quadrants", [1, 12, 14, 1234])
-def test_keep_placement_hands_the_cad_boundary_the_scaled_offset(quadrants: int) -> None:
-    config = _solver_mesher_config(_placed_design(quadrants), keep_placement=True)
-    assert config["mesh"]["quadrants"] == quadrants
-    assert config["mesh"]["verticalOffset"] == 60.0
+def test_the_cad_boundary_is_recentred_like_the_solve(quadrants: int) -> None:
+    """The CAD outputs keep the throat centre at the origin (23 Nov 2026)."""
+
+    from server.exports.cad_geometry import cad_mesher_config
+
+    config = cad_mesher_config(_placed_design(quadrants))
+    assert config["mesh"]["quadrants"] == "1234"
+    assert config["mesh"]["verticalOffset"] == 0.0
 
 
 def test_a_non_scalar_placement_is_refused_whatever_the_domain() -> None:

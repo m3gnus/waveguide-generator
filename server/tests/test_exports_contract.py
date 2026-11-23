@@ -280,23 +280,27 @@ _STEP_SOLID_STUB = (
 )
 
 
-def test_solid_step_carries_the_cad_placement_on_a_reduced_declared_domain(
+def test_solid_step_puts_the_throat_at_the_origin_on_a_reduced_declared_domain(
     monkeypatch,
 ) -> None:
-    """The solid STEP is a CAD boundary, so it keeps mesh.vertical_offset.
+    """The solid STEP has its throat centre at the origin, as Send to CAD has.
 
-    The solve mesh is always recentred; the CAD geometry (``cad_geometry``)
-    reopens a reduced domain and keeps the placement. An ATH-imported design
-    declaring ``Mesh.Quadrants = 1`` used to export an unplaced solid while the
-    same design's wglink bundle shipped placed.
+    Intentional change (23 Nov 2026): the CAD geometry used to keep
+    mesh.vertical_offset, so an 80 mm offset design put its throat 80 mm above
+    the Fusion document origin and the return path had to undo it. Now both
+    CAD outputs share the solve's frame, and a CAD program places the part.
+    The CAD geometry (``cad_geometry``) still reopens a reduced domain: an
+    ATH-imported design declaring ``Mesh.Quadrants = 1`` exports a full part.
     """
 
     import hornlab_mesher.cad as mesher_cad
 
     captured: list = []
+    frames: list = []
 
-    def fake_write(geometry, path):
+    def fake_write(geometry, path, *, link_frame=False):
         captured.append(geometry)
+        frames.append(link_frame)
         Path(path).write_text(_STEP_SOLID_STUB, encoding="utf-8")
         return path, _step_result().cad_info
 
@@ -316,9 +320,14 @@ def test_solid_step_carries_the_cad_placement_on_a_reduced_declared_domain(
     assert len(captured) == 1
     # A part is never a quarter of itself, whatever domain the solve declares.
     assert captured[0].closed
-    # The design value through the global Scale, exactly as the CAD-link bundle
-    # and the Onshape datums place it.
-    assert captured[0].vertical_offset_mm == 60.0
+    # The design keeps its 60 mm (30 through Scale 2); the part does not.
+    assert design.root.mesh.vertical_offset.value == 30
+    assert captured[0].vertical_offset_mm == 0.0
+    throat = np.asarray(captured[0].inner_points)[:, 0, :]
+    np.testing.assert_allclose(throat.mean(axis=0), [0.0, 0.0, 0.0], atol=1e-9)
+    # Written in the WGLink bundle's frame, so a throat off z = 0 (an ATH
+    # slot) lands where the body Fusion lofts does.
+    assert frames == [True]
 
 
 def _header_positions(step_text: str) -> list[int]:

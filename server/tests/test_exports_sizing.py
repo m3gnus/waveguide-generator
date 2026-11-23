@@ -404,7 +404,7 @@ def test_the_solid_step_still_falls_back_rather_than_read_a_chord_as_a_fit() -> 
     )
     from server.mesh.builder import _solver_mesher_config
 
-    config = _solver_mesher_config(_rounded(), keep_placement=True)
+    config = _solver_mesher_config(_rounded())
     config["mesh"] = {
         **(config.get("mesh") or {}),
         "cornerSegments": EXPORT_CORNER_SEGMENTS,

@@ -22,7 +22,7 @@ from server.tests.test_exports_sizing import _seed
 
 
 def _config(**mesh: float) -> dict:
-    return _solver_mesher_config(_seed(**mesh), keep_placement=True)
+    return _solver_mesher_config(_seed(**mesh))
 
 
 def test_cad_sampling_is_the_same_whatever_the_solve_was_set_to() -> None:
@@ -198,7 +198,7 @@ def test_the_unverified_sampling_warning_reaches_the_export_result(
 
     written: list[object] = []
 
-    def write(geometry, path):
+    def write(geometry, path, **_kwargs):
         written.append(geometry)
         path.write_text("STEP transport checked separately by the STEP contract tests")
         return path, None

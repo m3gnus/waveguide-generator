@@ -70,7 +70,7 @@ def test_solid_step_planner_and_writer_keep_authored_mouth(monkeypatch):
         seen.append(_height(_grid(config)))
         return sizing.CadPlan(12, None)
 
-    def write(geometry, path):
+    def write(geometry, path, **_kwargs):
         seen.append(_height(np.asarray(geometry.inner_points)))
         path.write_text("STEP transport checked separately by the STEP contract tests")
         return path, None

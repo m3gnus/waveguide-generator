@@ -380,16 +380,14 @@ def _progress(
         progress_cb(stage, float(progress), message)
 
 
-def _solver_mesher_config(
-    design: DesignConfig, *, keep_placement: bool = False
-) -> dict[str, Any]:
+def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
     """Restore solver-domain controls hidden by preview translation.
 
     Preview always expands to 1234 quadrants; solve meshes preserve ATH's
     reduced-domain rules (v1 ``mesher_adapter.py:140-187,342-424``).
 
-    ``keep_placement`` is for the CAD exports only: they are the one consumer
-    that wants ``mesh.vertical_offset`` applied (see below).
+    ``mesh.vertical_offset`` is never applied (see below); the CAD exports
+    build from this config too, with the throat centre at the origin.
     """
 
     root = design.root
@@ -415,8 +413,7 @@ def _solver_mesher_config(
     from server.design.native import NATIVE_FORMULAS
 
     if root.formula in NATIVE_FORMULAS:
-        if not keep_placement:
-            config["mesh"]["vertical_offset_mm"] = 0.0
+        config["mesh"]["vertical_offset_mm"] = 0.0
         return config
     mesh = config.setdefault("mesh", {})
     quadrants, _ = _resolve_quadrants(design)
@@ -430,8 +427,9 @@ def _solver_mesher_config(
     # symmetry images only support mirror planes through the origin, which pins
     # a y-cut reduced mesh to y=0 forever.  A translation of the whole assembly
     # is acoustically inert (the observation frame is derived from the solved
-    # mesh), so nothing is lost: the placement is applied only at the CAD
-    # boundary, by the solid STEP and the CAD-link exports.
+    # mesh), so nothing is lost. The CAD exports (solid STEP, Send to CAD) do
+    # not apply it either: their throat centre is the CAD origin, and a CAD
+    # program places the part itself (``server/exports/cad_geometry.py``).
     #
     # A ground plane is a SECOND, unrelated placement and the sentence above
     # does not cover it. It is applied inside the adapter, after this function,
@@ -441,8 +439,7 @@ def _solver_mesher_config(
     # on the translated mesh, which is one of the two reasons a grounded solve
     # retains none (server/solver/bempp.py).
     _strict_scalar(root.mesh.vertical_offset, 0.0, "mesh.vertical_offset")
-    if not keep_placement:
-        mesh["verticalOffset"] = 0.0
+    mesh["verticalOffset"] = 0.0
 
     # No sharp-edge fallback here.  V1 flattened the enclosure roundover to zero
     # on any reduced domain whose edge radius reached its smallest margin

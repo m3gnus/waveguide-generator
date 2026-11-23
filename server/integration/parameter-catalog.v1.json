@@ -6093,7 +6093,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Shifts the exported design vertically, for placing a horn off-centre on its baffle. It applies only to the solid STEP and Send to CAD exports. The viewport, the solver mesh, every acoustic result and the recentred exports (STL, surface STEP, profile CSV) are all built in the recentred frame, so simulation results never depend on it."
+      "description": "Kept with the design and written to ATH config files, where it places the horn off-centre on its baffle. Waveguide Generator applies it to no export: the solid STEP, Send to CAD and every other export put the throat centre at the origin, so a CAD program places the horn itself. The viewport, the solver mesh and every acoustic result are built at the origin too, so simulation results never depend on it."
     },
     {
       "id": "mesh.wall_thickness",

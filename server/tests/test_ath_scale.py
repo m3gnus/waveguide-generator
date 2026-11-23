@@ -13,6 +13,7 @@ from hornlab_mesher.profile_sampling import build_point_grid_arrays
 
 from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import parse, serialize
+from server.exports.cad_geometry import cad_mesher_config
 from server.exports.core import _bare_grid_config
 from server.exports.geometry_identity import geometry_hash, geometry_hash_for_design, mesher_version
 from server.mesh.builder import _solver_mesher_config
@@ -61,15 +62,15 @@ def test_scaled_implicit_morph_matches_direct_import_through_geometry_paths(sour
         solve_reference = {**preview_reference, 'mesh': {
             **preview_reference['mesh'], 'quadrants': solve['mesh']['quadrants']}}
         _assert_arrays(_arrays(solve), _arrays(solve_reference))
-        placed = _solver_mesher_config(design, keep_placement=True)
-        assert float(placed['mesh'].get('verticalOffset', 0)) == float(direct['mesh'].get('verticalOffset', 0))
+        assert float(cad_mesher_config(design)['mesh'].get('verticalOffset', 0)) == 0.0
 
         exported = _bare_grid_config(design, profile_sampling=True)
         export_reference = {**preview_reference, 'mode': 'bare', 'mesh': {
             **preview_reference['mesh'], 'wallThickness': 0, 'scaleToMetres': False}}
         _assert_arrays(_arrays(exported), _arrays(export_reference))
 
-    # WGLink freshness uses the same placed geometry as the outbound export.
+    # WGLink freshness hashes the design's own (placed) geometry, not the CAD
+    # output, which has its throat at the origin.
     # Zero-wall probe files request inner-only geometry at the WG boundary.
     if float(direct['mesh'].get('wallThickness', 5)) == 0:
         direct['mode'] = 'bare'

@@ -54,7 +54,7 @@ def test_the_written_geometry_is_the_planners_accepted_probe(tmp_path) -> None:
     assert normalize_step(new_text) == normalize_step(old_text)
 
 
-def test_cad_geometry_is_the_full_placed_model_with_export_corners() -> None:
+def test_cad_geometry_is_the_full_throat_centred_model_with_export_corners() -> None:
     from server.exports.sizing import EXPORT_CORNER_SEGMENTS
     from server.design.schema import DesignConfig
 
@@ -65,11 +65,15 @@ def test_cad_geometry_is_the_full_placed_model_with_export_corners() -> None:
     assert config["mesh"]["quadrants"] == "1234"
     assert "quadrants" not in config
     assert config["mesh"]["cornerSegments"] == EXPORT_CORNER_SEGMENTS
-    assert config["mesh"]["verticalOffset"] == 12.0
+    # Intentional (23 Nov 2026): no CAD output applies mesh.vertical_offset;
+    # the throat centre is the CAD origin, as it is the solve's.
+    assert config["mesh"]["verticalOffset"] == 0.0
 
     cad = resolve_cad_geometry(design)
     assert cad.resolved.geometry.closed
-    assert cad.resolved.geometry.vertical_offset_mm == 12.0
+    assert cad.resolved.geometry.vertical_offset_mm == 0.0
+    throat = np.asarray(cad.resolved.geometry.inner_points)[:, 0, :]
+    np.testing.assert_allclose(throat.mean(axis=0), [0.0, 0.0, 0.0], atol=1e-9)
 
 
 @pytest.mark.parametrize("mesh", [{}, {"mouth_resolution": 3, "throat_resolution": 1.5}])

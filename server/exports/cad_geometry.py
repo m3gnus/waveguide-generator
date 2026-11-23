@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class CadGeometry:
     """The resolved geometry every CAD output writes, and the plan that sized it."""
 
-    #: The mesher's ``ResolvedGeometry``: full model, placed, CAD-sampled.
+    #: The mesher's ``ResolvedGeometry``: full model, throat at the origin, CAD-sampled.
     resolved: Any
     plan: CadPlan
     #: What determines the geometry: the planned config and the mesher. Two
@@ -61,7 +61,7 @@ _STRICT_SCALAR = re.compile(r"^(\S+) must be a finite scalar expression$")
 
 
 def _cad_base_config(design: DesignConfig) -> dict[str, Any]:
-    """``_solver_mesher_config`` with placement, its refusals told as a CAD fix.
+    """``_solver_mesher_config``, its refusals told as a CAD fix.
 
     Its plain ``ValueError`` refusals speak of the solver; a CAD export or send
     is refused with the control to change and how.
@@ -70,7 +70,7 @@ def _cad_base_config(design: DesignConfig) -> dict[str, Any]:
     from hornlab_mesher.errors import UserRefusal, numeric_refusal
 
     try:
-        return _solver_mesher_config(design, keep_placement=True)
+        return _solver_mesher_config(design)
     except UserRefusal:
         raise
     except ValueError as exc:
@@ -98,10 +98,12 @@ def cad_mesher_config(design: DesignConfig) -> dict[str, Any]:
       be a quarter of itself. The planner measures this same full config, so
       the geometry it accepted is the geometry written (the mesher's
       ``write_step_from_config`` reopens the domain the same way).
-    * The placement. ``mesh.vertical_offset`` is applied only at the CAD
-      boundary (``_solver_mesher_config``), and every CAD output carries it,
-      so an ATH import declaring Mesh.Quadrants = 1 or 12 still exports a
-      placed solid.
+    * No placement. The throat centre is the CAD origin, as it is the solve's:
+      ``mesh.vertical_offset`` stays with the design (and its ATH config) but
+      moves no CAD output. A CAD program places the part itself -- Fusion
+      records that as the link's occurrence transform, which the return leg
+      inverts -- so the Fusion document origin is the throat of an unmoved
+      link, and File -> STEP writes the same part.
     * Export corner arcs, set before sampling is chosen, so the planner
       measures the arcs that will be written rather than the design's own
       count.
@@ -214,7 +216,9 @@ def write_cad_step(cad: CadGeometry, path: Path) -> CadInfo:
     # safe as well: contract tests and maintenance tools call it directly,
     # allowing the pinned mesher to own a native session.
     with _preserve_native_windows_path():
-        _, info = write_step(cad.resolved.geometry, path)
+        # The WGLink bundle's frame (throat centre at the origin), so this
+        # solid and the body Fusion lofts from a Send are one part.
+        _, info = write_step(cad.resolved.geometry, path, link_frame=True)
     return info
 
 

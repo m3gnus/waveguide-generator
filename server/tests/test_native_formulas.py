@@ -175,7 +175,6 @@ def test_native_preview_full_domain_and_solve_safety(formula: str) -> None:
         validate_symmetry_mode("quarter", resolution)
     config = _solver_mesher_config(design)
     assert config["mesh"]["vertical_offset_mm"] == 0
-    assert _solver_mesher_config(design, keep_placement=True)["mesh"]["vertical_offset_mm"] == 7
     guarded, warning, multiplier = _mesh_policy(design, config)
     assert multiplier == 1
     assert warning == 18000

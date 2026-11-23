@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 from fastapi import HTTPException
 
-from hornlab_mesher import read_wglink
+from hornlab_mesher import WGLINK_BUNDLE_VERSION, read_wglink
 import pytest
 
 from server.cadlink.identity import SaveIdentity, design_hash
@@ -197,7 +197,7 @@ def test_send_to_cad_lofts_the_grid_the_solid_step_writes(
     assert len(step_grids) == 1  # Send to CAD wrote no STEP
     assert sorted(path.name for path in bundle.iterdir()) == ["point-grid.json", "wglink.json"]
     manifest = read_wglink(bundle)
-    assert manifest["wglink_version"] == "1.2"
+    assert manifest["wglink_version"] == WGLINK_BUNDLE_VERSION
     assert manifest["body"]["file"] == "point-grid.json"
     grid_bytes = (bundle / "point-grid.json").read_bytes()
     assert row["artifactSha256"] == "sha256:" + hashlib.sha256(grid_bytes).hexdigest()
@@ -205,18 +205,66 @@ def test_send_to_cad_lofts_the_grid_the_solid_step_writes(
     # recomputes exactly this.
     assert row["geometryHash"] == geometry_hash_for_design(design)
 
-    # The grid ships placed (link-local frame); the STEP writer places the
-    # same points itself.
-    placement = np.asarray([0.0, 7.5, 0.0])
+    # Fusion lofts the very points the STEP writer builds, with the throat
+    # centre at the origin: the design's 7.5 mm vertical offset moves neither.
     lofted = np.asarray(json.loads(grid_bytes)["inner_points"])
-    np.testing.assert_array_equal(lofted, step_grids[0] + placement)
+    np.testing.assert_array_equal(lofted, step_grids[0])
     cad = resolve_cad_geometry(design)
-    np.testing.assert_array_equal(
-        lofted, np.asarray(cad.resolved.geometry.inner_points) + placement
-    )
+    np.testing.assert_array_equal(lofted, np.asarray(cad.resolved.geometry.inner_points))
+    np.testing.assert_allclose(lofted[:, 0, :].mean(axis=0), [0.0, 0.0, 0.0], atol=1e-9)
     assert manifest["cad_sampling"] == cad.sampling_record()
     assert manifest["cad_sampling"]["warning"] is None
     assert "warning" not in row
+
+
+def test_an_ath_slot_throat_is_at_the_origin_in_both_cad_outputs(tmp_path: Path) -> None:
+    """ATH's Slot.Length puts the throat at z = Slot length; CAD puts it at 0.
+
+    Measured on the ATH V2026-09a slot witness: the design's throat ring sits
+    at z = 12 mm in the solve, preview and stored geometry. Fusion lofts the
+    bundle's grid and File -> STEP writes the solid; both are in the link
+    frame, so the throat centre is the CAD origin and the two are one part.
+    """
+
+    import numpy as np
+
+    from server.design.textcfg import parse
+    from server.exports import core
+    from server.exports.cad_geometry import resolve_cad_geometry
+
+    design = parse(
+        "R-OSSE = {\n R = 150\n r0 = 12.7\n a0 = 10\n a = 50\n k = 1\n r = 0.4\n"
+        " b = 0.2\n m = 0.85\n q = 3.4\n}\nSlot.Length = 12\nMesh.WallThickness = 5\n"
+        "Mesh.VerticalOffset = 20\nABEC.SimType = 2\n"
+    ).design
+    stored = np.asarray(resolve_cad_geometry(design).resolved.geometry.inner_points)
+    assert stored[:, 0, 2].mean() == pytest.approx(12.0)
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    row = service.export_wglink_sync(
+        _request(_saved(store, design), design), store, workspace, "unified"
+    )
+    grid = json.loads((Path(row["bundlePath"]) / "point-grid.json").read_text())
+    lofted = np.asarray(grid["inner_points"])
+    np.testing.assert_allclose(lofted[:, 0, :].mean(axis=0), [0.0, 0.0, 0.0], atol=1e-9)
+    np.testing.assert_allclose(lofted, stored - [0.0, 0.0, 12.0], atol=1e-9)
+
+    # File -> STEP is the stored solid moved by the same -12 mm, nothing else:
+    # the 20 mm Mesh.VerticalOffset moves neither output.
+    from hornlab_mesher.cad import write_step
+    from server.mesh.gmsh_worker import _run_in_gmsh_session
+
+    solid = core._build_step_solid_sync(design.model_dump(mode="json"))
+    _, at_station = _run_in_gmsh_session(
+        write_step, resolve_cad_geometry(design).resolved.geometry, tmp_path / "station.step"
+    )
+    np.testing.assert_allclose(
+        np.asarray(solid.cad_info.bounding_box_mm),
+        np.asarray(at_station.bounding_box_mm) - [0.0, 0.0, 12.0],
+        atol=1e-6,
+    )
 
 
 def test_send_to_cad_checks_the_solid_builds_unless_this_child_built_it(
