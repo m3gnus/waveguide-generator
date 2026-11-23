@@ -83,7 +83,7 @@ The pinned source picks up explicit Send to CAD requests with coordination off,
 reports correlated outcomes, and creates a separate Design for a new Insert.
 Unconfirmed solve-setting edits survive refusal/retry until WG reports the saved
 setup. The add-in uses its existing atomic writer for that optional pending-edit
-record; history written by an add-in before 0.3.4 is not migrated into pending
+record; history written by an add-in before the ae201fe revision is not migrated into pending
 edits. Real Fusion acceptance of a pinned revision remains separate from
 source/package qualification.
 
