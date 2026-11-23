@@ -21,7 +21,12 @@ beforeAll(realSessionReady);
 const storage = namespaceStorage('sourceContourDraft');
 function validation(document: SourceDocument): SourceValidation { return { document, geometry_sha256: 'geometry', excitation_sha256: 'excitation', meridian: Object.fromEntries(document.contour.segments.map((p, i) => [p.id, document.contour.points.slice(i, i + 2).map((point) => [point.r_mm, point.z_mm])])) }; }
 
-describe('source editor interactions', () => {
+// These tests render the full editor with the real sketch solver under React's development build, and
+// each interaction advances fake timers (no real waiting). Alone they take 0.1-0.9 s of pure CPU, but the
+// full suite runs this file at 5-6x slower while other workers compete (101 s instead of 20 s), which
+// pushed the longest ones past vitest's 5 s default. Give the whole file a limit that holds under load.
+const LOADED_SUITE_TIMEOUT_MS = 30_000;
+describe('source editor interactions', { timeout: LOADED_SUITE_TIMEOUT_MS }, () => {
   let host: HTMLDivElement; let root: Root;
   beforeEach(() => {
     vi.useFakeTimers(); vi.clearAllMocks();
