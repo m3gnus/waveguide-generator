@@ -148,9 +148,10 @@ def _point_expression(
 
     if height and height_base != 0.0:
         if y_origin:
-            # ``enc_y0`` is already in the placed link-local frame; unlike an
-            # unplaced point-ring coordinate it already includes the vertical
-            # offset and must not receive it a second time.
+            # ``enc_y0`` is a position in the link-local frame (format 1.3:
+            # throat at the origin; earlier bundles: placed by the vertical
+            # offset, which it then already includes), so it is the origin
+            # term and never receives the offset again.
             local_y = y - y_origin_base
             y_expr = f"({y_origin} + {_scalar(local_y / height_base)} * {height})"
         else:

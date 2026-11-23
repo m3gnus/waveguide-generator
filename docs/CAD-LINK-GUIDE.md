@@ -65,7 +65,14 @@ missing **Run on Startup**; fix those in Fusion's add-in list.
    Fusion's normal tools. Keep every surface the sound meets in the model.
 
 The add-in inserts native Fusion features with throat and mouth sketches and
-datums. Build your features from these references where you can, and move or
+datums, all in one timeline group. The throat centre is the inserted component's
+origin, and +Z is the horn axis, so until you move the component the throat sits
+at the document origin; the component's own origin planes are the throat plane
+and the mirror planes WG solves with. The baffle and back planes (or a
+freestanding horn's mouth plane) start hidden in the component's Construction
+folder. A link inserted before this (with Mesh.VerticalOffset applied) keeps its
+offset and its datums when it is updated; insert the design again to get the
+new frame. Build your features from these references where you can, and move or
 joint the whole inserted component, not the bodies inside it. If you change the
 waveguide in WG later, send it again: the add-in automatically updates the linked
 waveguide in Fusion. Then check your own features. Use **Advanced → Update**

@@ -18,7 +18,7 @@ exported per declared channel unless the user has selected a specific one.
 
 | Format | Current output |
 |---|---|
-| STEP solid | Full-domain manufacturable B-rep in millimetres, including available wall/enclosure material with an open throat. Throat centre at the origin, as in the solve and preview frames and the CAD-link bundle (Send to CAD): `mesh.vertical_offset` stays with the design but places no CAD output. A design without material may fall back to a surface body. |
+| STEP solid | Full-domain manufacturable B-rep in millimetres, including available wall/enclosure material with an open throat. Throat centre at the origin, as in the CAD-link bundle (Send to CAD): on the axis (x = y = 0) like the solve and preview frames, and at z = 0 where those keep the throat's own station (an ATH `Slot.Length` puts it at z = Slot length). `mesh.vertical_offset` stays with the design but places no CAD output. A design without material may fall back to a surface body. |
 | STEP inner surface | Full-domain ruled acoustic bore in millimetres. Exposed from the design menu for users who want to thicken/loft themselves. |
 | STL | Binary little-endian STL of physical-tag-1 horn-inner triangles from an authoritative Gmsh build on the export's own grid. Coordinates are millimetres with solver `(x, vertical, axial)` mapped to `(x, -vertical, axial)` and winding reversed to preserve the mesher's normal side. |
 | Fusion curves | Two semicolon-delimited CRLF CSVs, profiles and slices, headed in centimetres as `x_cm;y_cm;z_cm`; uses the bare uniform-ring inner surface without vertical offset. |
