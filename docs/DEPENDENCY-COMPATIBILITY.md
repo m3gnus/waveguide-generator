@@ -242,3 +242,8 @@ qualification is still required before enabling it.
 ## Send-to-CAD package pin
 
 WGLink `440a57402cebe6334b653d8e23b4d97f9d69ac88` reads bundle format 1.2 (no STEP), names a too-new model with the update remedy, and keeps sharp corner rays when it thins a grid to Fusion's 64-point ring. Add-in 0.3.4 at `b67b7d2` also reads 1.2 bundles. `b67b7d2` supplied the retry/discovery, Solid-tab dispatch and retained-receipt lifetime fixes. Its shared protocol is vendored from the exact committed bytes. The canonical fixture changes only its intentional pinned-file provenance hash; serializer cases are unchanged. The paired endpoint oracle retains its original WG capture, original add-in capture identity and every fixture digest while qualifying the new package. Open-in-Fusion and CADLink P2 consumer branches remain held.
+
+The vendored shared protocol was later refreshed from WGLink `986f177b8153eb3b15fdc73ea1c9a9b47abff6a4`
+(SHA-256 `4849eb302874d67daa989c30f9f103bb8d3feb3d21941d4cf6c979fc68d83857`), so WG's ingress
+counts an included body from a stale external link as degraded, as the add-in writer does. The
+package pin above is unchanged.
