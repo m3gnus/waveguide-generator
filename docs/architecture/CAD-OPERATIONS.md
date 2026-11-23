@@ -48,7 +48,7 @@ and exact-id return waiter on reconnect.
 - `joblane/` owns setup revisions, preparation inputs, job admission, delivery status and
   the request status files Fusion follows (`request_status.py`).
 - `fusion/` owns the WGLink file channel: delivery, heartbeat status, outcomes,
-  return requests, recovery notices and add-in pin reconciliation.
+  recovery notices and add-in pin reconciliation.
 
 `api.py` assembles the CAD Link routers at the top. `store.py` and `receipts.py`
 keep persistence; `identity.py` owns model identity. Root contracts remain in
@@ -79,10 +79,14 @@ from importing job admission shims. Subpackage initializers contain only a docst
 | --- | --- | --- | --- |
 | `receive_snapshot` | `{}` | `{bundle_path, manifest_sha256}` | No |
 | `prepare_and_solve` | `{}` | `{return_id, bundle_path, manifest_sha256}` | No |
-| `request_return` | `{document_id, design_id, instance_id, expected_baseline}` | `{}` | Yes |
+| `request_return` (retired) | `{document_id, design_id, instance_id, expected_baseline}` | `{}` | Yes |
 | `insert_link` | `{destination, export_id}` | `{}` | No; it always requests a new document |
 | `update_link` | `{document_id, design_id, instance_id, expected_baseline}` | `{export_id}` | Yes |
 
+- **`request_return` is retired.** It was Pull from WG: WG asking Fusion to export
+  its document back. WG no longer creates it; the user brings the model in with Send
+  to WG in Fusion. Rows an earlier WG stored stay readable, and startup cancels any
+  still unfinished with that remedy (see "Pull from WG retired").
 - **Fields.** Every field is a required string. All must be non-empty except
   `prepare_and_solve.return_id`, which a legacy single-slot solve marker may omit (the
   empty string).
@@ -246,7 +250,7 @@ for a Fusion request and for WG's own Prepare (`POST /api/cadlink/ingest`) alike
 | `ready_to_solve` | `needs_user_input` | Prepared (a press that asked to stop short of solving), and ready: the user's Solve starts it with the same prepared mesh. Never a question or a failure; kept by Clear failed |
 | `superseded` | `cancelled` | A newer unstarted update for the same exact link replaced this request |
 | `expired` | `cancelled` | An insert remained unclaimed for 30 minutes |
-| `session_changed` | `cancelled` | A return request named a Fusion session that is no longer current |
+| `session_changed` | `cancelled` | A return request (retired) named a Fusion session that is no longer current |
 | `publication_failed` | `cancelled` | The operation was stored but its request file could not be published |
 | `preflight_blocked` | `rejected` | The delivered return breaks a shared preflight rule (see "Preflight rules"): refused at admission, before preparation, in the rule's own words. The add-in never sends one |
 | `adapter_refused` | `rejected` | Fusion explicitly refused this exact request and no document evidence says it applied |
@@ -1038,8 +1042,8 @@ under `frontend/src/` unless they start with `server/`.
 | 2 | A refused Send, or one whose folder entry is gone, is said, never dropped | none | Receipt outcomes and persisted feedback in `stores/cadReceipts.ts`, `shell/cadlink/receiptDisplay.ts` | `receiptDisplay.test.ts :: reports %s distinctly and never opens the retained copy`; `test_cad_receipts.py :: test_http_projects_refused_missing_unreadable_and_retained_copy` |
 | 3 | Requests not about the model on screen sit under "Earlier requests (n)" | partial (solves are jobs; Fusion recovery is not) | `stores/cadRecoveryNotices.ts :: selectCadRequests`, `shell/CadOperationsSection.tsx` | `cadRequests.test.ts :: joins mixed jobs and notices in stable order and keeps only on-screen requests loud`; `CadOperationsSection.onScreen.test.tsx` |
 | 4 | Dismiss and Clear all act on the named requests once and never claim a repair | partial: solves use `POST /api/jobs/{id}/dismiss` | `stores/cadRecoveryNotices.ts :: createCadRequestActions`, job dismissal, `server/cadlink/fusion/recovery_api.py` | `cadRequests.test.ts :: Dismiss and Clear all share named requests once even if job binding changes meanwhile`; `test_cad_recovery_notices.py` durable dismissal tests |
-| 5 | An older listing, ingest, Send display or mesh load never replaces a newer selection or the selected CAD application | none (job fencing is not selection fencing) | `shell/cadlink/arrivals.ts`, `shell/cadlink/receiptDisplay.ts`, `shell/cadlink/artifactLoader.ts`, `stores/cadReturn.ts`, `viewport/importedMeshStore.ts` | `arrivals.test.ts` deferred success/error tests; `receiptDisplay.test.ts` selection fences; `artifactLoader.test.ts`; `CadWorkspaceOwners.test.ts` single-pull-owner and Onshape deferred listing/ingest/mesh tests |
-| 6 | After a reconnect, pending work reloads and missed outcomes of awaited requests are found | partial (solves: jobs) | `shell/cadObservation.ts` reloads jobs, the receipt feed and exact return/outbound outcomes; settled pull evidence remains available across recovery awaits; `stores/cadConnection.ts` holds reconnect feedback | `cadObservation.test.ts` disconnected completion, bounded retry, omitted exact outcomes and superseded reconnect tests; `returnWaiter.test.ts` exact outcomes and settled evidence; `CadWorkspaceOwners.test.ts` pull settlement during a delayed reconnect feed; `cadSetupPublisher.test.ts` visible recovery feedback |
+| 5 | An older listing, ingest, Send display or mesh load never replaces a newer selection or the selected CAD application | none (job fencing is not selection fencing) | `shell/cadlink/arrivals.ts`, `shell/cadlink/receiptDisplay.ts`, `shell/cadlink/artifactLoader.ts`, `stores/cadReturn.ts`, `viewport/importedMeshStore.ts` | `arrivals.test.ts` deferred success/error tests; `receiptDisplay.test.ts` selection fences; `artifactLoader.test.ts`; `CadWorkspaceOwners.test.ts` Onshape deferred listing/ingest/mesh tests |
+| 6 | After a reconnect, pending work reloads and missed outcomes of awaited requests are found | partial (solves: jobs) | `shell/cadObservation.ts` reloads jobs, the receipt feed and exact outbound outcomes; `stores/cadConnection.ts` holds reconnect feedback | `cadObservation.test.ts` disconnected completion, bounded retry, omitted exact outcomes and superseded reconnect tests; `cadSetupPublisher.test.ts` visible recovery feedback |
 | 7 | Sends accepted before the page connected, or during an outage, are discovered | none | `server/cadlink/intake/receipts_api.py`, cursor feed `stores/cadReceipts.ts` | `cadReceipts.test.ts` cursor paging, overlap, failed-page recovery and push/resync tests; `test_cad_receipts.py` |
 | 8 | A solve's job is claimed and its label advanced once, despite duplicates, reloads or a lost response; Fusion sees no refusal while admission is pending, including across restart | *job* | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` job/client-request-keyed claims; `server/cadlink/intake/solve_command.py` projects durable admission to the ACK | `JobsCoordinator.mutex.test.tsx`; `M1Acceptance.test.tsx :: makes no second job and no second result…`; `test_cad_job_cutover.py :: test_failed_admission_stays_unconfirmed_until_a_durable_decision`; `test_cad_inbox_restart.py :: test_restart_while_admission_is_pending_never_publishes_refusal` |
 | 9 | A pinned result stays until the new run has results; Results is revealed once, only if the user has not navigated | yes | `api/results.ts`, `shell/ResultsPanel.tsx`, `shell/solveAttention.ts` | `ResultsPanel.transition.test.tsx`, `solveAttention.test.tsx` |
@@ -1058,7 +1062,7 @@ under `frontend/src/` unless they start with `server/`.
 | 22 | A return for another project never replaces the parametric design or its undo history | none | `shell/cadlink/arrivals.ts`, `shell/cadlink/restores.ts`, `shell/cadlink/receiptDisplay.ts` design-identity fences | `arrivals.test.ts :: refuses a foreign arrival without replacing design or undo history`; `receiptDisplay.test.ts` foreign project and undo tests |
 | 23 | Imported mode reopens the last model of the input in use (`lastModel`: one durable pointer per input, migrated once from the saved mesh setup and remembered CAD project keys) through `openImported({kind:'model'})`, at start and when the person switches into an empty Imported view; once per pointer per session, never forcing the mode or the input, and standing down for a refused foreign return or a pending `?job=` link; a gone model (404, `model_not_found`, `prepared_unavailable`, 409, 422) clears its pointer at once, any other failure is shown once and clears it only after two starts in a row fail (offline starts do not count); a CAD model never solved shows its newest return on defaults, selected and ingested by the workspace owners | none | `stores/importedModel.ts` `reopenLastModel`, `stores/lastModel.ts`, `shell/cadlink/restores.ts` `observeLastModel` | `importedModel.test.ts` last model, `restores.test.ts` last-model reopen, `CadWorkspaceOwners.test.ts`, `meshImport.test.ts` pointer migration, `workspaceMode.test.ts` |
 | 24 | Opening an archived CAD run restores its ingest and setup; a late restore never overtakes a newer pick; prepared-mesh collection never removes the mesh a run names | `GET /api/runs/{id}/workspace` (model, prepared mesh, setup revision) | `stores/importedModel.ts` `openImported`, `shell/cadlink/restores.ts` CAD rail view, `stores/cadReturn.ts` archive fencing, `server/mesh/prepared_gc.py` | `restores.test.ts` standalone archived ingest/setup/sweep restore and newer-selection fences; `importedModel.test.ts`; `test_runs_workspace.py`; `test_prepared_gc.py :: test_each_keep_reason_keeps_its_mesh` |
-| 25 | "Bring in geometry" joins repeated pulls, waits for the correlated return, reports refusal or timeout; late returns after timeout remain discoverable | none (a correlation id, not a job) | `shell/cadlink/returnWaiter.ts`, exact file outcome reader/router `server/cadlink/fusion/fusion_return.py`; the waiter alone selects a pending correlated pull; Bring in and solve reports preparation/submission and clears stale status on failure | `returnWaiter.test.ts` correlation, joining, refusal, deadline, stalled batches and command cancellation; `CadWorkspaceOwners.test.ts` plain-pull and pull-and-solve ingestion, phase/error feedback and late-after-timeout discovery; `test_fusion_return.py :: test_production_cadlink_mount_exposes_exact_file_return_outcome` |
+| 25 | Retired: Pull from WG ("Bring in geometry"). Fusion changes come in only when the user presses Send to WG in Fusion; CAD Link says so in one line, and startup cancels an unfinished pull an earlier WG left | none | `shell/CadLinkPanel.tsx` line; `server/cadlink/fusion/fusion_outcomes.py :: retire_return_requests`; `server/cadlink/fusion/fusion_delivery.py` removes unstarted pull files at startup | `CadLinkPanel.test.tsx :: tells the user to send Fusion changes from Fusion, with no control that asks Fusion for them`; `test_cad_pull_retired.py`; `test_cad_fusion_markers.py :: test_startup_removes_unstarted_pull_requests_an_earlier_wg_left` |
 | 26 | Onshape returns stay ingestible with their own origin, without Fusion-folder polling | none | `shell/cadlink/arrivals.ts` origin-aware Onshape actions/readers, UI capability gate; `shell/CadWorkspaceOwners.tsx` gates Fusion receipt display and fences every deferred boundary | `arrivals.test.ts` Onshape origin/identity/instance fences; `CadWorkspaceOwners.test.ts` Onshape mount and deferred display isolation; `CadLinkPanel.test.tsx` Onshape choices and return display |
 | 27 | Retries and reloads keep one solve identity; a waiting solve for the snapshot is continued, not duplicated | *job* | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` client request id and `/solve-again` | `M1bSolveCard.test.tsx`; `JobsCoordinator.mutex.test.tsx` continuation and press-mutex tests |
 | 28 | The model's run status shows the latest request for its snapshot, never a previous run's outcome | *job* (`cad_state`) | `shell/CurrentModelStatus.tsx`, `shell/CadOperationsSection.tsx` job selector | `CadModelDetails.test.tsx :: never shows a previous run's outcome under a new request for the same snapshot` |
@@ -1088,30 +1092,11 @@ Menu-style callers catch `isOutboundSupersededError(error)`
 and return quietly before setting feedback; supersession is not an export failure
 or a null conflict result.
 
-Row 25 remains a deliberate file-transport command: `fusion/fusion_return.py` publishes
-on `fusion_delivery.RETURN_REQUESTS`, consumed by the add-in's
-`next_return_request`. **The existing `GET /api/cadlink/returns` listing is the
-authoritative geometry source**: a readable item with the exact `requestId`
-settles the waiter. S5-2's receipt feed projects received snapshots and cannot
-prove the outcome of a `request_return`. The narrow
-`GET /api/cadlink/return-requests/{request_id}` router in `fusion/fusion_return.py` reads
-bounded `.fusion-status.json` diagnostics by exact id and persists refusal or
-adapter completion in the existing request record. Adapter completion alone
-cannot settle geometry. `mount_cadlink`
-mounts this router. The waiter selects the pulled return and starts its preparation;
-Bring in and solve joins that same preparation. Automatic arrival discovery yields
-while a pull is pending and excludes its claimed correlation ids after settlement.
-The backend consumes the request inbox;
-Fusion consumes handoff/return request files and publishes `.fusion-status.json`.
-The standalone waiter joins presses even before publication finishes, owns its
-60-second deadline and active polling, exposes exact awaited ids plus `refresh`
-for reconnect recovery, and unsubscribes/stops on settlement or disposal. Each
-poll owns one listing/outcome pair and aborts stalled fetches before the next
-2.5-second poll; settlement also aborts outstanding reads. The model-choice token
-is rechecked immediately before publication and settlement, including archive
-restore intents that advance without notifying store subscribers. Manual
-model choices and document/identity/instance changes supersede the waiter once;
-background listing revisions, automatic arrivals and mesh settings do not.
+Row 25 is retired. WG no longer asks Fusion to export its document back (Pull from
+WG, `request_return`): the request route, its outcome router and the frontend waiter
+are gone. The user brings Fusion's model in with Send to WG in Fusion, which arrives
+through the request inbox like every other Send. The backend consumes the request
+inbox; Fusion consumes handoff request files and publishes `.fusion-status.json`.
 
 An accepted Send whose folder entry has gone is reported, not opened from the
 retained copy. This limit survives receipt display, including a fresh folder check
@@ -2150,8 +2135,7 @@ ships.
 
 - **WG refuses an older add-in.** The add-in reports its version in the heartbeat as
   `deliveryVersion`. A file heartbeat without it, or below 3, gives the status
-  `addin_outdated`, and WG reads nothing more from it. WG publishes no return request to
-  such an add-in (HTTP 409 with the remedy), and refuses its solve commands (see
+  `addin_outdated`, and WG reads nothing more from it. WG refuses its solve commands (see
   "Solve-command delivery"). The UI names the remedy, from what WG's startup did about
   the add-in (`addinRefresh`).
 - **WGLink refuses an older WG.** It needs WG to advertise version 3 in its capability
@@ -2203,8 +2187,9 @@ ships.
     marker alone never proves what Fusion loaded.
 - **What an older WG left is removed.** At every start WG removes the single slots
   `.fusion-return-request.json` and `.fusion-handoff.json`, their records
-  (`.legacy-slot.json`), and request files of another schema. No add-in this WG talks to
-  runs them.
+  (`.legacy-slot.json`), request files of another schema, and every unstarted file in
+  the retired `.fusion-return-requests` folder (see "Pull from WG retired"). No add-in
+  this WG talks to runs them, or WG no longer reads their results.
 - **A rollback** to a release before version 3 (v0.3.2, v0.3.3-rc.1) leaves the newer
   add-in in place: those releases do not manage WGLink. The add-in refuses that WG's
   requests and says so, and a solve command it writes waits untaken, with a notice (see
@@ -2252,8 +2237,8 @@ every start:
   before endpoint cleanup; a locked endpoint or a directory at that name logs
   a cleanup warning without preventing publication.
   `test_wglink_packaged_pair.py` checks the exact pinned writer, including an
-  exchange in a separate process for Send, Solve, acknowledgements, Insert/Update,
-  return requests and the file heartbeat.
+  exchange in a separate process for Send, Solve, acknowledgements, Insert/Update
+  and the file heartbeat.
 
 - **Reading it.** A reader ignores fields it does not know. A missing or unreadable file,
   a `schemaVersion` the reader does not know, or a value that is not an integer read as
@@ -2269,24 +2254,17 @@ every start:
 
 ## WG-produced Fusion requests
 
-WG asks Fusion for two kinds of work:
-
-- a **return request**: export the active document back to WG (`request_return`);
-- a **handoff**: open or update a completed export (`insert_link` or `update_link`).
+WG asks Fusion for one kind of work: a **handoff**, to open or update a completed
+export (`insert_link` or `update_link`). It no longer asks Fusion to export its
+document back (a return request, `request_return`; see "Pull from WG retired").
 
 Each request has a request ID that WG generates, and that ID is its operation ID. Each is
-one file under `<data dir>/ipc/wglink/`:
-
-| Request | File |
-| --- | --- |
-| Return request | `.fusion-return-requests/<requestId>.json` |
-| Handoff | `.fusion-handoffs/<requestId>.json` |
+one file under `<data dir>/ipc/wglink/`: `.fusion-handoffs/<requestId>.json`.
 
 WG commits the operation row before renaming the request file into place. A registry
 failure publishes no file. The complete hidden staged file is fsynced first; if the
-rename and its compensating cancellation both fail, startup finishes a staged
-return request only. Startup never publishes a handoff; its hidden staging is
-discarded and its operation row is left as it was. Otherwise a file-write failure cancels the newly created row as
+rename and its compensating cancellation both fail, startup never publishes it: its
+hidden staging is discarded and its operation row is left as it was. Otherwise a file-write failure cancels the newly created row as
 `publication_failed`, so no request is left waiting for a file that never existed.
 A recovered same-ID operation is never republished: its visible file or hidden Fusion
 claim, if any, already owns delivery, and a terminal operation must never run twice.
@@ -2300,9 +2278,6 @@ without handoff intent also reports `failed`, with reason `not_published`.
 
 - **Fields.** `schemaVersion: 3`, `target: "fusion360"`, `requestId`, `operationId`
   (equal to `requestId`), `deliverySequence`, and the request's own fields.
-  - A return request names `sessionId`, `designId`, `documentId`, `instanceId` and
-    `expectedReturnStateHash`. All are required; WG refuses to publish one without a
-    baseline.
   - A handoff names the bundle and its export identity. An update also names
     `expectedDocumentId`, `expectedInstanceId` and `expectedReturnStateHash`, all three
     or WG refuses it (HTTP 422, before anything is built). A handoff with no instance is
@@ -2316,8 +2291,7 @@ without handoff intent also reports `failed`, with reason `not_published`.
   `.tmp`, then renamed into place. A reader takes only `*.json` names that do not start
   with `.`. Every write retries a `PermissionError` briefly: on Windows a reader can hold
   the file open.
-- **What WG withdraws when it publishes.** Earlier return requests that name a different
-  session, because no add-in will run them; and an unstarted update of the same exact
+- **What WG withdraws when it publishes.** An unstarted update of the same exact
   link (see "Ordering"). Only a file still on disk under its own name is withdrawn: one
   the add-in has claimed has started.
   WG first renames a withdrawable file to a hidden holding name, records its durable
@@ -2349,10 +2323,9 @@ The additive heartbeat capability `diagnostics.activation.wgRequestPickup: 1`
 identifies this behavior; delivery version stays 3. WG distinguishes a command-mode
 last report without this flag (install the updated add-in and restart it) from a
 capable add-in that has not answered (finish the active command or start/restart
-the add-in). Version 0.3.3 reports continue to be read. Return requests remain
-unconsumed with coordination off. WG refuses its return-request route with the
-remedy **Use Send to WG in Fusion**; a closed Fusion first asks the user to open
-it. Fusion-originated Send still uses WG's inbox.
+the add-in). Version 0.3.3 reports continue to be read, as do heartbeats that
+still report automatic coordination. Fusion-originated Send uses WG's inbox; it is
+the only way Fusion's model comes into WG.
 
 **The add-in** handles each kind in this order:
 
@@ -2363,7 +2336,6 @@ it. Fusion-originated Send still uses WG's inbox.
    claim is retried on the next pass; on Windows that happens while WG reads the file.
 3. **Run it at most once** per request ID, in the order "Fusion-bound mutations" gives,
    then delete the claim, whatever the outcome.
-4. **A return request runs only in the session it names** (`sessionId`).
 
 **Legacy HTTP claims.** No new HTTP session or claim can be created.
 An older WG may have persisted `claim_json` with a `liveSessionId` and left the
@@ -2371,26 +2343,28 @@ operation `processing` or `cancel_requested` at `adapter-received`,
 `queued-for-fusion` or `executing`.
 After file evidence is checked, startup, status reads and explicit reconciliation
 settle those attempts once their last persisted progress is 30 minutes old.
-Insert/Update becomes `recovery_required`, never repeated; a return request is
-rejected with `adapter_failed` and an interrupted message; a user cancellation
-settles as `cancelled`. Recent live claims are untouched. Exact document evidence
+Insert/Update becomes `recovery_required`, never repeated; a user cancellation
+settles as `cancelled`. A retired return request is settled at startup instead (see
+"Pull from WG retired"). Recent live claims are untouched. Exact document evidence
 can still settle a mutation
 before or after the timeout. Recovery notices retain dismissal semantics.
 The lost-completion cancellation guarantee remains required after deletion of
-`test_cadlink_live_requests.py`; it is covered by
-`test_cad_file_transport.py::test_cancelled_legacy_return_with_lost_completion_settles_durably`.
+`test_cadlink_live_requests.py`; for the retired return request it is covered by
+`test_cad_pull_retired.py::test_unfinished_pull_is_cancelled_with_the_send_to_wg_remedy`.
 
-**File return claims.** After exact heartbeat outcomes are checked, status reads,
-startup, reconciliation and the exact return-outcome route reject a file-claimed
-return request whose last persisted progress is at least 30 minutes old and whose
-file evidence is gone. The result is `adapter_failed` with an interrupted message,
-or `cancelled` if the user cancelled it. WG never guesses success or repeats the
-export. A visible/staged/withdrawn request, a `.wglink-claim-` file, or a correlated
-export directory, reservation or staging path prevents settlement. The configured
-exchange folder must be available to check these fences. Insert/Update file claims
-continue to require document evidence. Coverage:
-`test_fusion_return.py::test_overwritten_last_request_file_return_settles_after_bound_and_restart`
-and `::test_file_return_timeout_preserves_every_progressing_path`.
+**Pull from WG retired.** WG no longer asks Fusion to export its document back:
+`POST /api/cadlink/request-fusion-return` and `GET /api/cadlink/return-requests/{id}`
+are gone, and so are the CAD Link buttons that used them. The user presses Send to
+WG in Fusion; CAD Link says so in one line when Fusion reports changes. At every
+start WG cancels each unfinished `request_return` row an earlier WG left (any state
+but `accepted`, `rejected` or `cancelled`) with the message "Pull from WG was
+retired. Use Send to WG in Fusion to bring the current model into WG." A dismissal
+the user already made stands as their own cancellation. A row that cannot be
+settled is logged and left; it never stops WG. Finished rows stay readable, and
+heartbeat outcomes for them are ignored. Startup also removes unstarted request
+files and WG's own staged files from `.fusion-return-requests`; an add-in's
+`.wglink-claim-` file there stays the add-in's. Coverage: `test_cad_pull_retired.py`
+and `test_cad_fusion_markers.py::test_startup_removes_unstarted_pull_requests_an_earlier_wg_left`.
 
 **Heartbeat outcome mapping.** Live document observations require a fresh heartbeat with
 `deliveryVersion >= 3` from `.fusion-status.json`: the one
@@ -2430,9 +2404,9 @@ summaries and show completion only after `fusionDelivery: applied`.
 | `recentOutcomes: recoveryRequired` (`_apply_pending_handoff`, `_sweep_leftover_claims`) | `recovery_required` for Insert/Update only |
 | `recentOutcomes: wgOutdated` (`_notice_outdated_wg`) | logged and ignored |
 | `recentOutcomes: notTaken` (`_pickup_check`, `_startup_pickup_check`) | ignored for Fusion-bound rows |
-| `lastRequest: refused` (`_apply_pending_return_request`, `_apply_pending_handoff`) | `rejected` / `adapter_refused`, unless document evidence already accepted it |
-| `lastRequest: applied` (`_apply_pending_return_request`, `_apply_pending_handoff`) | accepts a return request; a mutation still requires document evidence |
-| `recentOutcomes` or `lastRequest: failed` for a return request | `rejected` / `adapter_failed`, also at startup and status settlement without polling the return route |
+| `lastRequest: refused` (`_apply_pending_handoff`) | `rejected` / `adapter_refused`, unless document evidence already accepted it |
+| `lastRequest: applied` (`_apply_pending_handoff`) | ignored; a mutation requires document evidence |
+| any outcome on the `returnRequest` channel (an older add-in) | ignored: Pull from WG is retired, and startup cancels its rows |
 | `lastRequest: failed` for Insert/Update | awaits document evidence; an expired legacy HTTP claim becomes `recovery_required` |
 | `lastRequest: running` (`_begin_request`) | left `processing` |
 | `lastRequest: requested` (`_submit_to_wg`) | ignored for Fusion-bound rows |
