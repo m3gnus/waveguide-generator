@@ -386,6 +386,11 @@ class CadPreparationHost:
     #: The selected WGLink folder now, or None (it can change while WG runs).
     workspace_root: Callable[[], Path | None] = lambda: None
     ingest: Callable[..., dict[str, Any]] = ingest_bundle
+    #: Starts the display tessellation this preparation deferred
+    #: (``defer_viewport``), by preparation id. Called on the event loop once
+    #: the solve is queued, so the viewer finds it built while the solver runs
+    #: instead of waiting on it afterwards. Returns at once; never raises.
+    start_deferred_viewport: Callable[[str], None] = lambda _ingest_id: None
 
 
 BindOutcome = str
@@ -1315,6 +1320,12 @@ async def _bind(
     if outcome == BIND_STOPPED:
         raise _Fenced()
     logger.info("CAD job %s (operation %s): bound and queued.", run.job_id, run.intent.operation_id)
+    ingest_id = preparation.get("ingest_id")
+    if isinstance(ingest_id, str) and ingest_id:
+        try:
+            host.start_deferred_viewport(ingest_id)
+        except Exception:  # noqa: BLE001 - display fidelity only; the solve is queued
+            logger.warning("Could not start the display mesh of CAD job %s.", run.job_id, exc_info=True)
     return "bound"
 
 

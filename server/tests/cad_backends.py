@@ -297,6 +297,9 @@ class JobsHarness(Harness):
         self._ingest_override: Any = None
         self._approved: dict[str, tuple[str, tuple[str, ...]]] = {}
         self._events: list[dict[str, Any]] = []
+        #: Preparation ids whose deferred display mesh the lane started.
+        self.started_viewports: list[str] = []
+        self.start_viewport: Callable[[str], None] = self.started_viewports.append
         self._open()
 
     # -- the process --------------------------------------------------------------
@@ -342,6 +345,7 @@ class JobsHarness(Harness):
                 data_dir=self.data_dir,
                 workspace_root=lambda: self.workspace.resolve() if self.workspace.exists() else None,
                 ingest=lambda *args, **kwargs: (self._ingest_override or self.ingest)(*args, **kwargs),
+                start_deferred_viewport=lambda ingest_id: self.start_viewport(ingest_id),
             )
         )
         self.runtime = runtime

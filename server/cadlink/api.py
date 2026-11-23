@@ -320,6 +320,28 @@ def _schedule_deferred_viewport(
     _DEFERRED_VIEWPORTS[lookup_key] = _spawn_background(build())
 
 
+def _start_prepared_viewport(state: Any, ingest_id: str) -> None:
+    """Start a queued CAD solve's deferred display tessellation in the background.
+
+    Fusion Solve prepares with ``defer_viewport`` so the solve starts sooner;
+    this builds the display mesh while the solver runs, through the same
+    registry the viewport-mesh route joins, so a reader that arrives meanwhile
+    waits for this build rather than starting another, and a retiring backend
+    counts it (``background_work_in_flight``).
+    """
+
+    async def start() -> None:
+        record = await asyncio.to_thread(get_ingestion_record, state.cadlink_store, ingest_id)
+        if record is None:
+            return
+        runtime = getattr(state, "jobs_runtime", None)
+        _schedule_deferred_viewport(
+            current_viewport_record(record), Path(state.data_dir), getattr(runtime, "events", None)
+        )
+
+    _spawn_background(start())
+
+
 def _schedule_frame_suggestion(store: CadLinkStore, record: Mapping[str, Any]) -> None:
     """Survey an unlinked import for its solver frame without holding the response.
 
@@ -1866,6 +1888,7 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
             store=state.cadlink_store, data_dir=Path(state.data_dir),
             workspace_root=lambda: selected_workspace_root(state),
             ingest=lambda *args, **kwargs: ingest_bundle(*args, **kwargs),
+            start_deferred_viewport=lambda ingest_id: _start_prepared_viewport(state, ingest_id),
         ))
         state.cad_job_shims = True
         queue = runtime.events.subscribe()

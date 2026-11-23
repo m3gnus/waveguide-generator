@@ -1652,6 +1652,74 @@ def test_viewport_endpoint_answers_202_while_a_deferred_tessellation_is_building
     assert ready.body == b"visual"
 
 
+def test_a_queued_cad_solve_builds_its_display_mesh_before_the_viewer_asks(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """E6 (23 Nov): the viewer opened a Fusion solve's model and waited on 202s.
+
+    Binding the solve starts the deferred build in the background; a viewer
+    asking meanwhile joins that same build instead of starting another.
+    """
+    from server.cadlink import api
+
+    ingest_id = "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C"
+    lookup_key = "9" * 64
+    geometry_hash = "sha256:" + "8" * 64
+    record = {
+        "ingest_id": ingest_id,
+        "transformed_geometry_hash": geometry_hash,
+        "viewport_mesh": {
+            "available": False,
+            "pending": True,
+            "pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
+            "lookup_key": lookup_key,
+        },
+    }
+    monkeypatch.setattr(
+        api, "get_ingestion_record", lambda _store, wanted: record if wanted == ingest_id else None
+    )
+    release = threading.Event()
+    builds: list[str] = []
+
+    def build(built_record, data_dir):
+        builds.append(str(built_record["ingest_id"]))
+        assert release.wait(timeout=2)
+        _write_deferred_viewport_cas(Path(data_dir), lookup_key, "visual", geometry_hash)
+        return {"msh_text": "visual"}
+
+    monkeypatch.setattr(api, "build_deferred_viewport", build)
+    published: list[dict[str, object]] = []
+    state = SimpleNamespace(
+        cadlink_store=object(), data_dir=str(tmp_path),
+        jobs_runtime=SimpleNamespace(events=SimpleNamespace(publish=published.append)),
+    )
+    viewer = SimpleNamespace(app=SimpleNamespace(state=state))
+
+    async def run() -> None:
+        api._start_prepared_viewport(state, ingest_id)
+        # A preparation WG no longer has starts nothing.
+        api._start_prepared_viewport(state, "wgi_01J5A8QK3M9T2XVBH0RD7NWE6D")
+        for _ in range(200):
+            if lookup_key in api._DEFERRED_VIEWPORTS:
+                break
+            await asyncio.sleep(0.01)
+        task = api._DEFERRED_VIEWPORTS[lookup_key]
+        pending = await get_ingest_viewport_mesh(ingest_id, viewer)
+        assert pending.status_code == 202
+        assert api._DEFERRED_VIEWPORTS[lookup_key] is task
+        assert api.background_work_in_flight()
+        release.set()
+        await task
+        ready = await get_ingest_viewport_mesh(ingest_id, viewer)
+        assert ready.status_code == 200
+        assert ready.body == b"visual"
+
+    asyncio.run(run())
+
+    assert builds == [ingest_id]
+    assert published == [{"v": 1, "kind": "cadViewportReady", "ingestId": ingest_id}]
+
+
 def test_deferred_viewport_publishes_a_ready_event(monkeypatch, tmp_path: Path) -> None:
     from server.cadlink import api
 

@@ -211,6 +211,43 @@ def test_the_lane_uses_no_attempt_generation_and_writes_nothing_of_the_operation
     assert cad["snapshot"]["manifest_sha256"] == json.loads(before["inputs_json"])["manifest_sha256"]
 
 
+def test_a_bound_solve_starts_its_deferred_display_mesh_while_the_solver_runs(h: JobsHarness) -> None:
+    """Fusion Solve defers the display tessellation; the viewer must not wait on it after the solve."""
+
+    _received(h)
+    job_id = _accept_direct(h, setup_revision_id=_revision(h.store, _setup()))
+    _settle(h)
+
+    row = _row(h, job_id)
+    assert row["status"] == "queued"
+    assert h.started_viewports == [h.submitted[0].geometry.ingest_id]
+
+
+def test_a_held_preparation_starts_no_display_mesh(h: JobsHarness) -> None:
+    _received(h, sized=False)
+
+    h.prepare()
+
+    assert h.latest_job()["status"] == "held"
+    assert h.started_viewports == []
+
+
+def test_a_display_mesh_that_cannot_start_leaves_the_solve_queued(
+    h: JobsHarness, caplog: pytest.LogCaptureFixture
+) -> None:
+    def refuse(_ingest_id: str) -> None:
+        raise RuntimeError("no display mesh today")
+
+    h.start_viewport = refuse
+    _received(h)
+    job_id = _accept_direct(h, setup_revision_id=_revision(h.store, _setup()))
+    with caplog.at_level(logging.WARNING, logger="server.jobs.cad_preparation"):
+        _settle(h)
+
+    assert _row(h, job_id)["status"] == "queued"
+    assert "Could not start the display mesh" in caplog.text
+
+
 def test_a_lane_that_lost_its_job_commits_and_writes_nothing(h: JobsHarness) -> None:
     """A stop lands while the lane meshes: the mesher's record is not committed, and nothing follows."""
 
