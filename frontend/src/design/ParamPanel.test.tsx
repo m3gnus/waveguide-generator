@@ -1895,7 +1895,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('Mouth height');
     expect(host.textContent).toContain('Realized depth');
     expect(host.textContent).toContain('Wall thickness');
-    expect(host.textContent).toContain('Vertical offset');
+    expect(host.textContent).toContain('Link vertical offset (older links)');
     expect(host.textContent).toContain('Enclosure width');
     expect(host.textContent).toContain('Enclosure height');
     expect(host.textContent).toContain('Enclosure depth');

@@ -1710,7 +1710,7 @@
       "legacy_key": "mesh.vertical_offset",
       "path": "mesh.vertical_offset",
       "mirror_paths": [],
-      "label": "Export vertical offset",
+      "label": "Vertical offset (native STEP/STL)",
       "section": "Solve & export mesh",
       "symbol": null,
       "kind": "number",
@@ -1744,7 +1744,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Finished Y placement for native STEP and STL exports. Live preview and solve stay centred."
+      "description": "Finished Y placement for this native design's STEP and STL exports only. Live preview and solve stay centred."
     },
     {
       "id": "common.s1",
@@ -6067,7 +6067,7 @@
       "legacy_key": "verticalOffset",
       "path": "mesh.vertical_offset",
       "mirror_paths": [],
-      "label": "Export vertical offset",
+      "label": "Vertical offset (ATH config)",
       "section": "Solve & export mesh",
       "symbol": null,
       "kind": "number",
@@ -6093,7 +6093,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Kept with the design and written to ATH config files, where it places the horn off-centre on its baffle. Waveguide Generator applies it to no export: the solid STEP, Send to CAD and every other export put the throat centre at the origin, so a CAD program places the horn itself. The viewport, the solver mesh and every acoustic result are built at the origin too, so simulation results never depend on it."
+      "description": "Kept with the design and written to ATH config files, where it places the horn off-centre on its baffle. Send to CAD and File > STEP do not apply it: they put the throat centre at the origin, so a CAD program places the horn itself (only the Onshape send still applies it, so its documents do not move). The viewport, the solver mesh and every acoustic result never depend on it."
     },
     {
       "id": "mesh.wall_thickness",

@@ -707,7 +707,7 @@ const REALIZED_DIMENSION_LABELS: ReadonlyArray<{ suffix: string; label: string }
   { suffix: '_mouth_h', label: 'Mouth height' },
   { suffix: '_depth', label: 'Realized depth' },
   { suffix: '_wall_t', label: 'Wall thickness' },
-  { suffix: '_vertical_offset', label: 'Vertical offset' },
+  { suffix: '_vertical_offset', label: 'Link vertical offset (older links)' },
   { suffix: '_enc_w', label: 'Enclosure width' },
   { suffix: '_enc_h', label: 'Enclosure height' },
   { suffix: '_enc_depth', label: 'Enclosure depth' },
