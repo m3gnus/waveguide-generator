@@ -18,7 +18,7 @@ import zipfile
 import pytest
 
 from scripts import cadlink_evidence
-from server.cadlink.fusion.fusion_delivery import CAPABILITIES_FILENAME, RETURN_REQUESTS
+from server.cadlink.fusion.fusion_delivery import CAPABILITIES_FILENAME, HANDOFFS
 from server.cadlink.ipc import ipc_folder
 from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME
 from server.platform.paths import data_paths
@@ -218,7 +218,7 @@ def test_the_database_is_opened_read_only(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     db_path = _make_operations_db(
         data_dir,
-        [("op-1", "request_return", "accepted", "2026-09-15T09:00:00Z")],
+        [("op-1", "insert_link", "accepted", "2026-09-15T09:00:00Z")],
     )
     before = db_path.read_bytes()
     db_path.chmod(0o444)
@@ -262,7 +262,7 @@ def test_the_collector_asks_sqlite_for_a_read_only_connection(
     """
 
     data_dir = tmp_path / "data"
-    _make_operations_db(data_dir, [("op-1", "request_return", "accepted", "2026-09-15T09:00:00Z")])
+    _make_operations_db(data_dir, [("op-1", "insert_link", "accepted", "2026-09-15T09:00:00Z")])
 
     calls: list[tuple[str, bool]] = []
     real_connect = sqlite3.connect
@@ -286,7 +286,7 @@ def test_operation_id_filters_rows(tmp_path: Path) -> None:
     _make_operations_db(
         data_dir,
         [
-            ("op-1", "request_return", "accepted", "2026-09-15T09:00:00Z"),
+            ("op-1", "insert_link", "accepted", "2026-09-15T09:00:00Z"),
             ("op-2", "update_link", "processing", "2026-09-15T09:05:00Z"),
         ],
     )
@@ -304,7 +304,7 @@ def test_missing_files_are_reported_not_raised(tmp_path: Path) -> None:
 
     assert evidence["ipc"]["fusionStatus"]["present"] is False
     assert evidence["ipc"]["wgCapabilities"]["present"] is False
-    assert evidence["requestDirectories"]["returnRequests"]["present"] is False
+    assert "returnRequests" not in evidence["requestDirectories"]
     assert evidence["requestDirectories"]["handoffs"]["present"] is False
     assert evidence["operations"]["present"] is False
     assert evidence["operations"]["rows"] == []
@@ -337,13 +337,13 @@ def test_a_malformed_json_member_is_reported_not_raised(tmp_path: Path) -> None:
 
 def test_request_directory_listing_is_metadata_only(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
-    requests_dir = _ipc_folder(data_dir) / RETURN_REQUESTS.directory
+    requests_dir = _ipc_folder(data_dir) / HANDOFFS.directory
     requests_dir.mkdir(parents=True)
     secret_body = "this request body must never appear in the evidence zip"
     (requests_dir / "req-1.json").write_text(secret_body, encoding="utf-8")
 
     evidence = cadlink_evidence.collect_evidence(data_dir)
-    listing = evidence["requestDirectories"]["returnRequests"]
+    listing = evidence["requestDirectories"]["handoffs"]
     assert listing["present"] is True
     [entry] = listing["entries"]
     assert entry["name"] == "req-1.json"

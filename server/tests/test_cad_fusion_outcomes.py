@@ -370,9 +370,9 @@ def test_terminal_backlog_does_not_hide_an_unsettled_operation(tmp_path: Path) -
     _accept(store, operation_id="000-pending")
     for index in range(1001):
         operation_id = f"zzz-terminal-{index:04d}"
-        row = _accept(store, operation_id=operation_id, kind="request_return")
+        row = _accept(store, operation_id=operation_id)
         store.record_outcome(
-            operation_id, int(row["attempt_generation"]), "accepted"
+            operation_id, int(row["attempt_generation"]), "cancelled"
         )
 
     settle_from_heartbeat(

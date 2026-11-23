@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
 
-from fastapi import HTTPException
 import pytest
 
 from server.cadlink import api
@@ -195,35 +194,20 @@ def test_version_033_fresh_last_request_still_settles(monkeypatch, tmp_path):
     assert store.get_operation('update-1')['state'] == 'rejected'
 
 
-@pytest.mark.parametrize('age', [0, 60])
-def test_return_route_refuses_command_observation_with_send_remedy(monkeypatch, tmp_path, age):
-    _, state, _ = _state(tmp_path, monkeypatch)
-    _report(tmp_path, age=age)
-    monkeypatch.setattr(api, 'fusion_process_running', lambda: True)
-    monkeypatch.setattr(api, 'publish_return_request', lambda *_, **__: pytest.fail('must not publish'))
-    payload = api.FusionReturnRequest(designId='wgd_1', documentId='fusion:doc-1',
-                                      instanceId='instance-1', expectedReturnStateHash='sha256:x')
-    with pytest.raises(HTTPException) as raised:
-        asyncio.run(api.request_fusion_return(payload, SimpleNamespace(app=SimpleNamespace(state=state))))
-    assert raised.value.status_code == 409 and 'Use Send to WG in Fusion' in raised.value.detail
-
-
-@pytest.mark.parametrize('report', ['absent', 'continuous', 'command'])
-def test_closed_fusion_return_route_names_the_current_remedy(monkeypatch, tmp_path, report):
-    _, state, _ = _state(tmp_path, monkeypatch)
-    if report != 'absent':
-        payload = _report(tmp_path, age=60)
-        if report == 'continuous':
-            payload['diagnostics']['activation']['automaticCoordination'] = True
-            (_ipc(tmp_path) / '.fusion-status.json').write_text(json.dumps(payload))
-    monkeypatch.setattr(api, 'fusion_process_running', lambda: False)
-    monkeypatch.setattr(api, 'publish_return_request', lambda *_, **__: pytest.fail('must not publish'))
-    payload = api.FusionReturnRequest(designId='wgd_1', documentId='fusion:doc-1',
-                                      instanceId='instance-1', expectedReturnStateHash='sha256:x')
-    with pytest.raises(HTTPException) as raised:
-        asyncio.run(api.request_fusion_return(payload, SimpleNamespace(app=SimpleNamespace(state=state))))
-    assert raised.value.status_code == 409
-    assert raised.value.detail == 'Fusion is closed. Open Fusion, then use Send to WG to bring the current model into WG.'
+@pytest.mark.parametrize('automatic', [True, False])
+def test_an_old_heartbeat_reporting_automatic_coordination_is_read_harmlessly(monkeypatch, tmp_path, automatic):
+    """Pull from WG is retired, and with it the add-in's automatic coordination
+    that served it. An add-in that still reports it is read like any other."""
+    store, state, _ = _state(tmp_path, monkeypatch)
+    report = _report(tmp_path, outcome='refused', message='Wrong document. Refresh CAD Link and send again.')
+    report['diagnostics']['activation']['automaticCoordination'] = automatic
+    (_ipc(tmp_path) / '.fusion-status.json').write_text(json.dumps(report))
+    status = read_fusion_status(tmp_path, current_design_hash='', current_formula='', design_id=None,
+                                process_running=True)
+    assert status['running'] is True and status['wgRequestPickup'] == 1
+    assert settle_reported_outcomes(store, tmp_path) == 1
+    assert store.get_operation('update-1')['state'] == 'rejected'
+    assert _operation(state)['fusionDelivery'] == 'refused'
 
 
 def test_startup_history_publication_is_read_only_and_does_not_repeat(monkeypatch, tmp_path):

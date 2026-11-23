@@ -586,43 +586,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/cadlink/request-fusion-return": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Request Fusion Return
-         * @description Ask the connected add-in to export the active Fusion document to WG.
-         */
-        post: operations["request_fusion_return_api_cadlink_request_fusion_return_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/cadlink/return-requests/{request_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Return Request */
-        get: operations["get_return_request_api_cadlink_return_requests__request_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/cadlink/returns": {
         parameters: {
             query?: never;
@@ -5171,17 +5134,6 @@ export interface components {
             /** Total */
             total: number;
         };
-        /** FusionReturnRequest */
-        FusionReturnRequest: {
-            /** Designid */
-            designId: string;
-            /** Documentid */
-            documentId: string;
-            /** Expectedreturnstatehash */
-            expectedReturnStateHash?: string | null;
-            /** Instanceid */
-            instanceId: string;
-        };
         /** FusionStatusRequest */
         FusionStatusRequest: {
             design: components["schemas"]["DesignConfig"];
@@ -8930,74 +8882,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    request_fusion_return_api_cadlink_request_fusion_return_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FusionReturnRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_return_request_api_cadlink_return_requests__request_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                request_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
             };
             /** @description Validation Error */
             422: {

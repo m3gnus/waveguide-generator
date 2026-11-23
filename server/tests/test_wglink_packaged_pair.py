@@ -513,7 +513,6 @@ def test_the_loader_refuses_a_foreign_protocol_module(tmp_path: Path, monkeypatc
 def test_pinned_addin_file_exchange_in_a_separate_process(packaged: Path, tmp_path: Path):
     """The exact shipped add-in exchanges files even with a stale endpoint."""
     from server.cadlink.fusion.fusion_delivery import advertise_fusion_delivery
-    from server.cadlink.fusion.fusion_return import publish_return_request
     from server.cadlink.fusion.fusion_outcomes import settle_from_heartbeat
     from server.cadlink.fusion.fusion_status import select_heartbeat
     from server.exports.cad_handoff import publish_fusion_handoff
@@ -552,19 +551,15 @@ if mode == 'produce':
 else:
     assert inbox.read_acknowledgement(ipc, 'pinned-process')[0] == 'accepted'
     assert inbox.read_acknowledgement(ipc, 'pinned-send')[0] == 'accepted'
-    request = handoffs.next_return_request(ipc, session_id='pinned-session')
-    assert request is not None and request.request_id == 'pinned-return'
-    claimed = handoffs.claim_request(request)
-    assert claimed is not None and handoffs.claim_request(request) is None
-    assert handoffs.acknowledge_return_request(claimed)
     for operation_id in ('pinned-insert', 'pinned-update'):
         handoff = handoffs.next_pending_handoff(ipc, bundle_root=workspace / 'wglink')
         assert handoff is not None and handoff.operation_id == operation_id
         claimed = handoffs.claim_request(handoff)
-        assert claimed is not None and handoffs.acknowledge_handoff(claimed)
+        assert claimed is not None and handoffs.claim_request(handoff) is None
+        assert handoffs.acknowledge_handoff(claimed)
     assert handoffs.next_pending_handoff(ipc, bundle_root=workspace / 'wglink') is None
     status.write_fusion_status(ipc, session_id='pinned-session', adapter_version=ADDIN_VERSION, document_name=None, links=[],
-        diagnostics={'lastRequest': {'channel': 'returnRequest', 'correlationId': 'pinned-return', 'outcome': 'failed'}})
+        diagnostics={'lastRequest': {'channel': 'handoff', 'correlationId': 'pinned-update', 'outcome': 'refused'}})
 '''
     script = script.replace('ADDIN_VERSION', repr(PIN['addinVersion']))
     def child(mode):
@@ -595,9 +590,6 @@ else:
         assert store.get_operation('pinned-process')['request_digest'] == first['request_digest']
         assert len(store.list_operations()) == 2
         assert store.get_operation('pinned-send')['request_digest'] == sent['request_digest']
-        publish_return_request(data, store, session_id='pinned-session', design_id='wgd_1',
-                               document_id='fusion:doc-1', instance_id='instance-1',
-                               expected_return_state_hash='sha256:state', request_id='pinned-return')
         handoff_bundle = workspace / 'wglink/pinned.wglink'
         handoff_bundle.mkdir(parents=True)
         result = _result(handoff_bundle)
@@ -609,8 +601,8 @@ else:
         heartbeat, transport = select_heartbeat(data)
         assert transport == 'file' and heartbeat['adapterVersion'] == PIN['addinVersion']
         settle_from_heartbeat(store, heartbeat, ipc)
-        assert store.get_operation('pinned-return')['state'] == 'rejected'
-        assert store.get_operation('pinned-return')['reason'] == 'adapter_failed'
+        assert store.get_operation('pinned-update')['state'] == 'rejected'
+        assert store.get_operation('pinned-update')['reason'] == 'adapter_refused'
     finally:
         import asyncio
         asyncio.run(application.state.jobs_runtime.shutdown())

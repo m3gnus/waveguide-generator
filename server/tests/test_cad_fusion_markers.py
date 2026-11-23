@@ -25,7 +25,6 @@ from typing import Any, Callable
 import pytest
 
 from server.cadlink.fusion.fusion_delivery import PROCESS_INSTANCE
-from server.cadlink.fusion.fusion_return import publish_return_request
 from server.cadlink.intake.solve_command import collect_solve_deliveries
 from server.cadlink.store import CadLinkStore
 from server.exports.cad_handoff import UPDATE_TARGET_REQUIRED, publish_fusion_handoff
@@ -33,6 +32,7 @@ from server.exports.cad_handoff import UPDATE_TARGET_REQUIRED, publish_fusion_ha
 
 CAPABILITIES = "wg-capabilities.json"
 SEQUENCE = "deliverySequence"
+# Pull from WG (retired): only an earlier WG wrote return requests.
 RETURNS = "return"
 HANDOFFS = "handoff"
 # kind -> (per-request folder, the single slot a WG before version 3 wrote)
@@ -104,7 +104,7 @@ class Addin:
                 or not payload.get("requestId")
                 or payload.get("operationId") != payload.get("requestId")
                 or _sequence_of(payload) is None
-            ) or (kind == RETURNS and payload.get("sessionId") != self.session_id):
+            ):
                 self.ran.append(path.stem)  # left alone, and not looked at again
                 continue
             request_id = str(payload["requestId"])
@@ -141,26 +141,12 @@ def _publish(
     data_dir: Path,
     workspace: Path,
     n: int,
-    session: str = SESSION,
     *,
     instance: str | None = "instance-a",
 ):
-    """Publish request number ``n`` of this kind; return what was published.
+    """Publish handoff number ``n``; return its ``PublishedRequest``."""
 
-    A return request returns its request id; a handoff its ``PublishedRequest``.
-    """
-
-    if kind == RETURNS:
-        _path, request_id = publish_return_request(
-            data_dir,
-            CadLinkStore.for_data_dir(data_dir),
-            session_id=session,
-            design_id="wgd_a",
-            document_id="fusion:doc-a",
-            instance_id="instance-a",
-            expected_return_state_hash=f"sha256:state-{n}",
-        )
-        return request_id
+    assert kind == HANDOFFS, "WG publishes only handoffs; Pull from WG is retired"
     bundle = workspace / "wglink" / f"horn-{n}.wglink"
     bundle.mkdir(parents=True, exist_ok=True)
     return publish_fusion_handoff(
@@ -181,7 +167,7 @@ def _publish(
 
 
 def _request_id(published) -> str:
-    return published if isinstance(published, str) else published.request_id
+    return published.request_id
 
 
 def _files(kind: str, data_dir: Path) -> list[str]:
@@ -296,7 +282,7 @@ def test_a_solve_command_the_addin_writes_after_startup_is_one_operation(
 # -- WG-produced requests: one file each ------------------------------------------
 
 
-@pytest.mark.parametrize("kind", [RETURNS, HANDOFFS])
+@pytest.mark.parametrize("kind", [HANDOFFS])
 def test_each_request_is_one_version_3_file_and_nothing_else(
     kind: str, data_dir: Path, workspace: Path
 ) -> None:
@@ -312,7 +298,7 @@ def test_each_request_is_one_version_3_file_and_nothing_else(
     assert [path.name for path in _folder(kind, data_dir).iterdir()] == [f"{request_id}.json"]
 
 
-@pytest.mark.parametrize("kind", [RETURNS, HANDOFFS])
+@pytest.mark.parametrize("kind", [HANDOFFS])
 def test_the_sequence_keeps_rising_while_requests_wait(
     kind: str, data_dir: Path, workspace: Path
 ) -> None:
@@ -324,7 +310,7 @@ def test_the_sequence_keeps_rising_while_requests_wait(
     assert _read(folder / f"{second}.json")[SEQUENCE] == 2
 
 
-@pytest.mark.parametrize("kind", [RETURNS, HANDOFFS])
+@pytest.mark.parametrize("kind", [HANDOFFS])
 def test_a_version_3_addin_runs_each_request_once(
     kind: str, data_dir: Path, workspace: Path
 ) -> None:
@@ -337,7 +323,7 @@ def test_a_version_3_addin_runs_each_request_once(
     assert _files(kind, data_dir) == []
 
 
-@pytest.mark.parametrize("kind", [RETURNS, HANDOFFS])
+@pytest.mark.parametrize("kind", [HANDOFFS])
 def test_a_publish_while_the_addin_runs_a_request_loses_nothing(
     kind: str, data_dir: Path, workspace: Path
 ) -> None:
@@ -350,16 +336,6 @@ def test_a_publish_while_the_addin_runs_a_request_loses_nothing(
             published.append(_request_id(_publish(kind, data_dir, workspace, 2)))
 
     assert addin.take(kind, after_claim=publish_the_next) == [first, published[0]]
-
-
-def test_return_requests_for_an_earlier_session_are_withdrawn(
-    data_dir: Path, workspace: Path
-) -> None:
-    old = _publish(RETURNS, data_dir, workspace, 1, session="session-old")
-    new = _publish(RETURNS, data_dir, workspace, 2, session="session-new")
-
-    assert _files(RETURNS, data_dir) == [new]
-    assert old != new
 
 
 # -- supersession: an unstarted update of the same link --------------------------
@@ -430,19 +406,6 @@ def test_an_update_must_name_its_document_and_baseline(
     assert _files(HANDOFFS, data_dir) == []
 
 
-def test_a_return_request_must_name_its_baseline(data_dir: Path) -> None:
-    with pytest.raises(ValueError, match="has not reported the model's state"):
-        publish_return_request(
-            data_dir,
-            CadLinkStore.for_data_dir(data_dir),
-            session_id=SESSION,
-            design_id="wgd_a",
-            document_id="fusion:doc-a",
-            instance_id="instance-a",
-            expected_return_state_hash=None,
-        )
-
-
 # -- what an older WG left behind ------------------------------------------------
 
 
@@ -480,4 +443,28 @@ def test_startup_removes_what_an_older_wg_left_and_keeps_current_requests(
     assert _files(HANDOFFS, data_dir) == [current]
     # The add-in's own claim is the add-in's to settle.
     assert claim.exists()
-    assert any("older WG left" in record.getMessage() for record in caplog.records)
+    assert any("earlier WG left" in record.getMessage() for record in caplog.records)
+
+
+def test_startup_removes_unstarted_pull_requests_an_earlier_wg_left(
+    data_dir: Path, workspace: Path
+) -> None:
+    """Pull from WG is retired: an unstarted current-schema return request goes,
+    and the add-in's own claim in that folder stays the add-in's to settle."""
+
+    folder = _folder(RETURNS, data_dir)
+    folder.mkdir(parents=True)
+    body = {"schemaVersion": 3, "target": "fusion360", "requestId": "pull-1",
+            "operationId": "pull-1", "sessionId": SESSION, SEQUENCE: 1}
+    unstarted = folder / "pull-1.json"
+    unstarted.write_text(json.dumps(body))
+    staged = folder / ".pull-2.json.abc.tmp"
+    staged.write_text(json.dumps({**body, "requestId": "pull-2", "operationId": "pull-2"}))
+    claim = folder / ".wglink-claim-pull-3-abc.json"
+    claim.write_text("{}")
+
+    _run_cadlink_startup(data_dir, workspace)
+
+    assert not unstarted.exists()
+    assert not staged.exists()
+    assert claim.exists()

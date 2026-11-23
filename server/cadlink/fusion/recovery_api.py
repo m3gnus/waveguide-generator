@@ -96,7 +96,7 @@ def recovery_notices(store: CadLinkStore, data_dir: Path) -> RecoveryNoticesResp
     # binding and an overlapping dismissal cannot revive the same request.
     with store._lock:
         if heartbeat is not None:
-            settle_from_heartbeat(store, heartbeat, ipc.ipc_folder(data_dir), mutations_only=True)
+            settle_from_heartbeat(store, heartbeat, ipc.ipc_folder(data_dir))
         document = last_report.get("document") if last_report else None
         document = document if isinstance(document, Mapping) else {}
         active_id = _text(document.get("id"))

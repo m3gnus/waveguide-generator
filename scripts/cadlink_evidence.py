@@ -11,14 +11,13 @@ and an optional operation id, this writes one zip holding:
   ``server/cadlink/fusion/fusion_delivery.py`` -- this is WG-internal signaling,
   rooted at the application data directory itself, not at the user-chosen
   CAD-link exchange folder ``CadWorkspaceState`` persists: every real caller
-  of ``advertise_fusion_delivery``, ``publish_return_request`` and
-  ``publish_fusion_handoff`` (``server/cadlink/api.py``,
+  of ``advertise_fusion_delivery`` and ``publish_fusion_handoff`` (``server/cadlink/api.py``,
   ``server/exports/api.py``) passes ``application.state.data_dir``, not the
   selected CAD-link path), with any object key naming a token, secret or
   password redacted, recursively.
 - ``request-directories.json``: a listing -- name, size, modification time,
-  never contents -- of the WGLink request directories, in that same
-  ``ipc/wglink`` folder (``.fusion-return-requests``, ``.fusion-handoffs``).
+  never contents -- of the WGLink request directory, in that same
+  ``ipc/wglink`` folder (``.fusion-handoffs``).
 - ``cad-operations.json``: the ``cad_operations`` rows from ``cadlink.db``,
   read through a read-only sqlite connection (``mode=ro``), filtered to the
   given operation id when one is given.
@@ -62,7 +61,7 @@ import zipfile
 # ``CadWorkspaceState``) is a *different* directory (where a returned STEP
 # bundle is written) and is reported here only as informational metadata,
 # never used to locate the ipc/wglink signaling files above.
-from server.cadlink.fusion.fusion_delivery import CAPABILITIES_FILENAME, HANDOFFS, RETURN_REQUESTS
+from server.cadlink.fusion.fusion_delivery import CAPABILITIES_FILENAME, HANDOFFS
 from server.cadlink.ipc import ipc_folder
 from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME
 from server.platform.paths import data_paths
@@ -205,7 +204,6 @@ def collect_request_directories(data_dir: Path) -> dict[str, Any]:
 
     folder = ipc_folder(data_dir)
     return {
-        "returnRequests": _directory_listing(folder / RETURN_REQUESTS.directory),
         "handoffs": _directory_listing(folder / HANDOFFS.directory),
     }
 
@@ -291,10 +289,6 @@ def _member_presence(evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
         {"name": "wg-capabilities.json", "present": ipc["wgCapabilities"]["present"]},
         {"name": "wg-endpoint.json", "present": ipc["wgEndpoint"]["present"]},
         {"name": "request-directories.json", "present": True},
-        {
-            "name": "return-requests",
-            "present": directories["returnRequests"]["present"],
-        },
         {"name": "handoffs", "present": directories["handoffs"]["present"]},
         {"name": "cad-operations.json", "present": evidence["operations"]["present"]},
         {"name": "server.log", "present": evidence["serverLog"]["present"]},

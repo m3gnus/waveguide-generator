@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
-import re
 from typing import Any, Mapping
 
 from server.contracts.canonical import canonical_ascii_json
@@ -23,15 +22,16 @@ from server.cadlink.operations import (
     REJECTED,
     REQUEST_RETURN,
     STAGE_EXECUTING,
+    TERMINAL_STATES,
     FUSION_STAGES,
     UPDATE_LINK,
 )
-from server.cadlink.fusion.fusion_status import FusionStatusUnreadable, delivers_requests, read_status_file
 from server.cadlink.store import CadLinkStore
 from server.contracts.wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
 
 
 logger = logging.getLogger(__name__)
+# Pull from WG (request_return) is retired; its old rows are still read and shown.
 FUSION_KINDS = frozenset({REQUEST_RETURN, INSERT_LINK, UPDATE_LINK})
 _last_request_seen: dict[str, str] = {}
 
@@ -149,8 +149,8 @@ def _applying(heartbeat: Mapping[str, Any]) -> str | None:
     return _operation_id(value.get("operationId")) if value is not None else None
 
 
-def _channel(row: Mapping[str, Any]) -> str:
-    return "returnRequest" if row.get("kind") == REQUEST_RETURN else "handoff"
+def _channel(_row: Mapping[str, Any]) -> str:
+    return "handoff"
 
 
 def _recent_record(heartbeat: Mapping[str, Any], row: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -197,11 +197,6 @@ def _log_last_request(heartbeat: Mapping[str, Any], ipc: Path) -> None:
     )
 
 
-def _visible_request(ipc: Path, row: Mapping[str, Any]) -> Path:
-    directory = ".fusion-return-requests" if row["kind"] == REQUEST_RETURN else ".fusion-handoffs"
-    return ipc / directory / f"{row['operation_id']}.json"
-
-
 #: Outcomes the add-in reports in the file heartbeat diagnostics.
 ADAPTER_OUTCOMES = (
     "applied", "reconciled", "expired", "refused", "superseded", "discarded", "recoveryRequired", "failed", "alreadyCurrent",
@@ -233,9 +228,7 @@ def adapter_outcome(
 
     if outcome in ("applied", "reconciled"):
         if not mutating:
-            if outcome == "reconciled" or evidence is not None:
-                raise ValueError("a return request is applied without document evidence")
-            return ACCEPTED, None, said("Fusion reported that it completed the return request.")
+            raise ValueError("only a document mutation is accepted from document evidence")
         export_id = _export_id(row)
         if export_id is None or evidence != (operation_id, export_id):
             raise ValueError("a document mutation is accepted only with its own operation and export ids")
@@ -284,7 +277,6 @@ def settle_from_heartbeat(
     ipc: Path,
     *,
     only_operation_id: str | None = None,
-    mutations_only: bool = False,
 ) -> int:
     """Record evidence and adapter outcomes without inferring a missed result."""
 
@@ -295,7 +287,7 @@ def settle_from_heartbeat(
     _log_last_request(heartbeat, ipc)
     changed = 0
     store.initialize()
-    kinds = (INSERT_LINK, UPDATE_LINK) if mutations_only else (INSERT_LINK, UPDATE_LINK, REQUEST_RETURN)
+    kinds = (INSERT_LINK, UPDATE_LINK)
     with store._lock:
         # Recovery must remain reachable beyond a bounded recent listing.
         rows = [dict(row) for row in store._connect().execute(
@@ -344,8 +336,7 @@ def settle_from_heartbeat(
         recent_record = _recent_record(heartbeat, row) or {}
         recent = _operation_id(recent_record.get("outcome"))
         message = _operation_id(recent_record.get("message"))
-        if (recent in ("superseded", "discarded", "refused", "expired", "alreadyCurrent", "failed")
-                or (row["kind"] == REQUEST_RETURN and recent in {"failed", "applied"})):
+        if recent in ("superseded", "discarded", "refused", "expired", "alreadyCurrent", "failed"):
             value = _record_adapter_outcome(store, row, recent, message=message)
         elif (recent in ("applied", "reconciled") and row["kind"] in MUTATING_KINDS
               and recent_record.get("exportId") == _export_id(row)
@@ -369,13 +360,9 @@ def settle_from_heartbeat(
 
         last = _last(heartbeat, row)
         last_outcome = _operation_id(last.get("outcome")) if last is not None else None
-        if last_outcome in {"refused", "expired", "alreadyCurrent"} or (last_outcome == "failed" and row["kind"] == REQUEST_RETURN):
+        if last_outcome in {"refused", "expired", "alreadyCurrent"}:
             value = _record_adapter_outcome(store, row, last_outcome,
                                             message=_operation_id(last.get("message")))
-            changed += value is not None
-            continue
-        if last_outcome == "applied" and row["kind"] == REQUEST_RETURN:
-            value = _record_adapter_outcome(store, row, "applied")
             changed += value is not None
             continue
 
@@ -440,7 +427,8 @@ def settle_abandoned_live_claims(
         ).fetchall()]
     changed = 0
     for row in rows:
-        if row["kind"] not in FUSION_KINDS or row.get("stage") not in FUSION_STAGES:
+        # Pull from WG rows are settled at startup (retire_return_requests).
+        if row["kind"] not in MUTATING_KINDS or row.get("stage") not in FUSION_STAGES:
             continue
         try:
             claim = json.loads(row["claim_json"])
@@ -451,121 +439,48 @@ def settle_abandoned_live_claims(
                 or updated.tzinfo is None or checked_at - updated < LEGACY_LIVE_CLAIM_MAX_AGE):
             continue
         message = "The legacy Fusion live request was interrupted and reported no outcome."
-        if row["kind"] in MUTATING_KINDS:
-            value = _record(store, row, RECOVERY_REQUIRED, outcome={"message": message})
-        else:
-            value = _record(store, row, REJECTED, reason="adapter_failed", outcome={"message": message})
+        value = _record(store, row, RECOVERY_REQUIRED, outcome={"message": message})
         changed += value is not None
     if changed:
         store.make_durable()
     return changed
 
 
-def settle_return_from_file(
-    store: CadLinkStore, row: Mapping[str, Any], ipc: Path, *, now: datetime | None = None,
-) -> dict[str, Any] | None:
-    """Persist exact return outcomes, including an old command-time report."""
-    request_id = str(row["operation_id"])
-    try:
-        report = read_status_file(ipc)
-        if report is None:
-            raise ValueError("No usable Fusion status file")
-        updated = datetime.fromisoformat(str(report.get("updatedAt", "")).replace("Z", "+00:00"))
-        if (not delivers_requests(report)
-                or updated.tzinfo is None or updated > (now or datetime.now(timezone.utc)) + timedelta(seconds=5)):
-            raise ValueError("Unsupported Fusion status")
-        diagnostics = report.get("diagnostics")
-        if not isinstance(diagnostics, dict):
-            raise ValueError("Invalid Fusion diagnostics")
-        recent = diagnostics.get("recentOutcomes", [])
-        candidates = [item for item in recent if isinstance(item, dict)
-                      and item.get("channel") == "returnRequest" and item.get("requestId") == request_id] if isinstance(recent, list) else []
-        last = diagnostics.get("lastRequest")
-        if isinstance(last, dict) and last.get("channel") == "returnRequest" and last.get("correlationId") == request_id:
-            candidates.append(last)
-        if candidates:
-            outcome = candidates[-1].get("outcome")
-            if outcome in {"refused", "failed", "superseded", "discarded", "applied"}:
-                state, reason, recorded = adapter_outcome(row, outcome)
-                changed = store.record_outcome(request_id, int(row["attempt_generation"]), state,
-                                               reason=reason, outcome=recorded)
-                if changed is not None:
-                    store.make_durable()
-                return changed
-    except (FusionStatusUnreadable, OSError, UnicodeError, ValueError, TypeError, OverflowError):
-        pass  # Missing or invalid evidence never implies refusal or success.
-    return None
+#: What an unfinished Pull from WG left by an earlier WG is settled with.
+RETIRED_RETURN_MESSAGE = (
+    "Pull from WG was retired. Use Send to WG in Fusion to bring the current model into WG."
+)
 
 
-def settle_abandoned_file_returns(
-    store: CadLinkStore, ipc: Path, workspace_root: Path | None, *,
-    now: datetime | None = None, only_operation_id: str | None = None,
-) -> int:
-    """Bound a lost return result after all of its file activity has gone.
+def retire_return_requests(store: CadLinkStore) -> int:
+    """Settle every unfinished Pull from WG an earlier WG left, as cancelled.
 
-    The pinned add-in overwrites lastRequest and deletes a completed claim.
-    Never infer success or retry an export. Pending publication, an add-in
-    claim, or a correlated export (including its staging directory) prevents
-    timeout. Without a configured exchange folder we cannot check that fence.
+    WG no longer asks Fusion to send its model back (``request_return``); the
+    user sends it with Send to WG in Fusion. Rows an earlier WG left waiting
+    would otherwise wait forever, so startup cancels them with the remedy. A
+    row that cannot be settled is logged and left as it is: it never stops WG.
     """
-    try:
-        available = workspace_root is not None and workspace_root.is_dir()
-    except OSError:
-        available = False
-    if not available:
-        return 0
-    assert workspace_root is not None
-    checked_at = now or datetime.now(timezone.utc)
     store.initialize()
     with store._lock:
         rows = [dict(row) for row in store._connect().execute(
-            "SELECT * FROM cad_operations WHERE kind = ? AND state IN (?, ?) "
-            + ("AND operation_id = ? " if only_operation_id else ""),
-            (REQUEST_RETURN, PROCESSING, CANCEL_REQUESTED)
-            + ((only_operation_id,) if only_operation_id else ()),
+            "SELECT * FROM cad_operations WHERE kind = ? AND state NOT IN (?, ?, ?) ORDER BY rowid",
+            (REQUEST_RETURN, *sorted(TERMINAL_STATES)),
         ).fetchall()]
     changed = 0
     for row in rows:
         try:
-            claim = json.loads(row.get("claim_json") or "{}")
-            updated = datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00"))
-            if (not isinstance(claim, Mapping) or claim.get("liveSessionId")
-                    or updated.tzinfo is None or checked_at - updated < LEGACY_LIVE_CLAIM_MAX_AGE):
-                continue
-            exact = settle_return_from_file(store, row, ipc, now=checked_at)
-            if exact is not None:
-                changed += 1
-                continue
-            operation_id = str(row["operation_id"])
-            visible = _visible_request(ipc, row)
-            # iterdir propagates permission errors; glob may hide them and
-            # mistake an unreadable claim directory for completed work.
-            if not ipc.is_dir():
-                continue
-            paths = list(visible.parent.iterdir()) if visible.parent.exists() else []
-            if any(path.name == visible.name
-                   or (path.name.endswith(".tmp") and path.name.startswith(
-                       (f".{visible.name}.", f".wg-withdraw-{visible.name}.")))
-                   or (path.name.startswith(f".wglink-claim-{operation_id}-") and path.suffix == ".json")
-                   for path in paths):
-                continue
-            # WGLink names both the final export and its temporary/reservation
-            # paths with the sanitized correlation id, before exporting starts.
-            safe_id = re.sub(r"[\\/:\x00-\x1f]", "_", operation_id).strip().rstrip(".") or "Untitled"
-            returns = workspace_root / "wgreturn"
-            if returns.exists() and any(f"-{safe_id}" in path.name for path in returns.iterdir()):
-                continue
-        except (OSError, TypeError, ValueError):
-            continue  # An unreadable path is not evidence that work has stopped.
-        value = _record(store, row, REJECTED, reason="adapter_failed", outcome={
-            "message": "The Fusion return request was interrupted and reported no outcome."
-        })
+            value = _record(store, row, CANCELLED, outcome={"message": RETIRED_RETURN_MESSAGE})
+        except (TypeError, ValueError) as exc:
+            logger.warning("Could not settle retired Fusion return request %s: %s",
+                           row.get("operation_id"), exc)
+            continue
         changed += value is not None
     if changed:
         store.make_durable()
+        logger.info("Cancelled %d unfinished Pull from WG request(s); Pull from WG is retired.", changed)
     return changed
 
 
-__all__ = ["ADAPTER_OUTCOMES", "FUSION_KINDS", "LEGACY_LIVE_CLAIM_MAX_AGE",
-           "adapter_outcome", "settle_from_heartbeat", "settle_abandoned_live_claims",
-           "settle_abandoned_file_returns", "settle_return_from_file"]
+__all__ = ["ADAPTER_OUTCOMES", "FUSION_KINDS", "LEGACY_LIVE_CLAIM_MAX_AGE", "RETIRED_RETURN_MESSAGE",
+           "adapter_outcome", "retire_return_requests", "settle_from_heartbeat",
+           "settle_abandoned_live_claims"]

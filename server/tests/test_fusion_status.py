@@ -861,37 +861,6 @@ def test_realized_parameter_absent_and_stale_states_are_explicit(tmp_path: Path)
     )["state"] == "no_link"
 
 
-@pytest.mark.parametrize("selected", ["instance-b", "missing"])
-def test_return_request_resolves_the_selected_same_design_instance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: str,
-) -> None:
-    from fastapi import HTTPException
-    from server.cadlink.api import FusionReturnRequest, request_fusion_return
-    from server.cadlink.fusion.fusion_return import RETURN_REQUESTS_DIRECTORY
-
-    _write_status(tmp_path, updated_at=datetime.now(timezone.utc), links=[
-        _link(instanceId="instance-a"), _link(instanceId="instance-b"),
-    ])
-    monkeypatch.setattr("server.cadlink.api.fusion_process_running", lambda: True)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(data_dir=tmp_path)))
-    payload = FusionReturnRequest(
-        designId="wgd_tritonia", documentId="fusion:doc-a", instanceId=selected,
-        expectedReturnStateHash="sha256:state",
-    )
-    folder = tmp_path / "ipc" / "wglink" / RETURN_REQUESTS_DIRECTORY
-    if selected == "missing":
-        with pytest.raises(HTTPException) as error:
-            asyncio.run(request_fusion_return(payload, request))
-        assert error.value.status_code == 409
-        assert not folder.exists() or list(folder.iterdir()) == []
-    else:
-        result = asyncio.run(request_fusion_return(payload, request))
-        published = json.loads((folder / f"{result['requestId']}.json").read_text())
-        assert published["instanceId"] == "instance-b"
-        assert published["requestId"] == result["requestId"]
-        assert published["expectedReturnStateHash"] == "sha256:state"
-
-
 @pytest.mark.parametrize("version", [None, 2, True], ids=["unreported", "version-2", "bool"])
 def test_an_addin_below_wgs_delivery_version_is_outdated_and_read_no_further(
     tmp_path: Path, version: object
@@ -941,40 +910,6 @@ def test_an_interrupted_operation_in_the_heartbeat_is_reported_as_recovery_requi
         tmp_path, current_design_hash="", current_formula="", design_id=TARGET_DESIGN_ID,
         now=NOW,
     )["recoveryRequired"] is None
-
-
-@pytest.mark.parametrize("case", ["outdated-addin", "no-baseline"])
-def test_a_return_request_is_refused_before_anything_is_published(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str,
-) -> None:
-    """An older add-in gets nothing; nor does a request with no baseline to prove."""
-
-    from fastapi import HTTPException
-    from server.cadlink.api import FusionReturnRequest, request_fusion_return
-    from server.cadlink.fusion.fusion_status import ADDIN_OUTDATED_MESSAGE
-
-    _write_status(
-        tmp_path,
-        updated_at=datetime.now(timezone.utc),
-        links=[_link(instanceId="instance-a")],
-        delivery_version=2 if case == "outdated-addin" else 3,
-    )
-    monkeypatch.setattr("server.cadlink.api.fusion_process_running", lambda: True)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(data_dir=tmp_path)))
-    payload = FusionReturnRequest(
-        designId="wgd_tritonia", documentId="fusion:doc-a", instanceId="instance-a",
-        expectedReturnStateHash=None if case == "no-baseline" else "sha256:state",
-    )
-
-    with pytest.raises(HTTPException) as error:
-        asyncio.run(request_fusion_return(payload, request))
-
-    assert error.value.status_code == 409
-    if case == "outdated-addin":
-        assert error.value.detail == ADDIN_OUTDATED_MESSAGE
-    else:
-        assert "has not reported the model's state" in error.value.detail
-    assert not (tmp_path / "ipc" / "wglink" / ".fusion-return-requests").exists()
 
 
 # --- CL13: which revision the heartbeat's measured half describes -----------

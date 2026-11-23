@@ -234,19 +234,6 @@ def test_dismissal_rejects_ids_without_an_accepted_mutation(tmp_path, notice_id)
     store.close()
 
 
-def test_evidence_request_directories_match_the_delivery_channels(tmp_path):
-    import ast
-    from server.cadlink.fusion.fusion_outcomes import _visible_request
-    # Read the file transport constants without assembling the application.
-    source = Path(__file__).parents[1] / "cadlink" / "fusion" / "fusion_delivery.py"
-    channels = {node.targets[0].id: ast.literal_eval(node.value.args[0])
-                for node in ast.parse(source.read_text()).body
-                if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id in {"HANDOFFS", "RETURN_REQUESTS"}}
-    for kind, channel in (("insert_link", "HANDOFFS"), ("update_link", "HANDOFFS"), ("request_return", "RETURN_REQUESTS")):
-        assert _visible_request(tmp_path, {"kind": kind, "operation_id": "named"}) == tmp_path / channels[channel] / "named.json"
-
-
 def test_only_active_document_notices_are_loud_and_stale_status_is_quiet(tmp_path):
     store = CadLinkStore.for_data_dir(tmp_path)
     accept(store)

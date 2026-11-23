@@ -65,7 +65,6 @@ from server.cadlink.fusion.addin_update import last_refresh, loaded_addin_identi
 from server.cadlink.joblane.default_setup import default_mesh
 from server.cadlink.joblane.delivery_status import delivery_status
 from server.cadlink.fusion.fusion_status import (
-    ADDIN_OUTDATED_MESSAGE,
     addin_inbox_session_signature,
     fusion_process_running,
     read_fusion_status,
@@ -74,8 +73,7 @@ from server.cadlink.fusion.fusion_status import (
     heartbeat_now, read_heartbeat_report, select_heartbeat, settleable_heartbeat,
 )
 from server.cadlink.fusion.fusion_outcomes import (
-    FUSION_KINDS, settle_from_heartbeat, settle_abandoned_live_claims,
-    settle_abandoned_file_returns,
+    FUSION_KINDS, retire_return_requests, settle_from_heartbeat, settle_abandoned_live_claims,
 )
 from server.cadlink.fusion.fusion_delivery import (
     advertise_fusion_delivery,
@@ -85,7 +83,6 @@ from server.cadlink.fusion.fusion_delivery import (
     withdraw_fusion_delivery,
 )
 from .ipc import ipc_folder
-from server.cadlink.fusion.fusion_return import publish_return_request
 from server.cadlink.intake.ingest import (
     IngestRefusal,
     build_deferred_viewport,
@@ -408,17 +405,6 @@ class FusionStatusRequest(BaseModel):
     identity: SaveIdentity | None = None
     instance_id: str | None = Field(default=None, alias="instanceId", min_length=1)
     return_bundle_path: str | None = Field(default=None, alias="returnBundlePath")
-
-
-class FusionReturnRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    design_id: str = Field(alias="designId", min_length=1)
-    document_id: str = Field(alias="documentId", min_length=1)
-    instance_id: str = Field(alias="instanceId", min_length=1)
-    expected_return_state_hash: str | None = Field(
-        default=None, alias="expectedReturnStateHash"
-    )
 
 
 class SolveCommandOutcome(BaseModel):
@@ -766,9 +752,6 @@ async def fusion_status(
             ipc_folder(Path(request.app.state.data_dir)),
         )
     await asyncio.to_thread(settle_abandoned_live_claims, store)
-    await asyncio.to_thread(settle_abandoned_file_returns, store,
-                            ipc_folder(Path(request.app.state.data_dir)),
-                            request.app.state.cad_workspace.selected_path())
     status = await asyncio.to_thread(
         read_fusion_status,
         Path(request.app.state.data_dir),
@@ -845,78 +828,6 @@ def _record_expired_insert(store: CadLinkStore, operation_id: str) -> None:
         reason="expired",
         outcome={"message": "The unstarted Fusion insert expired after 30 minutes."},
     )
-
-
-@router.post("/request-fusion-return")
-async def request_fusion_return(
-    payload: FusionReturnRequest, request: Request
-) -> dict[str, str]:
-    """Ask the connected add-in to export the active Fusion document to WG."""
-
-    status = await asyncio.to_thread(
-        read_fusion_status,
-        Path(request.app.state.data_dir),
-        current_design_hash="",
-        current_formula="",
-        design_id=payload.design_id,
-        instance_id=payload.instance_id,
-        process_running=await asyncio.to_thread(fusion_process_running),
-    )
-    from server.cadlink.fusion.fusion_status import last_fusion_heartbeat, observation_policy
-    last_report = await asyncio.to_thread(last_fusion_heartbeat, Path(request.app.state.data_dir))
-    if status.get("state") == "closed":
-        raise HTTPException(status_code=409, detail=(
-            "Fusion is closed. Open Fusion, then use Send to WG to bring the current model into WG."))
-    if (status.get("observationPolicy") == "command"
-            or last_report is not None and observation_policy(last_report) == "command"):
-        raise HTTPException(status_code=409, detail=(
-            "Fusion reports changes only after a command. Use Send to WG in Fusion "
-            "to bring the current model into WG."))
-    session_id = str(status.get("sessionId") or "")
-    if not status.get("running") or not session_id:
-        raise HTTPException(
-            status_code=409,
-            detail="Fusion is running, but the Waveguide Generator add-in in Fusion is offline. Restart the add-in first.",
-        )
-    if status.get("state") == "addin_outdated":
-        raise HTTPException(status_code=409, detail=ADDIN_OUTDATED_MESSAGE)
-    link = status.get("link")
-    if (
-        status.get("documentId") != payload.document_id
-        or not isinstance(link, dict)
-        or link.get("designId") != payload.design_id
-        or link.get("instanceId") != payload.instance_id
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="The active Fusion document changed. Refresh CAD Link and try again.",
-        )
-    if not payload.expected_return_state_hash:
-        # The add-in exports only the exact model WG displayed, which it proves
-        # against this token; without it there is nothing to prove.
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Fusion has not reported the model's state yet. Refresh CAD Link, "
-                "wait for Fusion to report the model, and try again."
-            ),
-        )
-    _marker, request_id = await asyncio.to_thread(
-        publish_return_request,
-        Path(request.app.state.data_dir),
-        getattr(request.app.state, "cadlink_store", None)
-        or CadLinkStore.for_data_dir(Path(request.app.state.data_dir)),
-        session_id=session_id,
-        design_id=payload.design_id,
-        document_id=payload.document_id,
-        instance_id=payload.instance_id,
-        expected_return_state_hash=payload.expected_return_state_hash,
-    )
-    return {
-        "status": "requested",
-        "requestId": request_id,
-        "documentName": str(status.get("documentName") or "Untitled"),
-    }
 
 
 @router.get("/solve-command")
@@ -2232,8 +2143,6 @@ async def post_reconcile_cad_operation(
             only_operation_id=operation_id,
         )
     await asyncio.to_thread(settle_abandoned_live_claims, store, only_operation_id=operation_id)
-    await asyncio.to_thread(settle_abandoned_file_returns, store, ipc_folder(Path(state.data_dir)),
-                            state.cad_workspace.selected_path(), only_operation_id=operation_id)
     current = await asyncio.to_thread(store.get_operation, operation_id)
     assert current is not None
     return ManualSolveOperationResponse(operation=operation_summary(current))
@@ -2577,9 +2486,6 @@ def mount_cadlink(application: FastAPI) -> None:
         runtime.protect_cad_document = protect_job_document
     application.include_router(receipts_api.router)
     application.include_router(recovery_api.router)
-    from server.cadlink.fusion.fusion_return import router as return_requests_router
-
-    application.include_router(return_requests_router)
     # An unlinked model's solver frame: preview and confirmation.
     from server.cadlink.intake.solver_frame_api import router as solver_frame_router
 
@@ -2602,8 +2508,9 @@ def mount_cadlink(application: FastAPI) -> None:
         await asyncio.to_thread(
             recover_staged_fusion_requests,
             Path(application.state.data_dir),
-            lookup_operation=application.state.cadlink_store.get_operation,
         )
+        # Pull from WG is retired: settle what an earlier WG left unfinished.
+        await asyncio.to_thread(retire_return_requests, application.state.cadlink_store)
         heartbeat = settleable_heartbeat(
             await asyncio.to_thread(select_heartbeat, Path(application.state.data_dir))
         )
@@ -2615,9 +2522,6 @@ def mount_cadlink(application: FastAPI) -> None:
                 ipc_folder(Path(application.state.data_dir)),
             )
         await asyncio.to_thread(settle_abandoned_live_claims, application.state.cadlink_store)
-        await asyncio.to_thread(settle_abandoned_file_returns, application.state.cadlink_store,
-                                ipc_folder(Path(application.state.data_dir)),
-                                application.state.cad_workspace.selected_path())
         await asyncio.to_thread(
             expire_unstarted_insert_handoffs,
             Path(application.state.data_dir),

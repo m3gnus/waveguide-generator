@@ -1,12 +1,14 @@
 """How WG's requests reach the Fusion add-in, and what WG tells it it reads.
 
-WG asks Fusion for two things: to export the active document back to WG (a
-return request) and to open or update a completed export (a handoff). Each
-request is its own file, ``.fusion-return-requests/<requestId>.json`` or
-``.fusion-handoffs/<requestId>.json``, with ``schemaVersion`` 3. There is no
-single-slot marker and no twin. WG and its add-in speak delivery version 3 and
-nothing older: WG refuses an add-in whose heartbeat reports less, and installs
-the add-in it ships (docs/architecture/CAD-OPERATIONS.md, "Delivery version").
+WG asks Fusion for one thing: to open or update a completed export (a
+handoff). Each request is its own file, ``.fusion-handoffs/<requestId>.json``,
+with ``schemaVersion`` 3. There is no single-slot marker and no twin. WG no
+longer asks Fusion to export its document back (Pull from WG, the retired
+``.fusion-return-requests`` folder); the user sends it with Send to WG.
+
+WG and its add-in speak delivery version 3 and nothing older: WG refuses an
+add-in whose heartbeat reports less, and installs the add-in it ships
+(docs/architecture/CAD-OPERATIONS.md, "Delivery version").
 
 Every request carries a ``deliverySequence``, one higher than any request of
 that kind still on disk, which orders the requests without a clock. A publish
@@ -16,8 +18,9 @@ still on disk under its own name has not started, and only such a request is
 ever withdrawn.
 
 At every start WG removes what a WG older than version 3 left in the folder --
-the single slots, their records, and request files of another schema -- because
-no add-in this WG talks to reads them. Then it writes ``wg-capabilities.json``.
+the single slots, their records, and request files of another schema -- and
+every unstarted Pull from WG request, because WG no longer reads their
+results. Then it writes ``wg-capabilities.json``.
 """
 
 from __future__ import annotations
@@ -124,9 +127,11 @@ class FusionRequestChannel:
     directory: str
 
 
-RETURN_REQUESTS = FusionRequestChannel(".fusion-return-requests")
 HANDOFFS = FusionRequestChannel(".fusion-handoffs")
-CHANNELS = (RETURN_REQUESTS, HANDOFFS)
+CHANNELS = (HANDOFFS,)
+#: Where an earlier WG asked Fusion to send its model back (Pull from WG,
+#: retired). WG writes nothing here; startup removes what it left unstarted.
+RETIRED_RETURN_REQUESTS = FusionRequestChannel(".fusion-return-requests")
 
 
 @dataclass(frozen=True)
@@ -444,29 +449,21 @@ def expire_unstarted_insert_handoffs(
     return tuple(expired)
 
 
-def recover_staged_fusion_requests(
-    data_dir: Path,
-    *,
-    lookup_operation: Callable[[str], Mapping[str, Any] | None],
-) -> tuple[str, ...]:
-    """Finish return files staged before a backend interruption.
+def recover_staged_fusion_requests(data_dir: Path) -> tuple[str, ...]:
+    """Remove request files staged before a backend interruption.
 
-    The JSON is durable before its operation is accepted. A received row plus
-    this hidden file proves the interruption happened between acceptance and
-    publication. Existing visible requests and add-in claims always win.
-    Handoffs are never delivered by startup recovery; a live Send must retry.
-
-    A legacy HTTP claim hid a request under the same pattern,
-    ``.<requestId>.json.live-<claimId>.tmp``, before it claims the operation
-    in the store. Interrupted before that claim, the row is still ``received``
-    and a return request is restored; interrupted after it, the row is not, and
-    the hidden file is deleted -- as is a handoff or a cancelled operation's file.
+    A staged file is hidden (``.<requestId>.json.<x>.tmp``) and was never
+    published. A handoff is never delivered by startup recovery -- a live Send
+    must retry -- and a Pull from WG is retired, so each staged WG request is
+    deleted. A legacy HTTP claim hid a request under the same pattern; it is
+    deleted too. The add-in's own claims are not staged files and stay.
+    Returns the ids of the requests removed.
     """
 
-    recovered: list[str] = []
+    removed: list[str] = []
     folder = ipc_folder(data_dir)
     with _LOCK:
-        for channel in CHANNELS:
+        for channel in (*CHANNELS, RETIRED_RETURN_REQUESTS):
             directory = folder / channel.directory
             try:
                 staged = [
@@ -485,29 +482,17 @@ def recover_staged_fusion_requests(
                     or operation_id is None
                 ):
                     continue
-                row = lookup_operation(operation_id)
-                own = directory / f"{operation_id}.json"
-                claimed = any(directory.glob(f".wglink-claim-{operation_id}-*.json"))
-                if (
-                    own.exists()
-                    or claimed
-                    or row is None
-                    or row.get("state") != "received"
-                    or channel == HANDOFFS
-                ):
-                    temporary.unlink(missing_ok=True)
-                    continue
-                os.replace(temporary, own)
-                recovered.append(operation_id)
-                logger.info("Recovered staged Fusion request %s at startup.", operation_id)
-    return tuple(recovered)
+                temporary.unlink(missing_ok=True)
+                removed.append(operation_id)
+    return tuple(removed)
 
 
 def _remove_older_delivery(folder: Path) -> list[str]:
-    """Remove what a WG before delivery version 3 left for its add-in.
+    """Remove what an earlier WG left for its add-in.
 
-    The single slots, their records, and request files of another schema. No
-    add-in this WG talks to runs any of them. The add-in's own claims
+    The single slots, their records, request files of another schema, and every
+    unstarted Pull from WG request (retired). No add-in this WG talks to runs
+    any of them, or WG no longer reads their results. The add-in's own claims
     (hidden files) are its to settle and are left alone.
     """
 
@@ -515,13 +500,14 @@ def _remove_older_delivery(folder: Path) -> list[str]:
     for name in LEGACY_SLOT_FILENAMES:
         if _remove(folder / name) == "removed":
             removed.append(name)
-    for channel in CHANNELS:
+    for channel in (*CHANNELS, RETIRED_RETURN_REQUESTS):
         directory = folder / channel.directory
         if _remove(directory / LEGACY_RECORD_FILENAME) == "removed":
             removed.append(f"{channel.directory}/{LEGACY_RECORD_FILENAME}")
         for path in _request_files(directory):
             payload = _read_json(path)
-            if isinstance(payload, Mapping) and payload.get("schemaVersion") == SCHEMA_VERSION:
+            if (channel != RETIRED_RETURN_REQUESTS and isinstance(payload, Mapping)
+                    and payload.get("schemaVersion") == SCHEMA_VERSION):
                 continue
             if _remove(path) == "removed":
                 removed.append(f"{channel.directory}/{path.name}")
@@ -545,8 +531,8 @@ def advertise_fusion_delivery(data_dir: Path, *, solve_delivery: bool = True) ->
             removed = _remove_older_delivery(folder)
         if removed:
             logger.info(
-                "Removed %d Fusion request file(s) an older WG left, which no current "
-                "add-in runs: %s",
+                "Removed %d Fusion request file(s) an earlier WG left, which no current "
+                "add-in runs or WG no longer reads: %s",
                 len(removed),
                 ", ".join(sorted(removed)),
             )
@@ -644,7 +630,7 @@ __all__ = [
     "LEGACY_RECORD_FILENAME",
     "LEGACY_SLOT_FILENAMES",
     "PublishedRequest",
-    "RETURN_REQUESTS",
+    "RETIRED_RETURN_REQUESTS",
     "SCHEMA_VERSION",
     "SEQUENCE_FIELD",
     "SOLVE_COMMAND_DELIVERY",

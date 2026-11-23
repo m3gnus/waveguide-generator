@@ -23,7 +23,6 @@ from server.tests.cad_file_harness import STARTUP, _snapshot_digest, wg
 from server.tests.test_cad_preparation import _write_return
 from server.tests.test_cad_inbox_stall import V4_SNAPSHOT, drop, fixture
 from server.tests.test_cad_fusion_outcomes import _accept, _heartbeat
-from cad_legacy_rows import request_cancel
 
 NOW = datetime.now(timezone.utc)
 
@@ -39,7 +38,7 @@ def _legacy(store, kind='update_link', stage='executing', *, age=timedelta(hours
     return row['operation_id']
 
 
-@pytest.mark.parametrize('kind,state', [('insert_link', 'recovery_required'), ('update_link', 'recovery_required'), ('request_return', 'rejected')])
+@pytest.mark.parametrize('kind,state', [('insert_link', 'recovery_required'), ('update_link', 'recovery_required')])
 @pytest.mark.parametrize('stage', ['adapter-received', 'queued-for-fusion', 'executing'])
 def test_old_live_claims_finish_without_repeating_mutations(tmp_path, kind, state, stage):
     store = CadLinkStore.for_data_dir(tmp_path)
@@ -71,19 +70,6 @@ def test_exact_file_evidence_wins_over_legacy_timeout(tmp_path):
     assert settle_from_heartbeat(store, _heartbeat(links=[{'operationId': 'old-claim', 'exportId': 'wge_1'}]), ipc_folder(tmp_path)) == 1
     assert settle_abandoned_live_claims(store, now=NOW) == 0
     assert store.get_operation('old-claim')['state'] == 'accepted'
-    store.close()
-
-
-@pytest.mark.parametrize('evidence', ['recent', 'last'])
-def test_failed_return_is_settled_by_heartbeat_without_return_poll(tmp_path, evidence):
-    store = CadLinkStore.for_data_dir(tmp_path)
-    operation_id = _legacy(store, 'request_return')
-    report = {'channel': 'returnRequest', 'outcome': 'failed',
-              ('requestId' if evidence == 'recent' else 'correlationId'): operation_id}
-    heartbeat = _heartbeat(**{evidence: [report] if evidence == 'recent' else report})
-    assert settle_from_heartbeat(store, heartbeat, ipc_folder(tmp_path)) == 1
-    assert store.get_operation(operation_id)['state'] == 'rejected'
-    assert store.get_operation(operation_id)['reason'] == 'adapter_failed'
     store.close()
 
 
@@ -343,8 +329,8 @@ def test_legacy_hidden_handoff_is_never_delivered_at_startup(tmp_path, state):
         directory.mkdir()
         hidden = directory / '.hidden-request.json.live-old-claim.tmp'
         hidden.write_text(json.dumps({'schemaVersion': 3, 'requestId': 'hidden-request', 'operationId': 'hidden-request'}))
-        recovered = recover_staged_fusion_requests(tmp_path, lookup_operation=store.get_operation)
-        assert recovered == ()
+        recovered = recover_staged_fusion_requests(tmp_path)
+        assert recovered == ('hidden-request',)
         assert not (directory / 'hidden-request.json').exists()
         assert not hidden.exists()
         assert store.get_operation('hidden-request')['state'] == state
@@ -389,22 +375,6 @@ def test_file_heartbeat_rejects_invalid_stale_or_future_reports(tmp_path, case):
         _status(tmp_path, updatedAt=(now + FUSION_STATUS_MAX_SKEW + timedelta(seconds=10)).isoformat())
     assert select_heartbeat(tmp_path, now) == (None, None)
     assert addin_update.loaded_addin_identity(tmp_path) is None
-
-
-def test_cancelled_legacy_return_with_lost_completion_settles_durably(tmp_path):
-    store = CadLinkStore.for_data_dir(tmp_path)
-    operation_id = _legacy(store, 'request_return')
-    assert request_cancel(store, operation_id)['state'] == 'cancel_requested'
-    with store._lock, store._transaction() as conn:
-        conn.execute('UPDATE cad_operations SET updated_at = ? WHERE operation_id = ?',
-                     ((NOW - LEGACY_LIVE_CLAIM_MAX_AGE).isoformat(), operation_id))
-    assert settle_abandoned_live_claims(store, now=NOW) == 1
-    assert store.get_operation(operation_id)['state'] == 'cancelled'
-    assert settle_abandoned_live_claims(store, now=NOW) == 0
-    store.close()
-    reopened = CadLinkStore.for_data_dir(tmp_path)
-    assert reopened.get_operation(operation_id)['state'] == 'cancelled'
-    reopened.close()
 
 
 @pytest.mark.parametrize('endpoint_kind', ['locked', 'directory'])
@@ -454,35 +424,6 @@ def test_endpoint_cleanup_still_runs_after_capability_write_failure(tmp_path, mo
     fusion_delivery.advertise_fusion_delivery(tmp_path)
     assert not endpoint.exists()
     assert 'Could not advertise' in caplog.text
-
-
-@pytest.mark.parametrize('entrypoint', ['startup', 'return-api', 'status', 'reconcile'])
-def test_file_return_lost_slot_settlement_is_wired_to_backend_entrypoints(tmp_path, entrypoint):
-    from server.cadlink import api
-    from server.cadlink.fusion.fusion_return import get_return_request
-
-    app = create_app(data_dir=tmp_path)
-    workspace = tmp_path / 'cadlink-folder'  # <data>/workspace is the runs folder
-    workspace.mkdir()
-    app.state.cad_workspace.select(workspace)
-    operation_id = _legacy(app.state.cadlink_store, 'request_return', claim=False)
-    ipc_folder(tmp_path, create=True)  # Startup published the machine-local IPC folder.
-    request = SimpleNamespace(app=app)
-    try:
-        if entrypoint == 'startup':
-            handler = next(h for h in app.router.on_startup if h.__name__ == 'advertise_fusion_delivery_on_startup')
-            asyncio.run(handler())
-        elif entrypoint == 'return-api':
-            assert asyncio.run(get_return_request(operation_id, request))['state'] == 'rejected'
-        elif entrypoint == 'status':
-            payload = api.FusionStatusRequest.model_validate({'design': {'formula': 'OSSE', 'L': 120, 'a': 45}})
-            asyncio.run(api.fusion_status(payload, request))
-        else:
-            asyncio.run(post_reconcile_cad_operation(operation_id, request))
-        assert app.state.cadlink_store.get_operation(operation_id)['state'] == 'rejected'
-        assert app.state.cadlink_store.get_operation(operation_id)['reason'] == 'adapter_failed'
-    finally:
-        app.state.cadlink_store.close()
 
 
 def test_returns_retains_constant_off_policy_for_frontend_clients(tmp_path, monkeypatch):

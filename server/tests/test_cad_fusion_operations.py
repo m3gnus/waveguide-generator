@@ -10,7 +10,6 @@ from server.cadlink.fusion import fusion_delivery
 from server.cadlink.fusion.fusion_delivery import expire_unstarted_insert_handoffs
 from server.cadlink.fusion.fusion_delivery import recover_staged_fusion_requests
 from server.cadlink.operations import request_digest
-from server.cadlink.fusion.fusion_return import publish_return_request
 from server.cadlink.store import CadLinkStore
 from server.exports.cad_handoff import publish_fusion_handoff
 
@@ -23,6 +22,13 @@ def _bundle(workspace: Path, name: str = "horn.wglink") -> Path:
     bundle = workspace / "wglink" / name
     bundle.mkdir(parents=True, exist_ok=True)
     return bundle
+
+
+def _insert(data_dir: Path, workspace: Path, store: CadLinkStore, request_id: str = "insert-1",
+            export_id: str = "wge_1"):
+    return publish_fusion_handoff(
+        data_dir, workspace, store, _result(_bundle(workspace), export_id), request_id=request_id,
+    )
 
 
 def _result(bundle: Path, export_id: str = "wge_1") -> dict[str, object]:
@@ -72,94 +78,52 @@ def test_capabilities_advertise_source_identity_without_changing_delivery(
     assert type(fusion_delivery.capabilities()["automaticDomain"]) is int
 
 
-def test_publishing_a_return_request_records_its_operation_before_the_file(
+def test_publishing_a_handoff_records_its_operation_before_the_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data_dir = tmp_path / "data"
+    workspace = tmp_path / "workspace"
     store = _store(data_dir)
     original = store.accept_operation
     observed: list[bool] = []
 
     def accept(*args, **kwargs):
         observed.append(
-            not (data_dir / "ipc" / "wglink" / ".fusion-return-requests" / "return-1.json").exists()
+            not (data_dir / "ipc" / "wglink" / ".fusion-handoffs" / "insert-1.json").exists()
         )
         return original(*args, **kwargs)
 
     monkeypatch.setattr(store, "accept_operation", accept)
-    path, request_id = publish_return_request(
-        data_dir,
-        store,
-        session_id="session-a",
-        design_id="wgd_1",
-        document_id="fusion:doc-1",
-        instance_id="instance-1",
-        expected_return_state_hash="sha256:state-1",
-        request_id="return-1",
-    )
+    published = _insert(data_dir, workspace, store)
 
     assert observed == [True]
-    assert path.is_file() and request_id == "return-1"
-    row = store.get_operation(request_id)
-    assert row is not None and row["kind"] == "request_return" and row["state"] == "received"
+    assert published.path.is_file() and published.request_id == "insert-1"
+    row = store.get_operation("insert-1")
+    assert row is not None and row["kind"] == "insert_link" and row["state"] == "received"
 
 
 def test_a_republished_request_id_with_another_target_is_a_conflict(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
+    workspace = tmp_path / "workspace"
     store = _store(data_dir)
-    first, _ = publish_return_request(
-        data_dir,
-        store,
-        session_id="session-a",
-        design_id="wgd_1",
-        document_id="fusion:doc-1",
-        instance_id="instance-1",
-        expected_return_state_hash="sha256:state-1",
-        request_id="return-1",
-    )
-    before = first.read_bytes()
+    first = _insert(data_dir, workspace, store)
+    before = first.path.read_bytes()
 
     with pytest.raises(ValueError, match="another operation"):
-        publish_return_request(
-            data_dir,
-            store,
-            session_id="session-a",
-            design_id="wgd_1",
-            document_id="fusion:doc-2",
-            instance_id="instance-1",
-            expected_return_state_hash="sha256:state-1",
-            request_id="return-1",
-        )
+        _insert(data_dir, workspace, store, export_id="wge_2")
 
-    assert first.read_bytes() == before
+    assert first.path.read_bytes() == before
 
 
 def test_a_terminal_operation_is_never_republished(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
+    workspace = tmp_path / "workspace"
     store = _store(data_dir)
-    path, _ = publish_return_request(
-        data_dir,
-        store,
-        session_id="session-a",
-        design_id="wgd_1",
-        document_id="fusion:doc-1",
-        instance_id="instance-1",
-        expected_return_state_hash="sha256:state-1",
-        request_id="return-1",
-    )
-    path.unlink()  # Fusion claimed and completed the visible delivery.
-    store.record_outcome("return-1", 0, "accepted")
+    path = _insert(data_dir, workspace, store).path
+    path.unlink()  # Fusion claimed the visible delivery; it expired unstarted.
+    store.record_outcome("insert-1", 0, "cancelled", reason="expired")
 
-    recovered_path, _ = publish_return_request(
-        data_dir,
-        store,
-        session_id="session-a",
-        design_id="wgd_1",
-        document_id="fusion:doc-1",
-        instance_id="instance-1",
-        expected_return_state_hash="sha256:state-1",
-        request_id="return-1",
-    )
+    recovered_path = _insert(data_dir, workspace, store).path
 
     assert recovered_path == path
     assert not recovered_path.exists()
@@ -194,36 +158,6 @@ def test_a_superseded_update_is_recorded_cancelled_superseded(tmp_path: Path) ->
     row = store.get_operation(older.request_id)
     assert row is not None and (row["state"], row["reason"]) == ("cancelled", "superseded")
     assert "update-new" in json.loads(row["outcome_json"])["message"]
-
-
-def test_a_return_for_an_old_session_is_recorded_cancelled(tmp_path: Path) -> None:
-    data_dir = tmp_path / "data"
-    store = _store(data_dir)
-    _, old_id = publish_return_request(
-        data_dir,
-        store,
-        session_id="session-old",
-        design_id="wgd_1",
-        document_id="fusion:doc-1",
-        instance_id="instance-1",
-        expected_return_state_hash="sha256:state-1",
-        request_id="return-old",
-    )
-    publish_return_request(
-        data_dir,
-        store,
-        session_id="session-new",
-        design_id="wgd_1",
-        document_id="fusion:doc-1",
-        instance_id="instance-1",
-        expected_return_state_hash="sha256:state-1",
-        request_id="return-new",
-    )
-
-    row = store.get_operation(old_id)
-    assert row is not None and (row["state"], row["reason"]) == (
-        "cancelled", "session_changed"
-    )
 
 
 def test_an_unstarted_insert_expires_and_is_never_delivered(tmp_path: Path) -> None:
@@ -321,6 +255,7 @@ def test_the_v3_handoff_keys_are_unchanged_for_the_pinned_addin(tmp_path: Path) 
 
 def test_store_failure_publishes_no_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     data_dir = tmp_path / "data"
+    workspace = tmp_path / "workspace"
     store = _store(data_dir)
 
     def fail(*_args, **_kwargs):
@@ -328,23 +263,15 @@ def test_store_failure_publishes_no_file(tmp_path: Path, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(store, "accept_operation", fail)
     with pytest.raises(OSError, match="registry unavailable"):
-        publish_return_request(
-            data_dir,
-            store,
-            session_id="session-a",
-            design_id="wgd_1",
-            document_id="fusion:doc-1",
-            instance_id="instance-1",
-            expected_return_state_hash="sha256:state-1",
-            request_id="return-1",
-        )
-    assert not (data_dir / "ipc" / "wglink" / ".fusion-return-requests" / "return-1.json").exists()
+        _insert(data_dir, workspace, store)
+    assert not (data_dir / "ipc" / "wglink" / ".fusion-handoffs" / "insert-1.json").exists()
 
 
 def test_file_failure_does_not_leave_a_received_operation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data_dir = tmp_path / "data"
+    workspace = tmp_path / "workspace"
     store = _store(data_dir)
 
     def fail(*_args, **_kwargs):
@@ -352,26 +279,18 @@ def test_file_failure_does_not_leave_a_received_operation(
 
     monkeypatch.setattr(fusion_delivery.os, "replace", fail)
     with pytest.raises(OSError, match="disk full"):
-        publish_return_request(
-            data_dir,
-            store,
-            session_id="session-a",
-            design_id="wgd_1",
-            document_id="fusion:doc-1",
-            instance_id="instance-1",
-            expected_return_state_hash="sha256:state-1",
-            request_id="return-1",
-        )
-    row = store.get_operation("return-1")
+        _insert(data_dir, workspace, store)
+    row = store.get_operation("insert-1")
     assert row is not None and (row["state"], row["reason"]) == (
         "cancelled", "publication_failed"
     )
 
 
-def test_failed_compensation_leaves_a_staged_request_startup_can_publish(
+def test_failed_compensation_leaves_a_staged_request_startup_removes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data_dir = tmp_path / "data"
+    workspace = tmp_path / "workspace"
     store = _store(data_dir)
     real_replace = fusion_delivery.os.replace
 
@@ -386,25 +305,16 @@ def test_failed_compensation_leaves_a_staged_request_startup_can_publish(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("registry unavailable")),
     )
     with pytest.raises(OSError, match="disk full"):
-        publish_return_request(
-            data_dir,
-            store,
-            session_id="session-a",
-            design_id="wgd_1",
-            document_id="fusion:doc-1",
-            instance_id="instance-1",
-            expected_return_state_hash="sha256:state-1",
-            request_id="return-1",
-        )
-    folder = data_dir / "ipc" / "wglink" / ".fusion-return-requests"
-    assert not (folder / "return-1.json").exists()
+        _insert(data_dir, workspace, store)
+    folder = data_dir / "ipc" / "wglink" / ".fusion-handoffs"
+    assert not (folder / "insert-1.json").exists()
     assert any(path.name.endswith(".tmp") for path in folder.iterdir())
 
     monkeypatch.setattr(fusion_delivery.os, "replace", real_replace)
-    assert recover_staged_fusion_requests(
-        data_dir, lookup_operation=store.get_operation
-    ) == ("return-1",)
-    assert (folder / "return-1.json").is_file()
+    # A handoff is never delivered by startup recovery: a live Send retries.
+    assert recover_staged_fusion_requests(data_dir) == ("insert-1",)
+    assert not (folder / "insert-1.json").exists()
+    assert not any(path.name.endswith(".tmp") for path in folder.iterdir())
 
 
 def test_failed_expiry_recording_restores_the_request(
