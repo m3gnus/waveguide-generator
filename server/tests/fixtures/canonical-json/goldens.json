@@ -514,60 +514,6 @@
     },
     {
       "kind": "helper",
-      "path": "server/cadlink/intake/native_source.py",
-      "symbol": "_canonical",
-      "original_line": 23,
-      "original_source": "def _canonical(value):\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), allow_nan=False).encode()",
-      "cases": [
-        {
-          "input": "nested",
-          "bytes_hex": "7b2261223a7b2261223a312c2262223a327d2c227a223a5b6e756c6c2c747275652c66616c73652c7b225c7530306539223a225c75393665612f5c75643833645c75646530305c6e5c225c5c227d5d7d",
-          "sha256": "afcf906f123cdf35b5a104fdf3dedd18b24e14e3def8ae62cde60e03ca99acc6"
-        },
-        {
-          "input": "numbers",
-          "bytes_hex": "7b226578706f6e656e74223a31652b32302c22666c6f6174223a302e312c226c61726765223a31303030303030303030303030303030303030303030303030303030303030303030303030303030302c226e656761746976655f7a65726f223a2d302e302c22736d616c6c223a31652d30372c2277686f6c655f666c6f6174223a312e307d",
-          "sha256": "6e7f758353c4212731bd906a1ffa8353e6a2ace607eed49de992ff4d63e03d5b"
-        },
-        {
-          "input": "tuple",
-          "bytes_hex": "5b225c7530306535222c5b6e756c6c2c66616c73655d2c7b2261223a322c227a223a317d5d",
-          "sha256": "a424f9b718b87a5de0ad7eca1c9015efe57c7ded2104b5ba5f0ac0784fd86c0b"
-        },
-        {
-          "input": "scalars",
-          "bytes_hex": "5b6e756c6c2c747275652c66616c73652c302e312c31652d30372c31303030303030303030303030303030303030303030303030303030303030303030303030303030302c225c75303065395c75393665615c75643833645c7564653030225d",
-          "sha256": "ed3dee1abd73f0b211d0d8f0f8fd0b080ae39806637dfdb99cec00dd41bea46a"
-        },
-        {
-          "input": "empty",
-          "bytes_hex": "7b7d",
-          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
-        },
-        {
-          "input": "nan",
-          "error": "ValueError"
-        },
-        {
-          "input": "positive_infinity",
-          "error": "ValueError"
-        },
-        {
-          "input": "negative_infinity",
-          "error": "ValueError"
-        },
-        {
-          "input": "normalized",
-          "error": "TypeError"
-        },
-        {
-          "input": "string_default",
-          "error": "TypeError"
-        }
-      ]
-    },
-    {
-      "kind": "helper",
       "path": "server/cadlink/onshape/return_leg.py",
       "symbol": "_canonical",
       "original_line": 56,

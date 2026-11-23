@@ -293,7 +293,7 @@ jobs:
     # cap at 97% with no hang. It was capped at 60m; RC run 38144034409 on
     # 2026-10-11 was then cut off at 60m at 93% (the previous green RC took
     # 57.7m), so it is capped at 80m. The heaviest files (test_exports_sizing,
-    # test_general_horn_sources, the real BEMPP/field-plane/pipeline tests) are
+    # the real BEMPP/field-plane/pipeline tests) are
     # the place to win time back; every other job keeps matrix.budget.
     #
     # macOS harness is the other exception. On main (run 36940318262,

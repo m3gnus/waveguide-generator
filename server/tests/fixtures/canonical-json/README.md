@@ -43,7 +43,6 @@ to run with only the standard library, bypassing the contracts package initializ
 | `server/cadlink/fusion/fusion_outcomes.py:192` | `_log_last_request` | `canonical_ascii_json` |
 | `server/cadlink/fusion/fusion_status.py:345` | `_fingerprint_hash` | `canonical_ascii_json` |
 | `server/cadlink/intake/ingest.py:19` | `_canonical` | `canonical_normalized_bytes` |
-| `server/cadlink/intake/native_source.py:16` | `_canonical` | `canonical_ascii_strict_bytes` |
 | `server/cadlink/onshape/return_leg.py:21` | `_canonical` | `canonical_ascii_strict_bytes` |
 | `server/cadlink/operations.py:14` | `canonical_json` | `canonical_utf8_strict_json` |
 | `server/cadlink/intake/step_evidence.py:21` | `_canonical` | `canonical_ascii_strict_bytes` |

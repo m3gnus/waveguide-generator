@@ -2,6 +2,7 @@
 
 from collections import Counter
 from copy import deepcopy
+import hashlib
 from io import BytesIO
 import json
 from zipfile import ZipFile
@@ -13,7 +14,6 @@ import numpy as np
 import pytest
 
 from server.platform import json_file
-from server.cadlink.intake.native_source import read_native_source
 from server.source_editor import PresetStore, create_router
 from server.tests.native_geometry_oracle import certificate, segment
 
@@ -287,7 +287,14 @@ def test_real_bundle_reopens_exact_recipe_and_closed_mesh(client, kind, attachme
     with ZipFile(BytesIO(response.content)) as archive:
         assert set(archive.namelist()) == {"source.json", "geometry.step", "preview.msh"}
         archive.extractall(destination)
-    raw, contour, drive, _ = read_native_source(destination)
+    from hornlab_mesher.source_contour import ContourDrive, SourceContour
+
+    manifest = json.loads((destination / "source.json").read_bytes())
+    for name, expected in manifest["members"].items():
+        assert "sha256:" + hashlib.sha256((destination / name).read_bytes()).hexdigest() == expected
+    contour = SourceContour.from_dict(manifest["recipe"]["contour"])
+    drive = ContourDrive(**manifest["drive"])
+    drive.validate(contour)
     assert json.loads(json.dumps(contour.to_dict())) == doc["contour"]
     assert dict(drive.weights) == doc["drive"]["weights"]
     assert drive.motion == doc["drive"]["motion"]
@@ -301,7 +308,7 @@ def test_real_bundle_reopens_exact_recipe_and_closed_mesh(client, kind, attachme
     assert np.all(np.linalg.norm(normals, axis=1) > 1e-12)
     assert np.sum(np.einsum("ij,ij->i", xyz[:, 0], normals)) > 0
     origin = np.array(attachment["dimensions"].get("center_mm", [0, 0, 0]))
-    for i, patch in enumerate(raw["patches"]):
+    for i, patch in enumerate(manifest["patches"]):
         faces = xyz[tags == patch["mesh_tag"]] - origin
         assert len(faces)
         if patch["role"] == "moving":

@@ -10,11 +10,10 @@ and host-memory admission gates remain unchanged. A restricted field refines
 only the verified rigid horn-wall selector; it never becomes a source role.
 
 The old Experimental assembly editor and its assembly authoring routes are
-retired. These native artifact and imported-request contracts remain for existing
-bundles and stored runs. `server.cadlink.intake.native_source` delegates shared
-assembly recipes to `native_assembly.read_assembly`, which reconstructs the exact
-mesher `SourceAssembly` recipe. Standalone baffle export also still needs the
-mesher's `FrontBaffle`; neither module can be removed with the old editor.
+retired, and so is the native ingestion that turned their artifacts into
+ingestion records (removed 23 Nov 2026; no route reached it). The
+imported-request contract remains for records published before then and for
+stored runs. Standalone baffle export still uses the mesher's `FrontBaffle`.
 
 Stored results replay through the existing job results API directly from their
 persisted payload. Reopening an imported run uses its stored workspace and

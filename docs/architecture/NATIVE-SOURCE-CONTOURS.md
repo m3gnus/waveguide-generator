@@ -1,10 +1,13 @@
 # Native source contour ingestion v1
 
 The producer API and canonical model are documented in the mesher's
-`docs/source-contours.md`. This coordinated additive contract uses
-`server.cadlink.intake.native_source.ingest_native_source` with `CadLinkStore`, a data
-directory and `ImportedMeshSizes`. It publishes a normal immutable ingestion
-ID usable by the existing imported solve job route. No managed CAD-return
+`docs/source-contours.md`. WG 0.3.6 and 0.3.7 ingested native source artifacts
+through the old Experimental assembly editor, publishing a normal immutable
+ingestion ID usable by the existing imported solve job route. That editor was
+retired, and the ingestion module (`server/cadlink/intake/native_source.py` and
+`native_assembly.py`), which nothing else reached, was removed on 23 Nov 2026.
+Records it published are still read: their `native_source` contract below is
+checked at planning, submission and direct Metal entry. No managed CAD-return
 manifest or `linked_throat` disc is fabricated.
 
 `source.json` is native authoring authority. Required version 1 and feature
