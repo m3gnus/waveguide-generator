@@ -22,13 +22,6 @@
 .cad-frame-view figcaption { color: var(--fg3); font-size: var(--text-micro); }
 .cad-secondary-action { justify-content: center; width: 100%; margin-top: 8px; }
 
-/* One notice channel at the top of the rail. */
-
-/* The evidence behind a refusal, one chevron away from its sentence. */
-.cad-alert-diagnostics > summary { cursor: pointer; color: var(--fg3); font-size: var(--text-micro); }
-.cad-alert-diagnostics > summary:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: 2px; }
-.cad-alert-diagnostics > p { margin: 4px 0 0; }
-
 /* ---- 1 · Project ---- */
 .cad-project-row { display: flex; align-items: flex-start; gap: 8px; }
 .cad-project-title { display: grid; gap: 2px; min-width: 0; flex: 1; }
