@@ -25,8 +25,6 @@ export interface CadObservationActivity {
   observationKey: string;
   /** Non-solve requests; solves are observed through the jobs snapshot. */
   requests: readonly CadObservedRequest[];
-  /** Pull/return waiters that have no receipt yet. */
-  awaitingReturn: boolean;
 }
 
 export interface CadObservationOptions {
@@ -40,7 +38,7 @@ export interface CadObservationOptions {
   /** Supplied by the receipt owner in S5-2. Reload the feed AND read each named
    * non-solve receipt by exact id (even when absent from the pending feed).
    * Return only ids whose outcomes were successfully reconciled. Throwing or
-   * omitting an id leaves it retryable; listing absence never settles a waiter. */
+   * omitting an id leaves it retryable; listing absence never settles an awaited request. */
   reloadReceipts(awaitedRequestIds: readonly string[]): Promise<ReadonlySet<string>>;
   manager?: Pick<typeof jobsSocket, 'getSnapshot' | 'subscribe' | 'subscribeCadOperations' | 'refresh'>;
   connection?: CadConnectionStore;
@@ -69,8 +67,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const restarts = new Set<() => void>();
   const visible = () => document.visibilityState !== 'hidden';
-  const working = () => options.getActivity().awaitingReturn
-    || options.getActivity().requests.some((request) => pendingRequest(request) && !PARKED.has(request.state))
+  const working = () => options.getActivity().requests.some((request) => pendingRequest(request) && !PARKED.has(request.state))
     || manager.getSnapshot().jobs.some(movingCadJob);
   let wasWorking = working();
   const restart = () => restarts.forEach((fn) => fn());
@@ -89,7 +86,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     // focus or a quiet-rate listing notices; until then quiet cadence applies.
     const fusionClosed = connection.getState().fusionStatus?.state === 'closed';
     if ((input.workspaceMode === 'cad' && !fusionClosed)
-      || connection.getState().fusionStatus?.processRunning || input.awaitingReturn) return base;
+      || connection.getState().fusionStatus?.processRunning) return base;
     if (input.cadFolderConfigured === false) return idle;
     return now() - lastActivityAt >= CAD_OBSERVATION_INTERVALS.quietMs ? idle : base;
   };
@@ -237,7 +234,6 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     const folderChanged = next.cadFolderConfigured !== activity.cadFolderConfigured;
     const folderDiscovered = activity.cadFolderConfigured === null && folderChanged;
     const enteredCad = next.workspaceMode === 'cad' && activity.workspaceMode !== 'cad';
-    const pullChanged = next.awaitingReturn !== activity.awaitingReturn;
     const modeChanged = next.workspaceMode !== activity.workspaceMode;
     const nextWorking = working();
     const workChanged = nextWorking !== wasWorking;
@@ -253,7 +249,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       if (!(folderChanged || enteredCad || applicationChanged)) readStatusSettled();
     }
     if ((folderChanged && !folderDiscovered) || enteredCad || applicationChanged) wake();
-    else if (contextChanged || folderChanged || modeChanged || pullChanged || workChanged) restart();
+    else if (contextChanged || folderChanged || modeChanged || workChanged) restart();
   });
   const unsubscribeConnection = connection.subscribe((state) => {
     const next = state.fusionStatus;

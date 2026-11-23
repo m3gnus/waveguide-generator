@@ -96,7 +96,7 @@ interface SolveControl {
   /** The coordinator's current parametric plan, also shared with dock panels. */
   plan: SolvePlan | null;
   planPending: boolean;
-  /** `attention`: the token of the user action this Solve continues (a pull
+  /** `attention`: the token of the user action this Solve continues (a prepare
    * and solve), so it is never captured again; omitted, the press is the action. */
   solve(attention?: number): Promise<'submitted' | 'busy' | 'blocked' | 'pending'>;
   /** CAD Link mode: Solve solves the CAD model on screen. */
@@ -781,7 +781,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const solve = useCallback(async (inherited?: number) => {
     if (submissionInFlight.current) return 'busy' as const;
     // The user action's one token: captured here, at the press, unless this
-    // Solve continues an action that already captured it (a pull and solve).
+    // Solve continues an action that already captured it (a prepare and solve).
     // A click handler may pass its event; only a number is a token.
     const attention = typeof inherited === 'number' ? inherited : solveAttention.armSolve();
     if (engineBlocked) workspaceNavigation.activate('results');

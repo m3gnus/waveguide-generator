@@ -6,16 +6,6 @@ import type { DesignIdentity } from './document';
 import type { RefreshOptions } from '../shell/cadlink/arrivals';
 import { ProgramFault } from '../api/httpError';
 
-/** A report belonging to one error message: the protocol-level evidence a
- * surface puts behind a disclosure rather than in the sentence it shows.
- *
- * `message` names the error it belongs to, so a surface renders it only while
- * that exact error is the one on screen. */
-export interface ErrorDiagnostics {
-  message: string;
-  detail: string;
-}
-
 /** A failed preparation the server classified (`failure` on its answer). */
 export interface CadIngestFailure {
   /** WG's own failure, recorded for the developers. */
@@ -37,9 +27,7 @@ export interface CadWorkspaceSnapshot {
   /** Preparation feedback belongs to this CAD intent, including after failure. */
   preparationIntent?: number;
   sendingToFusion: boolean;
-  pullingFromFusion: boolean;
   error: string | null;
-  errorDiagnostics: ErrorDiagnostics | null;
   status: string | null;
   viewportNotice: string | null;
   /** The returns listing's folder answer; null until a listing has answered. */
@@ -54,8 +42,6 @@ export interface CadWorkspaceSnapshot {
   /** `meshLimitOverride`: the user chose Solve anyway over the triangle ceiling. */
   ingest(options?: { meshLimitOverride?: boolean }): Promise<void>;
   ingestSelected(options?: { meshLimitOverride?: boolean }): Promise<CadReturnIngestRecord>;
-  pullFromFusion(): Promise<CadReturnBundle>;
-  pullAndSolve(): Promise<'solving' | 'blocked' | 'failed'>;
   /** Prepare the selected model, then start its solve: a Solve the triangle
    * ceiling stopped, finished by Solve anyway (`meshLimitOverride`). */
   prepareAndSolve(options?: { meshLimitOverride?: boolean }): Promise<'solving' | 'blocked' | 'failed'>;
@@ -82,9 +68,7 @@ export const emptyCadWorkspace: CadWorkspaceSnapshot = {
   ingestFailure: null,
   preparationIntent: undefined,
   sendingToFusion: false,
-  pullingFromFusion: false,
   error: null,
-  errorDiagnostics: null,
   status: null,
   viewportNotice: null,
   cadFolderConfigured: null,
@@ -97,8 +81,6 @@ export const emptyCadWorkspace: CadWorkspaceSnapshot = {
   selectBundle: () => undefined,
   ingest: unavailable,
   ingestSelected: unavailable,
-  pullFromFusion: unavailable,
-  pullAndSolve: unavailable,
   prepareAndSolve: unavailable,
   sendWgToFusion: unavailable,
   cancelFusionConflict: () => undefined,

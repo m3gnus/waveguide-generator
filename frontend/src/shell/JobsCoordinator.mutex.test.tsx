@@ -40,7 +40,6 @@ import { fileMeshSetup, registeredMesh, useMeshImportStore } from '../stores/mes
 import { readLastModel, rememberLastModel } from '../stores/lastModel';
 import type { RegisteredMesh } from '../api/meshImport';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
-import { cadWorkspace } from '../stores/cadWorkspace';
 import { resetCadSolverFrameStore, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import {
   JobsCoordinator,
@@ -3535,13 +3534,6 @@ describe('solve invocation mutex', () => {
     ['Fusion reports newer geometry', true],
     ['Fusion reports nothing new (positive control for the same measurement)', false],
   ])('keeps Solve as the one primary action that solves the displayed model when %s', async (_name, fusionChangesAvailable) => {
-    const pullAndSolve = vi.fn(async () => 'solving' as const);
-    const pullFromFusion = vi.fn(async () => { throw new Error('not in this test'); });
-    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
-      ...cadWorkspace.getSnapshot(),
-      pullAndSolve,
-      pullFromFusion,
-    });
     useCadConnectionStore.setState({ fusionStatus: {
       running: true, state: 'stale', fusionChangesAvailable,
       observationFreshness: 'current', documentChangeDetectable: true,
@@ -3556,18 +3548,11 @@ describe('solve invocation mutex', () => {
     expect(host.textContent).not.toContain('Pull from Fusion & Solve');
 
     await act(async () => { buttons[0].click(); await Promise.resolve(); await Promise.resolve(); });
-    expect(pullAndSolve).not.toHaveBeenCalled();
-    expect(pullFromFusion).not.toHaveBeenCalled();
     expect(mocks.solveModel).toHaveBeenCalledOnce();
     expect(mocks.solveModel).toHaveBeenCalledWith('unfiled', expect.objectContaining({ prepared_id: 'wgi_displayed' }));
   });
 
   it('gives the keyboard shortcut the same meaning as the button while Fusion reports newer geometry', async () => {
-    const pullAndSolve = vi.fn(async () => 'solving' as const);
-    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
-      ...cadWorkspace.getSnapshot(),
-      pullAndSolve,
-    });
     useCadConnectionStore.setState({ fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never });
     act(() => { readyCad('wgi_displayed'); workspaceModeStore.setMode('cad'); });
     await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
@@ -3576,26 +3561,18 @@ describe('solve invocation mutex', () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }));
       await Promise.resolve(); await Promise.resolve();
     });
-    expect(pullAndSolve).not.toHaveBeenCalled();
     expect(mocks.solveModel).toHaveBeenCalledOnce();
     expect(mocks.solveModel).toHaveBeenCalledWith('unfiled', expect.objectContaining({ prepared_id: 'wgi_displayed' }));
   });
 
-  it('offers the Fusion refresh as its own action on the source line, which never solves', async () => {
-    const pullFromFusion = vi.fn(async () => ({}) as never);
-    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
-      ...cadWorkspace.getSnapshot(),
-      pullFromFusion,
-    });
+  it('says Fusion has newer geometry on the source line, with no action that asks Fusion for it', async () => {
     useCadConnectionStore.setState({ fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never });
     act(() => { readyCad('wgi_displayed'); workspaceModeStore.setMode('cad'); });
     await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
 
     const line = host.querySelector('.cad-source-line')!;
-    expect(line.textContent).toContain('Model loaded from Fusion · Newer CAD changes available');
-    const refresh = [...line.querySelectorAll('button')].find((button) => button.textContent === 'Refresh')!;
-    await act(async () => { refresh.click(); await Promise.resolve(); });
-    expect(pullFromFusion).toHaveBeenCalledOnce();
+    expect(line.textContent).toBe('Model loaded from Fusion · Newer CAD changes available');
+    expect(line.querySelector('button')).toBeNull();
     expect(mocks.solveModel).not.toHaveBeenCalled();
   });
 

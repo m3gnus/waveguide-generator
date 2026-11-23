@@ -383,10 +383,9 @@ describe('R2: a WGLink that reports only on command keeps every explicit action'
     realizedDimensions: { state: 'link_unavailable', instanceId: null, exportId: null, parameters: [] },
   } as unknown as FusionCadStatus;
 
-  it('the source line says when Fusion last reported, and keeps Refresh', () => {
+  it('the source line says when Fusion last reported', () => {
     const line = cadSourceLine(lastReport, true)!;
     expect(line.text).toMatch(/Fusion last reported .*not observed since$/);
-    expect(line.refresh).toBe(true);
     expect(line.text).not.toMatch(/offline|closed|Matches/i);
   });
 

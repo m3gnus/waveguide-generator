@@ -215,7 +215,6 @@ export function CadLinkPanel() {
     ingesting,
     sendingToFusion,
     error: actionError,
-    errorDiagnostics,
     status,
     viewportNotice,
     onshapeStatus,
@@ -294,13 +293,6 @@ export function CadLinkPanel() {
     }
   };
 
-  // The coordinator owns one pending pull shared by every control, so both
-  // entry points stay busy until arrival, failure, or the timeout.
-  const bringFromFusion = () => {
-    cadWorkspaceView.clearFeedback();
-    void cadWorkspaceView.pullFromFusion().catch(() => undefined);
-  };
-
   const sendToFusion = () => {
     if (cadLimitation) return;
     void cadWorkspaceView.sendWgToFusion().catch(() => undefined);
@@ -330,10 +322,6 @@ export function CadLinkPanel() {
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
   const designName = designNameSlug(documentName);
   const shownName = designName === UNTITLED_SLUG ? 'this design' : designName;
-  const canRequestFusionReturn = Boolean(
-    fusionStatus?.running && fusionStatus.documentName && fusionStatus.documentId
-    && fusionStatus.link && identity?.designId,
-  );
   // Onshape's Free plan makes every document world-readable. Say so before the
   // user sends, not after -- and say it from the plan WG actually read.
   const publicOnly = onshapeConnection?.plan?.publicOnly === true;
@@ -358,7 +346,6 @@ export function CadLinkPanel() {
   const addinVersion = !onshape && fusionStatus?.running && fusionStatus.adapterVersion
     ? `The Waveguide Generator add-in in Fusion ${fusionStatus.adapterVersion}`
     : undefined;
-  const fusionBothChanged = Boolean(fusionStatus?.wgChangesAvailable && fusionStatus.fusionChangesAvailable);
   const staleModel = model.preparation === 'stale';
   const solveCard = model.preparation === 'prepared';
   const onshapeActionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;
@@ -387,7 +374,6 @@ export function CadLinkPanel() {
     </>
     : <>
       <button className="btn-link link-button" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation ?? "Rebuild the linked Fusion waveguide from the current WG design."} onClick={sendToFusion}>Send to Fusion</button>
-      <button className="btn-link link-button" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Ask Fusion for the active document's current geometry and source tags." onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring geometry into WG'}</button>
     </>;
 
   // 2 · CAD Link: is CAD in sync with WG? One card, both directions. Install
@@ -435,12 +421,9 @@ export function CadLinkPanel() {
         {!onshape && workflow.state === 'not-configured' && fusionStatus?.cadFolderMissingPath && <RootFolderControls cadlinkOnly showPath={false}/>}
         {!onshape && workflow.state === 'not-configured' && !fusionStatus?.cadFolderMissingPath && <button className="btn-primary primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
         {!onshape && !unlinkedOnScreen && workflow.action === 'open' && <button className="btn-primary primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Open in Fusion 360'}</button>}
-        {!onshape && fusionStatus?.fusionChangesAvailable && !fusionStatus.wgChangesAvailable && <div className="cad-confirm-actions">
-          <button className="btn" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in'}</button>
-          <button className="btn-primary primary" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Bring the current Fusion geometry into WG, prepare it, and start the solve." onClick={() => { void cadWorkspaceView.pullAndSolve(); }}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in & solve'}</button>
-        </div>}
-        {!onshape && !unlinkedOnScreen && workflow.action === 'update' && <div className={fusionBothChanged ? 'cad-confirm-actions' : undefined}>
-          {fusionBothChanged && <button className="btn" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Keep the Fusion edits: bring the Fusion geometry into WG instead of overwriting it." onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring Fusion changes in'}</button>}
+        {/* Fusion's changes come in only when the user sends them from Fusion. */}
+        {!onshape && fusionStatus?.fusionChangesAvailable && <p className="cad-detail">Use Send to WG in Fusion to bring the current model into WG.</p>}
+        {!onshape && !unlinkedOnScreen && workflow.action === 'update' && <div>
           <button className="btn-primary primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Send WG changes to Fusion'}</button>
         </div>}
         {/* Onshape: the same card carries its send/return pair. */}
@@ -489,13 +472,6 @@ export function CadLinkPanel() {
         persistent conditions render inside the card they belong to. */}
     {error && <Notice tone="error">
       {error}
-      {/* The report behind the sentence: the adapter's own words, the entity
-          ids and the internal invariants. It belongs to this exact message,
-          so a later unrelated error leaves it behind rather than carrying a
-          stale explanation under a new headline. */}
-      {errorDiagnostics?.message === error && <DeveloperDetails summary="Diagnostics" className="cad-alert-diagnostics">
-        <p className="cad-detail">{errorDiagnostics.detail}</p>
-      </DeveloperDetails>}
     </Notice>}
     {status && <Notice tone="info" className="cad-status-strip" role="status">{status}</Notice>}
     {sendOutcome && <Notice tone={sendOutcome.tone === 'error' ? 'error' : 'info'} className="cad-status-strip" role={sendOutcome.tone === 'error' ? 'alert' : 'status'}>{sendOutcome.text}</Notice>}

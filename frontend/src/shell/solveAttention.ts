@@ -71,7 +71,7 @@ export const solveAttention = {
   /** A finished run the user asked for, whose Results were not revealed. */
   getReadyRun: (): string | null => readyRun,
 
-  /** The user pressed Solve (button, shortcut, palette, or a pull and solve).
+  /** The user pressed Solve (button, shortcut, palette, or a prepare and solve).
    * Returns the action's identity: the one token every continuation of this
    * press carries (`bindRun`/`bindOperation`'s `token`) and every failure of
    * it reports with. Call it once per user action, never on a delayed

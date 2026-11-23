@@ -577,22 +577,6 @@ export function getFusionCadStatus(
   }, fetcher);
 }
 
-export function requestFusionReturn(
-  target: {
-    designId: string;
-    documentId: string;
-    instanceId: string;
-    expectedReturnStateHash: string | null;
-  },
-  fetcher: typeof fetch = fetch,
-): Promise<{ status: 'requested'; requestId: string; documentName: string }> {
-  return jsonRequest('/api/cadlink/request-fusion-return', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(target),
-  }, fetcher);
-}
-
 export function ingestReturn(
   request: CadReturnIngestRequest,
   fetcher: typeof fetch = fetch,

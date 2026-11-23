@@ -47,7 +47,7 @@ describe('CAD observation scheduler without the coordinator', () => {
     visible = true;
     vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visible ? 'visible' : 'hidden');
     activity = { cadApplication: 'fusion360', cadFolderConfigured: true,
-      workspaceMode: 'cad', observationKey: 'design-1', requests: [], awaitingReturn: false };
+      workspaceMode: 'cad', observationKey: 'design-1', requests: [] };
     snapshot = { connection: 'disconnected', jobs: [], epoch: null, cursor: null, error: null };
     connection = createCadConnectionStore();
     readStatus = vi.fn(async () => status());
@@ -111,13 +111,6 @@ describe('CAD observation scheduler without the coordinator', () => {
   it('does not mistake an ordinary solver job for moving CAD work', async () => {
     snapshot.jobs = [{ id: 'ordinary', status: 'running' } as JobItem];
     await mount(); const before = reads(); await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(before);
-  });
-
-  it('an awaiting return keeps reads moving until it settles', async () => {
-    await mount(); change({ awaitingReturn: true }); const before = reads();
-    await vi.advanceTimersByTimeAsync(5_000); expect(reads()).toEqual(before.map((count) => count + 2));
-    change({ awaitingReturn: false }); const ended = reads();
-    await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(ended);
   });
 
   it.each(['focus', 'cad-mode', 'folder', 'addin-session'])('off: %s wakes idle reads once without restarting routine reads', async (event) => {
@@ -257,7 +250,7 @@ describe('CAD observation scheduler without the coordinator', () => {
   });
 
   it('suppresses hidden-page reads even with moving work, and resumes on visibility', async () => {
-    activity.awaitingReturn = true; visible = false;
+    activity.requests = [{ id: 'send-1', state: 'processing' }]; visible = false;
     await mount(); await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual([0, 0]);
     window.dispatchEvent(new Event('focus')); await vi.advanceTimersByTimeAsync(5_000); expect(reads()).toEqual([0, 0]);
     visible = true; document.dispatchEvent(new Event('visibilitychange')); await vi.advanceTimersByTimeAsync(0);

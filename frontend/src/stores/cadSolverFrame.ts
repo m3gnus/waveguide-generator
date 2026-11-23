@@ -137,7 +137,7 @@ export const useCadSolverFrameStore = create<CadSolverFrameStore>((set, get) => 
 }));
 
 /** The read of this ingestion's frame under way, if any: a Solve given right
- * after a preparation (Bring in & solve) waits for it, and judges the frame
+ * after a preparation (prepare and solve) waits for it, and judges the frame
  * the card is about to show rather than a read still in flight. */
 export function frameReadInFlight(ingestId: string | null | undefined): Promise<void> | null {
   return (ingestId ? loads.get(ingestId) : undefined) ?? null;

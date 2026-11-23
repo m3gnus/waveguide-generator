@@ -55,8 +55,6 @@ beforeEach(() => {
     if (path === '/api/cadlink/fusion-status') return json(status());
     if (path.includes('/receipts?')) return json({ feed_id: 'cutover', receipts, cursor: receipts.at(-1)?.cursor ?? 0, has_more: false });
     if (path === '/api/cadlink/recovery-notices') return json({ notices: [] });
-    if (path === '/api/cadlink/request-fusion-return') return json({ requestId: 'pull-1', documentName: 'Speaker' });
-    if (path === '/api/cadlink/return-requests/pull-1') return json({ requestId: 'pull-1', state: 'processing', reason: null, message: null });
     if (path === '/api/cadlink/ingest') return json(record);
     if (path === `/api/cadlink/ingest/${record.ingest_id}`) return json(record);
     if (path.endsWith('/viewport-mesh') || path.endsWith('/mesh')) return new Response(mesh);
@@ -140,36 +138,7 @@ it('an older startup Send cannot cancel the model load of a newer accepted Fusio
   expect(compareSelection.getSnapshot().awaiting).toBe(run.id);
 });
 
-it('gives a correlated pull one selection and ingest owner despite simultaneous observation listings (rows 5, 25)', async () => {
-  stop = mountCadWorkspaceOwners(); await flush();
-  const first = cadWorkspace.getSnapshot().pullFromFusion();
-  expect(cadWorkspace.getSnapshot().pullFromFusion()).toBe(first);
-  await flush();
-  returns = [{ ...bundle, requestId: 'pull-1', modifiedAt: new Date().toISOString() }];
-  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true });
-  await first; await flush();
-  expect(calls('/api/cadlink/request-fusion-return')).toHaveLength(1);
-  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
-  expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
-  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
-  expect(fetcher.mock.calls.every(([input]) => !String(input).includes('/api/cadlink/live'))).toBe(true);
-});
-
-it('Bring in and solve joins the arrival preparation and submits once through the job owner (rows 18, 25)', async () => {
-  const solve = vi.fn(async () => 'submitted' as const);
-  vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
-  stop = mountCadWorkspaceOwners(); await flush();
-  const action = cadWorkspace.getSnapshot().pullAndSolve(); await flush();
-  returns = [{ ...bundle, requestId: 'pull-1' }];
-  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true });
-  expect(await action).toBe('solving');
-  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
-  expect(solve).toHaveBeenCalledOnce();
-});
-
-it('a Bring in and solve stopped at the triangle ceiling asks Solve anyway, which prepares with the override and solves', async () => {
+it('a Solve stopped at the triangle ceiling asks Solve anyway, which prepares with the override and solves', async () => {
   const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
   const solve = vi.fn(async () => 'submitted' as const);
   vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
@@ -184,10 +153,10 @@ it('a Bring in and solve stopped at the triangle ceiling asks Solve anyway, whic
         next_step: 'Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size.',
         triangle_count: 28_944, limit: 22_000 } }, 422));
   });
+  returns = [bundle];
   stop = mountCadWorkspaceOwners(); await flush();
-  const action = cadWorkspace.getSnapshot().pullAndSolve(); await flush();
-  returns = [{ ...bundle, requestId: 'pull-1' }];
-  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true });
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  const action = cadWorkspace.getSnapshot().prepareAndSolve(); await flush();
   // A choice, not a failure: the Solve waits for the pop-up's answer.
   expect(await action).toBe('blocked');
   expect(cadWorkspace.getSnapshot().error).toBeNull();
@@ -197,36 +166,22 @@ it('a Bring in and solve stopped at the triangle ceiling asks Solve anyway, whic
   expect(solve).not.toHaveBeenCalled();
   // Solve anyway: one preparation with the override, then the same public Solve.
   expect(await cadWorkspace.getSnapshot().prepareAndSolve({ meshLimitOverride: true })).toBe('solving');
-  expect(bodies.map((body) => body.meshLimitOverride ?? false)).toEqual([false, true]);
+  expect(bodies.map((body) => body.meshLimitOverride ?? false).at(-1)).toBe(true);
+  expect(bodies.slice(0, -1).every((body) => !body.meshLimitOverride)).toBe(true);
   expect(useCadReturnStore.getState().ingestRecord?.mesh_limit_override).toBe(true);
   expect(solve).toHaveBeenCalledOnce();
   meshCeilingChoice.clear();
 });
 
-it('a Bring in and solve whose preparation failed says so once, on the model\'s status line, never as a red error', async () => {
-  const calm = 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.';
-  const base = fetcher.getMockImplementation()!;
-  fetcher.mockImplementation((input, init) => String(input) !== '/api/cadlink/ingest' ? base(input, init)
-    : Promise.resolve(json({ detail: { code: 'preparation_failed', failure: 'internal', message: calm, retry: true, diagnostic: 'worker exited 9' } }, 422)));
-  stop = mountCadWorkspaceOwners(); await flush();
-  const action = cadWorkspace.getSnapshot().pullAndSolve(); await flush();
-  returns = [{ ...bundle, requestId: 'pull-1' }];
-  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true });
-  expect(await action).toBe('failed');
-  expect(cadWorkspace.getSnapshot().error).toBeNull();
-  expect(cadWorkspace.getSnapshot().ingestError).toBe(calm);
-  expect(cadWorkspace.getSnapshot().ingestFailure).toEqual({ recorded: true, retry: true, diagnostic: 'worker exited 9' });
-});
-
-it.each([false, true])('Bring in and solve waits for the arrival frame and rechecks supersession (%s)', async (superseded) => {
+it.each([false, true])('Prepare and solve waits for the model\'s frame read and rechecks supersession (%s)', async (superseded) => {
   const frame = deferred<Response>();
   const reading = useCadSolverFrameStore.getState().load(record.ingest_id, (() => frame.promise) as typeof fetch);
   const solve = vi.fn(async () => 'submitted' as const);
   vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
+  returns = [bundle];
   stop = mountCadWorkspaceOwners(); await flush();
-  const action = cadWorkspace.getSnapshot().pullAndSolve(); await flush();
-  returns = [{ ...bundle, requestId: 'pull-1' }];
-  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true }); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  const action = cadWorkspace.getSnapshot().prepareAndSolve(); await flush();
   expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
   expect(solve).not.toHaveBeenCalled();
   if (superseded) useCadReturnStore.setState({ ingestRecord: { ...record, ingest_id: 'newer-model' } });
@@ -584,23 +539,6 @@ it('pending outbound operations restored by the existing operation reader resume
   expect(calls('/api/cadlink/fusion-status').length - before).toBe(2);
 });
 
-it('a pull settling while reconnect waits for receipts clears recovery warnings through retries and Refresh (row 25)', async () => {
-  stop = mountCadWorkspaceOwners(); await flush();
-  const pull = cadWorkspace.getSnapshot().pullFromFusion(); await flush();
-  const base = fetcher.getMockImplementation()!;
-  const feed = deferred<Response>();
-  fetcher.mockImplementation((input, init) => String(input).includes('/receipts?') ? feed.promise : base(input, init));
-  channels.forEach((channel) => channel.resync()); await flush();
-  returns = [{ ...bundle, requestId: 'pull-1' }];
-  await vi.advanceTimersByTimeAsync(2_500); await pull;
-  fetcher.mockImplementation(base);
-  feed.resolve(json({ feed_id: 'cutover', receipts: [], cursor: 0, has_more: false })); await flush();
-  expect(useCadConnectionStore.getState().recoveryError).toBeNull();
-  await vi.advanceTimersByTimeAsync(5_000);
-  await cadWorkspace.getSnapshot().refresh(); await flush();
-  expect(useCadConnectionStore.getState().recoveryError).toBeNull();
-});
-
 it.each(['Onshape', 'hidden'])('clears initial model loading when mounted in %s (row 10)', async (mode) => {
   if (mode === 'Onshape') { preferencesStore.setOnshapeAvailable(true); preferencesStore.update({ cadApplication: 'onshape' }); }
   else vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
@@ -608,34 +546,17 @@ it.each(['Onshape', 'hidden'])('clears initial model loading when mounted in %s 
   expect(cadWorkspace.getSnapshot().loading).toBe(false);
 });
 
-it('pull-and-solve reports preparation and submission phases and clears stale status on error (rows 18, 25)', async () => {
-  const ingest = deferred<Response>(); const submit = deferred<'submitted'>();
-  const base = fetcher.getMockImplementation()!;
-  fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/ingest' ? ingest.promise : base(input, init));
+it('prepare-and-solve reports submission and clears stale status on error (row 18)', async () => {
+  const submit = deferred<'submitted'>();
   vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve: () => submit.promise } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
+  returns = [bundle];
   stop = mountCadWorkspaceOwners(); await flush();
-  const solve = cadWorkspace.getSnapshot().pullAndSolve(); await flush();
-  returns = [{ ...bundle, requestId: 'pull-1' }];
-  await cadWorkspace.getSnapshot().refresh(); await flush();
-  expect(cadWorkspace.getSnapshot().status).toContain('Preparing the simulation');
-  ingest.resolve(json(record)); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  const solve = cadWorkspace.getSnapshot().prepareAndSolve(); await flush();
   expect(cadWorkspace.getSnapshot().status).toContain('Submitting the solve');
   submit.reject(new Error('Submission failed')); expect(await solve).toBe('blocked');
   expect(cadWorkspace.getSnapshot().status).toBeNull();
   expect(cadWorkspace.getSnapshot().error).toBe('Submission failed');
-});
-
-it('a return landing after the pull timeout is available to discovery (rows 5, 25)', async () => {
-  const base = fetcher.getMockImplementation()!;
-  fetcher.mockImplementation((input, init) => String(input).endsWith('/fusion-status')
-    ? Promise.resolve(json(status({ addinInboxTransfer: false }))) : base(input, init));
-  stop = mountCadWorkspaceOwners(); await flush();
-  const pull = cadWorkspace.getSnapshot().pullFromFusion().catch((error: Error) => error); await flush();
-  await vi.advanceTimersByTimeAsync(60_000); expect(await pull).toBeInstanceOf(Error);
-  returns = [{ ...bundle, requestId: 'pull-1', modifiedAt: new Date().toISOString() }];
-  await vi.advanceTimersByTimeAsync(2_500);
-  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
-  expect(useCadReturnStore.getState().selectedBundle?.requestId).toBe('pull-1');
 });
 
 /** The owners mount while the jobs socket is still connecting; its first hello follows. */
@@ -1115,25 +1036,6 @@ it('wakes preparation when a project-open listing clears its pending flag', asyn
   listing.resolve(json({ items: [bundle], cadFolderConfigured: true }));
   await flush();
   expect(calls('/api/cadlink/ingest')).toHaveLength(1);
-  expect(useCadReturnStore.getState().needsIngest).toBe(false);
-});
-
-it('wakes changed settings when a Fusion pull ends without a model', async () => {
-  resetImportedModelStore(); returns = [bundle];
-  stop = mountCadWorkspaceOwners(); await flush();
-  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
-  const base = fetcher.getMockImplementation()!; let refused = false;
-  fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/return-requests/pull-1' && refused
-    ? Promise.resolve(json({ requestId: 'pull-1', state: 'failed', reason: null, message: null })) : base(input, init));
-  const pull = cadWorkspace.getSnapshot().pullFromFusion().catch(error => error); await flush();
-  useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
-  await vi.advanceTimersByTimeAsync(400);
-  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
-  refused = true;
-  await cadWorkspace.getSnapshot().refresh();
-  expect(await pull).toBeInstanceOf(Error);
-  await vi.advanceTimersByTimeAsync(400);
-  expect(calls('/api/cadlink/ingest')).toHaveLength(2);
   expect(useCadReturnStore.getState().needsIngest).toBe(false);
 });
 

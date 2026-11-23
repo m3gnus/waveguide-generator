@@ -244,9 +244,9 @@ describe('V2: the source line consumes observationFreshness honestly', () => {
     expect(cadSourceLine(status({}), false)).toBeNull();
   });
 
-  it('reports newer CAD changes, with a refresh, whatever the observation age', () => {
+  it('reports newer CAD changes whatever the observation age', () => {
     expect(cadSourceLine(status({ state: 'stale', fusionChangesAvailable: true, observationFreshness: 'stale' }), true))
-      .toEqual({ text: 'Model loaded from Fusion · Newer CAD changes available', tone: 'changed', refresh: true });
+      .toEqual({ text: 'Model loaded from Fusion · Newer CAD changes available', tone: 'changed' });
   });
 
   it.each(['stale', 'none'] as const)('never claims a match from a %s observation', (freshness) => {
@@ -267,7 +267,7 @@ describe('V2: the source line consumes observationFreshness honestly', () => {
 
   it('says only where the model came from while Fusion is not reporting', () => {
     expect(cadSourceLine(status({ running: false, state: 'closed' as FusionCadStatus['state'] }), true))
-      .toEqual({ text: 'Model loaded from Fusion', tone: 'info', refresh: false });
+      .toEqual({ text: 'Model loaded from Fusion', tone: 'info' });
     expect(cadSourceLine(null, true)?.text).toBe('Model loaded from Fusion');
   });
 });

@@ -2472,7 +2472,8 @@ describe('CadLinkPanel', () => {
 
     // Both directions live on the one card; sending still parks on the
     // coordinator's conflict dialog because Fusion changed too.
-    expect(host.textContent).toContain('Bring Fusion changes in');
+    expect(host.textContent).toContain('Use Send to WG in Fusion to bring the current model into WG.');
+    expect([...host.querySelectorAll('button')].some((button) => /^Bring/.test(button.textContent ?? ''))).toBe(false);
     const send = [...host.querySelectorAll<HTMLButtonElement>('button')]
       .find((button) => button.textContent === 'Send WG changes to Fusion')!;
     await act(async () => { send.click(); await Promise.resolve(); });
@@ -2480,125 +2481,30 @@ describe('CadLinkPanel', () => {
     expect(host.textContent).toContain('Continue: send WG changes');
   });
 
-  it('keeps both Fusion pull controls busy and suppresses repeated requests until arrival', async () => {
+  it('tells the user to send Fusion changes from Fusion, with no control that asks Fusion for them', async () => {
     useDocumentStore.setState({
       identity: { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 2 },
     });
     const fusion = { ...currentFusion, state: 'stale' as const, fusionChangesAvailable: true };
-    let resolveRequest!: (response: Response) => void;
-    const request = new Promise<Response>((resolve) => { resolveRequest = resolve; });
-    let requestCount = 0;
-    let returns = { items: listing.items };
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
-      const path = String(input);
-      if (path.endsWith('/fusion-status')) return Promise.resolve(json(fusion));
-      if (path.endsWith('/returns')) return Promise.resolve(json(returns));
-      if (path.endsWith('/request-fusion-return')) {
-        requestCount += 1;
-        return request;
-      }
-      return Promise.resolve(json(record));
-    }));
-    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    const pullButtons = () => [...host.querySelectorAll<HTMLButtonElement>('.cad-link-card .cad-confirm-actions button')];
-
-    await act(async () => {
-      pullButtons()[0].click();
-      cadWorkspace.getSnapshot().pullAndSolve();
-      cadWorkspace.getSnapshot().pullFromFusion();
-      await Promise.resolve();
-    });
-    expect(requestCount).toBe(1);
-    expect(pullButtons()).toHaveLength(2);
-    expect(pullButtons().every((button) => button.disabled)).toBe(true);
-    expect(pullButtons().map((button) => button.textContent)).toEqual(['Waiting for Fusion…', 'Waiting for Fusion…']);
-
-    await act(async () => {
-      resolveRequest(json({ status: 'requested', requestId: 'req_busy', documentName: 'Tritonia V' }));
-      await Promise.resolve(); await Promise.resolve();
-    });
-    expect(pullButtons().every((button) => button.disabled)).toBe(true);
-    returns = { items: [{ ...listing.items[0], requestId: 'req_busy' }] };
-    await act(async () => {
-      await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true });
-      await Promise.resolve();
-    });
-    expect(cadWorkspace.getSnapshot().pullingFromFusion).toBe(false);
-    expect(requestCount).toBe(1);
-  });
-
-  it('puts a Fusion refusal on the primary path and its report behind a disclosure', async () => {
-    preferencesStore.update({ showDeveloperDetails: true });
-    useDocumentStore.setState({
-      identity: { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 2 },
-    });
-    const refusal = "WGLink instance '393aaad4-9e78-462d-ad6c-126d411fbefd' "
-      + 'has no resolvable wrapper occurrence; placement was not defaulted to identity.';
-    const fusion = { ...currentFusion, state: 'stale' as const, fusionChangesAvailable: true };
+    const requested: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
+      requested.push(path);
       if (path.endsWith('/fusion-status')) return json(fusion);
-      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
-      if (path.endsWith('/return-requests/req_refused')) return json({ requestId: 'req_refused', state: fixtureOperations.req_refused?.state ?? 'processing', reason: null, message: fixtureOperations.req_refused?.message ?? null });
-      if (path.endsWith('/request-fusion-return')) {
-        return json({ status: 'requested', requestId: 'req_refused', documentName: 'Tritonia V' });
-      }
+      if (path.endsWith('/returns')) return json(listing);
       return json(record);
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    await act(async () => {
-      cadWorkspace.getSnapshot().pullFromFusion().catch(() => undefined);
-      await Promise.resolve(); await Promise.resolve();
-    });
-    act(() => {
-      applyCadRequest({
-        operationId: 'req_refused', kind: 'request_return', state: 'rejected', stage: 'executing',
-        reason: 'adapter_refused', message: refusal, jobId: null, attemptGeneration: 1,
-        setupRevisionId: null, preparationId: null, snapshot: null, legacy: false,
-        createdAt: '2026-09-20T10:00:00Z', updatedAt: '2026-09-20T10:00:01Z',
-      } as CadOperationSummary);
-    });
-    await act(async () => {
-      await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true });
-      await Promise.resolve();
-    });
 
-    const alert = host.querySelector<HTMLElement>('.notice-error[role="alert"]')!;
-    expect(alert).not.toBeNull();
-    const disclosure = alert.querySelector<HTMLDetailsElement>('details.cad-alert-diagnostics')!;
-    expect(disclosure).not.toBeNull();
-    const summary = disclosure.querySelector<HTMLElement>('summary')!;
+    const card = host.querySelector<HTMLElement>('.cad-link-card')!;
+    expect(card.textContent).toContain('Use Send to WG in Fusion to bring the current model into WG.');
+    expect([...host.querySelectorAll('button')].map((button) => button.textContent))
+      .not.toEqual(expect.arrayContaining([expect.stringMatching(/^Bring|Waiting for Fusion/)]));
+    expect(requested.some((path) => path.includes('request-fusion-return') || path.includes('return-requests'))).toBe(false);
 
-    // Primary path: what happened and what to do, with no opaque identity.
-    const primary = alert.textContent!.replace(disclosure.textContent!, '');
-    expect(primary).toContain('could not');
-    expectNoJargon(alert);
-    expect(primary).not.toContain('393aaad4');
-    expect(primary).not.toContain('defaulted to identity');
-
-    // The disclosure is shut to begin with, and its evidence is not read out
-    // as part of the alert until it is opened.
-    expect(disclosure.open).toBe(false);
-
-    // Accessible: a real summary element, with a name, reachable by keyboard
-    // and operable from it.
-    expect(summary.tagName).toBe('SUMMARY');
-    expect(summary.textContent).toBe('Diagnostics');
-    summary.focus();
-    expect(document.activeElement).toBe(summary);
-    act(() => { summary.click(); });
-    expect(disclosure.open).toBe(true);
-    expect(disclosure.textContent).toContain(refusal);
-    expect(disclosure.textContent).toContain('393aaad4-9e78-462d-ad6c-126d411fbefd');
-
-    // A later, unrelated error takes the alert over. The report belonged to
-    // the refusal, so it goes with it rather than standing under a headline it
-    // does not explain.
-    await act(async () => { cadWorkspace.getSnapshot().reportError('The jobs system is not answering.'); });
-    const replaced = host.querySelector<HTMLElement>('.notice-error[role="alert"]')!;
-    expect(replaced.textContent).toContain('The jobs system is not answering.');
-    expect(replaced.querySelector('details.cad-alert-diagnostics')).toBeNull();
-    expect(replaced.textContent).not.toContain('393aaad4');
+    // Nothing to bring in: no line.
+    act(() => { useCadConnectionStore.setState({ fusionStatus: { ...fusion, fusionChangesAvailable: false } as never }); });
+    expect(host.textContent).not.toContain('Use Send to WG in Fusion');
   });
 
   it('records blocking findings on the wire, filters skipped sizes, and emits range/list sweep shapes', () => {

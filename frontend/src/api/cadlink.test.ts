@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { designForFamily } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { CadLinkApiError, getFusionCadStatus, getIngest, ingestReturn, listReturns, requestFusionReturn } from './cadlink';
+import { CadLinkApiError, getFusionCadStatus, getIngest, ingestReturn, listReturns } from './cadlink';
 
 describe('CAD-link client', () => {
   it('uses the server aliases for listing, ingestion, and record lookup', async () => {
@@ -98,19 +98,5 @@ describe('CAD-link client', () => {
     };
     expect(body.design.extra_blocks['ABEC.Polars:SPL_H'].items.Distance).toBe('4.25');
     expect(body.design.extra_blocks['ABEC.Polars:SPL_V']).toBeUndefined();
-  });
-
-  it('targets an exact Fusion document and linked instance for a return', async () => {
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
-      status: 'requested', requestId: 'request-a', documentName: 'Tritonia V',
-    }), { status: 200 }));
-    await requestFusionReturn({
-      designId: 'wgd_a', documentId: 'fusion:doc-a', instanceId: 'instance-a',
-      expectedReturnStateHash: 'sha256:return-state',
-    }, fetcher as typeof fetch);
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
-      designId: 'wgd_a', documentId: 'fusion:doc-a', instanceId: 'instance-a',
-      expectedReturnStateHash: 'sha256:return-state',
-    });
   });
 });

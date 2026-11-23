@@ -26,7 +26,6 @@ import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode'
 import { requestParameterReveal } from '../design/ParamPanel';
 import { BrandMark, Icon } from './icons';
 import { useSolveControl } from './JobsCoordinator';
-import { cadWorkspace } from '../stores/cadWorkspace';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
 import { HeldCadRequestDialog } from './HeldCadRequestDialog';
@@ -196,8 +195,6 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
 export interface CadSourceLine {
   text: string;
   tone: 'info' | 'changed' | 'unverified';
-  /** A refresh from Fusion is worth offering. */
-  refresh: boolean;
 }
 
 export function cadSourceLine(status: FusionCadStatus | null | undefined, modelShown: boolean): CadSourceLine | null {
@@ -205,7 +202,7 @@ export function cadSourceLine(status: FusionCadStatus | null | undefined, modelS
   const base = 'Model loaded from Fusion';
   // WGLink with its automatic coordination off reports only when it runs a
   // command: WG holds its last report, and says so -- never "offline", never
-  // "matches" -- and Refresh stays, reading Fusion when pressed.
+  // "matches". Newer geometry comes in when the user sends it from Fusion.
   if (status?.statusObserved === false) {
     const at = status.observedAt ? new Date(status.observedAt) : null;
     const when = at && !Number.isNaN(at.getTime())
@@ -214,23 +211,22 @@ export function cadSourceLine(status: FusionCadStatus | null | undefined, modelS
     return {
       text: `${base} · Fusion last reported${when}, not observed since`,
       tone: status.fusionChangesAvailable ? 'changed' : 'unverified',
-      refresh: true,
     };
   }
   if (!status?.running || status.state !== 'current' && status.state !== 'stale') {
-    return { text: base, tone: 'info', refresh: false };
+    return { text: base, tone: 'info' };
   }
   // Positive evidence of a difference stands whatever the observation's age:
-  // over-reporting it costs a redundant refresh, never a wrong solve.
+  // over-reporting it costs a redundant Send, never a wrong solve.
   if (status.fusionChangesAvailable) {
-    return { text: `${base} · Newer CAD changes available`, tone: 'changed', refresh: true };
+    return { text: `${base} · Newer CAD changes available`, tone: 'changed' };
   }
   const freshness = status.observationFreshness ?? null;
   const measured = freshness === 'current' || freshness === 'unknown';
   if (!measured || !status.documentChangeDetectable) {
-    return { text: `${base} · Live CAD freshness not verified`, tone: 'unverified', refresh: true };
+    return { text: `${base} · Live CAD freshness not verified`, tone: 'unverified' };
   }
-  return { text: `${base} · Matches Fusion`, tone: 'info', refresh: false };
+  return { text: `${base} · Matches Fusion`, tone: 'info' };
 }
 
 /** The solve actions.
@@ -238,17 +234,11 @@ export function cadSourceLine(status: FusionCadStatus | null | undefined, modelS
  * Solve has one meaning: it solves the model and settings WG displays now. The
  * connection to Fusion never changes what it does or which button is primary;
  * the button, the shortcut and the palette's Solve are the same command.
- * Bringing newer geometry in from Fusion is its own explicit action on the
- * source line (and "Pull from Fusion & Solve" in the command palette).
+ * Newer geometry comes in from Fusion when the user presses Send to WG there.
  */
 export function SolveActions() {
   const solve = useSolveControl();
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const cadWorkspaceView = useSyncExternalStore(
-    cadWorkspace.subscribe,
-    cadWorkspace.getSnapshot,
-    cadWorkspace.getSnapshot,
-  );
   const fusionStatus = useCadConnectionStore((current) => current.fusionStatus);
   const modelShown = useCadReturnStore((state) => Boolean(state.ingestRecord));
   const fusion = usePreferences().cadApplication === 'fusion360';
@@ -271,14 +261,6 @@ export function SolveActions() {
     ><Icon name="play"/>{solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
     {source && <span className={`cad-source-line cad-source-${source.tone}`} role="status" title={source.text}>
       <span>{source.text}</span>
-      {source.refresh && <button
-        className="btn-link"
-        type="button"
-        disabled={cadWorkspaceView.pullingFromFusion}
-        aria-busy={cadWorkspaceView.pullingFromFusion}
-        title="Bring Fusion's current geometry into WG without solving it"
-        onClick={() => { void cadWorkspaceView.pullFromFusion().catch(() => undefined); }}
-      >{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Refresh'}</button>}
     </span>}
     <AttentionNotices/>
   </>;
@@ -411,7 +393,6 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const cadBundleAvailable = useCadReturnStore(state => Boolean(state.selectedBundle));
   const cadReturnReady = useCadReturnStore((state) => Boolean(state.ingestRecord));
   const editableCadMesh = useCadReturnStore(state => cadMeshIsEditable(state.selectedBundle));
-  const fusionRunning = useCadConnectionStore((current) => current.fusionStatus?.running);
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>();
@@ -470,23 +451,6 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     }));
     const commands: PaletteEntry[] = [
       { id: 'solve', kind: 'Commands', label: solve.label, detail: solve.title, disabled: solve.disabled, run: solve.solve },
-      // The pull was reachable only from inside the CAD Link panel.
-      {
-        id: 'cad-pull-solve',
-        kind: 'Commands',
-        label: 'Pull from Fusion & Solve',
-        detail: 'Request the current Fusion geometry, prepare it, and solve',
-        disabled: workspaceMode !== 'cad' || !fusionRunning,
-        run: () => { void cadWorkspace.getSnapshot().pullAndSolve().catch(() => undefined); },
-      },
-      {
-        id: 'cad-pull',
-        kind: 'Commands',
-        label: 'Refresh geometry from Fusion',
-        detail: 'Request the current Fusion geometry without solving',
-        disabled: workspaceMode !== 'cad' || !fusionRunning,
-        run: () => { void cadWorkspace.getSnapshot().pullFromFusion().catch(() => undefined); },
-      },
       { id: 'undo', kind: 'Commands', label: 'Undo', detail: undoReason, disabled: !canUndo, run: undo },
       { id: 'redo', kind: 'Commands', label: 'Redo', detail: redoReason, disabled: !canRedo, run: redo },
       { id: 'open', kind: 'Commands', label: 'Open', detail: 'Open a design file', run: () => fileAction('Open…') },
@@ -502,7 +466,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];
     return [...parameters, ...jobEntries, ...commands];
-  }, [fusionRunning, developerDetails, cadBundleAvailable, cadReturnReady, editableCadMesh, canRedo, canUndo, copyReason, undoReason, redoReason, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
+  }, [developerDetails, cadBundleAvailable, cadReturnReady, editableCadMesh, canRedo, canUndo, copyReason, undoReason, redoReason, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
 
   return <header className="topbar">
     <WindowControls side="leading"/>

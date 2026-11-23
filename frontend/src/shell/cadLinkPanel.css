@@ -25,7 +25,6 @@
 /* One notice channel at the top of the rail. */
 
 /* The evidence behind a refusal, one chevron away from its sentence. */
-.cad-alert-diagnostics { margin-top: 5px; }
 .cad-alert-diagnostics > summary { cursor: pointer; color: var(--fg3); font-size: var(--text-micro); }
 .cad-alert-diagnostics > summary:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: 2px; }
 .cad-alert-diagnostics > p { margin: 4px 0 0; }

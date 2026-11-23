@@ -94,8 +94,6 @@ export interface CadReturnArrivalReaderIntegration {
   /** Initial discovery can be deferred across listings while a receipt owns display. */
   initialChoiceOwed: Ref<boolean>;
   deferredArrivalRevisions: Ref<Map<string, string>>;
-  /** The explicit waiter owns selection, including after its poll settles. */
-  awaitingReturn(): boolean;
   /** Receipt display chooses the Send before discovery may choose an initial model. */
   awaitingReceiptDisplay(): boolean;
   /** Only an active restore may defer discovery; a stale durable pointer cannot. */
@@ -120,7 +118,7 @@ export async function refreshCadReturnArrivals(
   const {
     autoIngestSelected, cadFolderConfigured, enterCadWorkspace, manualSelectionAt, noteCadActivity,
     projectOpenPending, refreshChannelDriverBases, refusedForeignReturn, returnListRequest,
-    seenReturnRevisions, initialChoiceOwed, deferredArrivalRevisions, awaitingReturn, awaitingReceiptDisplay, awaitingLastModel, sendOwnersKnown, ownsReturn, ownsSolveReturn,
+    seenReturnRevisions, initialChoiceOwed, deferredArrivalRevisions, awaitingReceiptDisplay, awaitingLastModel, sendOwnersKnown, ownsReturn, ownsSolveReturn,
     setError, setStatus, setBundles, setLoading,
   } = integration;
   const background = options.background === true;
@@ -175,7 +173,7 @@ export async function refreshCadReturnArrivals(
     }
     // An owed initial choice must let queued Sends finish first, even when a
     // background poll also notices a new revision in the folder.
-    const arrived = options.autoOpenNew && !restoring && !deferNewArrivals && !awaitingReturn()
+    const arrived = options.autoOpenNew && !restoring && !deferNewArrivals
       && !(initialChoiceOwed.current && awaitingReceiptDisplay())
       ? newestReturnArrival(response.items.filter((item) => !ownsReturn(item)
         // Discovering the return already in the viewport is not a new model
@@ -184,7 +182,7 @@ export async function refreshCadReturnArrivals(
     seenReturnRevisions.current = next;
     const currentDesignId = useDocumentStore.getState().identity?.designId;
     if (useCadReturnStore.getState().selectedBundle) initialChoiceOwed.current = false;
-    const canChooseInitial = initialChoiceOwed.current && !restoring && !awaitingReturn() && !awaitingReceiptDisplay()
+    const canChooseInitial = initialChoiceOwed.current && !restoring && !awaitingReceiptDisplay()
       && !useCadReturnStore.getState().selectedBundle;
     const initial = canChooseInitial
       ? response.items.find((item) => (
@@ -425,7 +423,7 @@ export function createCadArrivalActions(
           activateWorkspace();
           // Awaited rather than fired and forgotten: the solve gate refuses an
           // ingestion whose mesh is not the one on screen, so a composed
-          // pull/ingest/solve that raced this fetch failed on every return after
+          // ingest/solve that raced this fetch failed on every return after
           // the first with a viewport-mismatch the user could not act on.
           await showIngestedMesh(
             record,
@@ -764,7 +762,7 @@ export function createCadReturnArrivalReader(
     projectOpenPending: { current: false }, refreshChannelDriverBases: async () => undefined,
     refusedForeignReturn: { current: false }, returnListRequest: { current: 0 },
     seenReturnRevisions: { current: null }, initialChoiceOwed: { current: true }, deferredArrivalRevisions: { current: new Map() },
-    awaitingReturn: () => false, awaitingReceiptDisplay: () => false, awaitingLastModel: () => false,
+    awaitingReceiptDisplay: () => false, awaitingLastModel: () => false,
     sendOwnersKnown: () => true, ownsReturn: () => false,
     setError: noop, setStatus: noop, setBundles: noop, setLoading: noop,
     ...overrides,
