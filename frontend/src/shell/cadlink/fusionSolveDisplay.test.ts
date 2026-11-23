@@ -8,13 +8,14 @@ import { resetDesignStore, useDesignStore } from '../../stores/design';
 import { resetDocumentStore } from '../../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../../stores/solveOptions';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
-import { useImportedModelStore } from '../../stores/importedModel';
+import { resetImportedModelStore, useImportedModelStore } from '../../stores/importedModel';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { bindWorkspaceNavigation, noteExplicitNavigation, publishVisiblePanels, resetWorkspaceNavigationForTests } from '../workspaceNavigation';
-import { resetSolveAttentionForTests } from '../solveAttention';
+import { resetSolveAttentionForTests, solveAttention } from '../solveAttention';
 import { createFusionSolveDisplay } from './fusionSolveDisplay';
 import { createCadReturnArrivalReader } from './arrivals';
-import { bundle, deferred, job, json, record, workspaceFor } from './selection.fixtures';
+import { observeLastModel } from './restores';
+import { bundle, deferred, job, json, mesh, record, workspaceFor } from './selection.fixtures';
 
 const NOW = Date.parse('2026-10-15T18:00:00Z');
 function external(id = 'fusion', created = NOW - 120_000) {
@@ -704,4 +705,93 @@ it.each(['active', 'newly completed'] as const)('lets a %s Fusion solve own disp
   await f.observe([run]);
   expect(currentModel().ingestId).toBe(record.ingest_id);
   expect(f.display.showIngestedMesh).toHaveBeenCalledOnce();
+});
+
+/** Another CAD model the person used earlier: what Imported mode reopens on entry. */
+const earlier = { ...record, ingest_id: 'wgi_earlier', model_id: 'wgl_earlier' };
+function earlierModelReads(setup: Promise<Response> | null = null) {
+  return vi.fn<typeof fetch>(async (input) => {
+    const path = String(input);
+    if (path.startsWith('/api/models/wgl_earlier/setup')) return setup ?? json({ setup: workspaceFor(earlier.ingest_id).setup?.content, revision_id: 'wgs_earlier' });
+    if (path.startsWith('/api/models/wgl_earlier')) return json({ model: { model_id: 'wgl_earlier', producer: 'cad', display_name: 'Earlier' },
+      latest_prepared: workspaceFor(earlier.ingest_id, undefined, { modelId: 'wgl_earlier' }).prepared, original_available: false });
+    if (path === `/api/cadlink/ingest/${earlier.ingest_id}`) return json(earlier);
+    if (path.endsWith('/viewport-mesh') || path.endsWith('/mesh')) return new Response(mesh);
+    return json({ detail: 'unexpected' }, 404);
+  });
+}
+const modelReads = (fetcher: ReturnType<typeof earlierModelReads>) =>
+  fetcher.mock.calls.filter(([input]) => String(input).startsWith('/api/models/wgl_earlier')).length;
+
+// 23 Nov: Fusion solved while WG was in Parametric. Entering CAD for the
+// request reopened the earlier model, that restore counted as a model choice,
+// and the request's own preparation and results were then skipped.
+it('shows a Fusion solve that arrives in Parametric, without reopening the earlier model on the way', async () => {
+  resetImportedModelStore(); workspaceModeStore.setMode('parametric');
+  rememberLastModel({ model_id: 'wgl_earlier', input: 'cad' });
+  const f = fixture(); const reads = earlierModelReads();
+  disposers.push(observeLastModel({ fetcher: reads, displayClaimed: f.ownsDisplay }));
+  await f.observe([preparing(null)]);
+  expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+  expect(f.ownsDisplay()).toBe(true);
+  await f.observe([preparing()]);
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+  const run = { ...external(), run_number: 147 };
+  await f.observe([run]);
+  await f.observe([{ ...run, status: 'complete', has_results: true }]);
+  expect(f.ownsDisplay()).toBe(false);
+  expect(modelReads(reads)).toBe(0);
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+  expect(compareSelection.getSnapshot().awaiting).toBe(run.id);
+  expect(f.display.reportDiagnostic.mock.calls).toEqual([]);
+  expect(solveAttention.getOfferedRun()).toBeNull();
+});
+
+it('stands an earlier-model restore down when a Fusion solve claims the view during its discovery', async () => {
+  resetImportedModelStore(); workspaceModeStore.setMode('cad');
+  rememberLastModel({ model_id: 'wgl_earlier', input: 'cad' });
+  const setup = deferred<Response>();
+  const f = fixture(); const reads = earlierModelReads(setup.promise);
+  disposers.push(observeLastModel({ fetcher: reads, displayClaimed: f.ownsDisplay }));
+  await vi.waitFor(() => expect(reads.mock.calls.some(([input]) => String(input).includes('/setup'))).toBe(true));
+  await f.observe([preparing(null)]);
+  setup.resolve(json({ setup: workspaceFor(earlier.ingest_id).setup?.content, revision_id: 'wgs_earlier' }));
+  await vi.waitFor(() => expect(useImportedModelStore.getState().phase).toBe('empty'));
+  expect(reads.mock.calls.map(([input]) => String(input))).not.toContain(`/api/cadlink/ingest/${earlier.ingest_id}`);
+  await f.observe([preparing()]);
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+  expect(f.display.reportDiagnostic.mock.calls).toEqual([]);
+});
+
+it('keeps the screen after the person chooses another model, and offers the finished Fusion solve', async () => {
+  const activate = vi.fn(() => true); disposers.push(bindWorkspaceNavigation(activate));
+  const f = fixture(); await f.observe([preparing(null)]);
+  useCadReturnStore.getState().selectBundle({ ...bundle, bundlePath: 'wgreturn/other.wgreturn', documentName: 'Other' });
+  const run = { ...external(), run_number: 147 };
+  await f.observe([run]);
+  expect(solveAttention.getOfferedRun()).toBeNull();
+  await f.observe([{ ...run, status: 'complete', has_results: true }]);
+  expect(f.fetcher).not.toHaveBeenCalled();
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('wgreturn/other.wgreturn');
+  expect(compareSelection.getSnapshot().awaiting).toBeNull();
+  expect(f.display.reportDiagnostic).toHaveBeenCalledExactlyOnceWith(run.id, 'model-choice');
+  expect(solveAttention.getOfferedRun()).toBe(run.id);
+});
+
+it('does not count an automatic restore as the person choosing a model', async () => {
+  // Without the display claim the restore still wins this race; it must not
+  // read as a model choice that cancels the arriving Fusion solve.
+  resetImportedModelStore(); workspaceModeStore.setMode('parametric');
+  rememberLastModel({ model_id: 'wgl_earlier', input: 'cad' });
+  const f = fixture(); const reads = earlierModelReads();
+  disposers.push(observeLastModel({ fetcher: reads }));
+  await f.observe([preparing(null)]);
+  await vi.waitFor(() => expect(useImportedModelStore.getState()).toMatchObject({ phase: 'ready', modelId: 'wgl_earlier' }));
+  await f.observe([preparing()]);
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+  const run = { ...external(), run_number: 147 };
+  await f.observe([run]);
+  await f.observe([{ ...run, status: 'complete', has_results: true }]);
+  expect(compareSelection.getSnapshot().awaiting).toBe(run.id);
+  expect(f.display.reportDiagnostic.mock.calls).toEqual([]);
 });

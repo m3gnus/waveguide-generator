@@ -216,8 +216,9 @@ export interface CadReturnState {
   isCurrentIngestIntent: (generation: number) => boolean;
   /** Observe selection intent without superseding in-flight preparation. */
   captureIngestIntent: () => number;
-  /** Model selections, independent of preparation, mesh edits and listing revisions. */
-  beginSelectionIntent: () => number;
+  /** Model selections, independent of preparation, mesh edits and listing revisions.
+   * An automatic one (a restore, a Fusion handoff) is no person's model choice. */
+  beginSelectionIntent: (automatic?: boolean) => number;
   captureSelectionIntent: () => number;
   isCurrentSelectionIntent: (generation: number) => boolean;
   /** User choices also fence Sends across the Send's own automatic listing selection. */
@@ -426,8 +427,9 @@ function supersedeIngestIntent(): number {
   return ingestIntentGeneration;
 }
 
-function supersedeSelectionIntent(): number {
-  modelChoiceGeneration += 1;
+/** A new model selection. Only a person's choice fences what WG does on its own. */
+function supersedeSelectionIntent(automatic = false): number {
+  if (!automatic) modelChoiceGeneration += 1;
   selectionIntentGeneration += 1;
   return selectionIntentGeneration;
 }
@@ -583,7 +585,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   attemptedPreparationKey: null,
   beginIngestIntent: supersedeIngestIntent,
   captureIngestIntent: () => ingestIntentGeneration,
-  beginSelectionIntent: supersedeSelectionIntent,
+  beginSelectionIntent: (automatic) => supersedeSelectionIntent(automatic),
   captureSelectionIntent: () => selectionIntentGeneration,
   isCurrentSelectionIntent: (generation) => generation === selectionIntentGeneration,
   captureModelChoice: () => modelChoiceGeneration,
@@ -591,8 +593,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   isCurrentIngestIntent: (generation) => generation === ingestIntentGeneration,
   isIngestSettled: () => get().ingestRecord !== null && appliedIngestGeneration === ingestIntentGeneration,
   selectBundle: (selectedBundle, projectLineageId, automatic = false, fetcher) => {
-    if (!automatic) supersedeSelectionIntent();
-    else selectionIntentGeneration += 1;
+    supersedeSelectionIntent(automatic);
     supersedeIngestIntent();
     const project = resolvedProjectLineage(get(), selectedBundle, projectLineageId);
     if (workspaceModeStore.getSnapshot().importedInput === 'cad') {

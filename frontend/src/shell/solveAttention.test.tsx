@@ -10,6 +10,10 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { AttentionNotices, cadSourceLine } from './TopBar';
 import { operationNeedsUser } from '../api/cadOperations';
 import { resetSolveAttentionForTests, solveAttention, useJobAttention } from './solveAttention';
+import { compareSelection } from '../api/results';
+
+const selectJob = vi.hoisted(() => vi.fn());
+vi.mock('../jobs/selectJob', () => ({ selectJob }));
 import {
   bindWorkspaceNavigation,
   navigationGeneration,
@@ -224,6 +228,34 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     ]));
     expect(activations).toEqual([]);
     expect(host.querySelector('.attention-waiting')?.textContent).toContain('A solve is waiting for you');
+  });
+
+  it('offers a Fusion solve finished behind another model choice until the person shows it', () => {
+    const run = { ...cadJobFixture(operation('op-done', 'accepted')), status: 'complete' as const, has_results: true, run_number: 147 };
+    act(() => publishCadJobs([run]));
+    compareSelection.clear(); selectJob.mockClear();
+    act(() => solveAttention.offerRun(run.id));
+    const notice = host.querySelector<HTMLButtonElement>('[data-attention="fusion-solve-offered"]');
+    expect(notice?.textContent).toContain('Fusion solve ready');
+    const generation = navigationGeneration();
+    act(() => notice!.click());
+    expect(selectJob).toHaveBeenCalledExactlyOnceWith(run);
+    expect(activations).toEqual(['results']);
+    expect(navigationGeneration()).toBeGreaterThan(generation);
+    expect(host.querySelector('[data-attention="fusion-solve-offered"]')).toBeNull();
+    // Once per run: a repeated jobs message does not offer it again.
+    act(() => solveAttention.offerRun(run.id));
+    expect(host.querySelector('[data-attention="fusion-solve-offered"]')).toBeNull();
+  });
+
+  it('withdraws the offer once the run is the shown result by another route', () => {
+    const run = { ...cadJobFixture(operation('op-done', 'accepted')), status: 'complete' as const, has_results: true };
+    act(() => publishCadJobs([run]));
+    act(() => solveAttention.offerRun(run.id));
+    expect(host.querySelector('[data-attention="fusion-solve-offered"]')).not.toBeNull();
+    act(() => compareSelection.setPrimary(run.id));
+    expect(host.querySelector('[data-attention="fusion-solve-offered"]')).toBeNull();
+    compareSelection.clear();
   });
 
   it('shows no notice while nothing waits (the notice itself is the measurement)', () => {

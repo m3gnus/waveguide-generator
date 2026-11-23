@@ -166,6 +166,33 @@ describe('job and last-model restores without the coordinator', () => {
     } finally { stop(); }
   });
 
+  it('is no model choice of the person, unlike a run they open', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' }); workspaceModeStore.setMode('cad');
+    const choice = useCadReturnStore.getState().captureModelChoice();
+    expect(await reopenLastModel(cadModelFetcher())).toBe(true);
+    expect(useCadReturnStore.getState().isCurrentModelChoice(choice)).toBe(true);
+    expect(await restoreCadJobModel(job(), {}, archiveFetcher)).toBe(true);
+    expect(useCadReturnStore.getState().isCurrentModelChoice(choice)).toBe(false);
+  });
+
+  it('stands down when another owner claims the view during discovery', async () => {
+    rememberLastModel({ model_id: 'wgl_project', input: 'cad' }); workspaceModeStore.setMode('cad');
+    const setup = deferred<Response>(); const requested = deferred<void>(); let claimed = false;
+    const reads = cadModelFetcher();
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).startsWith('/api/models/wgl_project/setup')) { requested.resolve(); return setup.promise; }
+      return reads(input, init);
+    });
+    const opened = reopenLastModel(fetcher, { blocked: () => claimed });
+    await requested.promise;
+    claimed = true;
+    setup.resolve(json({ setup: workspaceFor().setup?.content, revision_id: 'wgs_saved' }));
+    expect(await opened).toBe(false);
+    expect(useImportedModelStore.getState().phase).toBe('empty');
+    expect(fetcher.mock.calls.map(([input]) => String(input))).not.toContain(`/api/cadlink/ingest/${record.ingest_id}`);
+    expect(readLastModel('cad')).toEqual({ model_id: 'wgl_project', input: 'cad' });
+  });
+
   it('owns the load during discovery so the passive empty viewport cannot force re-ingestion', async () => {
     rememberLastModel({ model_id: 'wgl_project', input: 'cad' }); workspaceModeStore.setMode('cad');
     const setup = deferred<Response>(); const requested = deferred<void>();

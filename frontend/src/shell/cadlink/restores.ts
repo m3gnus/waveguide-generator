@@ -113,7 +113,9 @@ export const cadImportedView: ImportedView = {
     enter();
     reportViewportNotice(null);
     resetCadProjectSettingsLoad();
-    useCadReturnStore.getState().beginSelectionIntent();
+    // An open WG makes on its own is not the person's model choice: a restore
+    // must never cancel a Fusion solve's display that is waiting for its mesh.
+    useCadReturnStore.getState().beginSelectionIntent(display.automatic === true);
     const selection = useCadReturnStore.getState().beginIngestIntent();
     const documentLoad = currentDocumentLoad();
     // A new target owns Solve before any request can fail or stall.
@@ -246,15 +248,17 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
  * Reopen the last model whenever Imported mode is showing and empty: at start,
  * and again when the person switches into it. It never changes the mode, so
  * Parametric opens nothing. It stands down while an open is under way, a
- * foreign return was refused, a `?job=` link is still to be opened, or the
- * view is no longer empty, and it tries each pointer at most once per session.
+ * foreign return was refused, a `?job=` link is still to be opened, a Fusion
+ * solve owns the view (`displayClaimed`; it entered CAD mode to show its own
+ * model), or the view is no longer empty, and it tries each pointer at most
+ * once per session.
  * A pointer that only reaches this browser later (the settings server answered
  * after the start-up wait) is tried when it arrives.
  */
 export function observeLastModel({
   reportStatus = () => undefined, reportError = () => undefined, fetcher = fetch, selectBundle,
-  refusedForeignReturn = { current: false }, jobLinkPending = () => false, settings = durableSettings,
-  restorePending = { current: false }, onSettled = () => undefined,
+  refusedForeignReturn = { current: false }, jobLinkPending = () => false, displayClaimed = () => false,
+  settings = durableSettings, restorePending = { current: false }, onSettled = () => undefined,
 }: {
   reportStatus?(message: string): void;
   reportError?(message: string): void;
@@ -263,6 +267,8 @@ export function observeLastModel({
   selectBundle?(bundle: CadReturnBundle, project: string): void;
   refusedForeignReturn?: { current: boolean };
   jobLinkPending?(): boolean;
+  /** Another owner is bringing its own model to the view (a Fusion solve). */
+  displayClaimed?(): boolean;
   /** Where a late-hydrated pointer is announced; the shared instance unless a test brings its own. */
   settings?: Pick<typeof durableSettings, 'subscribe'>;
   /** Discovery waits for this attempt, then retries an initial choice if still empty. */
@@ -271,7 +277,7 @@ export function observeLastModel({
 } = {}): () => void {
   let active = true;
   const tried = new Set<string>();
-  const blocked = () => !active || refusedForeignReturn.current || jobLinkPending();
+  const blocked = () => !active || refusedForeignReturn.current || jobLinkPending() || displayClaimed();
   const openUnsolved = async (pointer: LastModel, prepared: PreparedSummary): Promise<boolean> => {
     if (!selectBundle || preferencesStore.getSnapshot().cadApplication === 'onshape') return false;
     const selection = useCadReturnStore.getState().captureIngestIntent();
@@ -305,7 +311,7 @@ export function observeLastModel({
       if (retained?.return_id === bundle.returnId && retained.manifest_sha256 === prepared.manifest_sha256
         && retained.artifact_sha256 === prepared.artifact_sha256) {
         return openImported({ kind: 'model', modelId: pointer.model_id, preparedId: prepared.ingest_id,
-          useEnginePreference: true }, fetcher);
+          useEnginePreference: true, display: { automatic: true } }, fetcher);
       }
     }
     // A different revision needs the same automatic preparation as a selection.
@@ -326,6 +332,7 @@ export function observeLastModel({
         return true;
       },
       openUnsolved,
+      blocked,
     })
       .then((opened) => { if (opened && active) reportStatus('Reopened the last model.'); })
       .catch((error: unknown) => {

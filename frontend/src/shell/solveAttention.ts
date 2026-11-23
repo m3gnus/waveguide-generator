@@ -39,6 +39,10 @@ const operationArms = new Map<string, number>();
 const resolvedRuns = new Set<string>();
 
 let readyRun: string | null = null;
+/** A finished Fusion solve WG did not show because the person had moved on to
+ * another model meanwhile: offered, never imposed, until shown or dismissed. */
+let offeredRun: string | null = null;
+const offeredRuns = new Set<string>();
 /** A Solve the user asked for failed after they navigated away from it: the
  * error waits in Results, and this says so until Results is seen. */
 let failedAction: string | null = null;
@@ -157,6 +161,21 @@ export const solveAttention = {
   dismissReady(): void {
     setReadyRun(null);
   },
+  /** Offer a finished run the person did not ask WG to show (Fusion solved it
+   * while they chose another model). Once per run; a newer offer replaces it. */
+  offerRun(jobId: string): void {
+    if (offeredRuns.has(jobId)) return;
+    offeredRuns.add(jobId);
+    offeredRun = jobId;
+    emit();
+  },
+  getOfferedRun: (): string | null => offeredRun,
+  /** The offered run is on screen now, or the person took the offer. */
+  dismissOffer(jobId: string): void {
+    if (offeredRun !== jobId) return;
+    offeredRun = null;
+    emit();
+  },
 };
 
 /** Tests only. */
@@ -166,12 +185,18 @@ export function resetSolveAttentionForTests(): void {
   operationArms.clear();
   resolvedRuns.clear();
   readyRun = null;
+  offeredRun = null;
+  offeredRuns.clear();
   failedAction = null;
   emit();
 }
 
 export function useReadyRun(): string | null {
   return useSyncExternalStore(solveAttention.subscribe, solveAttention.getReadyRun, solveAttention.getReadyRun);
+}
+
+export function useOfferedRun(): string | null {
+  return useSyncExternalStore(solveAttention.subscribe, solveAttention.getOfferedRun, solveAttention.getOfferedRun);
 }
 
 export function useFailedAction(): string | null {

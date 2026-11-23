@@ -149,6 +149,9 @@ export interface OpenedModel {
 
 /** How a caller shows a reopened model: its status words and its viewport. */
 export interface ImportedDisplay {
+  /** WG opens this on its own (a restore, a Fusion handoff): it is not the
+   * person choosing a model, so it never supersedes what waits on their choice. */
+  automatic?: boolean;
   /** An automatic caller relinquishes the open when the user moves on. */
   isCurrent?(): boolean;
   /** Automatic handoffs keep internal read failures in developer diagnostics. */
@@ -433,6 +436,9 @@ export interface ReopenOptions {
   shouldTry?(pointer: LastModel): boolean;
   /** Shows a CAD model that was never solved, so has no setup to open it by. Say why when it cannot be shown. */
   openUnsolved?(pointer: LastModel, prepared: PreparedSummary): Promise<boolean>;
+  /** A guard that holds now. Asked again before each step, so a restore stands
+   * down when another owner (a Fusion solve) claims the view during discovery. */
+  blocked?(): boolean;
 }
 
 /** A request that got no response at all (offline, refused, aborted): the pointer says nothing about the model. */
@@ -465,7 +471,7 @@ export async function reopenLastModel(fetcher: typeof fetch = fetch, options: Re
   let discovering = false;
   const stillEmpty = () => workspaceModeStore.getSnapshot().mode === 'cad'
     && useImportedModelStore.getState().phase === (discovering ? 'loading' : 'empty')
-    && importedMeshStore.isCurrentGeneration(generation);
+    && importedMeshStore.isCurrentGeneration(generation) && options.blocked?.() !== true;
   await migrateLastModel(fetcher);
   const pointer = readLastModel(workspaceModeStore.getSnapshot().importedInput);
   if (!pointer || !stillEmpty() || options.shouldTry?.(pointer) === false) return false;
@@ -498,7 +504,8 @@ export async function reopenLastModel(fetcher: typeof fetch = fetch, options: Re
       const opened = await openImportedWithRead({ kind: 'model', modelId: pointer.model_id,
         // Bind the setup and retained record to the preparation discovery actually read.
         ...(pointer.input === 'cad' ? { preparedId: read.latest_prepared.ingest_id } : {}),
-        useEnginePreference: true }, reachable, { model: read, setup: saved });
+        useEnginePreference: true, display: { automatic: true } },
+      reachable, { model: read, setup: saved });
       return opened;
     } catch (error) {
       activity.end(false);

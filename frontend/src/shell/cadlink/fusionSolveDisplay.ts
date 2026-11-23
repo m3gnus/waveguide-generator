@@ -32,6 +32,8 @@ export function reportFusionDisplayDiagnostic(jobId: string, reason: string, err
 }
 
 type Intent = { sendAt?: number; navigation: number; edits: number; choice: number; document: ReturnType<typeof currentDocumentLoad> };
+/** Why a display stopped that are the person moving on: a finished solve is then offered, never imposed. */
+const MOVED_ON = new Set(['navigation', 'edited', 'document', 'model-choice']);
 const DISPLAY_FAILURE = 'WG could not show the Fusion model. It tries again when the request updates or when you return to CAD or Results.';
 
 /** Fusion Solve alone owns its request's model, from preparation through results.
@@ -65,6 +67,8 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   let explicitIntent: Intent | null = null;
   let edits = 0;
   let opening: { current(): boolean; generation: number } | null = null;
+  /** The request bringing its model to the screen, from presentation until shown or superseded. */
+  let following: { id: string; current(): boolean } | null = null;
   // The last time the request arrived or changed (a hold or a failure ends it).
   const changedAt = (job: JobItem) => Math.max(Date.parse(job.created_at), Date.parse(job.completed_at ?? '') || -Infinity);
   // Only a request that arrives or changes in this session (or within the
@@ -198,7 +202,18 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
       : !isCurrentDocumentLoad(intent.document) ? 'document'
       : !useCadReturnStore.getState().isCurrentModelChoice(intent.choice) ? 'model-choice' : null;
     const current = () => blocked() === null;
-    if (!current()) { diagnostic(job.id, blocked()!); return; }
+    if (!current()) {
+      const reason = blocked()!;
+      if (following?.id === job.id) following = null;
+      diagnostic(job.id, reason);
+      // The person chose something else meanwhile. Their screen stays theirs;
+      // the finished solve waits one click away instead of being dropped.
+      if (MOVED_ON.has(reason) && job.status === 'complete' && job.has_results && job.run_number != null
+        && job.cad_state?.state === 'accepted') solveAttention.offerRun(job.id);
+      return;
+    }
+    // Claimed before CAD mode is entered: entering it must not restore another model.
+    following = { id: job.id, current };
     if (!presented.has(job.id)) {
       presented.add(job.id);
       display.enterCadWorkspace?.();
@@ -235,7 +250,7 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
     }
     const action = (async () => {
       rememberCadSolve(job.id, '');
-      const guardedDisplay = { ...display, isCurrent: current,
+      const guardedDisplay = { ...display, isCurrent: current, automatic: !explicit,
         // The request's progress belongs to Results. The shared history
         // opener must not front the geometry panel again at each transition.
         enterCadWorkspace: () => workspaceModeStore.setMode('cad'),
@@ -275,6 +290,7 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
       if (!accepted) return;
       acknowledgeCadSolve(job, 'completion');
       acknowledgeCadSolve(job, 'display');
+      solveAttention.dismissOffer(job.id);
       if (!explicit) compareSelection.awaitRun(job.id);
       if (job.client_request_id) solveAttention.followJob(job.client_request_id, job.id);
       solveAttention.bindRun(job.id, job.id, null);
@@ -336,6 +352,14 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   const stopShowRequest = jobsSocket.subscribeCadShowRequest((request) => { void showRequest(request); });
   return {
     latestSentAt: () => newestSentAt, observe, resume, showRequest,
+    /** A Fusion solve is bringing its own model to the screen: it entered CAD
+     * mode for that, so an automatic restore must not open another model. */
+    ownsDisplay: () => {
+      if (disposed || !following || !following.current()) return false;
+      const id = following.id;
+      const job = latestJobs.find((item) => item.id === id);
+      return inFlight.has(id) || (!!job && isActiveJobStatus(job.status));
+    },
     // Hold only returns that predate the show. A new Send must stay eligible
     // even when its receipt arrives before discovery sees the return.
     ownsReturn: (bundle: CadReturnBundle, jobs: readonly JobItem[]) =>
