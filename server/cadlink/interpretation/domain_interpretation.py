@@ -248,6 +248,39 @@ class Observations:
         }
 
 
+def kept_side(negative: int, positive: int) -> str | None:
+    """Which side of its plane a model with these vertex counts lies on; None when both or neither."""
+
+    if negative and not positive:
+        return "negative"
+    if positive and not negative:
+        return "positive"
+    return None
+
+
+def shows_cut_rim(observation: PlaneObservation | Mapping[str, Any] | None) -> bool:
+    """Whether one plane's observation shows a cut WG did not make.
+
+    The one cut-rim rule, for a live ``PlaneObservation`` or its saved
+    ``to_json()`` form: a rigid-shell rim (``rigid_cut_rim_edges``) of at least
+    ``MIN_RIM_EDGES`` edges that WG did not cut. An open end on the solver's
+    z0, which WG never mirrors, is a cut only where the plane passes through a
+    source; otherwise it is a horn mouth.
+    """
+
+    if isinstance(observation, PlaneObservation):
+        wg_cut, rim = observation.wg_cut, observation.rigid_cut_rim_edges
+        solver_plane, bisected = observation.solver_plane, observation.sources_bisected
+    elif isinstance(observation, Mapping):
+        wg_cut, rim = observation.get("wg_cut"), observation.get("rigid_cut_rim_edges")
+        solver_plane, bisected = observation.get("solver_plane"), observation.get("sources_bisected")
+    else:
+        return False
+    if wg_cut or not isinstance(rim, int) or rim < MIN_RIM_EDGES:
+        return False
+    return not (solver_plane == "z0" and not bisected)
+
+
 def _vertex_components(count: int, faces: np.ndarray) -> np.ndarray:
     """A connected-component label per vertex, triangles joining their corners."""
 
@@ -702,11 +735,7 @@ def apply_evidence(plan: DomainPlan, observations: Observations | None, *, ident
             observation, observations.other_open_edges
         )
         recorded_side = dict(plan.kept_sides).get(plane)
-        observed_side = (
-            "negative" if observation.negative and not observation.positive
-            else "positive" if observation.positive and not observation.negative
-            else None
-        )
+        observed_side = kept_side(observation.negative, observation.positive)
         if problem is None and recorded_side is not None and observed_side is not None and (
             recorded_side != observed_side
         ):
@@ -888,15 +917,10 @@ def cut_shaped_open_rim(interpretation: Mapping[str, Any]) -> tuple[str, int] | 
         return None
     for plane in PLANES:
         item = planes.get(plane)
-        if not isinstance(item, Mapping) or item.get("wg_cut"):
-            continue
-        cut_rim = item.get("rigid_cut_rim_edges")
-        if not isinstance(cut_rim, int) or cut_rim < MIN_RIM_EDGES:
-            continue
-        if item.get("solver_plane") == "z0" and not item.get("sources_bisected"):
+        if not shows_cut_rim(item):
             continue
         rim = item.get("rim_edges")
-        return plane, rim if isinstance(rim, int) else cut_rim
+        return plane, rim if isinstance(rim, int) else item["rigid_cut_rim_edges"]
     return None
 
 
@@ -1128,10 +1152,12 @@ __all__ = [
     "export_frame",
     "interpretation_finding",
     "interpretation_record",
+    "kept_side",
     "observe",
     "observe_record_mesh",
     "plane_words",
     "record_key",
     "record_plan_identity",
+    "shows_cut_rim",
     "valid_choices",
 ]

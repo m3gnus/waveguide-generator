@@ -80,9 +80,11 @@ from server.cadlink.interpretation.domain_interpretation import (
     READING_REDUCED,
     cut_shaped_open_rim,
     interpretation_record,
+    kept_side,
     oblique_cut_refusal_message,
     off_centre_cut_refusal_message,
     open_half_refusal_message,
+    shows_cut_rim,
 )
 from server.mesh.source_completion import source_completion_factors
 
@@ -120,17 +122,14 @@ def _sha256(value: Any) -> str | None:
 
 
 def _kept_side(observation: Mapping[str, Any] | None) -> str | None:
-    """Which side of its plane the observed model lies on; None when both or neither."""
+    """Which side of its plane a saved observation's model lies on (``kept_side``)."""
 
     if not isinstance(observation, Mapping):
         return None
-    negative = int(observation.get("negative_vertices") or 0)
-    positive = int(observation.get("positive_vertices") or 0)
-    if positive and not negative:
-        return "positive"
-    if negative and not positive:
-        return "negative"
-    return None
+    return kept_side(
+        int(observation.get("negative_vertices") or 0),
+        int(observation.get("positive_vertices") or 0),
+    )
 
 
 def _proper_frame(normalisation: Mapping[str, Any]) -> dict[str, Any]:
@@ -343,14 +342,9 @@ def _decide(
         if plane in mirrored:
             continue
         observation = observed_planes.get(plane)
-        if not isinstance(observation, Mapping) or observation.get("wg_cut"):
+        if not shows_cut_rim(observation):
             continue
-        rigid_rim = int(observation.get("rigid_cut_rim_edges") or 0)
-        if rigid_rim < MIN_RIM_EDGES:
-            continue
-        if observation.get("solver_plane") == "z0" and not observation.get("sources_bisected"):
-            # An open end on the solver's z0 (a horn mouth) is not a cut.
-            continue
+        rigid_rim = observation["rigid_cut_rim_edges"]
         kept = _kept_side(observation)
         entry: dict[str, Any] = {
             "plane": plane,

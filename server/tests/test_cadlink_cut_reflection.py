@@ -23,7 +23,13 @@ import pytest
 
 from server.cadlink.interpretation import cut_recovery as cr
 from server.cadlink.interpretation import domain_decision as dd
-from server.cadlink.interpretation.domain_interpretation import Observations, PlaneObservation
+from server.cadlink.interpretation.domain_interpretation import (
+    Observations,
+    PlaneObservation,
+    cut_shaped_open_rim,
+    kept_side,
+    shows_cut_rim,
+)
 from server.cadlink.interpretation.frame_infer import parse_tagged_msh
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from server.mesh.imported import (
@@ -486,6 +492,34 @@ def _observations(**plane: Any) -> Observations:
         other_open_edges=0,
         free_edges=20,
     )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {},
+        dict(wg_cut=True),
+        dict(rigid_cut_rim_edges=2),
+        dict(rigid_cut_rim_edges=3),
+        dict(solver_plane="z0", sources_bisected=[]),
+        dict(solver_plane="z0"),
+        dict(negative=0, positive=40),
+        dict(positive=5),
+    ],
+)
+def test_one_cut_rim_rule_reads_live_and_saved_observations_alike(change: dict[str, Any]) -> None:
+    observations = _observations(**change)
+    saved = observations.to_json()
+    live = observations.planes["x0"]
+    shown = shows_cut_rim(live)
+    assert shows_cut_rim(saved["planes"]["x0"]) is shown
+    assert (cr.geometry_cut_planes(observations) == ["x0"]) is shown
+    assert (cut_shaped_open_rim({"observations": saved}) is not None) is shown
+    side = kept_side(live.negative, live.positive)
+    assert dd._kept_side(saved["planes"]["x0"]) == side
+    assert side == ("negative" if live.negative and not live.positive
+                    else "positive" if live.positive and not live.negative else None)
+    assert shows_cut_rim(None) is False and shows_cut_rim({}) is False
 
 
 @pytest.mark.parametrize(

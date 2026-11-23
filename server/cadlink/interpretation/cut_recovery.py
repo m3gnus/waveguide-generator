@@ -48,7 +48,9 @@ from server.cadlink.interpretation.domain_interpretation import (
     PLANES,
     SUPPORTED_PLANES,
     Observations,
+    kept_side,
     plane_words,
+    shows_cut_rim,
 )
 
 
@@ -155,24 +157,15 @@ def geometry_cut_planes(observations: Observations | None) -> list[str]:
     """The CAD planes the observed geometry shows cut open (in CAD plane order).
 
     A plane is cut where a rigid-shell rim spanning its one-sided shell lies on
-    it and WG did not make it (``rigid_cut_rim_edges``, the same reading as
-    ``domain_interpretation.cut_shaped_open_rim``). An open end on the solver's
-    z = 0 with no source the plane passes through is a horn mouth, not a cut.
+    it and WG did not make it (``domain_interpretation.shows_cut_rim``, the rule
+    ``cut_shaped_open_rim`` and the domain decision read too). An open end on
+    the solver's z = 0 with no source the plane passes through is a horn mouth,
+    not a cut.
     """
 
     if observations is None:
         return []
-    planes = []
-    for plane in PLANES:
-        observation = observations.planes.get(plane)
-        if observation is None or observation.wg_cut:
-            continue
-        if observation.rigid_cut_rim_edges < MIN_RIM_EDGES:
-            continue
-        if observation.solver_plane == "z0" and not observation.sources_bisected:
-            continue
-        planes.append(plane)
-    return planes
+    return [plane for plane in PLANES if shows_cut_rim(observations.planes.get(plane))]
 
 
 def side_of_source(source: Mapping[str, Any]) -> str | None:
@@ -264,14 +257,6 @@ class CutRecovery:
         }
 
 
-def _kept_side(negative: int, positive: int) -> str | None:
-    if negative and not positive:
-        return "negative"
-    if positive and not negative:
-        return "positive"
-    return None
-
-
 def assess_cut_recovery(
     observations: Observations | None,
     *,
@@ -354,7 +339,7 @@ def assess_cut_recovery(
                     f"WG cannot mirror {words}; cut it on an origin plane",
                 )
             )
-        side = _kept_side(observation.negative, observation.positive)
+        side = kept_side(observation.negative, observation.positive)
         kept[plane] = side
         if side is None:
             own.append(
