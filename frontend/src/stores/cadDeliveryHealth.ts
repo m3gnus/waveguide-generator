@@ -12,12 +12,11 @@ export const useCadDeliveryHealthStore = create<{
   refusals: CadInboxRefusal[];
   unseenRefusals: number;
   outboundOperations: Record<string, CadOperationSummary>;
-  recoveryError: string | null;
   setStatus: (status: CadDeliveryStatus) => void;
   mergeRefusals: (refusals: CadInboxRefusal[]) => void;
   acknowledgeRefusals: () => void;
 }>((set, get) => ({
-  status: null, refusals: [], unseenRefusals: 0, outboundOperations: {}, recoveryError: null,
+  status: null, refusals: [], unseenRefusals: 0, outboundOperations: {},
   setStatus: (status) => { set({ status }); get().mergeRefusals(status.recentRefusals ?? []); },
   mergeRefusals: (refusals) => {
     const known = new Set(get().refusals.map(refusalKey));
@@ -130,5 +129,5 @@ export function connectCadDeliveryHealth(): () => void {
 }
 
 export function resetCadDeliveryHealthStore(): void {
-  useCadDeliveryHealthStore.setState({ status: null, refusals: [], unseenRefusals: 0, outboundOperations: {}, recoveryError: null });
+  useCadDeliveryHealthStore.setState({ status: null, refusals: [], unseenRefusals: 0, outboundOperations: {} });
 }

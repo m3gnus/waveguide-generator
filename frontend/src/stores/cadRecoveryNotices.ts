@@ -6,7 +6,6 @@ import { isPendingCadOperation, operationNeedsUser } from '../api/cadOperations'
 import { jsonRequest, type CadReturnBundle, type CadReturnIngestRecord } from '../api/cadlink';
 import { isActiveJobStatus, jobsSocket, type JobItem, type JobsSocketManager } from '../api/jobsSocket';
 import { cadJobAboutModel, cadJobSummary, cadModelOnScreen, latestCadJobs, dismissCadJob, isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
-import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
 import { useCadConnectionStore, type CadConnectionStore } from './cadConnection';
 import { cadStartupHello } from './cadStartupHello';
 
@@ -33,7 +32,6 @@ export function createCadRecoveryNoticesStore(): CadRecoveryNoticesStore {
     fence() { generation += 1; },
     setRecoveryError(message) {
       set({ recoveryError: message });
-      useCadDeliveryHealthStore.setState({ recoveryError: message });
     },
     async load(fetcher = fetch) {
       const started = ++generation;
@@ -85,7 +83,6 @@ export function connectCadRecoveryNotices(
   fetcher: typeof fetch = fetch,
   connection: Pick<CadConnectionStore, 'subscribe'> = useCadConnectionStore,
 ): () => void {
-  useCadDeliveryHealthStore.setState({ recoveryError: store.getState().recoveryError });
   let active = true;
   const startup = cadStartupHello(manager);
   let reading = false;

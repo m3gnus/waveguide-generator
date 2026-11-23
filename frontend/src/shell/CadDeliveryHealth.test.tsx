@@ -6,6 +6,7 @@ import type { CadDeliveryStatus, CadOperationSummary } from '../api/cadOperation
 import { jobsSocket, JobsSocketManager, type CadOperationListener, type JobsWebSocketLike } from '../api/jobsSocket';
 import { resetCadDeliveryHealthStore, useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { cadReceiptsStore } from '../stores/cadReceipts';
+import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
 import { Shell } from './Shell';
 import type { FusionCadStatus } from '../api/cadlink';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -127,6 +128,15 @@ describe('the CAD Link panel section', () => {
   const mount = async () => {
     await act(async () => { root.render(<><CadDeliveryHealthDataSource/><CadDeliveryHealth now={() => NOW}/></>); await vi.advanceTimersByTimeAsync(10); });
   };
+
+  it('shows the recovery-notice read failure its owner holds, and drops it once a read succeeds', async () => {
+    await mount();
+    expect(host.textContent).toBe('');
+    act(() => cadRecoveryNoticesStore.getState().setRecoveryError('WG could not check interrupted Fusion requests. Refresh CAD Link to try again.'));
+    expect(host.textContent).toContain('Refresh CAD Link to try again.');
+    act(() => cadRecoveryNoticesStore.getState().setRecoveryError(null));
+    expect(host.textContent).toBe('');
+  });
 
   it.each([
     ['disabled', status({ consumer: 'disabled' }), 'WG2_CAD_DELIVERY=0'],

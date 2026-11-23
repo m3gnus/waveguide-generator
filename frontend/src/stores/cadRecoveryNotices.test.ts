@@ -1,6 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createCadRecoveryNoticesStore, connectCadRecoveryNotices, type CadRecoveryNotice } from './cadRecoveryNotices';
-import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
 import type { JobsSocketManager } from '../api/jobsSocket';
 import { createCadConnectionStore, type CadConnectionStatus } from './cadConnection';
 
@@ -12,7 +11,6 @@ const json = (value: unknown) => new Response(JSON.stringify(value), { headers: 
 const deferred = <T>() => { let resolve!: (value: T) => void; let reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 
 describe('recovery notices without the coordinator', () => {
-  beforeEach(() => useCadDeliveryHealthStore.setState({ recoveryError: null }));
   afterEach(() => vi.useRealTimers());
   it('restores notices on reload and evidence alone removes them', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => json({ notices: [notice()] }));
@@ -49,15 +47,14 @@ describe('recovery notices without the coordinator', () => {
     await reload.getState().load(fetcher);
     expect(reload.getState().notices).toEqual({});
   });
-  it('keeps unresolved notices and owns delivery-health recoveryError until a successful retry', async () => {
+  it('keeps unresolved notices and their recoveryError until a successful retry', async () => {
     const store = createCadRecoveryNoticesStore();
     await store.getState().load(async () => json({ notices: [notice()] }));
     await expect(store.getState().load(async () => { throw new Error('could not check interrupted Fusion requests'); })).rejects.toThrow();
     expect(store.getState().notices.mutation).toBeDefined();
     expect(store.getState().recoveryError).toContain('could not check interrupted Fusion requests');
-    expect(useCadDeliveryHealthStore.getState().recoveryError).toBe(store.getState().recoveryError);
     await store.getState().load(async () => json({ notices: [notice()] }));
-    expect(useCadDeliveryHealthStore.getState().recoveryError).toBeNull();
+    expect(store.getState().recoveryError).toBeNull();
   });
   it('refuses an older load success or failure after a newer read', async () => {
     const store = createCadRecoveryNoticesStore();
@@ -105,8 +102,9 @@ describe('recovery notices without the coordinator', () => {
       subscribeCadOperations: vi.fn((value) => { handlers = value; return vi.fn(); }) } as Pick<JobsSocketManager, 'subscribeCadOperations' | 'getSnapshot'>;
     const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(async () => outcome === 'answered' ? json({ notices: [] }) : new Response('{}', { status: 503 }))
       .mockImplementation(async () => json({ notices: [] }));
-    const stop = connectCadRecoveryNotices(manager, createCadRecoveryNoticesStore(), fetcher, createCadConnectionStore());
-    await vi.waitFor(() => expect(useCadDeliveryHealthStore.getState().recoveryError).toEqual(outcome === 'answered' ? null : expect.any(String)));
+    const store = createCadRecoveryNoticesStore();
+    const stop = connectCadRecoveryNotices(manager, store, fetcher, createCadConnectionStore());
+    await vi.waitFor(() => expect(store.getState().recoveryError).toEqual(outcome === 'answered' ? null : expect.any(String)));
     handlers.resync();
     await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(afterHello));
     handlers.resync();
@@ -181,20 +179,19 @@ describe('recovery notices without the coordinator', () => {
   it('owns health recovery feedback and clears it after a successful notice read', async () => {
     const store = createCadRecoveryNoticesStore();
     await expect(store.getState().load(async () => { throw new Error('notice read failed'); })).rejects.toThrow();
-    expect(useCadDeliveryHealthStore.getState().recoveryError).toBe(store.getState().recoveryError);
+    expect(store.getState().recoveryError).toContain('Refresh CAD Link to try again');
     await store.getState().load(async () => json({ notices: [] }));
-    expect(useCadDeliveryHealthStore.getState().recoveryError).toBeNull();
+    expect(store.getState().recoveryError).toBeNull();
   });
 });
 
-it('fences a delayed notice failure after unmount so it cannot overwrite the next health owner', async () => {
+it('fences a delayed notice failure after unmount so it cannot report a stale error', async () => {
   const request = deferred<Response>();
   const store = createCadRecoveryNoticesStore();
   const manager = { subscribeCadOperations: () => () => undefined };
   const stop = connectCadRecoveryNotices(manager, store, () => request.promise);
   stop();
-  useCadDeliveryHealthStore.setState({ recoveryError: 'new owner' });
   request.reject(new Error('old read failed'));
   await Promise.resolve(); await Promise.resolve();
-  expect(useCadDeliveryHealthStore.getState().recoveryError).toBe('new owner');
+  expect(store.getState().recoveryError).toBeNull();
 });
