@@ -150,8 +150,8 @@ def _applying(heartbeat: Mapping[str, Any]) -> str | None:
     return _operation_id(value.get("operationId")) if value is not None else None
 
 
-def _channel(_row: Mapping[str, Any]) -> str:
-    return "handoff"
+#: The heartbeat channel of every request WG still makes (all handoffs).
+_HANDOFF_CHANNEL = "handoff"
 
 
 def _recent_record(heartbeat: Mapping[str, Any], row: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -164,7 +164,7 @@ def _recent_record(heartbeat: Mapping[str, Any], row: Mapping[str, Any]) -> Mapp
         item = _object(value)
         if (
             item is not None
-            and item.get("channel") == _channel(row)
+            and item.get("channel") == _HANDOFF_CHANNEL
             and item.get("requestId") == operation_id
         ):
             return item
@@ -174,7 +174,7 @@ def _recent_record(heartbeat: Mapping[str, Any], row: Mapping[str, Any]) -> Mapp
 def _last(heartbeat: Mapping[str, Any], row: Mapping[str, Any]) -> Mapping[str, Any] | None:
     diagnostics = _object(heartbeat.get("diagnostics")) or {}
     value = _object(diagnostics.get("lastRequest"))
-    if value is None or value.get("channel") != _channel(row):
+    if value is None or value.get("channel") != _HANDOFF_CHANNEL:
         return None
     return value if value.get("correlationId") == row.get("operation_id") else None
 
@@ -218,7 +218,9 @@ def adapter_outcome(
     Returns ``(state, reason, outcome)``. A mutation is accepted only as
     reconciled, with ``evidence`` equal to its own operation and export ids; ``failed`` leaves
     a mutation that was executing ``recovery_required``. Raises ``ValueError``
-    for an outcome that does not apply to the operation's kind.
+    for an outcome that does not apply to the operation's kind. Every caller
+    passes a mutation today; the non-mutating checks stay as guards, so a
+    future caller cannot accept a request from document evidence.
     """
 
     operation_id = str(row["operation_id"])

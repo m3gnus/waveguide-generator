@@ -72,8 +72,10 @@ from server.cadlink.fusion.fusion_status import (
 from server.cadlink.fusion.fusion_status import (
     heartbeat_now, read_heartbeat_report, select_heartbeat, settleable_heartbeat,
 )
+from server.cadlink.operations import REQUEST_RETURN
 from server.cadlink.fusion.fusion_outcomes import (
-    FUSION_KINDS, retire_return_requests, settle_from_heartbeat, settle_abandoned_live_claims,
+    FUSION_KINDS, RETIRED_RETURN_MESSAGE, retire_return_requests, settle_from_heartbeat,
+    settle_abandoned_live_claims,
 )
 from server.cadlink.fusion.fusion_delivery import (
     advertise_fusion_delivery,
@@ -2118,6 +2120,17 @@ async def post_reconcile_cad_operation(
                 code="operation_not_reconcilable",
                 stage="reconciliation",
                 message="This operation is not a Fusion request.",
+                retryable=False,
+            ),
+        )
+    if row.get("kind") == REQUEST_RETURN:
+        # Startup settles every unfinished one; this WG never makes another.
+        return JSONResponse(
+            status_code=409,
+            content=error_envelope(
+                code="operation_not_reconcilable",
+                stage="reconciliation",
+                message=RETIRED_RETURN_MESSAGE,
                 retryable=False,
             ),
         )

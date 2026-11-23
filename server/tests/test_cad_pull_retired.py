@@ -10,6 +10,7 @@ import asyncio
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -158,3 +159,18 @@ def test_the_pull_routes_are_gone(tmp_path):
         assert not any("return-request" in path for path in app.openapi()["paths"])
     finally:
         app.state.cadlink_store.close()
+
+
+def test_reconcile_refuses_a_pull_with_the_send_to_wg_remedy(tmp_path):
+    from server.cadlink.api import post_reconcile_cad_operation
+
+    app = create_app(data_dir=tmp_path / "data")
+    store = app.state.cadlink_store
+    _return_row(store, "pull-1", "processing")
+    response = asyncio.run(
+        post_reconcile_cad_operation("pull-1", SimpleNamespace(app=SimpleNamespace(state=app.state)))
+    )
+    assert response.status_code == 409
+    body = json.loads(response.body)
+    assert RETIRED_RETURN_MESSAGE in json.dumps(body)
+    assert store.get_operation("pull-1")["state"] == "processing"
