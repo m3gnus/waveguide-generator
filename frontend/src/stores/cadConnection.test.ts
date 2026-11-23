@@ -28,7 +28,6 @@ describe('CAD connection observations without the coordinator', () => {
   it('ages a held status into last report at the TTL without traffic', async () => {
     const reader = vi.fn(async () => status());
     await connection.read(reader);
-    expect(connection.getState().receivedAt).toBe(Date.now());
     expect(fusionWorkflowView(connection.getState().fusionStatus).state).toBe('current');
     await vi.advanceTimersByTimeAsync(19_999);
     expect(connection.getState().fusionStatus?.statusObserved).not.toBe(false);
@@ -130,7 +129,7 @@ describe('CAD connection observations without the coordinator', () => {
     await vi.advanceTimersByTimeAsync(15_000);
     expect(connection.getState().fusionStatus?.statusObserved).toBe(false);
     expect(connection.getState().fusionStatus?.processRunning).toBe(true);
-    expect(connection.getState().linkName).toBe('Upper horn');
+    expect(connection.getState().fusionStatus?.link?.linkName).toBe('Upper horn');
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -147,10 +146,10 @@ describe('CAD connection observations without the coordinator', () => {
   it('exposes the optional linkName without replacing design or instance identity', async () => {
     const link = { instanceId: 'instance-1', designName: 'WG design', linkName: 'Upper horn' } as NonNullable<CadConnectionStatus['link']>;
     await connection.read(async () => status({ link, matchingLinks: [link] }));
-    expect(connection.getState().linkName).toBe('Upper horn');
+    expect(connection.getState().fusionStatus?.link?.linkName).toBe('Upper horn');
     expect(connection.getState().fusionStatus?.link?.designName).toBe('WG design');
     await connection.read(async () => status({ link: { ...link, linkName: null } }));
-    expect(connection.getState().linkName).toBeNull();
+    expect(connection.getState().fusionStatus?.link?.linkName).toBeNull();
   });
 });
 

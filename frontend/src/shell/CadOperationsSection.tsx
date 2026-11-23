@@ -8,6 +8,7 @@ import { isPendingCadOperation, reconcileCadOperation } from '../api/cadOperatio
 import { createCadRequestActions, selectCadRequests, useCadRecoveryNotices, type CadRequest } from '../stores/cadRecoveryNotices';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { cadWorkspace } from '../stores/cadWorkspace';
+import { useCadConnectionStore } from '../stores/cadConnection';
 import { openImported } from '../stores/importedModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { openCadProject } from './CadProjectPanel';
@@ -401,8 +402,9 @@ function RecoveryOperationCard({ request, requestActions }: { request: CadReques
   const coordinator = useSyncExternalStore(
     cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot,
   );
+  const activeDocumentName = useCadConnectionStore((current) => current.fusionStatus?.documentName ?? null);
   const { busy, error, ask } = useRequestAction();
-  const documentName = operation.snapshot?.documentName ?? coordinator.fusionStatus?.documentName ?? null;
+  const documentName = operation.snapshot?.documentName ?? activeDocumentName;
   const label = documentName ?? 'the Fusion document';
   return <Notice tone="warning" role={null} className="cad-operation cad-operation-recovery" data-operation-id={operation.operationId} data-request-id={request.id} tabIndex={-1} title={<>Update interrupted — recovery required{documentName ? ` · ${documentName}` : ''}</>} actions={<div className="cad-confirm-actions">
       <button className="btn"
@@ -481,19 +483,13 @@ function EarlierRequests({ requests, requestActions }: { requests: CadRequest[];
   </details>;
 }
 
-/** Whether an operation is about what is in front of the user: a solve of the
- * model on screen (the same snapshot), or a recovery the active Fusion
- * document still reports. */
-function aboutWhatIsOnScreen(
+/** Whether a solve is of the model on screen (the same snapshot). */
+function solvesWhatIsOnScreen(
   operation: CadOperationSummary,
   record: CadReturnIngestRecord | null,
-  reportedRecovery: string | null,
 ): boolean {
-  if (operation.kind === 'prepare_and_solve') {
-    const manifest = operation.snapshot?.manifestSha256 ?? null;
-    return Boolean(record && manifest && record.manifest_sha256 === manifest);
-  }
-  return reportedRecovery !== null && operation.operationId === reportedRecovery;
+  const manifest = operation.snapshot?.manifestSha256 ?? null;
+  return Boolean(record && manifest && record.manifest_sha256 === manifest);
 }
 
 /** The waiting or running solves of the model on screen. */
@@ -502,7 +498,7 @@ export function onScreenSolves(
   record: CadReturnIngestRecord | null,
 ): CadOperationSummary[] {
   return Object.values(operations).filter(isPendingCadOperation)
-    .filter((operation) => operation.kind === 'prepare_and_solve' && aboutWhatIsOnScreen(operation, record, null));
+    .filter((operation) => operation.kind === 'prepare_and_solve' && solvesWhatIsOnScreen(operation, record));
 }
 
 /** The waiting or running solves of the model on screen, under its status

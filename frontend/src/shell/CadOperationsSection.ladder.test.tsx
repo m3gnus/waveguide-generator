@@ -28,7 +28,6 @@ vi.mock('../stores/cadWorkspace', () => {
   const snapshot = {
     ...coordinator,
     reconcileOperation: vi.fn(), reportError: vi.fn(),
-    fusionStatus: null,
   };
   return { cadWorkspace: { getSnapshot: () => snapshot, subscribe: () => () => undefined } };
 });

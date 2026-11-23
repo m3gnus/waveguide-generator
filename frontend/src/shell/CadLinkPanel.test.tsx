@@ -5,7 +5,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing, FusionCadStatus } from '../api/cadlink';
-import { resetCadCoordinationForTests } from '../api/cadCoordination';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
@@ -24,7 +23,7 @@ import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
-import { CadLinkPanel, declaredDomainPhrase, fusionWorkflowView, onshapeWorkflowView } from './CadLinkPanel';
+import { CadLinkPanel, declaredDomainPhrase } from './CadLinkPanel';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { newestReturnArrival } from './cadlink/arrivals';
 import { showIngestedMeshInViewport } from './cadlink/artifactLoader';
@@ -34,11 +33,10 @@ import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
 import { SolveActions } from './TopBar';
 import { CurrentModelStatus } from './CurrentModelStatus';
 import { workspaceNavigation } from './workspaceNavigation';
-import { fusionAddinNeedsInstall } from './cadWorkflowView';
+import { fusionAddinNeedsInstall, fusionWorkflowView, onshapeWorkflowView } from './cadWorkflowView';
 
 const listing: CadReturnListing = {
   cadFolderConfigured: true,
-  coordination: 'on',
   items: [{
     name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
     documentName: 'Speaker', requestId: null, sourceCount: 1, instanceCount: 1,
@@ -119,10 +117,9 @@ describe('CadLinkPanel', () => {
     capabilityClient.clear();
     publishCadJobs([]); sessionStorage.clear();
     reviewDetail = undefined; missingReview = false;
-    useCadConnectionStore.setRecoveryError(null); cadReceiptsStore.setState({ recoveryError: null });
+    useCadConnectionStore.invalidate(); useCadConnectionStore.setRecoveryError(null); cadReceiptsStore.setState({ recoveryError: null });
     fixtureOperations = {}; reportedRecovery = null; cadRecoveryNoticesStore.setState({ notices: {}, recoveryError: null });
 
-    resetCadCoordinationForTests('on');
     workspaceModeStore.setMode('parametric');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
@@ -143,7 +140,7 @@ describe('CadLinkPanel', () => {
   it('never offers the parametric Fusion actions for a selected unprepared CAD-authored return', async () => {
     const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
     const ingest = vi.fn().mockResolvedValue(undefined);
-    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: currentFusion, ingest }, true);
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, ingest }, true); useCadConnectionStore.setState({ fusionStatus: currentFusion });
     workspaceModeStore.setMode('cad');
     useDocumentStore.setState({ identity: { designId: 'parked-design', lineageId: 'parked-project' } as never });
     useCadReturnStore.getState().selectBundle({ ...listing.items[0], designIds: [] });
@@ -166,7 +163,7 @@ describe('CadLinkPanel', () => {
 
   it('keeps a quiet connection line below the runs and no Install add-in for a current add-in', async () => {
     const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
-    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: { ...currentFusion, immutableBundles: true } }, true);
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false }, true); useCadConnectionStore.setState({ fusionStatus: { ...currentFusion, immutableBundles: true } });
     workspaceModeStore.setMode('cad');
     useCadReturnStore.getState().selectBundle({ ...listing.items[0], designIds: [] });
     await act(async () => root.render(<QueryClientProvider client={capabilityClient}><CadLinkPanel/></QueryClientProvider>));
@@ -181,7 +178,7 @@ describe('CadLinkPanel', () => {
 
   it('leads with a connection that needs the user, and offers Install add-in for an outdated add-in', async () => {
     const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
-    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: { ...currentFusion, state: 'addin_outdated' } }, true);
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false }, true); useCadConnectionStore.setState({ fusionStatus: { ...currentFusion, state: 'addin_outdated' } });
     workspaceModeStore.setMode('cad');
     await act(async () => root.render(<QueryClientProvider client={capabilityClient}><CadLinkPanel/></QueryClientProvider>));
     const panel = host.querySelector('.cadlink-panel')!;
@@ -215,7 +212,7 @@ describe('CadLinkPanel', () => {
 
   it('tells a Fusion request pointer whose preparation failed WG\'s words, never a Prepare simulation it cannot offer', async () => {
     const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
-    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: closedFusion }, true);
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false }, true); useCadConnectionStore.setState({ fusionStatus: closedFusion });
     workspaceModeStore.setMode('cad');
     const calm = 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.';
     const failed = cadJobFixture({
@@ -246,7 +243,7 @@ describe('CadLinkPanel', () => {
       return json(record);
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); });
-    await vi.waitFor(() => expect(cadWorkspace.getSnapshot().fusionStatus?.running).toBe(true));
+    await vi.waitFor(() => expect(useCadConnectionStore.getState().fusionStatus?.running).toBe(true));
     const message = 'Update the Fusion add-in to let manual Update follow newer exports.';
     expect(host.textContent?.includes(message)).toBe(immutableBundles !== true);
     // A current add-in needs nothing from the user: WG keeps it up to date.
@@ -278,7 +275,7 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/install-addin')) return json({ verdict: 'pending', detail: 'Close Fusion to finish installing the Waveguide Generator add-in in Fusion.' });
       if (path.endsWith('/fusion-status')) return json({ ...closedFusion, cadFolderConfigured: false, addinRefresh: { verdict: 'not-in-use', detail: 'No signal' } });
-      if (path.endsWith('/returns')) return json({ items: [], cadFolderConfigured: false, coordination: 'off' });
+      if (path.endsWith('/returns')) return json({ items: [], cadFolderConfigured: false });
       return json(record);
     });
     vi.stubGlobal('fetch', fetcher);
@@ -1092,7 +1089,7 @@ describe('CadLinkPanel', () => {
     openHistory();
     act(() => host.querySelector<HTMLButtonElement>('.cad-bundle-list button')!.click());
     await clickIngest();
-    await vi.waitFor(() => expect(cadWorkspace.getSnapshot().fusionStatus?.running).toBe(false));
+    await vi.waitFor(() => expect(useCadConnectionStore.getState().fusionStatus?.running).toBe(false));
     const posted = recordOperationRequests({ detailFromStore: true });
     act(() => {
       applyCadRequest(cadOperation({
@@ -2856,18 +2853,28 @@ describe('CadLinkPanel', () => {
     expect(linkedCard.querySelector('.cad-primary-action')?.textContent).toBe('Open in Fusion 360');
   });
 
-  it('mentions background coordination only when it is off', async () => {
-    preferencesStore.update({ showDeveloperDetails: true });
+  it('mentions that background checks are off only in developer details, for Fusion, once the listing answered', async () => {
     const { CadCoordinationNote } = await import('./CadLinkPanel');
-    const { resetCadCoordinationForTests } = await import('../api/cadCoordination');
-    resetCadCoordinationForTests('on');
+    const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
+    preferencesStore.update({ showDeveloperDetails: true, cadApplication: 'fusion360' });
+    cadWorkspace.setState({ ...emptyCadWorkspace, cadFolderConfigured: null }, true);
     await act(async () => { root.render(<CadCoordinationNote/>); });
     expect(host.textContent).toBe('');
-    resetCadCoordinationForTests('off');
-    await act(async () => { root.render(<CadCoordinationNote/>); });
+    act(() => cadWorkspace.setState({ cadFolderConfigured: true }));
     expect(host.textContent).toContain('Background checks are off');
     expect(host.textContent).not.toContain('WG2_CAD_COORDINATION');
-    resetCadCoordinationForTests();
+    act(() => preferencesStore.update({ showDeveloperDetails: false }));
+    expect(host.textContent).toBe('');
+  });
+
+  it('never shows the Fusion background-check note in Onshape mode', async () => {
+    const { CadCoordinationNote } = await import('./CadLinkPanel');
+    preferencesStore.setOnshapeAvailable(true);
+    preferencesStore.update({ showDeveloperDetails: true, cadApplication: 'onshape' });
+    act(() => cadWorkspace.setState({ cadFolderConfigured: true }));
+    await act(async () => { root.render(<CadCoordinationNote/>); });
+    expect(host.textContent).toBe('');
+    preferencesStore.setOnshapeAvailable(false);
   });
 
   it('flags only mistakes in the checks: a declared cut that fails, never a candidate plane, hidden skips of construction, or double counts', async () => {

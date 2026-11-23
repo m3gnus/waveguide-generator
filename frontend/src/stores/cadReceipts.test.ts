@@ -135,6 +135,32 @@ describe('Send receipt cursor source, without a coordinator', () => {
     expect(socket.unsubscribe).toHaveBeenCalledOnce();
   });
 
+  it('the first hello of a starting socket reuses the answered mount read; reconnects read again (D5)', async () => {
+    const store = createCadReceiptsStore(sessionStorage, () => NOW);
+    const socket = channel();
+    const manager = { ...socket.manager, getSnapshot: () => ({ connection: 'connecting' as const, epoch: null, cursor: null, jobs: [], error: null }) };
+    const fetcher = vi.fn().mockImplementation(async () => answer([]));
+    const stop = connectCadReceipts(manager, store, fetcher);
+    await flush();
+    socket.listener.resync(); await flush();
+    expect(fetcher).toHaveBeenCalledOnce();
+    socket.listener.resync(); await flush();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it('the first hello retries a failed mount read at once (D5)', async () => {
+    const store = createCadReceiptsStore(sessionStorage, () => NOW);
+    const socket = channel();
+    const fetcher = vi.fn().mockRejectedValueOnce(new Error('offline')).mockImplementation(async () => answer([]));
+    const stop = connectCadReceipts(socket.manager, store, fetcher);
+    await flush();
+    socket.listener.resync(); await flush();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(store.getState().loadedAt).not.toBeNull();
+    stop();
+  });
+
   it('keeps late intake refusals in delivery health and counts a push/reconnect once', async () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     const socket = channel();

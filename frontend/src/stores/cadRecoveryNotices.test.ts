@@ -1,6 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createCadRecoveryNoticesStore, connectCadRecoveryNotices, type CadRecoveryNotice } from './cadRecoveryNotices';
-import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
 import type { JobsSocketManager } from '../api/jobsSocket';
 import { createCadConnectionStore, type CadConnectionStatus } from './cadConnection';
 
@@ -12,7 +11,6 @@ const json = (value: unknown) => new Response(JSON.stringify(value), { headers: 
 const deferred = <T>() => { let resolve!: (value: T) => void; let reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 
 describe('recovery notices without the coordinator', () => {
-  beforeEach(() => useCadDeliveryHealthStore.setState({ recoveryError: null }));
   afterEach(() => vi.useRealTimers());
   it('restores notices on reload and evidence alone removes them', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => json({ notices: [notice()] }));
@@ -49,15 +47,14 @@ describe('recovery notices without the coordinator', () => {
     await reload.getState().load(fetcher);
     expect(reload.getState().notices).toEqual({});
   });
-  it('keeps unresolved notices and owns delivery-health recoveryError until a successful retry', async () => {
+  it('keeps unresolved notices and their recoveryError until a successful retry', async () => {
     const store = createCadRecoveryNoticesStore();
     await store.getState().load(async () => json({ notices: [notice()] }));
     await expect(store.getState().load(async () => { throw new Error('could not check interrupted Fusion requests'); })).rejects.toThrow();
     expect(store.getState().notices.mutation).toBeDefined();
     expect(store.getState().recoveryError).toContain('could not check interrupted Fusion requests');
-    expect(useCadDeliveryHealthStore.getState().recoveryError).toBe(store.getState().recoveryError);
     await store.getState().load(async () => json({ notices: [notice()] }));
-    expect(useCadDeliveryHealthStore.getState().recoveryError).toBeNull();
+    expect(store.getState().recoveryError).toBeNull();
   });
   it('refuses an older load success or failure after a newer read', async () => {
     const store = createCadRecoveryNoticesStore();
@@ -98,6 +95,53 @@ describe('recovery notices without the coordinator', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+  it.each([['answered', 1], ['failed', 2]] as const)('the first hello of a starting socket reuses a mount read that %s; reconnects read again (D5)', async (outcome, afterHello) => {
+    let handlers!: Parameters<JobsSocketManager['subscribeCadOperations']>[0];
+    const snapshot = { connection: 'connecting' } as ReturnType<JobsSocketManager['getSnapshot']>;
+    const manager = { getSnapshot: () => snapshot,
+      subscribeCadOperations: vi.fn((value) => { handlers = value; return vi.fn(); }) } as Pick<JobsSocketManager, 'subscribeCadOperations' | 'getSnapshot'>;
+    const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(async () => outcome === 'answered' ? json({ notices: [] }) : new Response('{}', { status: 503 }))
+      .mockImplementation(async () => json({ notices: [] }));
+    const store = createCadRecoveryNoticesStore();
+    const stop = connectCadRecoveryNotices(manager, store, fetcher, createCadConnectionStore());
+    await vi.waitFor(() => expect(store.getState().recoveryError).toEqual(outcome === 'answered' ? null : expect.any(String)));
+    handlers.resync();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(afterHello));
+    handlers.resync();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(afterHello + 1));
+    stop();
+  });
+  it('reads notices again when the mount read fails after the first hello shared it (P2-1)', async () => {
+    let handlers!: Parameters<JobsSocketManager['subscribeCadOperations']>[0];
+    const manager = { getSnapshot: () => ({ connection: 'connecting' }) as ReturnType<JobsSocketManager['getSnapshot']>,
+      subscribeCadOperations: vi.fn((value) => { handlers = value; return vi.fn(); }) } as Pick<JobsSocketManager, 'subscribeCadOperations' | 'getSnapshot'>;
+    const response = deferred<Response>();
+    const store = createCadRecoveryNoticesStore();
+    const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(() => response.promise).mockImplementation(async () => json({ notices: [] }));
+    const stop = connectCadRecoveryNotices(manager, store, fetcher, createCadConnectionStore());
+    handlers.resync();
+    expect(fetcher).toHaveBeenCalledOnce();
+    response.resolve(new Response('{}', { status: 503 }));
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(store.getState().recoveryError).toBeNull());
+    stop();
+  });
+  it('a design edit (invalidate, then a new report) reads notices once (B1)', async () => {
+    const manager = { subscribeCadOperations: vi.fn(() => vi.fn()) } as Pick<JobsSocketManager, 'subscribeCadOperations'>;
+    const connection = createCadConnectionStore();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => json({ notices: [] }));
+    const stop = connectCadRecoveryNotices(manager, createCadRecoveryNoticesStore(), fetcher, connection);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    const report = { state: 'current', running: true, link: null, documentId: 'doc', updatedAt: new Date().toISOString(), statusTtlSeconds: 20 } as CadConnectionStatus;
+    await connection.read(async () => report);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    connection.invalidate();
+    await connection.read(async () => ({ ...report }));
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    stop(); connection.invalidate();
+  });
   it('refreshes status-file changes and held-status expiry, coalesces bursts, and never polls idle', async () => {
     vi.useFakeTimers();
     vi.setSystemTime('2026-10-11T12:00:00Z');
@@ -135,20 +179,19 @@ describe('recovery notices without the coordinator', () => {
   it('owns health recovery feedback and clears it after a successful notice read', async () => {
     const store = createCadRecoveryNoticesStore();
     await expect(store.getState().load(async () => { throw new Error('notice read failed'); })).rejects.toThrow();
-    expect(useCadDeliveryHealthStore.getState().recoveryError).toBe(store.getState().recoveryError);
+    expect(store.getState().recoveryError).toContain('Refresh CAD Link to try again');
     await store.getState().load(async () => json({ notices: [] }));
-    expect(useCadDeliveryHealthStore.getState().recoveryError).toBeNull();
+    expect(store.getState().recoveryError).toBeNull();
   });
 });
 
-it('fences a delayed notice failure after unmount so it cannot overwrite the next health owner', async () => {
+it('fences a delayed notice failure after unmount so it cannot report a stale error', async () => {
   const request = deferred<Response>();
   const store = createCadRecoveryNoticesStore();
   const manager = { subscribeCadOperations: () => () => undefined };
   const stop = connectCadRecoveryNotices(manager, store, () => request.promise);
   stop();
-  useCadDeliveryHealthStore.setState({ recoveryError: 'new owner' });
   request.reject(new Error('old read failed'));
   await Promise.resolve(); await Promise.resolve();
-  expect(useCadDeliveryHealthStore.getState().recoveryError).toBe('new owner');
+  expect(store.getState().recoveryError).toBeNull();
 });

@@ -1,12 +1,14 @@
 import type { CadOperationSummary } from '../api/cadOperations';
-import type { CadCoordination } from '../api/cadCoordination';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { useCadConnectionStore, type CadConnectionStore, type CadConnectionStatus } from '../stores/cadConnection';
+import { cadStartupHello } from '../stores/cadStartupHello';
 
 // CAD observation and idle backoff cadences.
 export const CAD_OBSERVATION_INTERVALS = {
   returnsMs: 2_500, returnsIdleMs: 30_000,
-  fusionStatusMs: 2_500, fusionStatusIdleMs: 30_000, quietMs: 30_000,
+  fusionStatusMs: 2_500, quietMs: 30_000,
+  /** A burst of design edits (a slider drag) reads Fusion status at its start and once after it settles. */
+  contextReadMs: 300,
 } as const;
 export const CAD_RECONNECT_RETRY_DELAYS_MS = [5_000, 30_000, 120_000] as const;
 
@@ -18,7 +20,6 @@ export interface CadObservationActivity {
   activityRevision?: number;
   cadApplication: string;
   cadFolderConfigured: boolean | null;
-  coordination: CadCoordination;
   workspaceMode: string;
   /** Design/settings/selected-instance generation. Changing it fences old reads. */
   observationKey: string;
@@ -78,17 +79,46 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     const input = options.getActivity();
     if (input.cadApplication !== 'fusion360' || !visible()) return null;
     const base = listing ? CAD_OBSERVATION_INTERVALS.returnsMs : CAD_OBSERVATION_INTERVALS.fusionStatusMs;
-    const idle = listing ? CAD_OBSERVATION_INTERVALS.returnsIdleMs : CAD_OBSERVATION_INTERVALS.fusionStatusIdleMs;
-    if (input.coordination !== 'on' && !(listing && !declaredInbox)) return working() ? base : null;
-    if (input.workspaceMode === 'cad' || connection.getState().fusionStatus?.processRunning || input.awaitingReturn) return base;
-    if (input.cadFolderConfigured === false) return listing ? idle : null;
+    // Idle observation stops unless an older add-in needs the folder listing
+    // to discover what it sends (it does not declare the inbox transfer).
+    if (!listing || declaredInbox) return working() ? base : null;
+    // From here on this is legacy return discovery only.
+    const idle = CAD_OBSERVATION_INTERVALS.returnsIdleMs;
+    // CAD mode keeps the base rate while Fusion may deliver. Once Fusion reports it
+    // is closed, nothing can arrive until it starts again, which its add-in push,
+    // focus or a quiet-rate listing notices; until then quiet cadence applies.
+    const fusionClosed = connection.getState().fusionStatus?.state === 'closed';
+    if ((input.workspaceMode === 'cad' && !fusionClosed)
+      || connection.getState().fusionStatus?.processRunning || input.awaitingReturn) return base;
+    if (input.cadFolderConfigured === false) return idle;
     return now() - lastActivityAt >= CAD_OBSERVATION_INTERVALS.quietMs ? idle : base;
   };
-  const readStatus = () => {
+  /** Rejects when an attempted read published no report (failed or fenced). */
+  const readStatusAnswered = () => {
     if (active && visible() && options.getActivity().cadApplication === 'fusion360') {
-      return connection.read(options.readFusionStatus).then(() => undefined);
+      return connection.read(options.readFusionStatus).then((status) => {
+        if (!status) throw new Error('Fusion status read was not answered');
+      });
     }
     return Promise.resolve();
+  };
+  const readStatus = () => readStatusAnswered().catch(() => undefined);
+  // Each context change fences the previous read, so a burst needs only its
+  // first read and one after the last change; the ones between are discarded.
+  let contextRead: ReturnType<typeof setTimeout> | null = null;
+  let contextReadOwed = false;
+  const readStatusSettled = () => {
+    if (contextRead !== null) {
+      contextReadOwed = true;
+      clearTimeout(contextRead); timers.delete(contextRead);
+    } else void readStatus();
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      contextRead = null;
+      if (contextReadOwed) { contextReadOwed = false; readStatusSettled(); }
+    }, CAD_OBSERVATION_INTERVALS.contextReadMs);
+    contextRead = timer;
+    timers.add(timer);
   };
   const readReturns = () => {
     if (active && visible() && options.getActivity().cadApplication === 'fusion360') {
@@ -151,10 +181,13 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       }, wait);
     });
   };
-  let firstWake = true;
-  let firstResync = true;
   const startupKey = activity.observationKey;
-  let startupReads: Promise<unknown> | null = null;
+  const startup = cadStartupHello(manager);
+  // The mount wake's reads start in a microtask; a hello before then shares them.
+  let mountReads: ((reads: Promise<unknown>) => void) | null = null;
+  // If they fail after answering the first hello, that hello's reads run after all.
+  startup.mountRead(new Promise((resolve) => { mountReads = resolve; }),
+    () => { if (active) { invalidateDeclaration(); wake(); recover(); } });
   let wakeScheduled = false;
   let wakeListing = false;
   const wake = (listing = true) => {
@@ -166,13 +199,10 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       wakeScheduled = false;
       if (!active) return;
       const listingRequested = wakeListing; wakeListing = false;
-      const reads = [listingRequested ? readReturns() : Promise.resolve(), readStatus()];
-      if (firstWake) {
-        firstWake = false;
-        const batch = Promise.allSettled(reads);
-        startupReads = batch;
-        void batch.finally(() => { if (startupReads === batch) startupReads = null; });
-      }
+      const status = readStatusAnswered();
+      const reads = Promise.all([listingRequested ? readReturns() : Promise.resolve(), status]);
+      void reads.catch(() => undefined);
+      mountReads?.(reads); mountReads = null;
     });
   };
   const invalidateDeclaration = () => {
@@ -185,12 +215,14 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     operation: (operation) => options.observeOperation?.(operation),
     addinStatusChanged: () => { invalidateDeclaration(); wake(); },
     resync: () => {
-      // The initial hello shares a still-running mount batch for this context.
-      // Later reconnects always fence and read again.
-      const coalesced = firstResync && startupReads !== null && options.getActivity().observationKey === startupKey;
-      firstResync = false;
+      // The first hello of a socket still starting at mount is answered by the
+      // mount batch for this context (cadStartupHello): the socket sends its
+      // own jobs snapshot after every hello, and nothing awaited can be owed yet.
+      // Later reconnects always fence, read again and recover.
+      const fresh = startup.resync();
+      const coalesced = !fresh && options.getActivity().observationKey === startupKey;
       if (!coalesced) { invalidateDeclaration(); wake(); }
-      recover();
+      if (!coalesced || unresolved.size || options.getActivity().requests.some(pendingRequest)) recover();
     },
   });
   const unsubscribeJobs = manager.subscribe(() => {
@@ -205,7 +237,6 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     const folderChanged = next.cadFolderConfigured !== activity.cadFolderConfigured;
     const folderDiscovered = activity.cadFolderConfigured === null && folderChanged;
     const enteredCad = next.workspaceMode === 'cad' && activity.workspaceMode !== 'cad';
-    const coordinationChanged = next.coordination !== activity.coordination;
     const pullChanged = next.awaitingReturn !== activity.awaitingReturn;
     const modeChanged = next.workspaceMode !== activity.workspaceMode;
     const nextWorking = working();
@@ -219,10 +250,10 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       // clocks for an add-in already known to deliver through the inbox.
       connection.invalidate();
       if (applicationChanged) invalidateDeclaration();
-      if (!(folderChanged || enteredCad || applicationChanged)) readStatus();
+      if (!(folderChanged || enteredCad || applicationChanged)) readStatusSettled();
     }
     if ((folderChanged && !folderDiscovered) || enteredCad || applicationChanged) wake();
-    else if (contextChanged || folderChanged || coordinationChanged || modeChanged || pullChanged || workChanged) restart();
+    else if (contextChanged || folderChanged || modeChanged || pullChanged || workChanged) restart();
   });
   const unsubscribeConnection = connection.subscribe((state) => {
     const next = state.fusionStatus;
@@ -248,6 +279,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     timers.forEach(clearTimeout);
     timers.clear();
     restarts.clear();
+    startup.dispose();
     unsubscribeChannel(); unsubscribeJobs(); unsubscribeActivity(); unsubscribeConnection();
     document.removeEventListener('visibilitychange', resume);
     window.removeEventListener('focus', resume);

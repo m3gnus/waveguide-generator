@@ -7,7 +7,6 @@ import { returnOnshapeToWg } from '../../api/onshape';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { workspaceNavigation } from '../workspaceNavigation';
 import { showIngestedMeshInViewport } from './artifactLoader';
-import { cadCoordinationStore } from '../../api/cadCoordination';
 import {
   CadLinkApiError,
   ingestReturn,
@@ -153,7 +152,6 @@ export async function refreshCadReturnArrivals(
     const discoveryPrevious = previous ?? (remembered ? next : null);
     const wasConfigured = cadFolderConfigured.current;
     cadFolderConfigured.current = response.cadFolderConfigured;
-    cadCoordinationStore.set(response.coordination === 'on' ? 'on' : 'off');
     const listingChanged = previous === null
       || previous.size !== next.size
       || [...next].some(([path, modifiedAt]) => previous.get(path) !== modifiedAt);

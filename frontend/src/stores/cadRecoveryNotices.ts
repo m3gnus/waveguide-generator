@@ -6,8 +6,8 @@ import { isPendingCadOperation, operationNeedsUser } from '../api/cadOperations'
 import { jsonRequest, type CadReturnBundle, type CadReturnIngestRecord } from '../api/cadlink';
 import { isActiveJobStatus, jobsSocket, type JobItem, type JobsSocketManager } from '../api/jobsSocket';
 import { cadJobAboutModel, cadJobSummary, cadModelOnScreen, latestCadJobs, dismissCadJob, isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
-import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
 import { useCadConnectionStore, type CadConnectionStore } from './cadConnection';
+import { cadStartupHello } from './cadStartupHello';
 
 export type CadRecoveryNotice = components['schemas']['RecoveryNotice'];
 type NoticePage = components['schemas']['RecoveryNoticesResponse'];
@@ -32,7 +32,6 @@ export function createCadRecoveryNoticesStore(): CadRecoveryNoticesStore {
     fence() { generation += 1; },
     setRecoveryError(message) {
       set({ recoveryError: message });
-      useCadDeliveryHealthStore.setState({ recoveryError: message });
     },
     async load(fetcher = fetch) {
       const started = ++generation;
@@ -79,40 +78,43 @@ export function useCadRecoveryNotices<T>(selector: (state: CadRecoveryNoticesSta
 /** Mounted on the existing jobs channel;
  * pushes wake an authoritative read, never manufacture a recovery outcome. */
 export function connectCadRecoveryNotices(
-  manager: Pick<JobsSocketManager, 'subscribeCadOperations'> = jobsSocket,
+  manager: Pick<JobsSocketManager, 'subscribeCadOperations'> & Partial<Pick<JobsSocketManager, 'getSnapshot' | 'subscribe'>> = jobsSocket,
   store = cadRecoveryNoticesStore,
   fetcher: typeof fetch = fetch,
   connection: Pick<CadConnectionStore, 'subscribe'> = useCadConnectionStore,
 ): () => void {
-  useCadDeliveryHealthStore.setState({ recoveryError: store.getState().recoveryError });
   let active = true;
-  let startup = true;
-  void Promise.resolve().then(() => { startup = false; });
+  const startup = cadStartupHello(manager);
   let reading = false;
   let again = false;
-  const read = () => {
-    if (!active) return;
-    if (reading) { again = true; return; }
+  const read = (): Promise<void> | null => {
+    if (!active) return null;
+    if (reading) { again = true; return null; }
     reading = true;
-    void store.getState().load(fetcher).catch(() => undefined).finally(() => {
+    const load = store.getState().load(fetcher);
+    void load.catch(() => undefined).finally(() => {
       reading = false;
       if (again) { again = false; read(); }
     });
+    return load;
   };
   const unsubscribe = manager.subscribeCadOperations({
     operation: (operation) => { if (operation.kind === 'insert_link' || operation.kind === 'update_link') read(); },
-    resync: () => { const coalesced = startup && reading; startup = false; if (!coalesced) read(); },
-    addinStatusChanged: read,
+    resync: () => { if (startup.resync()) read(); },
+    addinStatusChanged: () => { read(); },
   });
   // The existing connection owner ages its held report once at expiry. This
   // also wakes document/evidence changes without introducing an idle poller.
+  // An invalidation (no status) carries no evidence: the read that follows it
+  // publishes the next report, and that report wakes the one notice read.
   const stopConnection = connection.subscribe((state, previous) => {
-    if (state.fusionStatus !== previous.fusionStatus) read();
+    if (state.fusionStatus !== previous.fusionStatus && state.fusionStatus !== null) read();
   });
-  read();
+  const mount = read();
+  if (mount) startup.mountRead(mount, () => { read(); });
   return () => {
     if (!active) return;
-    active = false; store.getState().fence(); unsubscribe(); stopConnection();
+    active = false; startup.dispose(); store.getState().fence(); unsubscribe(); stopConnection();
   };
 }
 

@@ -10,6 +10,7 @@ import { useMeshImportStore } from '../stores/meshImport';
 import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { cadWorkspace, emptyCadWorkspace } from '../stores/cadWorkspace';
+import { useCadConnectionStore } from '../stores/cadConnection';
 import { preferencesStore } from '../prefs/preferences';
 import { entryMatches } from './CommandPalette';
 import { buildParameterPaletteEntries } from './TopBar';
@@ -31,16 +32,15 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount()); client.clear(); host.remove();
-  workspaceModeStore.setMode('parametric'); resetImportedModelStore(); resetCadReturnStore();
+  workspaceModeStore.setMode('parametric'); resetImportedModelStore(); resetCadReturnStore(); useCadConnectionStore.invalidate();
   useMeshImportStore.setState(initialFile, true); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 
 it('shows one Fusion instance chooser in CAD Link', async () => {
   const selectFusionInstance = vi.fn();
-  vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({ ...emptyCadWorkspace, selectFusionInstance,
-    fusionStatus: { cadFolderConfigured: true, running: true, state: 'instance_selection_required', link: null,
-      matchingLinks: [{ instanceId: 'a' }, { instanceId: 'b' }] } as never,
-  });
+  vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({ ...emptyCadWorkspace, selectFusionInstance });
+  useCadConnectionStore.setState({ fusionStatus: { cadFolderConfigured: true, running: true, state: 'instance_selection_required', link: null,
+    matchingLinks: [{ instanceId: 'a' }, { instanceId: 'b' }] } as never });
   workspaceModeStore.setMode('cad'); workspaceModeStore.setImportedInput('cad');
   await mount();
   expect(host.querySelectorAll('[aria-label="Linked Fusion instance"]')).toHaveLength(1);
@@ -55,10 +55,9 @@ it.each([
   ['stale', 'Send WG changes to Fusion'],
 ] as const)('shows one primary Fusion action for %s and uses the shared send', async (state, label) => {
   const sendWgToFusion = vi.fn().mockResolvedValue(null);
-  vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({ ...emptyCadWorkspace, sendWgToFusion,
-    fusionStatus: { cadFolderConfigured: true, running: true, state, currentFormula: 'OSSE', wgChangesAvailable: state === 'stale',
-      observationFreshness: 'current', link: state === 'stale' ? { instanceId: 'a' } : null } as never,
-  });
+  vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({ ...emptyCadWorkspace, sendWgToFusion });
+  useCadConnectionStore.setState({ fusionStatus: { cadFolderConfigured: true, running: true, state, currentFormula: 'OSSE', wgChangesAvailable: state === 'stale',
+    observationFreshness: 'current', link: state === 'stale' ? { instanceId: 'a' } : null } as never });
   workspaceModeStore.setMode('cad'); workspaceModeStore.setImportedInput('cad');
   await mount();
   const actions = [...host.querySelectorAll('button')].filter(button => button.textContent === label);

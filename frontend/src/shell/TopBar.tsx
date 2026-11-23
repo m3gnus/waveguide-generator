@@ -27,6 +27,7 @@ import { requestParameterReveal } from '../design/ParamPanel';
 import { BrandMark, Icon } from './icons';
 import { useSolveControl } from './JobsCoordinator';
 import { cadWorkspace } from '../stores/cadWorkspace';
+import { useCadConnectionStore } from '../stores/cadConnection';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
 import { HeldCadRequestDialog } from './HeldCadRequestDialog';
 import { isFailedCadPreparation } from '../jobs/cadSolve';
@@ -248,10 +249,11 @@ export function SolveActions() {
     cadWorkspace.getSnapshot,
     cadWorkspace.getSnapshot,
   );
+  const fusionStatus = useCadConnectionStore((current) => current.fusionStatus);
   const modelShown = useCadReturnStore((state) => Boolean(state.ingestRecord));
   const fusion = usePreferences().cadApplication === 'fusion360';
   const source = mode === 'cad' && fusion
-    ? cadSourceLine(cadWorkspaceView.fusionStatus, modelShown)
+    ? cadSourceLine(fusionStatus, modelShown)
     : null;
 
   return <>
@@ -409,11 +411,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const cadBundleAvailable = useCadReturnStore(state => Boolean(state.selectedBundle));
   const cadReturnReady = useCadReturnStore((state) => Boolean(state.ingestRecord));
   const editableCadMesh = useCadReturnStore(state => cadMeshIsEditable(state.selectedBundle));
-  const cadWorkspaceView = useSyncExternalStore(
-    cadWorkspace.subscribe,
-    cadWorkspace.getSnapshot,
-    cadWorkspace.getSnapshot,
-  );
+  const fusionRunning = useCadConnectionStore((current) => current.fusionStatus?.running);
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>();
@@ -478,7 +476,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
         kind: 'Commands',
         label: 'Pull from Fusion & Solve',
         detail: 'Request the current Fusion geometry, prepare it, and solve',
-        disabled: workspaceMode !== 'cad' || !cadWorkspaceView.fusionStatus?.running,
+        disabled: workspaceMode !== 'cad' || !fusionRunning,
         run: () => { void cadWorkspace.getSnapshot().pullAndSolve().catch(() => undefined); },
       },
       {
@@ -486,7 +484,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
         kind: 'Commands',
         label: 'Refresh geometry from Fusion',
         detail: 'Request the current Fusion geometry without solving',
-        disabled: workspaceMode !== 'cad' || !cadWorkspaceView.fusionStatus?.running,
+        disabled: workspaceMode !== 'cad' || !fusionRunning,
         run: () => { void cadWorkspace.getSnapshot().pullFromFusion().catch(() => undefined); },
       },
       { id: 'undo', kind: 'Commands', label: 'Undo', detail: undoReason, disabled: !canUndo, run: undo },
@@ -504,7 +502,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];
     return [...parameters, ...jobEntries, ...commands];
-  }, [cadWorkspaceView.fusionStatus?.running, developerDetails, cadBundleAvailable, cadReturnReady, editableCadMesh, canRedo, canUndo, copyReason, undoReason, redoReason, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
+  }, [fusionRunning, developerDetails, cadBundleAvailable, cadReturnReady, editableCadMesh, canRedo, canUndo, copyReason, undoReason, redoReason, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
 
   return <header className="topbar">
     <WindowControls side="leading"/>

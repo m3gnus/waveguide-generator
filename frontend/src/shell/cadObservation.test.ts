@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadOperationListener, JobItem, JobsSnapshot } from '../api/jobsSocket';
 import { createCadConnectionStore, type CadConnectionStatus } from '../stores/cadConnection';
 import { expectNoJargon } from '../testing/expectNoJargon';
-import { connectCadObservation, type CadObservationActivity } from './cadObservation';
+import { CAD_OBSERVATION_INTERVALS, connectCadObservation, type CadObservationActivity } from './cadObservation';
 import { agedFusionStatus, fusionWorkflowView } from './cadWorkflowView';
 
 function status(overrides: Partial<CadConnectionStatus> = {}): CadConnectionStatus {
@@ -46,7 +46,7 @@ describe('CAD observation scheduler without the coordinator', () => {
     vi.useFakeTimers(); vi.setSystemTime('2026-10-11T12:00:00Z');
     visible = true;
     vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visible ? 'visible' : 'hidden');
-    activity = { cadApplication: 'fusion360', cadFolderConfigured: true, coordination: 'off',
+    activity = { cadApplication: 'fusion360', cadFolderConfigured: true,
       workspaceMode: 'cad', observationKey: 'design-1', requests: [], awaitingReturn: false };
     snapshot = { connection: 'disconnected', jobs: [], epoch: null, cursor: null, error: null };
     connection = createCadConnectionStore();
@@ -82,14 +82,6 @@ describe('CAD observation scheduler without the coordinator', () => {
     await vi.advanceTimersByTimeAsync(600_000);
     expect(reads()).toEqual(mounted);
     expect(refreshJobs).not.toHaveBeenCalled(); expect(reloadReceipts).not.toHaveBeenCalled();
-  });
-
-  it.each(['unknown', 'off'] as const)('%s: defaults to silence until coordination is explicitly on', async (coordination) => {
-    activity.coordination = coordination;
-    await mount(); const mounted = reads();
-    await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(mounted);
-    change({ coordination: 'on' }); await vi.advanceTimersByTimeAsync(5_000);
-    expect(readStatus.mock.calls.length).toBeGreaterThan(mounted[0]);
   });
 
   it.each(['needs_user_input', 'recovery_required'])('off: parked %s requests stay quiet and moving them resumes reads', async (state) => {
@@ -128,27 +120,6 @@ describe('CAD observation scheduler without the coordinator', () => {
     await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(ended);
   });
 
-  it.each(['listing change', 'Send'])('on: %s resets the quiet clock without changing context (row 10)', async () => {
-    activity.coordination = 'on'; activity.workspaceMode = 'parametric'; activity.activityRevision = 0;
-    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false }));
-    await mount(); await vi.advanceTimersByTimeAsync(60_000); const quiet = reads();
-    change({ activityRevision: 1 });
-    await vi.advanceTimersByTimeAsync(2_500); expect(reads()).toEqual(quiet.map((count) => count + 1));
-    await vi.advanceTimersByTimeAsync(27_500); const quietAgain = reads();
-    await vi.advanceTimersByTimeAsync(29_999); expect(reads()).toEqual(quietAgain);
-  });
-
-  it('on: quiet observations widen to 30 seconds and focus immediately wakes them', async () => {
-    activity.coordination = 'on'; activity.workspaceMode = 'parametric';
-    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false }));
-    await mount(); await vi.advanceTimersByTimeAsync(30_000); const quiet = reads();
-    await vi.advanceTimersByTimeAsync(29_999); expect(reads()).toEqual(quiet);
-    await vi.advanceTimersByTimeAsync(1); expect(reads()).toEqual(quiet.map((count) => count + 1));
-    window.dispatchEvent(new Event('focus')); await vi.advanceTimersByTimeAsync(0);
-    expect(reads()).toEqual(quiet.map((count) => count + 2));
-    await vi.advanceTimersByTimeAsync(2_500); expect(reads()).toEqual(quiet.map((count) => count + 3));
-  });
-
   it.each(['focus', 'cad-mode', 'folder', 'addin-session'])('off: %s wakes idle reads once without restarting routine reads', async (event) => {
     activity.workspaceMode = 'parametric'; await mount(); const before = reads();
     if (event === 'focus') window.dispatchEvent(new Event('focus'));
@@ -177,9 +148,7 @@ describe('CAD observation scheduler without the coordinator', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(readStatus).toHaveBeenCalledTimes(2);
     expect(connection.getState().fusionStatus).toBe(held.fusionStatus);
-    expect(connection.getState().receivedAt).toBe(held.receivedAt);
-    expect(connection.getState().expiresAt).toBe(held.expiresAt);
-    expect(connection.getState().linkName).toBe('Upper horn');
+    expect(connection.getState().fusionStatus?.link?.linkName).toBe('Upper horn');
     expect(connection.getState().fusionStatus?.processRunning).toBe(true);
     expect(fusionWorkflowView(connection.getState().fusionStatus).state).toBe('current');
     await vi.advanceTimersByTimeAsync(14_999);
@@ -188,7 +157,7 @@ describe('CAD observation scheduler without the coordinator', () => {
     expect(connection.getState().fusionStatus?.statusObserved).toBe(false);
     expect(fusionWorkflowView(connection.getState().fusionStatus).headline).toContain('last reported');
     expect(connection.getState().fusionStatus?.processRunning).toBe(true);
-    expect(connection.getState().linkName).toBe('Upper horn');
+    expect(connection.getState().fusionStatus?.link?.linkName).toBe('Upper horn');
     expect(readStatus).toHaveBeenCalledTimes(2);
   });
 
@@ -199,12 +168,92 @@ describe('CAD observation scheduler without the coordinator', () => {
     const changed = reads(); await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(changed);
   });
 
+  it('off: a burst of design edits reads status at its start and once after it settles (B1)', async () => {
+    await mount(); const before = reads();
+    for (let revision = 2; revision <= 20; revision += 1) {
+      change({ observationKey: `design-${revision}` });
+      await vi.advanceTimersByTimeAsync(CAD_OBSERVATION_INTERVALS.contextReadMs / 3);
+    }
+    expect(reads()).toEqual([before[0] + 1, before[1]]);
+    expect(connection.getState().fusionStatus).toBeNull();
+    await vi.advanceTimersByTimeAsync(CAD_OBSERVATION_INTERVALS.contextReadMs);
+    expect(reads()).toEqual([before[0] + 2, before[1]]);
+    expect(connection.getState().fusionStatus).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads()).toEqual([before[0] + 2, before[1]]);
+  });
+
   it('off: a stalled design-status read preserves the known inbox declaration and idle silence', async () => {
     await mount();
     readStatus.mockImplementation(() => new Promise(() => undefined));
     change({ observationKey: 'design-2' });
     const changed = reads(); await vi.advanceTimersByTimeAsync(60_000);
     expect(reads()).toEqual(changed);
+  });
+
+  it.each(['in flight', 'answered'])('the first hello of a socket starting at mount shares the mount reads %s; reconnects read again (D5)', async (when) => {
+    snapshot = { ...snapshot, connection: 'connecting' };
+    let answer!: (value: CadConnectionStatus) => void;
+    if (when === 'in flight') readStatus.mockImplementationOnce(() => new Promise((done) => { answer = done; }));
+    stop = connectCadObservation({
+      getActivity: () => activity,
+      subscribeActivity: (listener) => { activityChanged = listener; return vi.fn(); },
+      readFusionStatus: () => readStatus(), reloadReturns: () => reloadReturns(),
+      reloadReceipts: (ids) => reloadReceipts(ids), connection,
+      manager: { getSnapshot: () => snapshot, subscribe: () => vi.fn(),
+        subscribeCadOperations: (listener) => { channel = listener; return vi.fn(); }, refresh: () => refreshJobs() },
+    });
+    if (when === 'answered') await vi.advanceTimersByTimeAsync(0);
+    snapshot = { ...snapshot, connection: 'connected' }; channel.resync();
+    await vi.advanceTimersByTimeAsync(0);
+    if (when === 'in flight') { answer(status()); await vi.advanceTimersByTimeAsync(0); }
+    expect(reads()).toEqual([1, 1]);
+    expect(refreshJobs).not.toHaveBeenCalled(); expect(reloadReceipts).not.toHaveBeenCalled();
+    await reconnect();
+    expect(reads()).toEqual([2, 2]);
+    expect(refreshJobs).toHaveBeenCalledOnce(); expect(reloadReceipts).toHaveBeenCalledOnce();
+  });
+
+  it('a socket that drops before its first hello reads and recovers on the reconnect hello (P2-2)', async () => {
+    snapshot = { ...snapshot, connection: 'connecting' };
+    const socketListeners = new Set<() => void>();
+    stop = connectCadObservation({
+      getActivity: () => activity,
+      subscribeActivity: (listener) => { activityChanged = listener; return vi.fn(); },
+      readFusionStatus: () => readStatus(), reloadReturns: () => reloadReturns(),
+      reloadReceipts: (ids) => reloadReceipts(ids), connection,
+      manager: { getSnapshot: () => snapshot,
+        subscribe: (listener) => { socketListeners.add(listener); return () => { socketListeners.delete(listener); }; },
+        subscribeCadOperations: (listener) => { channel = listener; return vi.fn(); }, refresh: () => refreshJobs() },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads()).toEqual([1, 1]);
+    snapshot = { ...snapshot, connection: 'reconnecting' }; socketListeners.forEach((listener) => listener());
+    await reconnect();
+    expect(reads()).toEqual([2, 2]);
+    expect(refreshJobs).toHaveBeenCalledOnce(); expect(reloadReceipts).toHaveBeenCalledOnce();
+  });
+
+  it('a mount status read that fails after answering the first hello reads and recovers then (P2-1)', async () => {
+    snapshot = { ...snapshot, connection: 'connecting' };
+    let fail!: (error: Error) => void;
+    readStatus.mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+    await mount();
+    await reconnect();
+    expect(reads()).toEqual([1, 1]); expect(refreshJobs).not.toHaveBeenCalled();
+    fail(new Error('offline')); await vi.advanceTimersByTimeAsync(0);
+    expect(reads()).toEqual([2, 2]);
+    expect(refreshJobs).toHaveBeenCalledOnce(); expect(reloadReceipts).toHaveBeenCalledOnce();
+  });
+
+  it('the first hello reads again when the mount status read went unanswered (D5)', async () => {
+    snapshot = { ...snapshot, connection: 'connecting' };
+    readStatus.mockRejectedValueOnce(new Error('offline'));
+    await mount();
+    expect(reads()).toEqual([1, 1]);
+    await reconnect();
+    expect(reads()).toEqual([2, 2]);
+    expect(refreshJobs).toHaveBeenCalledOnce();
   });
 
   it('suppresses hidden-page reads even with moving work, and resumes on visibility', async () => {
@@ -228,11 +277,49 @@ describe('CAD observation scheduler without the coordinator', () => {
     await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(inbox);
   });
 
-  it('on: with no folder, status clocks stop and discovery uses the idle rate', async () => {
-    activity.coordination = 'on'; activity.workspaceMode = 'parametric'; activity.cadFolderConfigured = false;
-    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false }));
-    await mount(); const before = reads(); await vi.advanceTimersByTimeAsync(30_000);
-    expect(reads()).toEqual([before[0], before[1] + 1]);
+  it('off: in CAD mode a closed Fusion widens legacy discovery to the quiet rate, and focus wakes it (S8)', async () => {
+    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false, addinInboxTransfer: false }));
+    await mount(); await vi.advanceTimersByTimeAsync(30_000); const quiet = reads();
+    await vi.advanceTimersByTimeAsync(29_999); expect(reads()).toEqual(quiet);
+    await vi.advanceTimersByTimeAsync(1); expect(reads()).toEqual([quiet[0], quiet[1] + 1]);
+    window.dispatchEvent(new Event('focus')); await vi.advanceTimersByTimeAsync(0);
+    expect(reads()).toEqual([quiet[0] + 1, quiet[1] + 2]);
+    await vi.advanceTimersByTimeAsync(2_500); expect(reads()).toEqual([quiet[0] + 1, quiet[1] + 3]);
+    // Fusion starts: its add-in push reads a running report, and the base rate returns.
+    readStatus.mockImplementation(async () => status({ addinInboxTransfer: false }));
+    channel.addinStatusChanged?.(); await vi.advanceTimersByTimeAsync(0);
+    const running = reads(); await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads()[1] - running[1]).toBeGreaterThan(20);
+  });
+
+  it.each(['listing change', 'Send'] as const)('off: %s resets the quiet clock of legacy discovery; a moving job keeps status reads, not discovery, fast (row 10)', async (activityKind) => {
+    activity.workspaceMode = 'parametric'; activity.activityRevision = 0;
+    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false, addinInboxTransfer: false }));
+    snapshot.jobs = [cadJob()];
+    await mount(); await vi.advanceTimersByTimeAsync(60_000);
+    for (let tick = 0; tick < 4; tick += 1) { jobsChanged(); await vi.advanceTimersByTimeAsync(2_500); }
+    const quiet = reads();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(reads()[1]).toBe(quiet[1]);
+    expect(reads()[0] - quiet[0]).toBe(4);
+    // A listing change only notes activity; a Send also leaves its request pending.
+    change(activityKind === 'Send'
+      ? { activityRevision: 1, requests: [{ id: 'send-1', state: 'processing' }] }
+      : { activityRevision: 1 });
+    const woke = reads();
+    await vi.advanceTimersByTimeAsync(2_500); expect(reads()[1]).toBe(woke[1] + 1);
+    await vi.advanceTimersByTimeAsync(27_500); const quietAgain = reads();
+    await vi.advanceTimersByTimeAsync(29_999); expect(reads()[1]).toBe(quietAgain[1]);
+    expect(reads()[0] - quietAgain[0]).toBeGreaterThanOrEqual(11);
+  });
+
+  it('off: a legacy add-in with no folder selected looks for one every 30 seconds', async () => {
+    activity.workspaceMode = 'parametric'; activity.cadFolderConfigured = false;
+    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false, addinInboxTransfer: false }));
+    await mount(); const before = reads();
+    await vi.advanceTimersByTimeAsync(29_999); expect(reads()).toEqual(before);
+    await vi.advanceTimersByTimeAsync(1); expect(reads()).toEqual([before[0], before[1] + 1]);
+    await vi.advanceTimersByTimeAsync(30_000); expect(reads()).toEqual([before[0], before[1] + 2]);
   });
 
   it('a job ends while disconnected: reconnect reloads jobs and exact awaited receipt IDs before pending reload drops them', async () => {
@@ -324,26 +411,6 @@ describe('CAD observation scheduler without the coordinator', () => {
     finish(new Set()); await vi.advanceTimersByTimeAsync(0);
     const stopped = reads(); window.dispatchEvent(new Event('focus')); await vi.advanceTimersByTimeAsync(600_000);
     expect(reads()).toEqual(stopped); expect(connection.getState().fusionStatus).toBeNull(); expect(vi.getTimerCount()).toBe(0);
-  });
-  it('on: moving jobs and coarse notifications do not hold the base rate or reset the quiet clock', async () => {
-    activity.coordination = 'on'; activity.workspaceMode = 'parametric';
-    readStatus.mockResolvedValue(status({ state: 'closed', processRunning: false, running: false }));
-    snapshot.jobs = [cadJob()];
-    await mount();
-    for (let tick = 0; tick < 16; tick += 1) {
-      activityChanged(); jobsChanged();
-      await vi.advanceTimersByTimeAsync(2_500);
-    }
-    const quiet = reads();
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(reads()).toEqual(quiet);
-    change({ awaitingReturn: true });
-    await vi.advanceTimersByTimeAsync(2_500);
-    expect(reads()[0]).toBe(quiet[0] + 1);
-    change({ awaitingReturn: false });
-    const settled = reads();
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(reads()).toEqual(settled);
   });
 
 });

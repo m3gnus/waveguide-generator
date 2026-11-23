@@ -132,14 +132,6 @@ function jsonBody(method: string, body: unknown, extra: RequestInit = {}): Reque
   return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...extra };
 }
 
-/** Store the exact setup a manual CAD solve will bind. */
-export function createSetupRevision(
-  setup: CadSolveSetup,
-  fetcher: typeof fetch = fetch,
-): Promise<SetupRevisionSummary> {
-  return jsonRequest('/api/cadlink/setup-revisions', jsonBody('POST', { setup }), fetcher);
-}
-
 /** Read the immutable inputs a named setup revision bound. */
 export function getSetupRevision(
   revisionId: string,

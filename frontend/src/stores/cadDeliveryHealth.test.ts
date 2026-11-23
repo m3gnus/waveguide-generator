@@ -47,13 +47,26 @@ describe('delivery-health reads in flight', () => {
     expect(useCadDeliveryHealthStore.getState().outboundOperations.update.state).toBe('accepted');
   });
 
+  it.each(['connecting', 'connected'] as const)('a hello after mounting on a %s socket reads again only when it is a reconnect (D5)', async (connection) => {
+    disconnect();
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).endsWith('/operations')
+      ? { operations: [] } : status(null))));
+    vi.stubGlobal('fetch', fetcher);
+    vi.spyOn(jobsSocket, 'getSnapshot').mockReturnValue({ connection, epoch: null, cursor: null, jobs: [], error: null });
+    disconnect = connectCadDeliveryHealth(); await flush();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    listener.resync(); await flush();
+    expect(fetcher).toHaveBeenCalledTimes(connection === 'connecting' ? 2 : 4);
+    listener.resync(); await flush();
+    expect(fetcher).toHaveBeenCalledTimes(connection === 'connecting' ? 4 : 6);
+  });
+
   it('coalesces requests into one follow-up read when waiting ends during a read', async () => {
     await flush();
     const waiting = { operationId: 'waiting', state: 'received', attemptGeneration: 0, updatedAt: null } as CadOperationSummary;
     listener.operation(waiting);
     await vi.advanceTimersByTimeAsync(3 * WAITING_READ_MS);
     listener.operation({ ...waiting, state: 'processing', attemptGeneration: 1 });
-    expect(useCadDeliveryHealthStore.getState().waiting).toBe(false);
     expect(answers).toHaveLength(1);
     respond(0, status('Old waiting snapshot.'));
     await flush();

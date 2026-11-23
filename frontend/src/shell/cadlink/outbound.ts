@@ -212,7 +212,6 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
       }));
       return settled;
     },
-    confirmFusionConflict: () => sendWgToFusion({ confirmed: true }),
     cancelFusionConflict() { conflict = null; store.setState({ pendingFusionConflict: false }); },
     dispose() { active = false; generation += 1; conflict = null; stopWatching?.();
       store.setState({ sendingToFusion: false, pendingFusionConflict: false }); },

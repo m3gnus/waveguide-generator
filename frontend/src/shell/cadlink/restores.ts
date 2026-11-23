@@ -27,7 +27,6 @@ import { seedImportedSolveOptionsFromParametric } from '../../stores/solveOption
 import { DEFAULT_SWEEP } from '../../stores/solveDefaults';
 import { reportCadAutomationError } from './caughtErrors';
 import { failureWords } from '../../api/httpError';
-export { cadHistorySetup } from '../../stores/cadSetupRestore';
 
 export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch, input: 'cad' | 'file' = 'cad'): Promise<string[]> {
   const owner = useCadReturnStore.getState();
@@ -202,7 +201,6 @@ export interface UseCadRestoresOptions {
   refusedForeignReturn: MutableRefObject<boolean>;
   returnListRequest: MutableRefObject<number>;
   seenReturnRevisions: MutableRefObject<Map<string, string> | null>;
-  selectBundleRef: MutableRefObject<(bundle: CadReturnBundle, projectLineageId?: string | null) => void>;
   setError(value: string | null): void;
   setStatus(value: string | null): void;
 }

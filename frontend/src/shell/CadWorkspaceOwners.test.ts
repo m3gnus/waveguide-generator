@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cadCoordinationStore, resetCadCoordinationForTests } from '../api/cadCoordination';
 import { jobsSocket, type CadOperationListener } from '../api/jobsSocket';
 import { publishCadJobs } from '../jobs/cadSolve.fixtures';
 import { compareSelection } from '../api/results';
@@ -39,7 +38,6 @@ beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime('2026-10-11T12:00:00Z');
   localStorage.clear(); sessionStorage.clear(); preferencesStore.resetForTests();
   publishCadJobs([]); compareSelection.clear();
-  resetCadCoordinationForTests();
   resetDesignStore(); resetDocumentStore(); resetCadReturnStore(); resetSolveOptionsStore();
   importedMeshStore.clear(); useCadConnectionStore.invalidate(); workspaceModeStore.setMode('parametric');
   useDocumentStore.getState().setCadLink(identity, 'current');
@@ -53,7 +51,7 @@ beforeEach(() => {
   fetcher = vi.fn(async (input, init) => {
     const path = String(input);
     if (path.endsWith('/workspace')) return json(workspaceFor());
-    if (path === '/api/cadlink/returns') return json({ items: returns, cadFolderConfigured: true, coordination: 'on' });
+    if (path === '/api/cadlink/returns') return json({ items: returns, cadFolderConfigured: true });
     if (path === '/api/cadlink/fusion-status') return json(status());
     if (path.includes('/receipts?')) return json({ feed_id: 'cutover', receipts, cursor: receipts.at(-1)?.cursor ?? 0, has_more: false });
     if (path === '/api/cadlink/recovery-notices') return json({ notices: [] });
@@ -270,12 +268,13 @@ it('unmount fences a receipt listing that ignores cancellation before it can sel
 });
 
 
-it('learns a missing coordination gate as off from the listing and stays idle without a gate request (row 10)', async () => {
+it('stays idle after the listing answers, without a gate request (row 10)', async () => {
   const base = fetcher.getMockImplementation()!;
   fetcher.mockImplementation((input, init) => String(input).endsWith('/returns')
     ? Promise.resolve(json({ items: [], cadFolderConfigured: true })) : base(input, init));
+  expect(cadWorkspace.getSnapshot().cadFolderConfigured).toBeNull();
   stop = mountCadWorkspaceOwners(); await flush();
-  expect(cadCoordinationStore.getSnapshot()).toBe('off');
+  expect(cadWorkspace.getSnapshot().cadFolderConfigured).toBe(true);
   const statusReads = calls('/api/cadlink/fusion-status').length;
   const returnReads = calls('/api/cadlink/returns').length;
   await vi.advanceTimersByTimeAsync(600_000);
@@ -556,10 +555,10 @@ it.each(['mount', 'listing', 'ingest', 'mesh'])('Onshape gates Fusion receipts a
   if (phase === 'mount' || phase === 'listing') expect(calls('/api/cadlink/ingest')).toHaveLength(0);
 });
 
-it('outbound sends keep status reads moving with coordination off until settlement (row 10)', async () => {
+it('outbound sends keep status reads moving until settlement (row 10)', async () => {
   const base = fetcher.getMockImplementation()!;
   fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/returns'
-    ? Promise.resolve(json({ items: [], cadFolderConfigured: true, coordination: 'off' }))
+    ? Promise.resolve(json({ items: [], cadFolderConfigured: true }))
     : String(input) === '/api/cad-workspace/path' ? Promise.resolve(json({ selected: true, path: 'exchange' }))
       : String(input).includes('/export/wglink') ? Promise.resolve(json({ ...exported, cadHandoff: 'published', cadHandoffRequestId: 'insert-1' }))
       : base(input, init));
@@ -577,7 +576,7 @@ it('outbound sends keep status reads moving with coordination off until settleme
 it('pending outbound operations restored by the existing operation reader resume status reads (row 10)', async () => {
   const base = fetcher.getMockImplementation()!;
   fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/returns'
-    ? Promise.resolve(json({ items: [], cadFolderConfigured: true, coordination: 'off' })) : base(input, init));
+    ? Promise.resolve(json({ items: [], cadFolderConfigured: true })) : base(input, init));
   useCadDeliveryHealthStore.setState({ outboundOperations: { restored: { operationId: 'restored', kind: 'update_link', state: 'processing' } as never } });
   stop = mountCadWorkspaceOwners(); await flush();
   const before = calls('/api/cadlink/fusion-status').length;
@@ -639,29 +638,29 @@ it('a return landing after the pull timeout is available to discovery (rows 5, 2
   expect(useCadReturnStore.getState().selectedBundle?.requestId).toBe('pull-1');
 });
 
-it('coalesces mount discovery/status and the initial socket hello (row 10)', async () => {
+/** The owners mount while the jobs socket is still connecting; its first hello follows. */
+function socketStarting() {
+  (jobsSocket as unknown as { snapshot: ReturnType<typeof jobsSocket.getSnapshot> }).snapshot = {
+    connection: 'connecting', epoch: null, cursor: null, jobs: [], error: null };
+}
+
+it.each(['in flight', 'answered'])('coalesces mount discovery/status and the initial socket hello with mount reads %s (row 10, D5)', async (when) => {
+  socketStarting();
   stop = mountCadWorkspaceOwners();
+  if (when === 'answered') await flush();
   channels.forEach((channel) => channel.resync()); await flush();
   expect(calls('/api/cadlink/fusion-status')).toHaveLength(1);
   expect(calls('/api/cadlink/returns')).toHaveLength(1);
+  // The mount read, then one read woken by the first published status.
+  expect(calls('/api/cadlink/recovery-notices')).toHaveLength(2);
   expect(fetcher.mock.calls.filter(([input]) => String(input).includes('/receipts?'))).toHaveLength(1);
-});
-
-it.each(['listing change', 'Send'])('coordination on: %s resets quiet observation in the mounted owners (row 10)', async (activity) => {
-  const base = fetcher.getMockImplementation()!;
-  fetcher.mockImplementation((input, init) => String(input).endsWith('/fusion-status')
-    ? Promise.resolve(json(status({ state: 'closed', processRunning: false, running: false, link: null })))
-    : String(input) === '/api/cad-workspace/path' ? Promise.resolve(json({ selected: true, path: 'exchange' }))
-      : String(input) === '/api/export/wglink' ? Promise.resolve(json(exported)) : base(input, init));
-  stop = mountCadWorkspaceOwners(); await flush(); await vi.advanceTimersByTimeAsync(60_000);
-  if (activity === 'listing change') {
-    returns = [{ ...bundle, modifiedAt: new Date(Date.now() - 120_000).toISOString() }];
-    await vi.advanceTimersByTimeAsync(30_000);
-  } else await cadWorkspace.getSnapshot().sendWgToFusion();
-  await flush(); const before = calls('/api/cadlink/fusion-status').length;
-  expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
-  await vi.advanceTimersByTimeAsync(2_500);
-  expect(calls('/api/cadlink/fusion-status').length - before).toBe(1);
+  expect(jobsSocket.refresh).not.toHaveBeenCalled();
+  // A later hello is a reconnect: it reads everything again.
+  channels.forEach((channel) => channel.resync()); await flush();
+  expect(calls('/api/cadlink/fusion-status')).toHaveLength(2);
+  expect(calls('/api/cadlink/recovery-notices').length).toBeGreaterThan(2);
+  expect(fetcher.mock.calls.filter(([input]) => String(input).includes('/receipts?')).length).toBeGreaterThanOrEqual(2);
+  expect(jobsSocket.refresh).toHaveBeenCalledOnce();
 });
 
 it('lists models for manual use when the receipt feed fails and never auto-ingests an unclaimed Send (rows 1, 5)', async () => {
@@ -679,7 +678,11 @@ it('lists models for manual use when the receipt feed fails and never auto-inges
 });
 
 it.each(['mount', 'background poll', 'manual Refresh', 'project open'])('hung receipt feed cannot stall discovery on %s (rows 1, 5, 10)', async (entry) => {
-  const base = fetcher.getMockImplementation()!;
+  const healthy = fetcher.getMockImplementation()!;
+  // Idle background listing runs only for an add-in that does not declare inbox transfer.
+  const base: typeof healthy = entry !== 'background poll' ? healthy : (input, init) => String(input).endsWith('/fusion-status')
+    ? Promise.resolve(json(status({ addinInboxTransfer: false }))) : healthy(input, init);
+  fetcher.mockImplementation(base);
   if (entry !== 'mount') { stop = mountCadWorkspaceOwners(); await flush(); }
   returns = [{ ...bundle, designIds: ['wgd_open'], modifiedAt: new Date().toISOString() }];
   fetcher.mockImplementation((input, init) => String(input).includes('/receipts?')
@@ -705,6 +708,8 @@ it.each(['mount', 'background poll', 'manual Refresh', 'project open'])('hung re
 });
 
 it('listing polls reuse fresh receipt evidence, while pushes and stale evidence trigger reads (rows 7, 10)', async () => {
+  // Moving CAD work keeps the listing polling for an inbox add-in.
+  useCadDeliveryHealthStore.setState({ outboundOperations: { moving: { operationId: 'moving', kind: 'update_link', state: 'processing' } as never } });
   stop = mountCadWorkspaceOwners(); await flush();
   const receiptReads = () => fetcher.mock.calls.filter(([input]) => String(input).includes('/receipts?')).length;
   const before = receiptReads(); const listings = calls('/api/cadlink/returns').length;
@@ -760,6 +765,7 @@ it('coalesces a delayed initial hello with mount status and discovery reads stil
   const statusRead = deferred<Response>(); const returnRead = deferred<Response>();
   fetcher.mockImplementation((input, init) => String(input).endsWith('/fusion-status') ? statusRead.promise
     : String(input).endsWith('/returns') ? returnRead.promise : base(input, init));
+  socketStarting();
   stop = mountCadWorkspaceOwners(); await flush();
   channels.forEach((channel) => channel.resync()); await flush();
   expect(calls('/api/cadlink/fusion-status')).toHaveLength(1);
@@ -1106,7 +1112,7 @@ it('wakes preparation when a project-open listing clears its pending flag', asyn
   useCadReturnStore.getState().selectBundle(bundle);
   await flush();
   expect(calls('/api/cadlink/ingest')).toHaveLength(0);
-  listing.resolve(json({ items: [bundle], cadFolderConfigured: true, coordination: 'on' }));
+  listing.resolve(json({ items: [bundle], cadFolderConfigured: true }));
   await flush();
   expect(calls('/api/cadlink/ingest')).toHaveLength(1);
   expect(useCadReturnStore.getState().needsIngest).toBe(false);

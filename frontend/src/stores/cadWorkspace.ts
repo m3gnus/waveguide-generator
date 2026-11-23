@@ -1,5 +1,5 @@
 import { createStore } from 'zustand/vanilla';
-import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
+import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import type { OnshapeConnection, OnshapeStatus } from '../api/onshape';
 import type { WgLinkExportResponse } from '../api/designIo';
 import type { DesignIdentity } from './document';
@@ -42,7 +42,8 @@ export interface CadWorkspaceSnapshot {
   errorDiagnostics: ErrorDiagnostics | null;
   status: string | null;
   viewportNotice: string | null;
-  fusionStatus: FusionCadStatus | null;
+  /** The returns listing's folder answer; null until a listing has answered. */
+  cadFolderConfigured: boolean | null;
   onshapeStatus: OnshapeStatus | null;
   onshapeConnection: OnshapeConnection | null;
   pendingFusionConflict: boolean;
@@ -86,7 +87,7 @@ export const emptyCadWorkspace: CadWorkspaceSnapshot = {
   errorDiagnostics: null,
   status: null,
   viewportNotice: null,
-  fusionStatus: null,
+  cadFolderConfigured: null,
   onshapeStatus: null,
   onshapeConnection: null,
   pendingFusionConflict: false,

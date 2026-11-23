@@ -45,7 +45,7 @@ it('does not recall an unnumbered CAD preparation as an archived run', async () 
 });
 
 it('restores the coupled BEAT model without legacy driver conversion', async () => {
-  const { cadHistorySetup } = await import('./restores');
+  const { cadHistorySetup } = await import('../../stores/cadSetupRestore');
   const model = { version: 1, motion_axis: [0, 1, 0], re_ohm: 6, le_h: .0005,
     bl_n_per_a: 7, mmd_kg: .02, cms_m_per_n: .001, rms_n_s_per_m: 1.5 };
   const job = { cad_setup: { drive_channels: [{ id: 'd', source_ids: ['s'], motion: 'axial', exterior_transducer: model }],

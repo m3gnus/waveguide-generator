@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { CadDeliveryStatus } from '../api/cadOperations';
 import { connectCadDeliveryHealth, refreshCadDeliveryHealth, useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
+import { useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
 import { useDeveloperDetails } from '../prefs/preferences';
 import { usePanelVisible } from './panelVisibility';
 
@@ -79,7 +80,7 @@ export function CadDeliveryHealth({ now = Date.now }: { now?: () => number }) {
     if (shown && visible && unseen) useCadDeliveryHealthStore.getState().acknowledgeRefusals();
   }, [shown, unseen, visible]);
 
-  const recoveryError = useCadDeliveryHealthStore((state) => state.recoveryError);
+  const recoveryError = useCadRecoveryNotices((state) => state.recoveryError);
   const lines = [
     ...deliveryHealthLines(status, now()),
     ...(recoveryError ? [{ tone: 'waiting' as const, text: recoveryError }] : []),

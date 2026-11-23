@@ -14,6 +14,7 @@ import type { CadOperationSummary } from '../api/cadOperations';
 import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
 import { jobsSocket } from '../api/jobsSocket';
 import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
+import { useCadConnectionStore } from '../stores/cadConnection';
 
 const coordinator = vi.hoisted(() => ({
   solveOperation: vi.fn(async () => undefined),
@@ -22,7 +23,6 @@ const coordinator = vi.hoisted(() => ({
   solveOperationWithSettings: vi.fn(async () => undefined),
   reconcileOperation: vi.fn(async () => undefined),
   reportError: vi.fn(), reportStatus: vi.fn(), refresh: vi.fn(async () => undefined),
-  fusionStatus: null as null | { documentName: string | null; recoveryRequired: { operationId: string; phase: string } | null },
 }));
 vi.mock('../stores/cadWorkspace', () => ({
   cadWorkspace: { getSnapshot: () => coordinator, subscribe: () => () => undefined },
@@ -96,7 +96,7 @@ describe('operation cards for the model on screen', () => {
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
-    coordinator.fusionStatus = null;
+    useCadConnectionStore.invalidate();
     Object.values(coordinator).forEach((value) => { if (typeof value === 'function' && 'mockClear' in value) value.mockClear(); });
   });
 
@@ -191,7 +191,7 @@ describe('operation cards for the model on screen', () => {
   });
 
   it('Check Fusion again reconciles the named mutation before refreshing status and notices (row 16)', async () => {
-    coordinator.fusionStatus = { documentName: 'Speaker', recoveryRequired: { operationId: RECOVERY_ID, phase: 'applied' } };
+    useCadConnectionStore.setState({ fusionStatus: { documentName: 'Speaker', recoveryRequired: { operationId: RECOVERY_ID, phase: 'applied' } } as never });
     vi.stubGlobal('fetch', vi.fn(async () => json({ operation: recovery({ state: 'accepted' }) })));
     await show([recovery()]);
     await act(async () => cadRecoveryNoticesStore.setState({ notices: { [RECOVERY_ID]: { ...cadRecoveryNoticesStore.getState().notices[RECOVERY_ID], active_document: true } } }));
@@ -209,7 +209,7 @@ describe('operation cards for the model on screen', () => {
     expect(earlier()?.textContent).toContain('250728solana');
 
     cadRecoveryNoticesStore.setState({ notices: { [RECOVERY_ID]: { ...cadRecoveryNoticesStore.getState().notices[RECOVERY_ID], active_document: true } } });
-    coordinator.fusionStatus = { documentName: '250728solana', recoveryRequired: { operationId: RECOVERY_ID, phase: 'applied' } };
+    useCadConnectionStore.setState({ fusionStatus: { documentName: '250728solana', recoveryRequired: { operationId: RECOVERY_ID, phase: 'applied' } } as never });
     await act(async () => root.render(<CadOperationsSection record={null}/>));
     const [card] = cards();
     expect(card.dataset.operationId).toBe(RECOVERY_ID);

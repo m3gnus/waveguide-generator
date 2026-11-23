@@ -1,7 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { CadLinkApiError, getFusionCadStatus, type CadReturnBundle, type CadReturnIngestRecord } from '../api/cadlink';
 import { getOnshapeConnection, getOnshapeStatus } from '../api/onshape';
-import { cadCoordinationStore } from '../api/cadCoordination';
 import { jobsSocket } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
 import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
@@ -69,9 +68,15 @@ export function mountCadWorkspaceOwners(): () => void {
   let activityRevision = 0;
   const activityListeners = new Set<() => void>();
   const changed = () => activityListeners.forEach((listener) => listener());
-  const noteCadActivity = () => { activityRevision += 1; changed(); };
   const publish = (patch: Partial<typeof emptyCadWorkspace>) => {
     if (mounted.current) cadWorkspace.setState(patch);
+  };
+  // A returns listing that changes the folder answer also notes activity, so
+  // the first answer is published here.
+  const noteCadActivity = () => {
+    activityRevision += 1;
+    if (cadWorkspace.getSnapshot().cadFolderConfigured !== cadFolderConfigured.current) publish({ cadFolderConfigured: cadFolderConfigured.current });
+    changed();
   };
   const reportError = (error: string | null) => publish({ error });
   const reportStatus = (status: string | null) => publish({ status });
@@ -175,7 +180,7 @@ export function mountCadWorkspaceOwners(): () => void {
       activityRevision,
       cadApplication: preferencesStore.getSnapshot().cadApplication,
       cadFolderConfigured: cadFolderConfigured.current,
-      coordination: cadCoordinationStore.getSnapshot(), workspaceMode: workspaceModeStore.getSnapshot().mode,
+      workspaceMode: workspaceModeStore.getSnapshot().mode,
       // No progress, receipt cursor or mesh generation in the context key.
       observationKey: JSON.stringify([useDocumentStore.getState().identity, useDesignStore.getState().designRevision,
         documentSettingsSignature(), useCadReturnStore.getState().selectedBundle?.bundlePath, fusionInstance]),
@@ -385,7 +390,6 @@ export function mountCadWorkspaceOwners(): () => void {
         ...(state.status !== previous.status ? { status: state.status } : {}) }); changed();
       if (previous.pullingFromFusion && !state.pullingFromFusion) autoIngestSelected();
     }),
-    useCadConnectionStore.subscribe((state) => publish({ fusionStatus: state.fusionStatus })),
     cadReceiptsStore.subscribe((state, previous) => {
       if (Object.keys(previous.receipts).length > 0 && Object.keys(state.receipts).length === 0) refreshOwedInitialChoice();
       if (state.receipts !== previous.receipts || state.displayRetries !== previous.displayRetries) autoIngestSelected();
@@ -399,7 +403,7 @@ export function mountCadWorkspaceOwners(): () => void {
       if (state.outboundOperations !== previous.outboundOperations) Object.values(state.outboundOperations).forEach(outbound.observeOperation);
     }), connectCadRecoveryNotices(),
     observeCadProjectLoads({ enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refusedForeignReturn,
-      returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns }, selectBundleRef: { current: selectBundle },
+      returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns },
       setError: reportError, setStatus: reportStatus }),
     observeFileDriverBaseRefresh(),
     observeLastModel({ reportStatus, reportError, refusedForeignReturn, selectBundle: (bundle, project) => selectBundle(bundle, project, true),
@@ -411,7 +415,7 @@ export function mountCadWorkspaceOwners(): () => void {
     useCadReturnStore.subscribe(contextChanged), useSolveOptionsStore.subscribe(contextChanged), useImportedSolveOptionsStore.subscribe(contextChanged),
     workspaceModeStore.subscribe(() => { changed(); autoIngestSelected(); }), preferencesStore.subscribe(subscribeContext),
     useImportedModelStore.subscribe(autoIngestSelected),
-    cadCoordinationStore.subscribe(changed), cadWorkspaceSelection.subscribe(() => observation.refresh()),
+    cadWorkspaceSelection.subscribe(() => observation.refresh()),
     subscribeRevision((event) => {
       if (event.reason === 'load') return;
       const feedback = cadWorkspace.getSnapshot();

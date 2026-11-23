@@ -23,7 +23,7 @@ import { useDocumentStore } from '../stores/document';
 import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { returnBelongsToProject } from './cadlink/arrivals';
-import { fusionAddinNeedsInstall, fusionAddinTooOldForUpdate, fusionLinkDisplayName, fusionParameterDriftDetail, fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
+import { fusionAddinNeedsInstall, fusionAddinTooOldForUpdate, fusionLinkDisplayName, fusionParameterDriftDetail, fusionWorkflowView, onshapeWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
@@ -36,7 +36,6 @@ import { RootFolderControls } from './RootFolderControls';
 import { requestSettings } from './settingsNavigation';
 import { workspaceNavigation } from './workspaceNavigation';
 import { usePanelVisible } from './panelVisibility';
-import { cadCoordinationStore } from '../api/cadCoordination';
 import './cadLinkPanel.css';
 
 // Kept as public panel helpers for existing callers; implementation lives next
@@ -50,10 +49,6 @@ import { failureWords } from '../api/httpError';
 const DOCUMENT_LINK_STATES: ReadonlySet<string> = new Set([
   'not-linked', 'no-document', 'current', 'stale', 'unmeasured', 'refresh-needed', 'instance-selection',
 ]);
-
-// The workflow views moved beside the coordinator's unified send path; the
-// re-export keeps this module the panel-facing home for existing callers.
-export { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView };
 
 function returnDisplayName(bundle: CadReturnBundle): string {
   if (bundle.documentName) return bundle.documentName;
@@ -97,14 +92,14 @@ function CadModelDeveloperDetails({ staleReason }: { staleReason: string | null 
 
 /** Explain the file transport's idle observation policy. */
 export function CadCoordinationNote() {
-  const state = useSyncExternalStore(cadCoordinationStore.subscribe, cadCoordinationStore.getSnapshot, cadCoordinationStore.getSnapshot);
-  const coordinator = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot);
   // How the transport polls is developer detail.
   const developerDetails = useDeveloperDetails();
-  // Wait until the returns listing has reported its compatibility policy.
-  if (!developerDetails || state === 'unknown' || state === 'on') return null;
-  const inbox = coordinator.fusionStatus?.addinInboxTransfer === true;
-  return <p className="cad-detail cad-coordination-state" data-coordination={state}>
+  const fusion = usePreferences().cadApplication === 'fusion360';
+  const inbox = useCadConnectionStore((current) => current.fusionStatus?.addinInboxTransfer === true);
+  // The Fusion returns listing reports the folder; until it has answered, say nothing.
+  const listed = useSyncExternalStore(cadWorkspace.subscribe, () => cadWorkspace.getSnapshot().cadFolderConfigured !== null, () => cadWorkspace.getSnapshot().cadFolderConfigured !== null);
+  if (!developerDetails || !fusion || !listed) return null;
+  return <p className="cad-detail cad-coordination-state" data-coordination="off">
     {inbox
       ? 'Background checks are off. WG checks models from CAD and Fusion status while CAD work is in progress, and when you act.'
       : 'Background checks are off. This older Fusion add-in needs WG to keep checking the WGLink folder for models you send.'}
@@ -187,7 +182,7 @@ export function CadLinkPanel() {
   const preferences = usePreferences();
   const design = useDesignStore((current) => current.design);
   const cadLimitation = nativeCadLimitation(design.formula);
-  const observedFusionStatus = useCadConnectionStore((current) => current.fusionStatus);
+  const fusionStatus = useCadConnectionStore((current) => current.fusionStatus);
   const designRevision = useDesignStore((current) => current.designRevision);
   const documentName = useDocumentStore((current) => current.designName);
   const identity = useDocumentStore((current) => current.identity);
@@ -209,7 +204,7 @@ export function CadLinkPanel() {
     } catch (error) {
       detail = error instanceof Error ? error.message : 'Could not install the Waveguide Generator add-in in Fusion. Try again.';
     }
-    setAddinReply({ detail, under: cadWorkspace.getSnapshot().fusionStatus });
+    setAddinReply({ detail, under: useCadConnectionStore.getState().fusionStatus });
     setInstallingAddin(false);
   }
   const onshapeSendGeneration = useRef(0);
@@ -223,7 +218,6 @@ export function CadLinkPanel() {
     errorDiagnostics,
     status,
     viewportNotice,
-    fusionStatus,
     onshapeStatus,
     onshapeConnection,
   } = cadWorkspaceView;
@@ -464,7 +458,7 @@ export function CadLinkPanel() {
       >
         <option value="" disabled>Choose an instance</option>
         {matchingFusionLinks.map((link) => {
-          const name = fusionLinkDisplayName(observedFusionStatus?.matchingLinks?.find((item) => item.instanceId === link.instanceId) ?? link);
+          const name = fusionLinkDisplayName(fusionStatus?.matchingLinks?.find((item) => item.instanceId === link.instanceId) ?? link);
           return <option value={link.instanceId} key={link.instanceId}>
             {name ? `${name} · ` : ''}{link.instanceId}
           </option>;

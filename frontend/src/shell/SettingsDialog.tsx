@@ -1,6 +1,6 @@
 import { Notice } from './Notice';
-import { cadWorkspace } from '../stores/cadWorkspace';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCadConnectionStore } from '../stores/cadConnection';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
 import { getAclRepairStatus, type AclRepairRootStatus } from '../api/aclRepair';
 import {
@@ -301,7 +301,7 @@ function CadSettings() {
   const [onshapeSetup, setOnshapeSetup] = useState<OnshapeConnection | null>(null);
   const rememberOnshapeConnection = useCallback((connection: OnshapeConnection) => setOnshapeSetup(connection), []);
   // Setup is a once-only walk; a connected user comes here for the folder or the theme.
-  const fusion = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot).fusionStatus;
+  const fusion = useCadConnectionStore((current) => current.fusionStatus);
   const connected = onshape ? !!onshapeSetup?.reachable : !!fusion?.running && fusion.cadFolderConfigured !== false;
   return <section id="settings-cad" className="settings-theme cad-settings" aria-labelledby="settings-cad-title" tabIndex={-1}>
     <h3 id="settings-cad-title">CAD Link</h3>

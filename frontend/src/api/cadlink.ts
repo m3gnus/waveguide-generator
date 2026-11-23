@@ -97,9 +97,6 @@ export interface CadReturnBundle {
 export interface CadReturnListing {
   items: CadReturnBundle[];
   cadFolderConfigured: boolean;
-  /** Compatibility observation policy: current WG always reports off.
-   * An absent or unrecognized value also leaves idle observations off. */
-  coordination?: 'on' | 'off';
 }
 
 export interface CadLinkedDesignSummary {

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { getDeliveryStatus, listCadOperations, type CadDeliveryStatus, type CadInboxRefusal, type CadOperationSummary } from '../api/cadOperations';
 import { jobsSocket } from '../api/jobsSocket';
+import { cadStartupHello } from './cadStartupHello';
 
 export const WAITING_READ_MS = 5_000;
 const refusalKey = (item: CadInboxRefusal) => `${item.at}|${item.file}|${item.operationId ?? ''}`;
@@ -11,13 +12,11 @@ export const useCadDeliveryHealthStore = create<{
   refusals: CadInboxRefusal[];
   unseenRefusals: number;
   outboundOperations: Record<string, CadOperationSummary>;
-  waiting: boolean;
-  recoveryError: string | null;
   setStatus: (status: CadDeliveryStatus) => void;
   mergeRefusals: (refusals: CadInboxRefusal[]) => void;
   acknowledgeRefusals: () => void;
 }>((set, get) => ({
-  status: null, refusals: [], unseenRefusals: 0, outboundOperations: {}, waiting: false, recoveryError: null,
+  status: null, refusals: [], unseenRefusals: 0, outboundOperations: {},
   setStatus: (status) => { set({ status }); get().mergeRefusals(status.recentRefusals ?? []); },
   mergeRefusals: (refusals) => {
     const known = new Set(get().refusals.map(refusalKey));
@@ -61,23 +60,26 @@ export function connectCadDeliveryHealth(): () => void {
     });
   };
   let timer: ReturnType<typeof setInterval> | null = null;
-  const read = () => {
-    if (!active) return;
-    if (reading) { readAgain = true; return; }
+  const read = (): Promise<void> | null => {
+    if (!active) return null;
+    if (reading) { readAgain = true; return null; }
     reading = true;
     const started = statusRevision;
-    void getDeliveryStatus().then((status) => {
+    const status = getDeliveryStatus().then((status) => {
       // A push received during this read is newer than its snapshot.
       if (active && started === statusRevision) useCadDeliveryHealthStore.getState().setStatus(status);
-    }).catch(() => undefined).finally(() => {
+    });
+    void status.catch(() => undefined).finally(() => {
       reading = false;
       if (readAgain) { readAgain = false; read(); }
     });
+    return status;
   };
+  let waiting = false;
   const updateWaiting = () => {
-    const waiting = [...intake.values()].some((item) => item.state === 'received');
-    if (waiting === useCadDeliveryHealthStore.getState().waiting) return;
-    useCadDeliveryHealthStore.setState({ waiting });
+    const next = [...intake.values()].some((item) => item.state === 'received');
+    if (next === waiting) return;
+    waiting = next;
     if (timer !== null) clearInterval(timer);
     timer = waiting ? setInterval(read, WAITING_READ_MS) : null;
     read();
@@ -85,7 +87,7 @@ export function connectCadDeliveryHealth(): () => void {
   const loadWaiting = () => {
     const started = ++loadRevision;
     changedDuringLoad.clear();
-    void listCadOperations().then((operations) => {
+    const listing = listCadOperations().then((operations) => {
       if (!active || started !== loadRevision) return;
       const listedIds = new Set(operations.map((item) => item.operationId));
       for (const id of intake.keys()) {
@@ -100,8 +102,11 @@ export function connectCadDeliveryHealth(): () => void {
       }
       useCadDeliveryHealthStore.setState({ outboundOperations });
       updateWaiting();
-    }).catch(() => undefined);
+    });
+    void listing.catch(() => undefined);
+    return listing;
   };
+  const startup = cadStartupHello(jobsSocket);
   const unsubscribe = jobsSocket.subscribeCadOperations({
     operation: (operation: CadOperationSummary) => {
       changedDuringLoad.add(operation.operationId);
@@ -110,20 +115,19 @@ export function connectCadDeliveryHealth(): () => void {
     },
     refusal: (refusal) => { useCadDeliveryHealthStore.getState().mergeRefusals([refusal]); read(); },
     deliveryStatus: (status) => { statusRevision += 1; useCadDeliveryHealthStore.getState().setStatus(status); },
-    resync: () => { loadWaiting(); read(); },
+    resync: () => { if (startup.resync()) { loadWaiting(); read(); } },
   });
-  refresh = read;
-  read();
-  loadWaiting();
+  refresh = () => { read(); };
+  startup.mountRead(Promise.all([read(), loadWaiting()]), () => { loadWaiting(); read(); });
   return () => {
     active = false;
+    startup.dispose();
     refresh = null;
     unsubscribe();
     if (timer !== null) clearInterval(timer);
-    useCadDeliveryHealthStore.setState({ waiting: false });
   };
 }
 
 export function resetCadDeliveryHealthStore(): void {
-  useCadDeliveryHealthStore.setState({ status: null, refusals: [], unseenRefusals: 0, outboundOperations: {}, waiting: false, recoveryError: null });
+  useCadDeliveryHealthStore.setState({ status: null, refusals: [], unseenRefusals: 0, outboundOperations: {} });
 }

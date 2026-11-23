@@ -76,6 +76,7 @@ import {
   optionKey,
 } from './parameterRegistry';
 import { cadWorkspace } from '../stores/cadWorkspace';
+import { useCadConnectionStore } from '../stores/cadConnection';
 import { useCadFeedbackError } from '../shell/cadSetupPublisher';
 import {
   CAD_CARDIOID_FIELD_CONTROLS,
@@ -812,14 +813,10 @@ export function RealizedDimensionsSection({ snapshot, driftedParameters = [], fo
 }
 
 function RealizedDimensionsCard({ forceOpen = false }: { forceOpen?: boolean }) {
-  const cadWorkspaceView = useSyncExternalStore(
-    cadWorkspace.subscribe,
-    cadWorkspace.getSnapshot,
-    cadWorkspace.getSnapshot,
-  );
+  const fusionStatus = useCadConnectionStore((current) => current.fusionStatus);
   return <RealizedDimensionsSection
-    snapshot={cadWorkspaceView.fusionStatus?.realizedDimensions ?? null}
-    driftedParameters={cadWorkspaceView.fusionStatus?.link?.driftedParameters}
+    snapshot={fusionStatus?.realizedDimensions ?? null}
+    driftedParameters={fusionStatus?.link?.driftedParameters}
     forceOpen={forceOpen}
   />;
 }
