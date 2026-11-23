@@ -101,6 +101,11 @@ thins a grid to Fusion's 64-point ring (Insert and Update pick the same rays).
 The pinned source is command-driven only: WG no longer asks Fusion for a return, and the
 add-in ignores (and logs once) an old setting that turned on automatic coordination.
 
+The pinned source reads WGLink bundle format 1.3, whose throat centre is the link origin: a new
+Insert has its throat at the component (and, unmoved, the document) origin with only hidden
+baffle/back or mouth planes, and a link inserted from an earlier bundle keeps its offset and
+throat station on Update.
+
 The current pin is the full commit in [`source.json`](source.json); its `note`
 says what that revision adds. The vendored shared protocol has its own source
 commit and SHA-256 in

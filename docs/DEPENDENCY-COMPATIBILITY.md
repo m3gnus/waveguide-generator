@@ -39,10 +39,19 @@ built and sewn once (WG skips this when its mesher child already built the same
 design) and an envelope wall is still certified. The other commits since
 `a04a6cd` are refactors without output change (shared validators and artifact
 publisher, dead aliases removed), docs, and `a66dd33`, which only speeds up STEP
-writing. Mesh and STEP bytes are unchanged. The WG
-consumer suite runs against a clean non-editable install of this exact pin.
+writing. Mesh and STEP bytes are unchanged. `8952c63` writes WGLink bundle format 1.3
+(required feature `throat-origin-frame-v1`): the bundle's grid, datums and parameters have
+the throat centre at the origin and no `Mesh.VerticalOffset`; an ATH `Slot.Length` throat
+moves to z = 0; position parameters carry `position_axis`; `ring_z_mm` is each ring's mean
+station. `write_step(..., link_frame=True)` writes the solid in that frame (WG's File > STEP);
+the default `write_step` and `derive_datums` keep the mesh's placement, so mesh and default
+STEP bytes and ATH parity are unchanged. `write_wglink(..., link_frame=False)` still writes the
+1.2 placed bundle (WG's Onshape send). Geometry qualification passed 9,750 tests with required
+ATH parity at `8952c63`. A WGLink add-in before `bc13639` refuses 1.3 bundles, so this pin moves
+with the WGLink pin below. The WG consumer suite runs against a clean non-editable install of
+this exact pin.
 
-The mesher pin `19f90d94dda80dc0a42d204769add556ae097b71` declares version 0.2.9. Apart from the FREEFORM
+The mesher pin `8952c639a868b4b4e8088183ad5a4298b23329fa` declares version 0.2.9. Apart from the FREEFORM
 wall correction, the outer-wall envelope (including curled R-OSSE lips) and the cross-section throat reference it retains the released `983f5a39` geometry contracts while
 reusing existing sampling and preview owners.
 It includes version-gated ATH v3 controls and typed public refusals with
@@ -257,3 +266,13 @@ land. WG's side of the round (Pull retired from WG, server and frontend cleanup)
 The vendored shared protocol now names the same commit; its bytes and SHA-256 are unchanged from
 `986f177`, as are the shared fixtures. The paired endpoint oracle keeps its WG capture, add-in
 capture identity and fixture digests.
+
+WGLink `bc13639afe8c671ed091bdb42a5f9642b2a6b6ba` (add-in 0.3.4) then became the package pin, with mesher `8952c63` (bundle
+format 1.3). A new Insert builds the horn with its throat centre at the wrapper component's
+origin, uses the component's origin planes and Z axis as the throat plane and horn axis, and
+adds only the hidden baffle and back planes (or a freestanding mouth plane). A link inserted
+from an earlier bundle keeps its offset, throat station and datums: Update lifts a 1.3 bundle
+to them. An earlier add-in refuses a 1.3 bundle with the update-the-add-in remedy. The vendored
+shared protocol names the same commit; its bytes and SHA-256 are unchanged from `986f177`, as are
+the shared fixtures. The paired endpoint oracle keeps its WG capture, add-in capture identity and
+fixture digests.
