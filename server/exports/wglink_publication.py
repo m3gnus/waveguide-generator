@@ -229,7 +229,8 @@ def publish_bundle(
     if cancel_cb is not None:
         cancel_cb()
     # Reservations and snapshots must survive power loss before their bytes
-    # become visible. The store otherwise uses WAL synchronous=NORMAL.
+    # become visible. The store commits with synchronous=FULL, so they already
+    # do; this marks the boundary.
     store.make_durable()
     destination = root / f"{_component(facts['exportId'])}.wglink"
     folder = _journal_folder(store)

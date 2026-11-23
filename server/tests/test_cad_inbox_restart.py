@@ -567,10 +567,11 @@ def test_a_request_file_that_survives_its_delete_is_safe_to_deliver_again(tmp_pa
 
 @pytest.mark.parametrize("name", list(REQUESTS))
 def test_a_request_whose_acceptance_was_lost_is_taken_again_without_a_second_job(tmp_path: Path, name: str, backend: str) -> None:
-    """WAL with synchronous=NORMAL can lose the last commits on a power cut, and
-    the delete can survive them or not. Where the file survived and the operation
-    did not, the file is accepted again; a job its first life made is found by
-    its submission key, and nothing is submitted twice."""
+    """An acceptance row can be lost while its request file survives (the store
+    once ran WAL with synchronous=NORMAL, and a power cut could drop the last
+    commits; a restored or damaged database still can). The file is accepted
+    again; a job its first life made is found by its submission key, and
+    nothing is submitted twice."""
 
     first = new_wg(tmp_path, backend)
     request = _request(name, *_setup_project(first))
