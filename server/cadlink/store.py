@@ -346,6 +346,17 @@ _SCHEMA = (
       updated_at TEXT NOT NULL
     )
     """,
+    # Fusion mutation recovery notices (``fusion/recovery_api.py``): the
+    # document a recovery names and whether the user dismissed it. Additive:
+    # an older release created the same table on first use and reads it the same.
+    """
+    CREATE TABLE IF NOT EXISTS cad_recovery_notices (
+      notice_id TEXT PRIMARY KEY,
+      document_id TEXT,
+      document_name TEXT,
+      dismissed_at TEXT
+    )
+    """,
 )
 # Columns later stages added to cad_operations: nullable (or defaulted), so a
 # row written before them -- by an earlier build, or by an older release, which

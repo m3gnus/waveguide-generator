@@ -17,7 +17,7 @@ from typing import Any, Literal, Mapping
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from server.cadlink.fusion.fusion_outcomes import RECOVERY_NOTICE_SCHEMA, recovery_document_id, settle_from_heartbeat
+from server.cadlink.fusion.fusion_outcomes import recovery_document_id, settle_from_heartbeat
 from server.cadlink import ipc
 from server.cadlink.store import CadLinkStore
 from server.cadlink.fusion.fusion_status import REPORT_UNREAD, delivers_requests, read_heartbeat_report
@@ -104,7 +104,6 @@ def recovery_notices(store: CadLinkStore, data_dir: Path) -> RecoveryNoticesResp
         applying = applying if isinstance(applying, Mapping) else {}
         notices = []
         with store._transaction() as conn:
-            conn.execute(RECOVERY_NOTICE_SCHEMA)
             # No capped operation listing: recovery remains discoverable even
             # with a large backlog. Acceptance rowid gives a stable tie order.
             rows = conn.execute("SELECT rowid AS sequence, * FROM cad_operations "
@@ -136,7 +135,6 @@ def recovery_notices(store: CadLinkStore, data_dir: Path) -> RecoveryNoticesResp
 def dismiss_recovery_notice(store: CadLinkStore, notice_id: str) -> RecoveryDismissalResponse:
     store.initialize()
     with store._lock, store._transaction() as conn:
-        conn.execute(RECOVERY_NOTICE_SCHEMA)
         operation = conn.execute("SELECT kind FROM cad_operations WHERE operation_id = ?", (notice_id,)).fetchone()
         if operation is None or operation["kind"] not in {"insert_link", "update_link"}:
             raise HTTPException(status_code=404, detail="WG cannot find this Fusion change. Refresh CAD Link.")

@@ -302,3 +302,21 @@ def test_notice_read_does_not_claim_an_unrelated_return_request(tmp_path):
     assert recovery_notices(store, tmp_path).notices == []
     assert store.get_operation("return")["state"] == "received"
     store.close()
+
+
+def test_polling_notices_runs_no_schema_statement(tmp_path):
+    # The notice table is part of the store's schema: a poll reads and
+    # upserts rows, and never asks SQLite to create a table.
+    store = CadLinkStore.for_data_dir(tmp_path)
+    accept(store)
+    report(tmp_path, applying=None)
+    recovery_notices(store, tmp_path)
+    statements: list[str] = []
+    store._connect().set_trace_callback(statements.append)
+    try:
+        recovery_notices(store, tmp_path)
+        dismiss_recovery_notice(store, "mutation")
+    finally:
+        store._connect().set_trace_callback(None)
+    assert statements and not [text for text in statements if text.lstrip().upper().startswith("CREATE")]
+    store.close()

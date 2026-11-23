@@ -37,16 +37,6 @@ _last_request_seen: dict[str, str] = {}
 
 
 # Additive recovery metadata, ignored by older readers; no user_version change.
-RECOVERY_NOTICE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS cad_recovery_notices (
-  notice_id TEXT PRIMARY KEY,
-  document_id TEXT,
-  document_name TEXT,
-  dismissed_at TEXT
-)
-"""
-
-
 def _remember_recovery_document(store: CadLinkStore, row: Mapping[str, Any],
                                 heartbeat: Mapping[str, Any]) -> None:
     """An Insert learns its document from the mark before that report is lost."""
@@ -56,8 +46,8 @@ def _remember_recovery_document(store: CadLinkStore, row: Mapping[str, Any],
     if (_applying(heartbeat) != row["operation_id"] or not document_id
             or (expected is not None and expected != document_id)):
         return
+    store.initialize()
     with store._lock, store._transaction() as conn:
-        conn.execute(RECOVERY_NOTICE_SCHEMA)
         conn.execute("INSERT INTO cad_recovery_notices(notice_id, document_id, document_name) "
                      "VALUES (?, ?, ?) ON CONFLICT(notice_id) DO UPDATE SET "
                      "document_id = COALESCE(cad_recovery_notices.document_id, excluded.document_id), "
@@ -116,10 +106,9 @@ def recovery_document_id(store: CadLinkStore, row: Mapping[str, Any]) -> str | N
     destination = _object(target.get("destination")) or {}
     if destination.get("kind") == "document":
         return _operation_id(destination.get("value"))
+    store.initialize()
     with store._lock:
-        conn = store._connect()
-        conn.execute(RECOVERY_NOTICE_SCHEMA)
-        saved = conn.execute("SELECT document_id FROM cad_recovery_notices WHERE notice_id = ?",
+        saved = store._connect().execute("SELECT document_id FROM cad_recovery_notices WHERE notice_id = ?",
                              (row["operation_id"],)).fetchone()
     return _operation_id(saved["document_id"]) if saved is not None else None
 
