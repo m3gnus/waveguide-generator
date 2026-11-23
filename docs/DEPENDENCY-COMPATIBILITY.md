@@ -48,10 +48,12 @@ the default `write_step` and `derive_datums` keep the mesh's placement, so mesh 
 STEP bytes and ATH parity are unchanged. `write_wglink(..., link_frame=False)` still writes the
 1.2 placed bundle (WG's Onshape send). Geometry qualification passed 9,750 tests with required
 ATH parity at `8952c63`. A WGLink add-in before `bc13639` refuses 1.3 bundles, so this pin moves
-with the WGLink pin below. The WG consumer suite runs against a clean non-editable install of
-this exact pin.
+with the WGLink pin below. `624adbf` renames two controls in the shipped control catalog to WG's
+new labels ("Vertical offset (ATH config)", "Vertical offset (native STEP/STL)"); geometry is
+unchanged (9,751 tests with required ATH parity). The WG consumer suite runs against a clean
+non-editable install of this exact pin.
 
-The mesher pin `8952c639a868b4b4e8088183ad5a4298b23329fa` declares version 0.2.9. Apart from the FREEFORM
+The mesher pin `624adbf7046b62b15cc1cb6ae75999663e401618` declares version 0.2.9. Apart from the FREEFORM
 wall correction, the outer-wall envelope (including curled R-OSSE lips) and the cross-section throat reference it retains the released `983f5a39` geometry contracts while
 reusing existing sampling and preview owners.
 It includes version-gated ATH v3 controls and typed public refusals with
