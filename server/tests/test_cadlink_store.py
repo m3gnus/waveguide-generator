@@ -878,3 +878,21 @@ def test_export_preparation_rolls_back_the_save_if_name_claim_fails(tmp_path):
         assert store.get_lineage_cad_names(requested.lineage_id) is None
     finally:
         store.close()
+
+
+def test_ingest_records_for_one_bundle_in_insertion_order(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    try:
+        made = []
+        for manifest, artifact in (("m1", "a1"), ("m2", "a1"), ("m1", "a2"), ("m1", "a1")):
+            row = store.allocate_ingest(
+                manifest_sha256=manifest, artifact_sha256=artifact,
+                record_builder=lambda ingest_id, _now: json.dumps({"ingest_id": ingest_id}),
+            )
+            made.append((manifest, artifact, row["ingest_id"]))
+        wanted = [ingest for manifest, artifact, ingest in made if (manifest, artifact) == ("m1", "a1")]
+        found = [json.loads(text)["ingest_id"] for text in store.ingest_records_for("m1", "a1")]
+        assert found == wanted
+        assert [json.loads(text)["ingest_id"] for text in store.ingest_records()] == [item[2] for item in made]
+    finally:
+        store.close()

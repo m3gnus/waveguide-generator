@@ -2382,6 +2382,19 @@ class CadLinkStore:
                 str(row[0]) for row in self._connect().execute("SELECT record_json FROM ingests")
             ]
 
+    def ingest_records_for(self, manifest_sha256: str, artifact_sha256: str) -> list[str]:
+        """The stored records of the ingests of one bundle, oldest first."""
+
+        self.initialize()
+        with self._lock:
+            return [
+                str(row[0]) for row in self._connect().execute(
+                    "SELECT record_json FROM ingests "
+                    "WHERE manifest_sha256 = ? AND artifact_sha256 = ? ORDER BY rowid",
+                    (manifest_sha256, artifact_sha256),
+                )
+            ]
+
     def mentioned(self, tokens: Iterable[str]) -> set[str]:
         """Which of ``tokens`` any text in any table of this store contains.
 

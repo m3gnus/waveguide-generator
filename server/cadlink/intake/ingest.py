@@ -1636,7 +1636,8 @@ def _ingest_bundle(
     # the originals. Its callback checks the entire requested interpretation,
     # not only the bundle identity. No packaged row is ever inserted.
     if reuse_existing and validate_record is not None:
-        for raw in store.ingest_records():
+        # The columns are the record's own identity; the record is still checked.
+        for raw in store.ingest_records_for(bundle.manifest_sha256, bundle.artifact_sha256):
             candidate = json.loads(raw)
             if (candidate.get("manifest_sha256") != bundle.manifest_sha256
                     or candidate.get("artifact_sha256") != bundle.artifact_sha256):
