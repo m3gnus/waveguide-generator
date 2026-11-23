@@ -32,10 +32,17 @@ crossed itself at the bend and the build was refused; such designs, slotted ones
 included, now build with a full wall at the bend. The acoustic surface is
 unchanged. Every other design keeps its mesh and STEP bytes (WG's FREEFORM and
 LOOKUP corpora, 25 saved-run designs and 27 test-fixture designs; a STEP export that already ran past 180 s was not compared). Geometry qualification
-passed 9,727 tests with required ATH parity at `a04a6cd`. The WG consumer suite
-runs against a clean non-editable install of this exact pin.
+passed 9,727 tests with required ATH parity at `a04a6cd`. `19f90d9` writes WGLink
+bundles (format 1.2) without a STEP: Fusion lofts `point-grid.json`, which WG now
+samples from the same CAD plan as File > STEP. Before sending, a bundle's solid is
+built and sewn once (WG skips this when its mesher child already built the same
+design) and an envelope wall is still certified. The other commits since
+`a04a6cd` are refactors without output change (shared validators and artifact
+publisher, dead aliases removed), docs, and `a66dd33`, which only speeds up STEP
+writing. Mesh and STEP bytes are unchanged. The WG
+consumer suite runs against a clean non-editable install of this exact pin.
 
-The mesher pin `a04a6cdcb4b054f48d162fa13aada1fe00ab2d72` declares version 0.2.9. Apart from the FREEFORM
+The mesher pin `19f90d94dda80dc0a42d204769add556ae097b71` declares version 0.2.9. Apart from the FREEFORM
 wall correction, the outer-wall envelope (including curled R-OSSE lips) and the cross-section throat reference it retains the released `983f5a39` geometry contracts while
 reusing existing sampling and preview owners.
 It includes version-gated ATH v3 controls and typed public refusals with
