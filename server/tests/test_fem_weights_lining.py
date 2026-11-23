@@ -275,3 +275,28 @@ def test_quiet_motion_and_lining_pass_gpu_float32_contract():
     validate_solve_request(request.wire)
     assert request.wire["compiled_system"]["components"][0]["parameters"]["boundary_motion_weights"] == {
         "boundary:fem:air:cone": 1e-6}
+
+
+@pytest.mark.parametrize("group", [
+    {"kind": "rigid", "lining": LINING},
+    {"kind": "moving", "relative_level_db": -6.},
+    {"kind": "moving", "lining": LINING},
+    {"kind": "rigid", "lining": {**LINING, "model": "other"}},
+    {"kind": "rigid", "lining": {**LINING, "extra": 1}},
+    {"kind": "rigid", "lining": {"model": "miki", "thickness_mm": 30.}},
+    {"kind": "rigid", "lining": {**LINING, "thickness_mm": float("nan")}},
+    {"kind": "moving", "relative_level_db": 1.},
+    {"kind": "rigid", "relative_level_db": 0.},
+])
+def test_record_option_guard_is_the_protocol_rule_in_wg_words(group):
+    from server.contracts.wglink_protocol import ProtocolValidationError, validate_fem_group_options
+    from server.mesh.fem_regions import FemRegionMeshError, validate_group_options
+
+    try:
+        validate_fem_group_options(group, "group")
+        protocol_refused = False
+    except ProtocolValidationError:
+        protocol_refused = True
+    with pytest.raises(FemRegionMeshError, match=r"^L: (lining|relative_level_db) ") if protocol_refused \
+            else nullcontext():
+        validate_group_options(group, "L")

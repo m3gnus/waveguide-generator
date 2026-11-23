@@ -30,6 +30,7 @@ from pathlib import Path
 import tempfile
 from typing import Any, Mapping, Sequence
 
+from server.contracts.wglink_protocol import ProtocolValidationError, validate_fem_group_options
 from server.platform.temp_session import temporary_directory_root
 
 FEM_TAG_NAMESPACE = "wg-fem-v1"
@@ -57,25 +58,37 @@ class FemRegionMeshError(ValueError):
         super().__init__(message)
 
 
+_LINING_NUMBERS = ("thickness_mm", "flow_resistivity_pa_s_per_m2")
+
+
 def validate_group_options(group: Mapping[str, Any], label: str) -> None:
-    """Guard boundary physics in WG records, independent of bundle validation."""
-    if "lining" in group:
+    """Guard boundary physics in WG records, independent of bundle validation.
+
+    The rules are the protocol's (``validate_fem_group_options``), the one
+    validator a returned bundle also passes; this names what failed in WG's
+    words, as an actionable ``FemRegionMeshError``.
+    """
+    try:
+        validate_fem_group_options(group, "group")
+    except ProtocolValidationError as exc:
+        raise FemRegionMeshError(f"{label}: {_group_option_problem(group, str(exc))}") from exc
+
+
+def _group_option_problem(group: Mapping[str, Any], protocol_message: str) -> str:
+    member = protocol_message.partition(": ")[0].split(".")[1:]
+    if member[:1] == ["lining"]:
         if group.get("kind") != "rigid":
-            raise FemRegionMeshError(f"{label}: lining is accepted only on a rigid group")
-        lining = group["lining"]
-        keys = {"model", "thickness_mm", "flow_resistivity_pa_s_per_m2"}
-        if not isinstance(lining, Mapping) or set(lining) != keys or lining["model"] != "miki":
-            raise FemRegionMeshError(f"{label}: lining requires the Miki model, thickness and airflow resistivity")
-        for key in keys - {"model"}:
-            value = lining[key]
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-                raise FemRegionMeshError(f"{label}: lining {key} must be finite and positive")
-    if "relative_level_db" in group:
+            return "lining is accepted only on a rigid group"
+        # The protocol reaches a number only once the model is Miki and no
+        # member is unknown; a missing number is a lining without its inputs.
+        if len(member) == 2 and member[1] in _LINING_NUMBERS and member[1] in group["lining"]:
+            return f"lining {member[1]} must be finite and positive"
+        return "lining requires the Miki model, thickness and airflow resistivity"
+    if member[:1] == ["relative_level_db"]:
         if group.get("kind") != "moving":
-            raise FemRegionMeshError(f"{label}: relative_level_db is accepted only on a moving group")
-        value = group["relative_level_db"]
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not -120 <= value <= 0:
-            raise FemRegionMeshError(f"{label}: relative_level_db must be finite and between -120 and 0 dB")
+            return "relative_level_db is accepted only on a moving group"
+        return "relative_level_db must be finite and between -120 and 0 dB"
+    return protocol_message
 
 
 def physical_name(region_id: str, group_id: str | None = None, kind: str | None = None) -> str:
