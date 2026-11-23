@@ -14,7 +14,7 @@ from typing import Any
 
 from server.platform.paths import data_paths
 from server.platform.private_paths import ensure_private_directory
-from server.platform.sqlite import _BUSY_TIMEOUT_MS, JournalModeStatus, configure_connection
+from server.platform.sqlite import JournalModeStatus, configure_connection
 
 from server.workspace.archive import archive_folder_slug
 from server.workspace import archive_identity
@@ -50,10 +50,6 @@ from .operations import (
 from .ipc import legacy_ledger_path
 from server.contracts.source_roles import inventory_sha256
 from . import receipts
-
-# How long ``make_durable`` waits for a reader that pins the log.
-DURABLE_BUSY_TIMEOUT_MS = 250
-
 
 logger = logging.getLogger(__name__)
 
@@ -2980,8 +2976,14 @@ class CadLinkStore:
                     return next(iter(self._connections))
         conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        # synchronous=FULL: every commit fsyncs the log before it returns, so a
+        # committed CAD write survives a power cut without a checkpoint. The
+        # CAD store's writes are few and small; the jobs store keeps NORMAL.
         self.journal_mode_status = configure_connection(
-            conn, db_path=str(self.db_path), label="CAD Link database"
+            conn,
+            db_path=str(self.db_path),
+            label="CAD Link database",
+            wal_synchronous="FULL",
         )
         self._local.conn = conn
         with self._connections_lock:
@@ -2989,33 +2991,15 @@ class CadLinkStore:
         return conn
 
     def make_durable(self) -> None:
-        """Flush every committed write to disk before returning.
+        """Return once every committed write survives a power cut: at once.
 
-        The store runs WAL with ``synchronous=NORMAL``, where a power cut can
-        roll back the last commits. A checkpoint syncs the log and the database
-        file, so what was committed before this call survives one.
+        The store runs WAL with ``synchronous=FULL`` (``FULL`` also when WAL is
+        refused), so each commit has already fsynced the log -- or, on a
+        rollback journal, the database -- before ``commit()`` returned. There is
+        nothing left to flush. Callers keep calling this at their durability
+        boundaries; it used to checkpoint the log, which cost a full database
+        sync and could report busy while a reader pinned the log.
         """
-
-        self.initialize()
-        if str(self.db_path) == ":memory:":
-            return
-        with self._lock:
-            conn = self._connect()
-            # A reader pinning the log makes the checkpoint report busy. Wait
-            # only briefly for it: the caller keeps its claim and tries on the
-            # next pass, and the store lock is not held for the full timeout.
-            conn.execute(f"PRAGMA busy_timeout = {DURABLE_BUSY_TIMEOUT_MS}")
-            try:
-                busy, log_frames, checkpointed = conn.execute(
-                    "PRAGMA wal_checkpoint(FULL)"
-                ).fetchone()
-            finally:
-                conn.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
-        if busy or (log_frames >= 0 and checkpointed < log_frames):
-            raise sqlite3.OperationalError(
-                "the CAD store could not be made durable: a reader held the log "
-                f"(busy={busy}, log={log_frames}, checkpointed={checkpointed})"
-            )
 
     def _read_one(self, sql: str, parameters: tuple[object, ...]) -> dict[str, Any] | None:
         """Read without creating a registry merely because a file was opened."""

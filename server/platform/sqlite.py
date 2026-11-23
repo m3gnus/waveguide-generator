@@ -110,9 +110,22 @@ def reset_journal_mode_statuses() -> None:
 
 
 def configure_connection(
-    conn: sqlite3.Connection, *, db_path: str, label: str
+    conn: sqlite3.Connection,
+    *,
+    db_path: str,
+    label: str,
+    wal_synchronous: str = "NORMAL",
 ) -> JournalModeStatus:
-    """Apply the shared store pragmas and report the journal mode actually granted."""
+    """Apply the shared store pragmas and report the journal mode actually granted.
+
+    ``wal_synchronous`` is the setting used when WAL is granted. ``NORMAL`` (the
+    jobs store) defers the log fsync to checkpoints; ``FULL`` (the CAD store)
+    fsyncs the log at every commit, so each commit is durable when it returns.
+    A refused WAL always gets ``FULL``.
+    """
+
+    if wal_synchronous not in {"NORMAL", "FULL"}:
+        raise ValueError(f"unsupported WAL synchronous setting {wal_synchronous!r}")
 
     row = conn.execute("PRAGMA journal_mode = WAL").fetchone()
     mode = str(row[0]).strip().lower() if row is not None else "unknown"
@@ -120,7 +133,7 @@ def configure_connection(
     # An in-memory database has no journal file to write, so SQLite answers
     # "memory" and there is nothing degraded about it.
     in_memory = db_path == MEMORY_DB or mode == "memory"
-    conn.execute(f"PRAGMA synchronous = {'NORMAL' if wal else 'FULL'}")
+    conn.execute(f"PRAGMA synchronous = {wal_synchronous if wal else 'FULL'}")
     # Without this any contention raises "database is locked" immediately. The
     # store's RLock makes that unreachable today, which is precisely why it
     # should not be the only thing standing between us and that error.

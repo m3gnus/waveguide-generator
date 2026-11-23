@@ -538,67 +538,52 @@ def test_a_command_id_that_names_no_safe_file_is_not_acknowledged_and_not_held(
     assert not _acks(data_dir).exists() or not list(_acks(data_dir).iterdir())
 
 
-def test_make_durable_checkpoints_the_log(data_dir, store, workspace) -> None:
+def test_the_store_commits_with_synchronous_full_and_make_durable_runs_no_checkpoint(
+    data_dir, store, workspace
+) -> None:
+    # Each commit fsyncs the log (synchronous=FULL), so make_durable has nothing
+    # left to do: it must not checkpoint, and so cannot report a busy log.
     bundle_path, manifest = _bundle(workspace)
     _file(data_dir, "cmd-1", bundle_path, manifest)
     _poll(data_dir, store)
-    store.make_durable()
-    # Nothing is left uncheckpointed.
+    conn = store._connect()
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    assert conn.execute("PRAGMA synchronous").fetchone()[0] == 2  # FULL
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        store.make_durable()
+    finally:
+        conn.set_trace_callback(None)
+    assert statements == []
+    # The committed frames are still in the log: nothing was checkpointed.
     with store._lock:
-        busy, log_frames, checkpointed = store._connect().execute(
+        busy, log_frames, checkpointed = conn.execute(
             "PRAGMA wal_checkpoint(PASSIVE)"
         ).fetchone()
-    assert busy == 0 and checkpointed == log_frames
+    assert busy == 0 and log_frames > 0
 
 
-def test_a_reader_pinning_the_log_stops_the_acknowledgement_and_the_claim_is_never_given_up(
-    data_dir, workspace, store, monkeypatch
+def test_a_reader_pinning_the_log_no_longer_holds_up_the_acknowledgement(
+    data_dir, workspace, store
 ) -> None:
     import sqlite3
 
     bundle_path, manifest = _bundle(workspace)
     _file(data_dir, "cmd-1", bundle_path, manifest)
-    monkeypatch.setattr(solve_command, "ACK_FAILURE_PASSES", 2)
-    monkeypatch.setattr("server.cadlink.store.DURABLE_BUSY_TIMEOUT_MS", 20)
     store.initialize()
-    # Land the row, then keep its frames un-checkpointed while a reader pins the log.
+    # A reader holding a snapshot used to make the durability checkpoint
+    # report busy, so the claim waited for the next pass (finding R8a).
     reader = sqlite3.connect(str(store.db_path))
     reader.execute("BEGIN")
     reader.execute("SELECT COUNT(*) FROM cad_operations").fetchone()
     try:
-        # A write after the reader's snapshot: the checkpoint cannot finish.
-        for _ in range(4):
-            _poll(data_dir, store)
-            assert _ack(data_dir, "cmd-1") is None
-            assert len(_claims(data_dir)) == 1, "the claim was consumed without a durable operation"
+        _poll(data_dir, store)
+        assert _ack(data_dir, "cmd-1")["outcome"] == "accepted"
+        assert _claims(data_dir) == []
     finally:
         reader.rollback()
         reader.close()
-
-    _poll(data_dir, store)
-
-    assert _ack(data_dir, "cmd-1")["outcome"] == "accepted"
-    assert _claims(data_dir) == []
-
-
-def test_a_busy_checkpoint_result_raises(store, monkeypatch) -> None:
-    import sqlite3
-
-    store.initialize()
-    real = store._connect()
-
-    class Busy:
-        def execute(self, sql, *args):
-            if "wal_checkpoint" in sql:
-                class Result:
-                    def fetchone(self_inner):
-                        return (1, 5, 0)
-                return Result()
-            return real.execute(sql, *args)
-
-    monkeypatch.setattr(store, "_connect", lambda: Busy())
-    with pytest.raises(sqlite3.OperationalError, match="durable"):
-        store.make_durable()
 
 
 @pytest.mark.parametrize("job_id", [None, ""])
