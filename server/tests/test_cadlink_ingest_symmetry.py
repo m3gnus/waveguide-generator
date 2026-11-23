@@ -1764,10 +1764,12 @@ def test_a_rear_facing_source_is_never_solved_inverted(tmp_path: Path) -> None:
     assert postprocess["flipped_global"] == 0
     assert postprocess["symmetry_parent_volume_flipped"] == 0
     assert postprocess["symmetry_parent_volume_kept"] >= 1
-    # Kept, but not silently: the source disagreed with the parent.
+    # Kept, and recorded for a developer: the source disagreed with the
+    # parent. It is not a user warning, because the winding is right and there
+    # is nothing to do about it.
     assert postprocess["symmetry_source_parent_conflicts"] >= 1
-    assert any(
-        "which their tagged source alone would have inverted" in warning
+    assert not any(
+        "wound like the full model" in warning
         for warning in auto["mesh"]["stats"]["warnings"]
     )
 

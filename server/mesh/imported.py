@@ -2703,20 +2703,15 @@ def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
             "from the bore and re-oriented from their source cap; the solve uses "
             "the corrected winding, and no action is needed"
         )
-    # Information as well. Where the mesher can, it winds each reduced
+    # Not warned about either: where the mesher can, it winds each reduced
     # component like the full model it mirrors (``_reduced_orientation_kwargs``)
     # and counts the components its source-cap rules would have wound the
-    # other way: a source facing away from the open axis (a throat plug's rear
-    # face), or a throat collar read on the outside of a solid wall. The second
-    # is a correctly tagged source, so this says what happened, not what to fix.
-    conflicts = int(repair.get("symmetry_source_parent_conflicts") or 0)
-    if conflicts and repair.get("reduced_orientation") == "mirrored-parent":
-        warnings.append(
-            f"{conflicts} symmetry-reduced component(s) were wound like the full "
-            "model they mirror, which their tagged source alone would have "
-            "inverted; the solve uses the full model's winding, and no action is "
-            "needed"
-        )
+    # other way -- a source facing away from the open axis (a throat plug's
+    # rear face), or a throat collar read on the outside of a solid wall. The
+    # second is a correctly tagged source and the winding is right, so there
+    # is nothing for the user to do. The count stays in the mesh metadata
+    # (``postprocess.symmetry_source_parent_conflicts``) for a developer, and
+    # ``verify_reduced_orientation`` still judges the winding it produced.
     return warnings
 
 
