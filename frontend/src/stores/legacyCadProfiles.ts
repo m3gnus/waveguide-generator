@@ -11,7 +11,7 @@ const solveProfileStorage = namespaceStorage('cadSolveProfiles');
 function solveProfileKey(owner: string, inventory: SourceInventoryCarrier): string {
   return JSON.stringify([owner, sourceInventorySignature(inventory)]);
 }
-export function dropStoredSolveProfiles(): void { solveProfileStorage.removeItem(''); }
+function dropStoredSolveProfiles(): void { solveProfileStorage.removeItem(''); }
 /**
  * Version 1 stored the combined output as a plain boolean whose `false` was
  * the old default rather than a decision. The combined output now defaults on
