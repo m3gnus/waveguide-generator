@@ -758,7 +758,7 @@ def apply_evidence(plan: DomainPlan, observations: Observations | None, *, ident
     reflect = tuple(
         plane
         for plane in applied
-        if observations.planes[plane].negative and not observations.planes[plane].positive
+        if kept_side(observations.planes[plane].negative, observations.planes[plane].positive) == "negative"
     )
     return EvidenceOutcome(tuple(applied), skipped, None, reflect)
 
