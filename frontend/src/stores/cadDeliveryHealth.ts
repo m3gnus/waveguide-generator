@@ -119,9 +119,10 @@ export function connectCadDeliveryHealth(): () => void {
     resync: () => { if (startup.resync()) { loadWaiting(); read(); } },
   });
   refresh = () => { read(); };
-  startup.mountRead(Promise.all([read(), loadWaiting()]));
+  startup.mountRead(Promise.all([read(), loadWaiting()]), () => { loadWaiting(); read(); });
   return () => {
     active = false;
+    startup.dispose();
     refresh = null;
     unsubscribe();
     if (timer !== null) clearInterval(timer);

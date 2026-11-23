@@ -113,6 +113,21 @@ describe('recovery notices without the coordinator', () => {
     await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(afterHello + 1));
     stop();
   });
+  it('reads notices again when the mount read fails after the first hello shared it (P2-1)', async () => {
+    let handlers!: Parameters<JobsSocketManager['subscribeCadOperations']>[0];
+    const manager = { getSnapshot: () => ({ connection: 'connecting' }) as ReturnType<JobsSocketManager['getSnapshot']>,
+      subscribeCadOperations: vi.fn((value) => { handlers = value; return vi.fn(); }) } as Pick<JobsSocketManager, 'subscribeCadOperations' | 'getSnapshot'>;
+    const response = deferred<Response>();
+    const store = createCadRecoveryNoticesStore();
+    const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(() => response.promise).mockImplementation(async () => json({ notices: [] }));
+    const stop = connectCadRecoveryNotices(manager, store, fetcher, createCadConnectionStore());
+    handlers.resync();
+    expect(fetcher).toHaveBeenCalledOnce();
+    response.resolve(new Response('{}', { status: 503 }));
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(store.getState().recoveryError).toBeNull());
+    stop();
+  });
   it('a design edit (invalidate, then a new report) reads notices once (B1)', async () => {
     const manager = { subscribeCadOperations: vi.fn(() => vi.fn()) } as Pick<JobsSocketManager, 'subscribeCadOperations'>;
     const connection = createCadConnectionStore();

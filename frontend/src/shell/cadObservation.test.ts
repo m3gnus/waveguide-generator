@@ -245,6 +245,38 @@ describe('CAD observation scheduler without the coordinator', () => {
     expect(refreshJobs).toHaveBeenCalledOnce(); expect(reloadReceipts).toHaveBeenCalledOnce();
   });
 
+  it('a socket that drops before its first hello reads and recovers on the reconnect hello (P2-2)', async () => {
+    snapshot = { ...snapshot, connection: 'connecting' };
+    const socketListeners = new Set<() => void>();
+    stop = connectCadObservation({
+      getActivity: () => activity,
+      subscribeActivity: (listener) => { activityChanged = listener; return vi.fn(); },
+      readFusionStatus: () => readStatus(), reloadReturns: () => reloadReturns(),
+      reloadReceipts: (ids) => reloadReceipts(ids), connection,
+      manager: { getSnapshot: () => snapshot,
+        subscribe: (listener) => { socketListeners.add(listener); return () => { socketListeners.delete(listener); }; },
+        subscribeCadOperations: (listener) => { channel = listener; return vi.fn(); }, refresh: () => refreshJobs() },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads()).toEqual([1, 1]);
+    snapshot = { ...snapshot, connection: 'reconnecting' }; socketListeners.forEach((listener) => listener());
+    await reconnect();
+    expect(reads()).toEqual([2, 2]);
+    expect(refreshJobs).toHaveBeenCalledOnce(); expect(reloadReceipts).toHaveBeenCalledOnce();
+  });
+
+  it('a mount status read that fails after answering the first hello reads and recovers then (P2-1)', async () => {
+    snapshot = { ...snapshot, connection: 'connecting' };
+    let fail!: (error: Error) => void;
+    readStatus.mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+    await mount();
+    await reconnect();
+    expect(reads()).toEqual([1, 1]); expect(refreshJobs).not.toHaveBeenCalled();
+    fail(new Error('offline')); await vi.advanceTimersByTimeAsync(0);
+    expect(reads()).toEqual([2, 2]);
+    expect(refreshJobs).toHaveBeenCalledOnce(); expect(reloadReceipts).toHaveBeenCalledOnce();
+  });
+
   it('the first hello reads again when the mount status read went unanswered (D5)', async () => {
     snapshot = { ...snapshot, connection: 'connecting' };
     readStatus.mockRejectedValueOnce(new Error('offline'));

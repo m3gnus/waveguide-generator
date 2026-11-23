@@ -80,7 +80,7 @@ export function useCadRecoveryNotices<T>(selector: (state: CadRecoveryNoticesSta
 /** Mounted on the existing jobs channel;
  * pushes wake an authoritative read, never manufacture a recovery outcome. */
 export function connectCadRecoveryNotices(
-  manager: Pick<JobsSocketManager, 'subscribeCadOperations'> & Partial<Pick<JobsSocketManager, 'getSnapshot'>> = jobsSocket,
+  manager: Pick<JobsSocketManager, 'subscribeCadOperations'> & Partial<Pick<JobsSocketManager, 'getSnapshot' | 'subscribe'>> = jobsSocket,
   store = cadRecoveryNoticesStore,
   fetcher: typeof fetch = fetch,
   connection: Pick<CadConnectionStore, 'subscribe'> = useCadConnectionStore,
@@ -114,10 +114,10 @@ export function connectCadRecoveryNotices(
     if (state.fusionStatus !== previous.fusionStatus && state.fusionStatus !== null) read();
   });
   const mount = read();
-  if (mount) startup.mountRead(mount);
+  if (mount) startup.mountRead(mount, () => { read(); });
   return () => {
     if (!active) return;
-    active = false; store.getState().fence(); unsubscribe(); stopConnection();
+    active = false; startup.dispose(); store.getState().fence(); unsubscribe(); stopConnection();
   };
 }
 

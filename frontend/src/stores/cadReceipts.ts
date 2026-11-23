@@ -223,7 +223,7 @@ export function useCadReceiptsStore<T>(selector: (state: CadReceiptsState) => T)
  * Shell mounts this source.
  */
 export function connectCadReceipts(
-  manager: Pick<JobsSocketManager, 'subscribeCadOperations'> & Partial<Pick<JobsSocketManager, 'getSnapshot'>> = jobsSocket,
+  manager: Pick<JobsSocketManager, 'subscribeCadOperations'> & Partial<Pick<JobsSocketManager, 'getSnapshot' | 'subscribe'>> = jobsSocket,
   store = cadReceiptsStore, fetcher: typeof fetch = fetch): () => void {
   let active = true;
   const startup = cadStartupHello(manager);
@@ -251,8 +251,8 @@ export function connectCadReceipts(
     resync: () => { if (startup.resync()) read(); },
   });
   const mount = read();
-  if (mount) startup.mountRead(mount);
-  return () => { active = false; unsubscribe(); if (timer !== null) clearTimeout(timer); };
+  if (mount) startup.mountRead(mount, () => { read(); });
+  return () => { active = false; startup.dispose(); unsubscribe(); if (timer !== null) clearTimeout(timer); };
 }
 
 /** Drain each batch once. Transport retries have bounded backoff and do not

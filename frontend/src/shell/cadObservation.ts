@@ -184,7 +184,9 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
   const startup = cadStartupHello(manager);
   // The mount wake's reads start in a microtask; a hello before then shares them.
   let mountReads: ((reads: Promise<unknown>) => void) | null = null;
-  startup.mountRead(new Promise((resolve) => { mountReads = resolve; }));
+  // If they fail after answering the first hello, that hello's reads run after all.
+  startup.mountRead(new Promise((resolve) => { mountReads = resolve; }),
+    () => { if (active) { invalidateDeclaration(); wake(); recover(); } });
   let wakeScheduled = false;
   let wakeListing = false;
   const wake = (listing = true) => {
@@ -213,7 +215,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     addinStatusChanged: () => { invalidateDeclaration(); wake(); },
     resync: () => {
       // The first hello of a socket still starting at mount is answered by the
-      // mount batch for this context (running or answered): the socket sends its
+      // mount batch for this context (cadStartupHello): the socket sends its
       // own jobs snapshot after every hello, and nothing awaited can be owed yet.
       // Later reconnects always fence, read again and recover.
       const fresh = startup.resync();
@@ -277,6 +279,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     timers.forEach(clearTimeout);
     timers.clear();
     restarts.clear();
+    startup.dispose();
     unsubscribeChannel(); unsubscribeJobs(); unsubscribeActivity(); unsubscribeConnection();
     document.removeEventListener('visibilitychange', resume);
     window.removeEventListener('focus', resume);
