@@ -218,6 +218,22 @@ def test_a_body_name_that_looks_like_an_entity_is_not_a_body(tmp_path: Path) -> 
     assert declared_step_bodies(disguised)["surface_models"] == 1
 
 
+def test_a_body_name_holding_comment_marks_hides_no_body(tmp_path: Path) -> None:
+    """Strings and comments are found in one pass, so a name cannot open a comment.
+
+    Stripping comments first read ``'a /* b'`` as the start of a comment that ran
+    to the ``*/`` in the second body's name, swallowing the record between them.
+    """
+
+    step = write_touching_bodies(
+        tmp_path / "comment-names.step",
+        faces=4,
+        names=("left /* woofer", "right */ tweeter"),
+        share_records=False,
+    )
+    assert declared_step_bodies(step)["surface_models"] == 2
+
+
 # ---------------------------------------------------------------------------
 # Touching bodies: the case geometry alone cannot decide
 # ---------------------------------------------------------------------------

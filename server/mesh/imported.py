@@ -2197,11 +2197,22 @@ def occ_body_groups(gmsh: Any, roots: Sequence[tuple[int, int]]) -> list[list[tu
     return groups
 
 
-#: Comments and strings, removed before any entity is counted. A body name is
-#: free text: without this, a part called ``SHELL_BASED_SURFACE_MODEL`` would
-#: add a body, and a commented-out one would too.
-_STEP_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-_STEP_STRING = re.compile(r"'(?:''|[^'])*'")
+def _step_text_without_comments(assembly_path: str | Path) -> str:
+    """Read a STEP file with its ``/* */`` comments removed, strings intact.
+
+    Comments and strings are removed before any entity is counted. A body name
+    is free text: without this, a part called ``SHELL_BASED_SURFACE_MODEL``
+    would add a body, and a commented-out one would too. The two must be
+    found in **one** left-to-right pass, which is what the mesher's
+    ``strip_step_comments`` does: stripping comments first lets a body *named*
+    ``a /* b`` open a comment that swallows the bodies after it.
+    """
+
+    from hornlab_mesher.step_text import read_step_text, strip_step_comments
+
+    return strip_step_comments(read_step_text(Path(assembly_path)))
+
+
 #: The two entity types CAD counts a body by. Deliberately the same rule and
 #: the same spelling as the producer's ``wglink_send.count_step_bodies``: this
 #: gate compares its result against a number that rule produced, so any
@@ -2240,8 +2251,7 @@ def step_void_solid_labels(assembly_path: str | Path) -> list[str]:
     still something a user can find in CAD and an empty quote is not.
     """
 
-    text = Path(assembly_path).read_text(encoding="ascii", errors="replace")
-    text = _STEP_COMMENT.sub("", text)
+    text = _step_text_without_comments(assembly_path)
     labels: list[str] = []
     for index, name in enumerate(_STEP_VOID_SOLID_NAMED.findall(text), start=1):
         cleaned = name.replace("''", "'").strip()
@@ -2272,8 +2282,9 @@ def declared_step_bodies(assembly_path: str | Path) -> dict[str, int]:
     question, asked by :func:`apply_occ_healing_options`.
     """
 
-    text = Path(assembly_path).read_text(encoding="ascii", errors="replace")
-    text = _STEP_STRING.sub("''", _STEP_COMMENT.sub("", text))
+    from hornlab_mesher.step_text import blank_step_strings
+
+    text = blank_step_strings(_step_text_without_comments(assembly_path))
     void_solids = len(_STEP_VOID_SOLID_BODY.findall(text))
     return {
         "surface_models": len(_STEP_SURFACE_BODY.findall(text)),
