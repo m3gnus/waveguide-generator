@@ -14,7 +14,7 @@ import math
 import re
 from pathlib import Path
 import tempfile
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -866,6 +866,60 @@ def _transform_direction(matrix: np.ndarray, direction: Iterable[float]) -> np.n
     return matrix[:3, :3] @ np.asarray(tuple(direction), dtype=float)
 
 
+class ThroatDisc(NamedTuple):
+    """The disc a throat contract describes: its centre (mm) and unit normal."""
+
+    centre_mm: np.ndarray
+    normal: np.ndarray
+
+
+def throat_disc(
+    contract: Mapping[str, Any], *, max_tilt_deg: float | None = None
+) -> ThroatDisc:
+    """Where the contract's throat axis pierces its throat plane, in mm.
+
+    That point is the centre of the throat disc. The plane's own origin is not:
+    it is any point of the plane, and a CAD app reports whichever one its datum
+    happens to carry. WGLink's ``WG_THROAT_PLANE`` is an offset of the link
+    component's XY plane, so its origin is the link origin projected onto it,
+    while ``WG_AXIS`` -- the intersection of ``WG_SOLVER_CUT_PLANE_X`` and
+    ``WG_GEOM_MIDPLANE_Y`` -- passes through the throat centre at
+    ``y = mesh.vertical_offset``. ``contract`` is a transformed contract
+    (``plane_origin_mm``, ``plane_normal``, ``axis_origin_mm``,
+    ``axis_direction``).
+
+    ``max_tilt_deg`` refuses an axis further than that from the plane normal;
+    without it only an axis lying in the plane, which never pierces it, is
+    refused.
+    """
+
+    normal = np.asarray(contract["plane_normal"], dtype=float)
+    normal_length = float(np.linalg.norm(normal))
+    direction = np.asarray(contract["axis_direction"], dtype=float)
+    direction_length = float(np.linalg.norm(direction))
+    if normal_length <= 0.0 or direction_length <= 0.0:
+        raise RoleResolutionError(
+            "role resolution: this throat contract has a degenerate throat plane "
+            "or axis, so the centre of its throat disc is undefined"
+        )
+    normal = normal / normal_length
+    direction = direction / direction_length
+    along = float(np.dot(direction, normal))
+    minimum = 1.0e-9 if max_tilt_deg is None else math.cos(math.radians(max_tilt_deg))
+    if abs(along) < minimum:
+        raise RoleResolutionError(
+            "role resolution: this throat's axis is not perpendicular to its own "
+            f"throat plane (off by {math.degrees(math.acos(min(1.0, abs(along)))):.4g} "
+            "degrees), so the centre of the disc it describes is undefined"
+        )
+    plane_origin = np.asarray(contract["plane_origin_mm"], dtype=float)
+    axis_origin = np.asarray(contract["axis_origin_mm"], dtype=float)
+    centre = axis_origin + direction * (
+        float(np.dot(plane_origin - axis_origin, normal)) / along
+    )
+    return ThroatDisc(centre_mm=centre, normal=normal)
+
+
 @dataclass(frozen=True)
 class DeclaredDiscReduction:
     """What a declared pre-cut domain does to one linked throat's disc.
@@ -928,35 +982,11 @@ def declared_disc_reduction(
     planes = tuple(str(plane) for plane in declared_cut_planes)
     if not planes:
         return DeclaredDiscReduction(1.0, (), ())
-    normal = np.asarray(contract["plane_normal"], dtype=float)
-    normal_length = float(np.linalg.norm(normal))
-    direction = np.asarray(contract["axis_direction"], dtype=float)
-    direction_length = float(np.linalg.norm(direction))
-    if normal_length <= 0.0 or direction_length <= 0.0:
-        raise RoleResolutionError(
-            "role resolution: this throat contract has a degenerate throat plane "
-            "or axis, so a declared reduced domain cannot be applied to it"
-        )
-    normal = normal / normal_length
-    direction = direction / direction_length
-    plane_origin = np.asarray(contract["plane_origin_mm"], dtype=float)
-    axis_origin = np.asarray(contract["axis_origin_mm"], dtype=float)
-    along = float(np.dot(direction, normal))
     # The contract's disc lies in the throat plane and the throat axis is its
     # normal. If the two are not parallel, the disc a declared cut would halve
     # is not the face being matched, and the direction its centroid would move
     # in is undefined -- so this is refused rather than approximated.
-    if abs(along) < math.cos(math.radians(NORMAL_ANGLE_DEG)):
-        raise RoleResolutionError(
-            "role resolution: this throat's axis is not perpendicular to its own "
-            f"throat plane (off by {math.degrees(math.acos(min(1.0, abs(along)))):.4g} "
-            "degrees), so the disc a declared reduced domain would cut is undefined"
-        )
-    # Where the axis pierces the throat plane: the centre of the disc the
-    # contract describes.
-    centre = axis_origin + direction * (
-        float(np.dot(plane_origin - axis_origin, normal)) / along
-    )
+    centre, normal = throat_disc(contract, max_tilt_deg=NORMAL_ANGLE_DEG)
     radius = 0.5 * float(contract["throat_diameter_mm"])
 
     fraction = 1.0
@@ -1160,15 +1190,18 @@ def recorded_vertical_offset_mm(instance: Mapping[str, Any] | None) -> float | N
     """Read ``mesh.vertical_offset`` from the WG config the CAD app echoes back.
 
     ``instances[].config`` is the exact design config WG shipped with the
-    export (``server/exports/api.py``), so the offset is recorded rather than
-    inferred. It is opaque to the return schema, so every level is tolerated
-    as missing and nothing here may raise.
+    export: ``DesignConfig.model_dump(mode="json", by_alias=True)`` in
+    ``server/exports/wglink_geometry.py``. ``DesignConfig`` is a root model,
+    so that dump is the formula config itself -- ``mesh`` is a top-level key,
+    with no ``root`` wrapper. The offset is recorded rather than inferred. It
+    is opaque to the return schema, so every level is tolerated as missing
+    and nothing here may raise.
     """
 
     if not isinstance(instance, Mapping):
         return None
     node: Any = instance.get("config")
-    for key in ("root", "mesh", "vertical_offset"):
+    for key in ("mesh", "vertical_offset"):
         if not isinstance(node, Mapping):
             return None
         node = node.get(key)
@@ -2114,6 +2147,38 @@ def apply_occ_healing_options(
     return applied
 
 
+def tessellated_bounds_mm(
+    gmsh: Any, assembly_path: str | Path, normalization: Any
+) -> tuple[float, ...]:
+    """The bounds of the normalised model, measured on its tessellation.
+
+    OCC's own box for a B-spline face is its control polygon's, padded, and is
+    not symmetric for a symmetric body: a mesher-written enclosure horn
+    symmetric about ``y = 80`` reads a box midpoint of 77.05 mm that way, and
+    90.05 mm wide on one side of ``x = 0`` against 104.01 mm on the other. The
+    tessellated box is within the tessellation's deflection of the surface.
+
+    It is measured on a second import in a scratch model, because measuring it
+    stores a triangulation on every face, which changes every later OCC box of
+    those faces -- the model being meshed keeps its own state.
+    """
+
+    current = gmsh.model.getCurrent()
+    gmsh.model.add("wgreturn-bounds")
+    try:
+        imported = _import_occ_root_bodies(gmsh, assembly_path)
+        apply_rigid_normalisation(gmsh, imported, normalization)
+        previous = gmsh.option.getNumber("Geometry.OCCBoundsUseStl")
+        gmsh.option.setNumber("Geometry.OCCBoundsUseStl", 1)
+        try:
+            return tuple(float(value) for value in gmsh.model.getBoundingBox(-1, -1))
+        finally:
+            gmsh.option.setNumber("Geometry.OCCBoundsUseStl", previous)
+    finally:
+        gmsh.model.remove()
+        gmsh.model.setCurrent(current)
+
+
 def _import_occ_root_bodies(gmsh: Any, assembly_path: str | Path) -> list[tuple[int, int]]:
     """Import all STEP topology and return only independently transformable bodies.
 
@@ -2967,11 +3032,14 @@ def build_imported_mesh(
         # and in the viewport rebuild, because the viewport verifies the
         # geometry fingerprint of this model bit for bit: composing them into
         # one move on one side only would round differently and fail that
-        # check. The recentre reads the bounds of the normalised model.
+        # check. The recentre reads the bounds of the normalised model, and
+        # only an offset return has its bounds measured.
         recentre = resolve_vertical_recentre(
             recorded_offset_mm,
-            bounds_mm=tuple(
-                float(value) for value in gmsh.model.getBoundingBox(-1, -1)
+            bounds_mm=(
+                tessellated_bounds_mm(gmsh, assembly_path, normalization)
+                if recorded_offset_mm
+                else (0.0,) * 6
             ),
         )
         solver_from_assembly = applied_normalization
@@ -3107,9 +3175,11 @@ def build_imported_mesh(
             horizontal = reference - float(np.dot(reference, axis)) * axis
             horizontal /= np.linalg.norm(horizontal)
             vertical = np.cross(axis, horizontal)
-            throat_origin_m = (
-                np.asarray(anchor_contract["plane_origin_mm"], dtype=float) * 1.0e-3
-            )
+            # The observation origin is the throat disc's centre, where the
+            # axis pierces the throat plane -- not the plane datum's own
+            # origin, which on a WGLink return is the link origin projected
+            # onto the plane, one vertical offset below the throat.
+            throat_origin_m = throat_disc(anchor_contract).centre_mm * 1.0e-3
             normalisation_record["anchor_manifest_throat_plane"] = {
                 "origin_mm": [float(value) for value in anchor_contract["plane_origin_mm"]],
                 "normal": [float(value) for value in anchor_contract["plane_normal"]],

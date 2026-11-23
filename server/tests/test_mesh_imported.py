@@ -20,6 +20,7 @@ from server.mesh.imported import (
     resolve_instance_source,
     resolve_user_source,
     resolve_vertical_recentre,
+    throat_disc,
     apply_rigid_normalisation,
     rigid_inverse,
     rigid_occ_motion,
@@ -358,28 +359,42 @@ def test_post_cut_source_area_refuses_a_silently_dead_channel() -> None:
     assert accepted["retained_fraction"] == 0.5
 
 
+def _echoed_config(mesh: dict | None = None) -> dict:
+    """``instances[].config`` exactly as a send ships it and WGLink echoes it.
+
+    The export serializer (``server/exports/wglink_geometry.py``) writes
+    ``DesignConfig.model_dump(mode="json", by_alias=True)``; WGLink stores that
+    snapshot and returns it verbatim. A hand-written dict here once had a
+    ``root`` wrapper the real dump never has, so the recentre was dead on every
+    real return while this test stayed green.
+    """
+
+    from server.design.schema import DesignConfig
+
+    design: dict = {"formula": "OSSE", "L": 120, "a": 45}
+    if mesh is not None:
+        design["mesh"] = mesh
+    return DesignConfig.model_validate(design).model_dump(mode="json", by_alias=True)
+
+
 def test_recorded_vertical_offset_reads_the_echoed_design_config() -> None:
-    assert (
-        recorded_vertical_offset_mm(
-            {"config": {"root": {"mesh": {"vertical_offset": {"value": 80.0, "raw": None}}}}}
-        )
-        == 80.0
-    )
+    assert recorded_vertical_offset_mm(
+        {"config": _echoed_config({"vertical_offset": 80, "quadrants": 1})}
+    ) == 80.0
+    assert recorded_vertical_offset_mm(
+        {"config": _echoed_config({"vertical_offset": "12"})}
+    ) == 12.0
+    assert recorded_vertical_offset_mm({"config": _echoed_config()}) is None
+    assert recorded_vertical_offset_mm({"config": _echoed_config({"vertical_offset": 0})}) == 0.0
     # A bare number is accepted because the config is an opaque echo, not a
     # schema WG can enforce on the return leg.
-    assert (
-        recorded_vertical_offset_mm({"config": {"root": {"mesh": {"vertical_offset": 12}}}})
-        == 12.0
-    )
+    echoed = _echoed_config()
+    echoed["mesh"] = {**(echoed["mesh"] or {}), "vertical_offset": 12}
+    assert recorded_vertical_offset_mm({"config": echoed}) == 12.0
     assert recorded_vertical_offset_mm({}) is None
-    assert recorded_vertical_offset_mm({"config": {"root": {"mesh": {}}}}) is None
     assert recorded_vertical_offset_mm(None) is None
-    assert (
-        recorded_vertical_offset_mm(
-            {"config": {"root": {"mesh": {"vertical_offset": {"value": None, "raw": "y"}}}}}
-        )
-        is None
-    )
+    echoed["mesh"]["vertical_offset"] = {"value": None, "raw": "y"}
+    assert recorded_vertical_offset_mm({"config": echoed}) is None
 
 
 def test_vertical_recentre_needs_the_geometry_to_agree_with_the_config() -> None:
@@ -509,6 +524,27 @@ def _throat_contract(centre=(0.0, 0.0, 0.0), diameter=20.0, normal=(0.0, 0.0, 1.
         "axis_origin_mm": list(centre),
         "axis_direction": list(normal),
     }
+
+
+def test_the_throat_centre_is_where_the_axis_pierces_the_throat_plane() -> None:
+    """The datums today's offset WGLink return carried (Mesh.VerticalOffset 80).
+
+    ``WG_THROAT_PLANE`` is an offset of the link XY plane, so Fusion reports
+    the link origin as its origin; only ``WG_AXIS`` passes through the throat.
+    Taking the plane origin put the observation origin 80 mm below the throat.
+    """
+
+    contract = _throat_contract()
+    contract["axis_origin_mm"] = [0.0, 80.0, 0.0]
+    assert throat_disc(contract).centre_mm == pytest.approx([0.0, 80.0, 0.0])
+    # Wherever on the axis its origin sits, the centre is the same point.
+    contract["axis_origin_mm"] = [0.0, 80.0, -35.0]
+    contract["plane_origin_mm"] = [12.0, -4.0, 0.0]
+    assert throat_disc(contract).centre_mm == pytest.approx([0.0, 80.0, 0.0])
+    # An axis lying in its plane never pierces it.
+    contract["axis_direction"] = [0.0, 1.0, 0.0]
+    with pytest.raises(RoleResolutionError, match="not perpendicular to its own throat plane"):
+        throat_disc(contract)
 
 
 def test_a_source_the_cut_never_reached_keeps_its_whole_disc() -> None:

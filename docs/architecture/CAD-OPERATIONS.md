@@ -942,7 +942,9 @@ contracts such as `precut_section_contract` and `cut_recovery_fallback`
 (`ingest.meshing_semantics`): adding `cut_recovery_fallback: full-domain-v1` (0.3.6)
 changed the fingerprint, and so every mesh cache key and preparation identity: each
 snapshot is meshed and prepared once more on its next solve after the upgrade, while
-saved runs keep the mesh their own record names. The fingerprint rounds those constants to 12
+saved runs keep the mesh their own record names. `linked_return_frame:
+recentred-throat-centre-v1` (0.3.8) did the same, so a vertically offset WGLink return
+that was cached as a half is recentred and cut to its quarter on its next solve. The fingerprint rounds those constants to 12
 decimal places, so a last-bit difference between platforms' maths libraries is not a new
 identity. A run keeps the mesh its own record names: collection never removes a mesh any run
 names (see "Retention").

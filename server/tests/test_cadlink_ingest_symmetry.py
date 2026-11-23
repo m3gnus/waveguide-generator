@@ -9,6 +9,7 @@ meshed boundary denies the cut.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
@@ -128,6 +129,7 @@ _RETURN_IDS = {
     "capped": "wgr_01J5A8QK3M9T2XVBH0RD7NWEC0",
     "full": "wgr_01J5A8QK3M9T2XVBH0RD7NWED0",
     "placed": "wgr_01J5A8QK3M9T2XVBH0RD7NWEE0",
+    "sent": "wgr_01J5A8QK3M9T2XVBH0RD7NWEF0",
 }
 
 
@@ -207,6 +209,37 @@ def _horn_bundle(
         box = _place_step(bundle / "assembly.step")
         bbox_mm = [box[:3], box[3:]]
         assembly_from_link = _placement_matrix()
+    return _write_return(
+        bundle,
+        name,
+        bbox_mm=bbox_mm,
+        assembly_from_link=assembly_from_link,
+        config=_echoed_design_config(vertical_offset_mm),
+        source_contract={
+            "role": "HF",
+            "throat_z_mm": throat["centre"][2],
+            **_fusion_throat_datums(throat["centre"]),
+            "throat_diameter_mm": math.sqrt(4.0 * area / math.pi),
+            "expected_disc_area_mm2": area,
+        },
+        observed_area_mm2=area,
+    )
+
+
+def _write_return(
+    bundle: Path,
+    name: str,
+    *,
+    bbox_mm: list[list[float]],
+    assembly_from_link: np.ndarray,
+    config: dict[str, Any],
+    source_contract: dict[str, Any],
+    observed_area_mm2: float,
+    build_mode: str = "freestanding",
+) -> Path:
+    """Write ``wgreturn.json`` for the ``assembly.step`` already in ``bundle``."""
+
+    area = observed_area_mm2
     step = (bundle / "assembly.step").read_bytes()
     manifest = {
         "wgreturn_version": "1.0",
@@ -270,16 +303,12 @@ def _horn_bundle(
                 "design_hash": "sha256:" + "1" * 64,
                 # The design config WG shipped with the export, echoed back by
                 # the CAD app: the only record of the placement it applied.
-                "config": {
-                    "root": {
-                        "mesh": {"vertical_offset": {"value": vertical_offset_mm, "raw": None}}
-                    }
-                },
+                "config": config,
                 "export_id": "wge_01J4Y2ZD000000000000000000",
                 "export_sequence": 1,
                 "geometry_hash": "sha256:" + "2" * 64,
                 "origin_bundle_id": "wgb_01J4Y2ZF000000000000000000",
-                "build_mode": "freestanding",
+                "build_mode": build_mode,
                 "parameter_prefix": "wg_horn_",
                 "occurrence_path": name,
                 "assembly_from_link": assembly_from_link.tolist(),
@@ -290,20 +319,7 @@ def _horn_bundle(
                     "observed_fingerprint": _fingerprint(),
                     "observed_at": "2026-08-18T09:14:03Z",
                 },
-                "source_contract": {
-                    "role": "HF",
-                    "throat_z_mm": throat["centre"][2],
-                    "throat_plane_link": {
-                        "origin_mm": list(throat["centre"]),
-                        "normal": [0, 0, 1],
-                    },
-                    "axis_link": {
-                        "origin_mm": list(throat["centre"]),
-                        "direction": [0, 0, 1],
-                    },
-                    "throat_diameter_mm": math.sqrt(4.0 * area / math.pi),
-                    "expected_disc_area_mm2": area,
-                },
+                "source_contract": source_contract,
             }
         ],
         "sources": [
@@ -331,6 +347,44 @@ def _horn_bundle(
         json.dumps(manifest, sort_keys=True), encoding="utf-8"
     )
     return bundle
+
+
+def _echoed_design_config(vertical_offset_mm: float) -> dict[str, Any]:
+    """``instances[].config`` as a send ships it and WGLink echoes it back.
+
+    The export writes ``DesignConfig.model_dump(mode="json", by_alias=True)``
+    (``server/exports/wglink_geometry.py``): a flat formula config, with no
+    ``root`` wrapper.
+    """
+
+    from server.design.schema import DesignConfig
+
+    return DesignConfig.model_validate(
+        {
+            "formula": "OSSE",
+            "L": 60,
+            "a": 45,
+            "mesh": {"vertical_offset": vertical_offset_mm, "quadrants": 1},
+        }
+    ).model_dump(mode="json", by_alias=True)
+
+
+def _fusion_throat_datums(throat_centre_mm: list[float]) -> dict[str, Any]:
+    """The throat datums as WGLink reads them off its Fusion construction.
+
+    ``WG_THROAT_PLANE`` is an offset of the link component's XY plane, so the
+    plane origin Fusion reports is the link origin projected onto it -- not the
+    throat centre. ``WG_AXIS`` is the intersection of ``WG_SOLVER_CUT_PLANE_X``
+    and ``WG_GEOM_MIDPLANE_Y``, so it passes through the throat centre at
+    ``y = mesh.vertical_offset`` (``wglink_core._build_datums``; today's live
+    return carried ``[0, 0, 0]`` and ``[0, 80, 0]``).
+    """
+
+    x, y, z = (float(value) for value in throat_centre_mm)
+    return {
+        "throat_plane_link": {"origin_mm": [0.0, 0.0, z], "normal": [0, 0, 1]},
+        "axis_link": {"origin_mm": [x, y, 0.0], "direction": [0, 0, 1]},
+    }
 
 
 _SIZES = {
@@ -570,6 +624,142 @@ def test_vertically_offset_return_keeps_the_quarter_reduction(tmp_path: Path) ->
         / centred_stats["dense_solver_used_vertex_count"]
     )
     assert 0.95 <= vertex_ratio <= 1.05
+
+
+def _sent_design_bundle(tmp_path: Path, design: Any) -> Path:
+    """Send ``design`` to CAD and return what WGLink sends back, unedited.
+
+    The outbound leg is real: the export serializer writes the WGLink bundle
+    exactly as Send to CAD does, so the echoed config and the datums are the
+    ones a live return carries. Fusion is not here, so its two products are
+    reproduced from that bundle the way the add-in makes them: the body is the
+    same CAD geometry written as a solid with its throat closed, and the
+    source contract is read off the construction ``wglink_core._build_datums``
+    builds from the bundle's datums (see :func:`_fusion_throat_datums`).
+    """
+
+    from hornlab_mesher.cad import write_step
+
+    from server.exports.cad_geometry import resolve_cad_geometry
+    from server.exports.wglink_geometry import build_bundle
+
+    design_id = "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M"
+    staged = tmp_path / "outbound.wglink"
+    _run_in_gmsh_session(
+        build_bundle,
+        design.model_dump(mode="json", by_alias=True),
+        str(staged),
+        {
+            "bundleId": "wgb_01J4Y2ZF000000000000000000",
+            "createdAt": "2026-11-23T14:47:00Z",
+            "designId": design_id,
+            "editVersion": 1,
+            "designHash": "sha256:" + "1" * 64,
+            "exportId": "wge_01J4Y2ZD000000000000000000",
+            "sequence": 1,
+            "parentExportId": None,
+        },
+        "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4N",
+        "sent horn",
+        "sent_horn",
+        "0.0.0-test",
+    )
+    outbound = json.loads((staged / "wglink.json").read_text(encoding="utf-8"))
+    datums = outbound["datums"]
+    parameters = {item["name"]: item for item in outbound["parameters"]}
+
+    bundle = tmp_path / "workspace" / "wgreturn" / "sent.wgreturn"
+    bundle.mkdir(parents=True)
+    # WGLink closes the lofted throat with a planar patch: the face its
+    # ``_throat_faces`` tags and the contract describes.
+    body = dataclasses.replace(
+        resolve_cad_geometry(design).resolved.geometry, source_shape=FLAT_THROAT_DISC
+    )
+    _step, info = _run_in_gmsh_session(
+        write_step, body, bundle / "assembly.step", open_throat=False
+    )
+    diameter = float(parameters["wg_sent_horn_throat_dia"]["value"])
+    area = math.pi * diameter * diameter / 4.0
+    # Where Fusion's datums put the throat: on WG_SOLVER_CUT_PLANE_X, on
+    # WG_GEOM_MIDPLANE_Y, in WG_THROAT_PLANE.
+    centre = [
+        float(datums["WG_SOLVER_CUT_PLANE_X"]["origin_mm"][0]),
+        float(datums["WG_GEOM_MIDPLANE_Y"]["origin_mm"][1]),
+        float(datums["WG_THROAT_PLANE"]["origin_mm"][2]),
+    ]
+    return _write_return(
+        bundle,
+        "sent",
+        bbox_mm=[list(info.bounding_box_mm[0]), list(info.bounding_box_mm[1])],
+        assembly_from_link=np.eye(4),
+        config=outbound["design"]["config"],
+        source_contract={
+            "role": "HF",
+            "throat_z_mm": centre[2],
+            **_fusion_throat_datums(centre),
+            "throat_diameter_mm": diameter,
+            "expected_disc_area_mm2": area,
+        },
+        observed_area_mm2=area,
+        build_mode=str(outbound["design"]["build_mode"]),
+    )
+
+
+def test_a_sent_offset_quarter_design_comes_back_as_a_quarter(tmp_path: Path) -> None:
+    """Send to CAD and back, with nothing hand-written on the WG side.
+
+    260308tritonia-q (Mesh.VerticalOffset 80, Mesh.Quadrants 1, an enclosure)
+    came back from Fusion and solved as a half: the recentre read its offset
+    from a ``root`` key the exported config never has, and the throat frame
+    took the throat plane's origin -- the link origin, 80 mm below the throat --
+    as the observation origin. Both passed here only because this module's
+    fixtures were written in those same wrong shapes.
+    """
+
+    pytest.importorskip("gmsh")
+    from server.design.schema import DesignConfig
+
+    design = DesignConfig.model_validate(
+        {
+            "formula": "OSSE",
+            "L": 60,
+            "a": 45,
+            "r0": 12.7,
+            "mesh": {"vertical_offset": 80, "quadrants": 1},
+            "enclosure": {
+                "depth": 120,
+                "space_l": 25,
+                "space_r": 25,
+                "space_t": 25,
+                "space_b": 25,
+            },
+        }
+    )
+    record = _ingest(tmp_path, _sent_design_bundle(tmp_path, design))
+
+    recentre = record["normalisation"]["vertical_recentre"]
+    assert recentre["recorded_offset_mm"] == 80.0
+    assert recentre["applied"] is True
+    assert recentre["applied_offset_mm"] == 80.0
+
+    assert record["symmetry"]["cut_planes"] == ["x0", "y0"]
+    assert record["symmetry_verification"]["verified"] is True
+    assert record["domain_decision"]["solver_domain"]["planes"] == ["x0", "y0"]
+    assert record["mesh"]["stats"]["domain_multiplier"] == 4.0
+
+    # The observation origin is the throat centre, now at the solver origin.
+    frame = record["anchor"]["throat_frame"]
+    for name in ("origin_m", "source_center_m"):
+        assert frame[name] == pytest.approx([0.0, 0.0, 0.0], abs=1.0e-9), name
+
+    # As sent, the enclosure spans y = -10..170 mm, 90 mm either side of the
+    # throat at y = 80. The quarter kept is the one on the solver's mirror
+    # planes: it starts on y = 0 and reaches the enclosure's 90 mm half-height.
+    assert recentre["midpoint_residual_mm"] <= recentre["midpoint_tolerance_mm"]
+    bounds = record["mesh"]["stats"]["bounds_m"]
+    assert bounds["min_x"] == pytest.approx(0.0, abs=1.0e-9)
+    assert bounds["min_y"] == pytest.approx(0.0, abs=1.0e-9)
+    assert bounds["max_y"] == pytest.approx(0.090, abs=1.0e-4)
 
 
 @pytest.mark.parametrize(
