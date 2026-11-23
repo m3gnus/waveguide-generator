@@ -15,6 +15,11 @@ journal mode the same setting can leave a corrupt file, which is not a trade
 anyone chose. So when WAL is refused this raises ``synchronous`` back to
 ``FULL``: slower, and correct, which is the right way round.
 
+A store can also ask for ``FULL`` on WAL (``wal_synchronous="FULL"``). The CAD
+store (``cadlink.db``) does: its writes are few and small, and each one must
+survive a power cut as soon as its commit returns, with no checkpoint. The jobs
+store keeps ``NORMAL`` and checkpoints at its own durability boundaries.
+
 It is a warning rather than a failure because the application is fully correct
 on a rollback journal; it is only slower. Refusing to start would turn a working
 network home directory into an unusable install. It is reported the way the

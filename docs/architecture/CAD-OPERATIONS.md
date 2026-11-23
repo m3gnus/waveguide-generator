@@ -772,9 +772,12 @@ applies the same matrices), and `server/cadlink/interpretation/frame_infer.py` t
 A CAD Solve is a job from acceptance. The delivery pass retains the snapshot,
 then calls `JobRuntime.accept_cad_solve` under `cad-solve:<operationId>`, records
 ledger acceptance with its job id, writes the acknowledgement and deletes the
-claim. The jobs acceptance is checkpointed before the ledger names it, and the
-ledger is checkpointed before the acknowledgement. A retained delivery cannot
-be acknowledged while either acceptance cannot be made durable. A claim whose
+claim. The jobs acceptance is checkpointed before the ledger names it
+(`jobs.db` runs WAL with `synchronous=NORMAL`, so its `make_durable` checkpoints),
+and the ledger acceptance is committed before the acknowledgement (`cadlink.db`
+runs WAL with `synchronous=FULL`, so every commit is durable when it returns). A
+retained delivery cannot be acknowledged while the jobs acceptance cannot be made
+durable. A claim whose
 snapshot is unreadable waits for the existing bounded number of passes; at the
 bound the job is accepted and its preparation explains the unavailable return.
 The same id with different inputs remains a ledger conflict. Send, Insert and
@@ -1119,8 +1122,9 @@ and unseen state; receipt recovery restores the latest 20 after a backend restar
 
 `cad_send_receipts` is additive, with no `user_version` bump. Its payload projects
 existing operation outcomes and snapshots; intake refusals are recorded before
-the existing push and file acknowledgement. The store's durability checkpoint
-must succeed before publishing, acknowledging or consuming a refused claim.
+the existing push and file acknowledgement. The refusal is committed, and so
+durable (`cadlink.db` commits with `synchronous=FULL`), before WG publishes,
+acknowledges or consumes a refused claim.
 The claim rename is synced on POSIX before receipt persistence. Claim UUIDs key
 the original refusal, including its filename, reason and timestamp,
 so retries and restarts replay it. A monotonic subsecond timestamp also keeps
@@ -1872,10 +1876,11 @@ before it deletes the request. It changes nothing about what is accepted or refu
   `os.replace`, so a reader sees a whole file. On Windows the replace is retried briefly
   when a reader holds the target (`PermissionError`). A redelivery of the same request
   writes the same outcome again.
-- Before the file is written WG forces the acceptance durable (a WAL checkpoint of the
-  CAD store), and after the replace it flushes the folder on POSIX. Without that, a power
-  cut could roll back the acceptance while the file and the request's delete survived, and
-  the add-in would see "accepted" for an operation WG lost.
+- Before the file is written the acceptance is committed, and `cadlink.db` commits with
+  `synchronous=FULL`, so the commit has synced the log before the file exists. After the
+  replace WG flushes the folder on POSIX. Without both, a power cut could roll back the
+  acceptance while the file and the request's delete survived, and the add-in would see
+  "accepted" for an operation WG lost.
 - A crash between persisting and writing leaves the claim, so the next start redelivers
   the request, gets the same operation (no second job), and writes the file.
   The pin also reads WG's request acknowledgements (`.wg-solve-acks/<id>.json`) when WG advertises
@@ -1889,9 +1894,7 @@ before it deletes the request. It changes nothing about what is accepted or refu
   written
   (for example a plain file named `.wg-solve-acks`) keeps its claim for 30 passes and is
   reported once per pass with a warning; then WG gives it up with one error and consumes
-  the request, whose operation was made durable first. If the operation cannot be made
-  durable (a reader holds the CAD store's log), the claim is kept for as long as that
-  lasts and is never given up. A file can also lag the request's disappearance
+  the request, whose operation was committed (and so durable) first. A file can also lag the request's disappearance
   by up to about 30 passes while its snapshot is retained. The add-in must not wait for
   ever: after about two minutes with its request gone and no file, it says that WG took the
   request but has not confirmed it, never "refused" and never "solving".
@@ -2021,36 +2024,36 @@ the next start finds:
 
 A received snapshot ends `accepted`, with no job, from every position.
 
-A power cut is different, because two writes are not durable at once:
+A power cut is different, because not every write is durable when it returns:
 
-- `cadlink.db` and `jobs.db` run in WAL mode with `synchronous=NORMAL`
-  (`server/platform/sqlite.py`). A commit survives WG being killed, but a power cut or an
-  operating-system crash can roll back the most recent commits.
+- `cadlink.db` runs in WAL mode with `synchronous=FULL` (`server/platform/sqlite.py`,
+  `server/cadlink/store.py`). Every commit syncs the log before it returns, so a
+  committed operation, acceptance or outcome survives a power cut or an operating-system
+  crash.
+- `jobs.db` runs in WAL mode with `synchronous=NORMAL`. A commit survives WG being
+  killed, but a power cut can roll back the most recent commits. The jobs store's
+  `make_durable` checkpoints the log, and a CAD Solve's job acceptance is checkpointed
+  before the operation's ledger names it (see "Preparation").
 - The claim rename and the claim delete are not followed by a flush of the folder. A
-  power cut can undo either of them, whatever happened to the database.
+  power cut can undo either of them, whatever happened to the databases.
 
-What the user sees depends on which of these writes survived:
+The acceptance is committed before the claim is deleted, so the delete can never survive
+an acceptance that did not. What the user sees depends on which writes survived:
 
-- **The delete survived and the acceptance did not.** The request is lost. The file is
-  gone, so the add-in's pickup check reports nothing, and WG has no operation to show.
-  The user sees neither the model nor a solve, and presses Send or Solve again in Fusion.
-  That is a new command with a new ID. If only later commits were lost, such as a
-  preparation stage, start-up recovery finishes the operation from the state that
-  survived, as in the table.
 - **The acceptance survived and the delete did not.** The request file, or its claim,
   is back. Delivering it again is safe (C5). It has the same ID and digest, so it
   recovers the stored operation, with no second operation and no second job.
-- **Both were undone.** The file is back and the operation is gone, so WG accepts it
-  again as new. If `jobs.db` kept a job under `cad-solve:<id>`, preparation finds it and
-  records it instead of submitting again.
-- **Not covered.** The two databases are separate files. A power cut could keep the
-  operation's `accepted` outcome and lose the job it names. The operation would then name
-  a job that the jobs list does not have. No test covers this case. Nothing submits the
-  solve again, so the user solves again from Fusion.
+- **The power cut came before the acceptance was committed.** Nothing was accepted, the
+  claim was not yet deleted, and the claim rename may be undone too. The file or its
+  claim is back and WG accepts it as new. If `jobs.db` kept a job under
+  `cad-solve:<id>`, preparation finds it and records it instead of submitting again.
+- **Later job commits were lost.** A solve's stages and results live in `jobs.db`, whose
+  latest commits a power cut can roll back. The job itself was checkpointed before the
+  operation named it, so start-up recovery finishes it from the state that survived, as
+  in the table.
 
-WG accepts this position rather than using `synchronous=FULL` for acceptance. No
-position gives a second operation or a second job. The worst a power cut does is lose a
-request that the user sends again.
+No position gives a second operation or a second job, and none loses a request whose
+claim was deleted.
 
 A claim left by an interrupted poll is finished by a later one. Within one poll,
 deliveries are taken oldest first: by `requestedAt` compared as text, then by the file's
