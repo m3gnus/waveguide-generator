@@ -1,23 +1,32 @@
-"""Measure what a CAD store commit costs on this machine's disk.
+"""Measure what a CAD store durability boundary costs on this machine's disk.
 
-The CAD store runs WAL with ``synchronous=FULL``: every commit fsyncs the log
-(``FlushFileBuffers`` on Windows, ``fsync`` on macOS and Linux), and
-``make_durable`` does nothing. Before that it ran ``synchronous=NORMAL`` and
-``make_durable`` ran ``PRAGMA wal_checkpoint(FULL)`` at each durability
-boundary. This prints one table comparing the three costs over N commits of a
-realistic row (an accepted ``receive_snapshot`` operation, the row a Send to CAD
-writes), each in a fresh database:
+The CAD store runs WAL with ``synchronous=FULL``: every commit syncs the log
+(``FlushFileBuffers`` on Windows, ``fsync`` on macOS and Linux) before it
+returns, and nothing checkpoints. Before that it ran ``synchronous=NORMAL`` and
+checkpointed with ``PRAGMA wal_checkpoint(FULL)`` once per durability boundary
+(a Send, an acknowledgement, a dismissal). Real flows commit about 1.5 times per
+boundary; ``--per-boundary`` (default 2) sets how many commits one boundary
+holds here. Each commit writes a realistic row (an accepted
+``receive_snapshot`` operation, the row a Send to CAD writes).
 
-* ``NORMAL commit``                  -- old per-commit cost, not yet durable
-* ``NORMAL commit + checkpoint``     -- old cost at a durability boundary
-* ``checkpoint alone``               -- the old ``make_durable``
-* ``FULL commit``                    -- new per-commit cost, durable on return
+The modes run interleaved, one boundary of each per round, so disk and thermal
+drift land on all of them alike. It prints, per boundary unless stated:
+
+* ``old: NORMAL commits + checkpoint`` -- what a boundary cost before
+* ``new: FULL commits``                -- what a boundary costs now
+* ``FULL, one commit``                 -- per commit
+* ``checkpoint alone``                 -- the old boundary's checkpoint
+
+``--fullfsync`` sets ``PRAGMA fullfsync`` and ``checkpoint_fullfsync`` on every
+connection. On macOS that makes each sync an ``F_FULLFSYNC``, which also flushes
+the drive's cache: the closest macOS stand-in for Windows ``FlushFileBuffers``.
+Elsewhere it changes nothing.
 
 Run from the repository root with any Python 3.11+ (stdlib only, plus WG's own
 store code)::
 
     python scripts/measure_cad_store_commit.py
-    python scripts/measure_cad_store_commit.py --commits 500 --dir D:\\scratch
+    python scripts/measure_cad_store_commit.py --boundaries 200 --fullfsync
 
 Put ``--dir`` on the disk that holds the WG data directory; the default is the
 system temporary folder. The databases are deleted afterwards.
@@ -25,13 +34,13 @@ system temporary folder. The databases are deleted afterwards.
 On Windows, from a checkout of the branch in PowerShell, with WG closed so the
 disk is otherwise idle (the WG data directory lives under ``%APPDATA%``)::
 
-    py -3 scripts\\measure_cad_store_commit.py --commits 500 --dir $env:APPDATA
+    py -3 scripts\\measure_cad_store_commit.py --boundaries 300 --dir $env:APPDATA
 """
 
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
+from contextlib import ExitStack, closing
 import os
 from pathlib import Path
 import platform
@@ -76,66 +85,93 @@ def _percentile(values: list[float], fraction: float) -> float:
     return ordered[position]
 
 
-def _run(folder: Path, name: str, *, synchronous: str, checkpoint: bool,
-         commits: int, prefill: int) -> tuple[list[float], list[float]]:
-    """Return per-commit and per-checkpoint wall times in milliseconds."""
+def _open(stack: ExitStack, path: Path, *, synchronous: str, fullfsync: bool,
+          prefill: int) -> tuple[CadLinkStore, sqlite3.Connection]:
+    store = stack.enter_context(closing(CadLinkStore(path)))
+    store.initialize()
+    # The store's own thread-local connection, so the settings apply to its writes.
+    conn = store._connect()
+    # The store opens FULL; NORMAL reproduces the configuration it replaced.
+    conn.execute(f"PRAGMA synchronous = {synchronous}")
+    if fullfsync:
+        conn.execute("PRAGMA fullfsync = 1")
+        conn.execute("PRAGMA checkpoint_fullfsync = 1")
+    for index in range(prefill):
+        _accept(store, index)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    return store, conn
 
-    store = CadLinkStore(folder / f"{name}.db")
-    with closing(store):
-        store.initialize()
-        conn = store._connect()
-        # The store opens FULL; NORMAL reproduces the configuration it replaced.
-        conn.execute(f"PRAGMA synchronous = {synchronous}")
-        for index in range(prefill):
-            _accept(store, index)
-        if checkpoint:
-            conn.execute("PRAGMA wal_checkpoint(FULL)").fetchone()
-        commit_ms: list[float] = []
-        checkpoint_ms: list[float] = []
-        for index in range(prefill, prefill + commits):
+
+def _checkpoint(conn: sqlite3.Connection) -> None:
+    busy, log_frames, copied = conn.execute("PRAGMA wal_checkpoint(FULL)").fetchone()
+    if busy or copied < log_frames:
+        raise RuntimeError("the checkpoint reported busy; is another process using the folder?")
+
+
+def measure(folder: Path, *, boundaries: int, per_boundary: int, prefill: int,
+            fullfsync: bool) -> dict[str, list[float]]:
+    """Per-boundary (and per-commit) wall times in milliseconds, modes interleaved."""
+
+    times: dict[str, list[float]] = {"old": [], "new": [], "commit": [], "checkpoint": []}
+    with ExitStack() as stack:
+        old, old_conn = _open(stack, folder / "normal.db", synchronous="NORMAL",
+                              fullfsync=fullfsync, prefill=prefill)
+        new, _ = _open(stack, folder / "full.db", synchronous="FULL",
+                       fullfsync=fullfsync, prefill=prefill)
+        index = prefill
+        for _ in range(boundaries):
             started = time.perf_counter()
-            _accept(store, index)
+            for offset in range(per_boundary):
+                _accept(old, index + offset)
             committed = time.perf_counter()
-            commit_ms.append((committed - started) * 1000.0)
-            if checkpoint:
-                # What make_durable ran before it became a no-op.
-                busy, log_frames, copied = conn.execute("PRAGMA wal_checkpoint(FULL)").fetchone()
-                checkpoint_ms.append((time.perf_counter() - committed) * 1000.0)
-                if busy or copied < log_frames:
-                    raise RuntimeError("the checkpoint reported busy; is another process using the folder?")
-    return commit_ms, checkpoint_ms
+            _checkpoint(old_conn)
+            finished = time.perf_counter()
+            times["old"].append((finished - started) * 1000.0)
+            times["checkpoint"].append((finished - committed) * 1000.0)
+
+            started = time.perf_counter()
+            for offset in range(per_boundary):
+                before = time.perf_counter()
+                _accept(new, index + offset)
+                times["commit"].append((time.perf_counter() - before) * 1000.0)
+            times["new"].append((time.perf_counter() - started) * 1000.0)
+            index += per_boundary
+    return times
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
-    parser.add_argument("--commits", type=int, default=200, help="timed commits per mode (default 200)")
+    parser.add_argument("--boundaries", type=int, default=200,
+                        help="timed durability boundaries per mode (default 200)")
+    parser.add_argument("--per-boundary", type=int, default=2,
+                        help="commits per boundary (default 2; real flows average about 1.5)")
     parser.add_argument("--prefill", type=int, default=200,
                         help="untimed rows written first, so the file is not empty (default 200)")
+    parser.add_argument("--fullfsync", action="store_true",
+                        help="flush the drive cache on every sync (macOS F_FULLFSYNC)")
     parser.add_argument("--dir", type=Path, default=None,
                         help="folder for the scratch databases (default: system temporary folder)")
     args = parser.parse_args(argv)
-    if args.commits < 1 or args.prefill < 0:
-        parser.error("--commits must be at least 1 and --prefill at least 0")
+    if args.boundaries < 1 or args.per_boundary < 1 or args.prefill < 0:
+        parser.error("--boundaries and --per-boundary must be at least 1 and --prefill at least 0")
     if args.dir is not None and not args.dir.is_dir():
         parser.error(f"--dir {args.dir} is not an existing folder")
 
     with tempfile.TemporaryDirectory(prefix="wg-cad-commit-", dir=args.dir) as temporary:
-        folder = Path(temporary)
-        normal, _ = _run(folder, "normal", synchronous="NORMAL", checkpoint=False,
-                         commits=args.commits, prefill=args.prefill)
-        normal_cp, checkpoints = _run(folder, "normal-checkpoint", synchronous="NORMAL", checkpoint=True,
-                                      commits=args.commits, prefill=args.prefill)
-        full, _ = _run(folder, "full", synchronous="FULL", checkpoint=False,
-                       commits=args.commits, prefill=args.prefill)
+        times = measure(Path(temporary), boundaries=args.boundaries,
+                        per_boundary=args.per_boundary, prefill=args.prefill,
+                        fullfsync=args.fullfsync)
         location = os.path.realpath(temporary)
 
     rows = [
-        ("NORMAL commit (old, not durable)", normal),
-        ("NORMAL commit + checkpoint (old boundary)", [a + b for a, b in zip(normal_cp, checkpoints)]),
-        ("checkpoint alone (old make_durable)", checkpoints),
-        ("FULL commit (new, durable)", full),
+        (f"old: {args.per_boundary} NORMAL commits + checkpoint", times["old"]),
+        (f"new: {args.per_boundary} FULL commits", times["new"]),
+        ("FULL, one commit", times["commit"]),
+        ("checkpoint alone (old boundary)", times["checkpoint"]),
     ]
-    print(f"CAD store commit latency, {args.commits} commits per mode after {args.prefill} prefill rows")
+    print(f"CAD store durability boundary, {args.boundaries} boundaries per mode, "
+          f"{args.per_boundary} commits each, interleaved, after {args.prefill} prefill rows"
+          f"{', fullfsync' if args.fullfsync else ''}")
     print(f"{platform.system()} {platform.release()} | Python {platform.python_version()} | "
           f"SQLite {sqlite3.sqlite_version} | folder {location}")
     header = f"{'mode':<44}{'p50 ms':>9}{'p95 ms':>9}{'max ms':>9}"
