@@ -304,8 +304,9 @@ async def export_wglink(
     if waiting is not None:
         result["cadHandoffWaiting"] = waiting
     # The bundle is already on disk and the response is already earned, so
-    # raising Fusion is strictly a courtesy: it runs off the request thread and
-    # its outcome only reaches the log.
+    # raising Fusion is strictly a courtesy. It runs off the event loop and
+    # returns at once: macOS `open` hands off to Launch Services, and Windows
+    # starts Fusion detached without waiting for it.
     result["cadLaunch"] = await asyncio.to_thread(focus_cad)
     return result
 
