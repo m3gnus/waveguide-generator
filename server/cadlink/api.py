@@ -14,7 +14,6 @@ from pathlib import Path
 import platform
 import re
 import secrets
-import sqlite3
 import subprocess
 import tempfile
 import time
@@ -2002,21 +2001,10 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
         message = {"v": 1, "kind": "cadInboxRefusal", "refusal": dict(refusal)}
         loop.call_soon_threadsafe(events.publish, message)
 
-    def job_for_submission(key: str) -> str | None:
-        # A read of the jobs database; it never starts the jobs runtime.
-        try:
-            return job_store.job_for_submission_key(key)
-        except sqlite3.OperationalError as exc:
-            # A jobs database the runtime has not created yet holds no job.
-            if "no such table" in str(exc):
-                return None
-            raise
-
     return PreparationContext(
         store=state.cadlink_store,
         data_dir=Path(state.data_dir),
         workspace_root=workspace_root,
-        job_for_submission=job_for_submission if job_store is not None else None,
         publish=publish,
         # A submission-key conflict is not among them: that key already made
         # a job, and preparation reconciles to it.

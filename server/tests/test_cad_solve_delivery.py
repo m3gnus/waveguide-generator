@@ -29,7 +29,6 @@ from server.cadlink.joblane.job_shims import run_delivery_pass
 from server.cadlink.joblane.preparation import (
     DeliveryPassReporter,
     PreparationContext,
-    reconcile_with_jobs,
 )
 from server.cadlink.intake import solve_command
 from server.cadlink.intake.solve_command import collect_solve_deliveries, record_outcome
@@ -573,22 +572,6 @@ def test_an_older_addins_repeat_of_a_held_command_does_not_end_it(
 
     assert store.get_operation("cmd-1")["state"] == "received"
     assert _waiting(store) == ["cmd-1"]
-
-
-def test_a_command_with_no_job_under_its_key_is_left_to_prepare(
-    data_dir, workspace, store
-) -> None:
-    bundle_path, manifest = _bundle(workspace)
-    _file(data_dir, "cmd-1", bundle_path, manifest)
-    assert _poll(data_dir, store) is None
-    ctx = PreparationContext(
-        store=store, data_dir=data_dir, workspace_root=workspace.resolve(),
-        job_for_submission={}.get, runtime=SimpleNamespace(),
-    )
-
-    assert reconcile_with_jobs(ctx, "cmd-1") is None
-
-    assert store.get_operation("cmd-1")["state"] == "received"
 
 
 def test_the_delivery_loop_reconciles_through_the_real_jobs_store(

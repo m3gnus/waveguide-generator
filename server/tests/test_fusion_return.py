@@ -9,6 +9,7 @@ import pytest
 
 from server.cadlink.fusion.fusion_return import RETURN_REQUESTS_DIRECTORY, publish_return_request
 from server.cadlink.store import CadLinkStore
+from cad_legacy_rows import request_cancel
 
 
 def test_return_request_is_machine_local_and_targets_the_addin_session(tmp_path) -> None:
@@ -269,7 +270,7 @@ def _lost_file_return(tmp_path, *, cancelled=False, age=None):
     path.unlink()
     store.claim(request_id, 0)
     if cancelled:
-        store.request_cancel(request_id)
+        request_cancel(store, request_id)
     with store._lock, store._transaction() as conn:
         conn.execute('UPDATE cad_operations SET updated_at = ? WHERE operation_id = ?',
                      ((datetime.now(timezone.utc) - (age or timedelta(hours=1))).isoformat(), request_id))

@@ -40,7 +40,6 @@ from server.cadlink.intake.solve_command import (
     RETAIN_INVALID,
     RETAIN_TRANSIENT,
     RETAINED,
-    SolveOutcomeConflict,
     record_outcome,
 )
 from server.cadlink.store import CadLinkStore
@@ -82,8 +81,6 @@ class PreparationContext(SnapshotContext):
     """What a preparation needs from the application, injectable for tests."""
 
     runtime: Any
-    #: The job a submission key created, if any (``JobStore.job_for_submission_key``).
-    job_for_submission: Callable[[str], str | None] | None = None
     #: Called with an operation's summary after each committed change.
     publish: Callable[[Mapping[str, Any]], None] | None = None
     #: The jobs system's own refusals of a request: a capability it lacks, a
@@ -537,27 +534,6 @@ def record_job_acceptance(ctx: PreparationContext, operation_id: str, job_id: st
                           **acceptance_details(job or {}))
 
 
-def reconcile_with_jobs(ctx: PreparationContext, operation_id: str) -> dict[str, Any] | None:
-    """Record ``accepted`` when the operation's submission key already made a job.
-
-    The job is the outcome: an earlier attempt created it, or the browser of a
-    build before the backend owned solves did, and its acknowledgement never
-    arrived. Returns the row when it did so.
-    """
-
-    if ctx.job_for_submission is None:
-        return None
-    job_id = ctx.job_for_submission(submission_key(operation_id))
-    if not job_id:
-        return None
-    logger.info("CAD operation %s: its submission key already made job %s.", operation_id, job_id)
-    try:
-        record_job_acceptance(ctx, operation_id, job_id)
-    except SolveOutcomeConflict:
-        pass
-    return ctx.store.get_operation(operation_id)
-
-
 def _restart_pending(ctx: PreparationContext) -> str | None:
     """The approved update restart's refusal, or None when none is pending."""
 
@@ -572,7 +548,6 @@ __all__ = [
     "SnapshotUnavailable",
     "exchange_bundle_path",
     "operation_summary",
-    "reconcile_with_jobs",
     "retain_operation_snapshot",
     "settle_received_snapshots",
     "settle_snapshot_operation",

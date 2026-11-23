@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from cad_backends import JobsHarness, compat_prepare
-from cad_legacy_rows import add_approvals, advance_operation, bind_request, record_preparation
+from cad_legacy_rows import add_approvals, advance_operation, bind_request, record_preparation, request_cancel
 from server.cadlink import api
 from server.cadlink.joblane.job_shims import sweep_pending_solves
 from server.cadlink.operations import REASON_CODES
@@ -64,7 +64,7 @@ def test_upgrade_migrates_every_pending_state_once_without_losing_preparation(h,
                                         acknowledged_findings=[], client_request_id="cad-solve:cmd-1")
             bind_request(h.store, "cmd-1", generation, setup_revision_id=revision, request_json=request.model_dump_json())
         elif state == "cancel_requested":
-            h.store.request_cancel("cmd-1")
+            request_cancel(h.store, "cmd-1")
     before = h.row()
     async def migrate():
         return await sweep_pending_solves(h.context())
@@ -248,7 +248,7 @@ def test_an_inadmissible_legacy_bind_migrates_to_a_refused_job_and_the_sweep_con
     bind_request(h.store, "cmd-2", generation, setup_revision_id=revision,
                  request_json=json.dumps({**original_request, "client_request_id": "cad-solve:cmd-2"}))
     if cancelled:
-        h.store.request_cancel("cmd-2")
+        request_cancel(h.store, "cmd-2")
     _accept(h.store, "cmd-3", bundle, manifest)
     async def rejected(request, **kwargs):
         raise EngineUnavailableError("This engine is unavailable on this host")
@@ -328,7 +328,7 @@ def test_bound_pending_cancel_never_submits_and_replays_stop_after_commit(h, mon
                                 manifest_sha256="sha256:" + "1" * 64, artifact_sha256="sha256:" + "2" * 64,
                                 acknowledged_findings=[], client_request_id="cad-solve:cmd-1")
     bind_request(h.store, "cmd-1", generation, setup_revision_id=_revision(h.store, _setup()), request_json=request.model_dump_json())
-    h.store.request_cancel("cmd-1")
+    request_cancel(h.store, "cmd-1")
     real_durable = h.jobs_store.make_durable
     committed = []
     def durable():
@@ -422,7 +422,7 @@ def test_one_malformed_row_between_good_rows_is_refused_and_does_not_block_sweep
 def test_replay_stops_an_existing_keyed_job_when_the_ledger_still_requests_cancel(h):
     _received(h)
     h.store.claim("cmd-1", 0)
-    h.store.request_cancel("cmd-1")
+    request_cancel(h.store, "cmd-1")
     h.jobs_store.create_job_idempotent(
         {"id": "committed-before-stop", "status": "queued", "created_at": "2026-09-01", "updated_at": "2026-09-01",
          "queued_at": "2026-09-01", "config_json": {}, "config_summary_json": {}},
@@ -662,7 +662,7 @@ def test_delivery_pass_retries_failed_startup_migrations(h, monkeypatch, state):
         h.store.record_outcome("cmd-1", generation, state, reason="findings_need_review",
                                outcome={"message": "Review the original finding."})
     elif state == "cancel_requested":
-        h.store.request_cancel("cmd-1")
+        request_cancel(h.store, "cmd-1")
     h.runtime._ensure_prep_lane = lambda: None
     real = h.runtime.accept_cad_solve
     async def broken(*args, **kwargs):
@@ -780,11 +780,10 @@ def test_f2_cad_state_keeps_missing_historical_data_null(h, record_kind):
         assert state["approvals"] == []
 
 
-@pytest.mark.parametrize("path", ["reconcile", "compat", "sweep", "delivery", "malformed"])
+@pytest.mark.parametrize("path", ["compat", "sweep", "delivery", "malformed"])
 @pytest.mark.parametrize("origin, provenance, axis", [("wg_defaults", "automatic", "+x"), ("user", "chosen", None)])
 def test_f2_acceptance_joins_copy_the_jobs_defaults_and_automatic_axis(h, monkeypatch, path, origin, provenance, axis):
     from server.cadlink.joblane import job_shims
-    from server.cadlink.joblane.preparation import reconcile_with_jobs
     from server.cadlink.joblane.job_shims import run_delivery_pass
     from server.jobs.cad_intent import CadSolveIntent
 
@@ -794,10 +793,7 @@ def test_f2_acceptance_joins_copy_the_jobs_defaults_and_automatic_axis(h, monkey
     record["task_metadata"]["cad"].update(setup={"origin": origin}, frame={"axis": "+x", "provenance": provenance})
     job_id, _, _ = h.jobs_store.create_job_idempotent(record, submission_key="cad-solve:cmd-1", request_sha256="old-request")
     ctx = h.context()
-    ctx.job_for_submission = h.jobs_store.job_for_submission_key
-    if path == "reconcile":
-        reconcile_with_jobs(ctx, "cmd-1")
-    elif path == "compat":
+    if path == "compat":
         h._loop.run(job_shims.accept_operation_solve(ctx, "cmd-1", manual=True))
     elif path == "sweep":
         h._loop.run(sweep_pending_solves(ctx))

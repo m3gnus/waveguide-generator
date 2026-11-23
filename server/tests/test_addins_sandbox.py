@@ -86,7 +86,7 @@ def test_the_startup_reconciliation_works_in_the_sandbox(
 ) -> None:
     """The positive proof: the lock appears in the sandbox, nothing reached home.
 
-    ``refresh_wglink`` directly, with no folder: the suite turns the startup
+    ``activate_wglink`` directly, with no folder: the suite turns the startup
     refresh off (``WG2_WGLINK_REFRESH=0``), and what is under test is where
     the refresh looks when it does run -- in a child with its own
     environment, or a test that calls it.
@@ -102,7 +102,8 @@ def test_the_startup_reconciliation_works_in_the_sandbox(
 
     # The positive lock proof needs a CAD Link user; other users never lock.
     record_usage(tmp_path, "install-action")
-    verdict, detail = addin_update.refresh_wglink(install_absent=False, data_dir=tmp_path)
+    activation = addin_update.activate_wglink(install_absent=False, data_dir=tmp_path)
+    verdict, detail = activation.verdict, activation.detail
 
     assert root_conftest.REAL_ADDINS_TOUCHES[touched_before:] == []
     assert verdict == "absent", detail

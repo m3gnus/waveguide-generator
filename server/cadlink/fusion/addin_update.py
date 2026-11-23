@@ -1069,13 +1069,6 @@ def _activate(
         return finish(plan.verdict, _activated_text(plan, pin, installed_target))
 
 
-def refresh_wglink(**kwargs: Any) -> tuple[str, str]:
-    """:func:`activate_wglink`, as ``(verdict, detail)``."""
-
-    activation = activate_wglink(**kwargs)
-    return activation.verdict, activation.detail
-
-
 # -- Who runs a pass ----------------------------------------------------------
 
 #: What this process last decided, for the status the UI polls.
@@ -1311,7 +1304,6 @@ __all__ = [
     "poll_activation",
     "read_pending",
     "refresh_and_log",
-    "refresh_wglink",
     "retained_previous_path",
     "running_build",
     "shutdown_addin_refresh",

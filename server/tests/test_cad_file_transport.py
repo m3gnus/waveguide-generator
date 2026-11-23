@@ -23,6 +23,7 @@ from server.tests.cad_file_harness import STARTUP, _snapshot_digest, wg
 from server.tests.test_cad_preparation import _write_return
 from server.tests.test_cad_inbox_stall import V4_SNAPSHOT, drop, fixture
 from server.tests.test_cad_fusion_outcomes import _accept, _heartbeat
+from cad_legacy_rows import request_cancel
 
 NOW = datetime.now(timezone.utc)
 
@@ -393,7 +394,7 @@ def test_file_heartbeat_rejects_invalid_stale_or_future_reports(tmp_path, case):
 def test_cancelled_legacy_return_with_lost_completion_settles_durably(tmp_path):
     store = CadLinkStore.for_data_dir(tmp_path)
     operation_id = _legacy(store, 'request_return')
-    assert store.request_cancel(operation_id)['state'] == 'cancel_requested'
+    assert request_cancel(store, operation_id)['state'] == 'cancel_requested'
     with store._lock, store._transaction() as conn:
         conn.execute('UPDATE cad_operations SET updated_at = ? WHERE operation_id = ?',
                      ((NOW - LEGACY_LIVE_CLAIM_MAX_AGE).isoformat(), operation_id))

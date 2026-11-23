@@ -1601,9 +1601,9 @@ def _ingest_bundle(
     solved without the request naming a frame. Backend preparation resolves the
     frame itself and passes it in ``prep_options``.
 
-    ``commit_guard`` is a preparation attempt's fence
-    (``CadLinkStore.attempt_is_current``): it runs inside the transaction that
-    publishes the record, so an attempt that lost its operation commits nothing.
+    ``commit_guard`` is a preparation attempt's fence: it runs inside the
+    transaction that publishes the record, so an attempt that lost its
+    operation commits nothing.
     ``retained_copy`` says ``bundle_path`` is WG's retained copy of a return
     (``retain_snapshot``), which carries no captured CAD document. Replay's
     ``validate_record`` checks the reconstructed interpretation before publication;

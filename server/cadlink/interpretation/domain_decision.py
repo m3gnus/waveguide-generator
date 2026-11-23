@@ -107,9 +107,6 @@ CONFIDENCE_REFUSED = "refused"
 
 OPEN_HALF_CODE = "imported_open_half_shell"
 MISMATCH_CODE = "imported_domain_decision_mismatch"
-#: Retired with S3-2: a negative-side cut is recovered by mesh reflection or
-#: refused with the condition it failed. Kept for records an earlier build wrote.
-REFLECTION_PENDING = "pending-s3-2"
 
 _FRACTION = {0: "full", 1: "half", 2: "quarter"}
 _DETERMINANT_TOLERANCE = 1.0e-6
@@ -721,7 +718,6 @@ __all__ = [
     "INPUT_UNRESOLVED",
     "MISMATCH_CODE",
     "OPEN_HALF_CODE",
-    "REFLECTION_PENDING",
     "decide_domain_and_frame",
     "decision_mismatch_message",
     "decision_problem",

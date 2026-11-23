@@ -35,6 +35,7 @@ from server.jobs.cad_preparation import job_cad_state
 from cad_backends import JobsHarness
 from test_cad_preparation import _received, _revision, _setup
 from test_job_cad_lane import _row, _second_return
+from cad_legacy_rows import request_cancel
 
 FIXTURES = Path(__file__).parent / "fixtures"
 MANIFEST = "sha256:" + "a" * 64
@@ -961,7 +962,7 @@ def test_a_receipt_rewritten_in_place_is_read_again(h) -> None:
 
 def test_a_solve_cancelled_before_admission_reads_cancelled_not_refused(h) -> None:
     _received(h)
-    h.store.request_cancel("cmd-1")
+    request_cancel(h.store, "cmd-1")
     row = h.store.get_operation("cmd-1")
     _receipt(h, outcome="refused", reason="This solve was cancelled before admission.")
     _publisher(h).tick(h.jobs_store)

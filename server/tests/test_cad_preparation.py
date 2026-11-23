@@ -53,6 +53,7 @@ from cad_backends import (
     backend_fixture,
     backend_free,
 )
+from cad_legacy_rows import request_cancel
 
 CALM_PREFIX = "Waveguide Generator could not prepare "
 #: A return or copy WG cannot read: the user sends it again (or tries again).
@@ -1632,10 +1633,10 @@ def test_a_cad_mutation_under_way_is_not_dismissed(harness: Harness) -> None:
     assert harness.store.claim("upd-1", 0) == 1
 
     # It may need recovery from the document, not cancellation.
-    assert harness.store.request_cancel("upd-1")["state"] == "processing"
+    assert request_cancel(harness.store, "upd-1")["state"] == "processing"
     # One that has not started can still be dismissed.
     _update_link(harness.store, "upd-2")
-    assert harness.store.request_cancel("upd-2")["state"] == "cancelled"
+    assert request_cancel(harness.store, "upd-2")["state"] == "cancelled"
 
 
 # -- the legacy solve-command routes -------------------------------------------------

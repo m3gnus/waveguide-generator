@@ -33,7 +33,6 @@ from .operations import (
     CLAIMABLE_STATES,
     DIGEST_VERSION,
     INSERT_LINK,
-    MUTATING_KINDS,
     PREPARE_AND_SOLVE,
     PROCESSING,
     RECEIVED,
@@ -1158,7 +1157,6 @@ class CadLinkStore:
         reason: str | None = None,
         outcome: Mapping[str, Any] | None = None,
         stage: str | None = None,
-        release_binding: bool = False,
     ) -> dict[str, Any] | None:
         """Record what the attempt holding ``generation`` found.
 
@@ -1170,8 +1168,6 @@ class CadLinkStore:
         A dismissal stands: from ``cancel_requested`` the outcome recorded is
         ``cancelled``, whatever the fenced attempt found, except ``accepted``
         with a job -- the job exists, and the user cancels it in the jobs list.
-        ``release_binding`` unbinds the request in the same transaction, for a
-        submission that created nothing; a request with a job stays bound.
         """
 
         if stage is not None and stage not in STAGES:
@@ -1210,12 +1206,6 @@ class CadLinkStore:
                 "WHERE operation_id = ?",
                 (state, job_id, reason, outcome_json, stage, utc_now(), operation_id),
             )
-            if release_binding and state not in TERMINAL_STATES:
-                conn.execute(
-                    "UPDATE cad_operations SET setup_revision_id = NULL, request_json = NULL "
-                    "WHERE operation_id = ? AND job_id IS NULL",
-                    (operation_id,),
-                )
             row = conn.execute(
                 "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
                 (operation_id,),
@@ -1223,21 +1213,6 @@ class CadLinkStore:
             if row is not None:
                 receipts.record_operation(conn, dict(row))
         return self._row(row)
-
-    def attempt_is_current(
-        self, conn: sqlite3.Connection, operation_id: str, generation: int
-    ) -> bool:
-        """The fence, for use inside another write's transaction on this store."""
-
-        row = conn.execute(
-            "SELECT state, attempt_generation FROM cad_operations WHERE operation_id = ?",
-            (operation_id,),
-        ).fetchone()
-        return (
-            row is not None
-            and row["state"] == PROCESSING
-            and int(row["attempt_generation"]) == int(generation)
-        )
 
     def record_snapshot(
         self, operation_id: str, snapshot: Mapping[str, Any]
@@ -1337,40 +1312,6 @@ class CadLinkStore:
             conn.execute("UPDATE cad_operations SET outcome_json = ?, updated_at = ? WHERE operation_id = ?",
                          (canonical_json(outcome), utc_now(), operation_id))
         return self.get_operation(operation_id)
-
-    def request_cancel(self, operation_id: str) -> dict[str, Any] | None:
-        """Dismiss an operation: at once when idle, at the attempt's next step when running.
-
-        An operation no attempt is working on becomes ``cancelled``. One an
-        attempt holds becomes ``cancel_requested``, which fences that attempt;
-        it then records ``cancelled``. A terminal operation is returned as it
-        is, and so is a CAD mutation under way: it may need recovery from the
-        document rather than cancellation.
-        """
-
-        self.initialize()
-        with self._lock, self._transaction() as conn:
-            row = conn.execute(
-                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
-                (operation_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            state = str(row["state"])
-            if state in TERMINAL_STATES or state == CANCEL_REQUESTED:
-                return self._row(row)
-            if state == PROCESSING and row["kind"] in MUTATING_KINDS:
-                return self._row(row)
-            new_state = CANCEL_REQUESTED if state == PROCESSING else CANCELLED
-            conn.execute(
-                "UPDATE cad_operations SET state = ?, updated_at = ? WHERE operation_id = ?",
-                (new_state, utc_now(), operation_id),
-            )
-            row = conn.execute(
-                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
-                (operation_id,),
-            ).fetchone()
-        return self._row(row)
 
     def create_setup_revision(self, setup_json: str, content_sha256: str) -> dict[str, Any]:
         """Store an immutable setup revision; identical content is one revision."""

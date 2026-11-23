@@ -27,6 +27,12 @@ def _no_live_fusion_or_shared_state(monkeypatch, tmp_path: Path) -> None:
     record_usage(tmp_path / "data", "install-action")
 
 
+def refresh_wglink(**kwargs):
+    """One activation pass, as ``(verdict, detail)``."""
+    activation = addin_update.activate_wglink(**kwargs)
+    return activation.verdict, activation.detail
+
+
 def _cad_mode(data: Path, mode: str = "cad") -> None:
     data.mkdir(parents=True, exist_ok=True)
     (data / "ui_settings.json").write_text(
@@ -90,7 +96,7 @@ def test_an_add_in_already_at_the_pin_is_left_alone(tmp_path: Path) -> None:
     addins = tmp_path / "AddIns"
     _installed(addins, commit="a" * 40, root=root)
 
-    assert addin_update.refresh_wglink(root=root, addins_dir=addins)[0] == "current"
+    assert refresh_wglink(root=root, addins_dir=addins)[0] == "current"
 
 
 def test_a_developer_sync_is_never_overwritten(tmp_path: Path) -> None:
@@ -102,7 +108,7 @@ def test_a_developer_sync_is_never_overwritten(tmp_path: Path) -> None:
     addins = tmp_path / "AddIns"
     _installed(addins, commit="b" * 40, root=root, dev=True)
 
-    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+    verdict, detail = refresh_wglink(root=root, addins_dir=addins)
     assert verdict == "developer"
     assert "developer sync" in detail
 
@@ -118,7 +124,7 @@ def test_an_add_in_managed_by_another_wg_installation_is_left_alone(tmp_path: Pa
     (other / "scripts" / "install_wglink.py").write_text("# installer\n", encoding="utf-8")
     _installed(addins, commit="b" * 40, root=other)
 
-    assert addin_update.refresh_wglink(root=root, addins_dir=addins)[0] == "external"
+    assert refresh_wglink(root=root, addins_dir=addins)[0] == "external"
 
 
 def test_an_add_in_whose_managing_wg_is_gone_is_replaced(tmp_path: Path, monkeypatch) -> None:
@@ -132,7 +138,7 @@ def test_an_add_in_whose_managing_wg_is_gone_is_replaced(tmp_path: Path, monkeyp
     _recording_installer(monkeypatch, addins, calls)
     monkeypatch.setattr(addin_update, "_verified_shipped_package", lambda *_args: (archive, None))
 
-    assert addin_update.refresh_wglink(root=root, addins_dir=addins)[0] == "replaced"
+    assert refresh_wglink(root=root, addins_dir=addins)[0] == "replaced"
     assert calls[0]["replace_external"] is True and calls[0]["archive_path"] == archive
 
 
@@ -174,7 +180,7 @@ def test_an_add_in_no_waveguide_generator_manages_is_replaced(
     archive = tmp_path / "wglink.zip"
     monkeypatch.setattr(addin_update, "_verified_shipped_package", lambda *_args: (archive, None))
 
-    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+    verdict, detail = refresh_wglink(root=root, addins_dir=addins)
 
     assert verdict == "replaced"
     assert "Fusion loads it the next time it starts" in detail
@@ -196,7 +202,7 @@ def test_an_unmanaged_add_in_is_left_when_no_verified_package_ships(
         lambda *_args: (None, "the bundled package for the Waveguide Generator add-in in Fusion is missing: wglink.zip"),
     )
 
-    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+    verdict, detail = refresh_wglink(root=root, addins_dir=addins)
 
     assert verdict == "unavailable" and "missing" in detail
     assert calls == [] and (target / "WGLink.py").is_file()
@@ -205,7 +211,7 @@ def test_an_unmanaged_add_in_is_left_when_no_verified_package_ships(
 def test_a_cad_user_can_still_decline_an_absent_add_in(tmp_path: Path) -> None:
     root = _wg_root(tmp_path, "a" * 40)
 
-    assert addin_update.refresh_wglink(
+    assert refresh_wglink(
         root=root, addins_dir=tmp_path / "AddIns", install_absent=False
     )[0] == "absent"
 
@@ -224,7 +230,7 @@ def test_startup_installs_an_absent_add_in_where_fusion_is_installed(
     _recording_installer(monkeypatch, addins, calls)
     monkeypatch.setattr(addin_update, "_verified_shipped_package", lambda *_args: (archive, None))
 
-    verdict, _detail = addin_update.refresh_wglink(root=root)
+    verdict, _detail = refresh_wglink(root=root)
 
     assert verdict == "installed"
     assert calls and calls[0]["archive_path"] == archive
@@ -289,7 +295,7 @@ def test_startup_recovers_a_managed_target_after_a_crash_moved_it_to_backup(
         encoding="utf-8",
     )
 
-    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+    verdict, detail = refresh_wglink(root=root, addins_dir=addins)
 
     assert verdict == "current"
     assert "pinned" in detail
@@ -327,7 +333,7 @@ def test_an_explicit_first_install_uses_only_the_verified_shipped_package(
         lambda *_args: (archive, None),
     )
 
-    verdict, detail = addin_update.refresh_wglink(
+    verdict, detail = refresh_wglink(
         root=root, addins_dir=addins, install_absent=True
     )
 
@@ -349,7 +355,7 @@ def test_an_implicit_first_install_requires_fusion_to_be_installed(tmp_path: Pat
 
     monkeypatch.setattr(addin_update, "_installer", recording)
 
-    verdict, detail = addin_update.refresh_wglink(root=root, install_absent=True)
+    verdict, detail = refresh_wglink(root=root, install_absent=True)
 
     assert verdict == "not-detected"
     assert "not installed" in detail
@@ -375,7 +381,7 @@ def test_a_verified_package_failure_is_reported_without_installing(tmp_path: Pat
         lambda *_args: (None, "the bundled package for the Waveguide Generator add-in in Fusion failed verification: bad hash"),
     )
 
-    verdict, detail = addin_update.refresh_wglink(
+    verdict, detail = refresh_wglink(
         root=root, addins_dir=addins, install_absent=True
     )
 
@@ -403,7 +409,7 @@ def test_a_stale_managed_add_in_is_updated_to_the_pin(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(addin_update, "_installer", recording)
 
-    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+    verdict, detail = refresh_wglink(root=root, addins_dir=addins)
     assert verdict == "updated"
     assert "Fusion loads it the next time it starts" in detail
     assert calls and calls[0]["root"] == root
@@ -419,7 +425,7 @@ def test_a_bundled_managed_update_never_fetches_when_its_package_is_missing(
     monkeypatch.setenv("WG2_BUNDLE", "1")
     monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path / "data"))
 
-    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+    verdict, detail = refresh_wglink(root=root, addins_dir=addins)
 
     assert verdict == "failed"
     assert "does not contain its package for the Waveguide Generator add-in in Fusion" in detail
@@ -437,7 +443,7 @@ def test_a_bundled_managed_update_refuses_a_tampered_shipped_package(
     monkeypatch.setenv("WG2_BUNDLE", "1")
     monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path / "data"))
 
-    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+    verdict, detail = refresh_wglink(root=root, addins_dir=addins)
 
     assert verdict == "failed"
     assert "Bundled package for the Waveguide Generator add-in in Fusion failed verification" in detail
@@ -461,7 +467,7 @@ def test_an_installer_failure_is_reported_and_never_raised(tmp_path: Path, monke
 
     monkeypatch.setattr(addin_update, "_installer", exploding)
 
-    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+    verdict, detail = refresh_wglink(root=root, addins_dir=addins)
     assert verdict == "failed"
     assert "no network" in detail
 

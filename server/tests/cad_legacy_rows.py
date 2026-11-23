@@ -14,6 +14,9 @@ from typing import Any
 
 from server.cadlink.identity import utc_now
 from server.cadlink.operations import (
+    CANCELLED,
+    CANCEL_REQUESTED,
+    MUTATING_KINDS,
     PROCESSING,
     STAGES,
     STAGE_READY,
@@ -21,6 +24,56 @@ from server.cadlink.operations import (
     canonical_json,
 )
 from server.cadlink.store import CadLinkStore, _require_generation
+
+
+def attempt_is_current(conn: Any, operation_id: str, generation: int) -> bool:
+    """The fence, for use inside another write's transaction on the store."""
+
+    row = conn.execute(
+        "SELECT state, attempt_generation FROM cad_operations WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone()
+    return (
+        row is not None
+        and row["state"] == PROCESSING
+        and int(row["attempt_generation"]) == int(generation)
+    )
+
+
+def request_cancel(store: CadLinkStore, operation_id: str) -> dict[str, Any] | None:
+    """Dismiss an operation: at once when idle, at the attempt's next step when running.
+
+    An operation no attempt is working on becomes ``cancelled``. One an
+    attempt holds becomes ``cancel_requested``, which fences that attempt;
+    it then records ``cancelled``. A terminal operation is returned as it
+    is, and so is a CAD mutation under way: it may need recovery from the
+    document rather than cancellation. Rows earlier builds dismissed this way
+    are still read.
+    """
+
+    store.initialize()
+    with store._lock, store._transaction() as conn:
+        row = conn.execute(
+            "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        state = str(row["state"])
+        if state in TERMINAL_STATES or state == CANCEL_REQUESTED:
+            return store._row(row)
+        if state == PROCESSING and row["kind"] in MUTATING_KINDS:
+            return store._row(row)
+        new_state = CANCEL_REQUESTED if state == PROCESSING else CANCELLED
+        conn.execute(
+            "UPDATE cad_operations SET state = ?, updated_at = ? WHERE operation_id = ?",
+            (new_state, utc_now(), operation_id),
+        )
+        row = conn.execute(
+            "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()
+    return store._row(row)
 
 
 def advance_operation(
@@ -159,7 +212,7 @@ def add_approvals(
         ).fetchone()
         if row is None or row["state"] in TERMINAL_STATES:
             return None
-        if generation is not None and not store.attempt_is_current(
+        if generation is not None and not attempt_is_current(
             conn, operation_id, _require_generation(generation)
         ):
             return None
@@ -219,7 +272,7 @@ def record_preparation(
     store.initialize()
     now = utc_now()
     with store._lock, store._transaction() as conn:
-        if not store.attempt_is_current(conn, operation_id, attempt):
+        if not attempt_is_current(conn, operation_id, attempt):
             return None
         conn.execute(
             "INSERT OR IGNORE INTO cad_preparations (preparation_id, operation_id, "

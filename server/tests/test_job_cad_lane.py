@@ -184,13 +184,15 @@ def test_the_lane_uses_no_attempt_generation_and_writes_nothing_of_the_operation
         return refuse
 
     for name in (
-        "claim", "attempt_is_current", "record_outcome", "request_cancel",
-        "record_snapshot", "record_legacy_outcome",
+        "claim", "record_outcome", "record_snapshot", "record_legacy_outcome",
     ):
         monkeypatch.setattr(CadLinkStore, name, forbidden(name))
     # Retired writers (now test-only, in cad_legacy_rows): fail if one comes back
     # on the store and the lane calls it.
-    for name in ("advance_operation", "bind_request", "add_approvals", "record_preparation"):
+    for name in (
+        "advance_operation", "bind_request", "add_approvals", "record_preparation",
+        "attempt_is_current", "request_cancel",
+    ):
         monkeypatch.setattr(CadLinkStore, name, forbidden(name), raising=False)
 
     job_id = _accept_direct(h, setup_revision_id=revision)

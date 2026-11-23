@@ -12,6 +12,7 @@ import pytest
 from server.cadlink.fusion.fusion_outcomes import settle_from_heartbeat
 from server.cadlink.operations import request_digest
 from server.cadlink.store import CadLinkStore
+from cad_legacy_rows import request_cancel
 
 
 def _store(tmp_path: Path) -> CadLinkStore:
@@ -320,7 +321,7 @@ def test_dismissal_cancels_an_unclaimed_fusion_request(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _accept(store)
 
-    dismissed = store.request_cancel("update-1")
+    dismissed = request_cancel(store, "update-1")
 
     assert dismissed is not None
     assert (dismissed["state"], dismissed["reason"]) == ("cancelled", None)
@@ -333,7 +334,7 @@ def test_dismissal_does_not_guess_an_outcome_after_fusion_claims_the_request(
     _accept(store)
     settle_from_heartbeat(store, _heartbeat(recent=[{"channel": "handoff", "requestId": "update-1", "outcome": "claimed"}]), _ipc(tmp_path))
 
-    dismissed = store.request_cancel("update-1")
+    dismissed = request_cancel(store, "update-1")
 
     assert dismissed is not None
     assert dismissed["state"] == "processing"
@@ -347,7 +348,7 @@ def test_dismissal_retires_a_recovery_required_mutation_as_cancelled(tmp_path: P
     recovery = store.record_outcome("update-1", generation, "recovery_required")
     assert recovery is not None and recovery["state"] == "recovery_required"
 
-    dismissed = store.request_cancel("update-1")
+    dismissed = request_cancel(store, "update-1")
 
     assert dismissed is not None
     assert (dismissed["state"], dismissed["reason"]) == ("cancelled", None)
