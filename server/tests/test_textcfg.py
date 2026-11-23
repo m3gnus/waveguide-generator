@@ -896,3 +896,31 @@ def test_length_mode_is_ath_scoped_and_never_overrides_a_stated_mode() -> None:
 
     stated = parse(ATH_OSSE_WITH_AZIMUTHAL_SLOT + "Length.Mode = profile\n")
     assert design_to_mesher_config(stated.design)["profile"]["_athLengthMode"] == "profile"
+
+
+def test_a_saved_design_is_reread_without_repeating_its_import_notices(caplog) -> None:
+    """The mesher's ignored-item notices are news once, when ATH is imported.
+
+    Every design hash, freshness check and job read of a saved imported design
+    goes back through the mesher's validation; each one logged the same block
+    again (200 times in one live log). The first import still logs them.
+    """
+
+    import logging
+    from pathlib import Path
+
+    text = (Path(__file__).parent / "fixtures" / "ath_scale" / "sv_0p7.cfg").read_text(encoding="utf-8")
+    parser_log = "hornlab_mesher.config_parser"
+
+    with caplog.at_level(logging.INFO, logger=parser_log):
+        fresh = parse(text)
+    imported = [record.getMessage() for record in caplog.records if record.name == parser_log]
+    assert any(message.startswith("[hornlab-mesher] ignoring Output.STL") for message in imported)
+    assert any("ATH axial sampling rule" in message for message in imported)
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger=parser_log):
+        saved = serialize(fresh.design)
+        reread = parse(saved)
+    assert [record.getMessage() for record in caplog.records if record.name == parser_log] == []
+    assert reread.design == parse(saved).design

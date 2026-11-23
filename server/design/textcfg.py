@@ -12,9 +12,11 @@ import json
 import logging
 import math
 import re
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal, Mapping
 
 from pydantic import ValidationError
 
@@ -1712,6 +1714,48 @@ def _mesher_validation_text(
 PayloadImporter = Callable[[Mapping[str, Any]], tuple[dict[str, Any], list[MigrationApplication]]]
 
 
+_REREAD = threading.local()
+#: What the mesher's text parser says about a design's own ATH bookkeeping:
+#: the items it ignores and the axial rule it picks. WG records them itself
+#: (``ParsedDesign.ignored_profile``, ``ath_axial_sampling_rule``), so they are
+#: news once, when an ATH file is first imported.
+_REREAD_NOTICES = (
+    "[hornlab-mesher] ignoring ",
+    "[hornlab-mesher] NAC present: ",
+    "[hornlab-mesher] ATH axial sampling rule ",
+    "[hornlab-mesher] saved v1 geometry retains",
+)
+
+
+class _SavedDesignRereadFilter(logging.Filter):
+    """Drop those notices while this thread re-reads a design WG saved.
+
+    Every hash, freshness check and job read of an imported design goes back
+    through the mesher's validation, and each one used to log the same seven
+    lines again. Thread-scoped, so a first import running on another thread
+    still logs its own.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not getattr(_REREAD, "active", False):
+            return True
+        return not str(record.msg).startswith(_REREAD_NOTICES)
+
+
+_MESHER_PARSER_LOG = logging.getLogger("hornlab_mesher.config_parser")
+_MESHER_PARSER_LOG.addFilter(_SavedDesignRereadFilter())
+
+
+@contextmanager
+def _saved_design_reread(active: bool) -> Iterator[None]:
+    previous = getattr(_REREAD, "active", False)
+    _REREAD.active = previous or active
+    try:
+        yield
+    finally:
+        _REREAD.active = previous
+
+
 def parse(text: str, *, migrate: bool = True, import_payload: PayloadImporter = apply_migrations) -> ParsedDesign:
     """Keep authored ATH refusal metadata through the existing text wrapper.
 
@@ -1973,7 +2017,8 @@ def _parse(text: str, *, migrate: bool = True, import_payload: PayloadImporter =
                 flat, blocks, comments, payload, ignored_profile,
                 preserve_passthrough=uses_ath_v3_import(version),
             )
-            mesher_config = parse_text_config(validation_text)
+            with _saved_design_reread(not fresh_ath):
+                mesher_config = parse_text_config(validation_text)
             if uses_ath_v3_import(import_version):
                 from hornlab_mesher.text_import import ATH_AXIAL_RULE_KEY
 

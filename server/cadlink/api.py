@@ -763,7 +763,7 @@ async def fusion_status(
             )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-    current_hash = design_hash(payload.design)
+    current_hash = await asyncio.to_thread(design_hash, payload.design)
     store: CadLinkStore = request.app.state.cadlink_store
     await asyncio.to_thread(
         expire_unstarted_insert_handoffs,

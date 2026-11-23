@@ -392,7 +392,7 @@ def test_design_hash_golden_non_ascii_and_nan_permitted(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(textcfg, "serialize", lambda design: "")
     monkeypatch.setattr(textcfg, "parse", lambda text: SimpleNamespace(design=Payload()))
-    assert identity.design_hash(object()) == DESIGN_HASH_NAN
+    assert identity.design_hash(Payload()) == DESIGN_HASH_NAN
 
 
 def test_meshing_semantics_goldens():

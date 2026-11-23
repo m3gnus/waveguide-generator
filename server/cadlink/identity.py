@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from datetime import datetime, timezone
 import hashlib
 import secrets
+import threading
 import time
 from typing import Literal, Mapping
 
@@ -66,6 +68,14 @@ OpenClassification = Literal[
 ]
 
 
+#: Recent design hashes by the canonical payload they were computed from. The
+#: round trip below costs ~130 ms on an imported ATH design, and the CAD status
+#: and send paths ask again for the same, unchanged design.
+_DESIGN_HASHES: OrderedDict[str, str] = OrderedDict()
+_DESIGN_HASHES_LIMIT = 64
+_DESIGN_HASHES_LOCK = threading.Lock()
+
+
 def design_hash(design: DesignConfig) -> str:
     """Hash the stable canonical typed payload, excluding link metadata.
 
@@ -73,13 +83,29 @@ def design_hash(design: DesignConfig) -> str:
     ``Throat.Profile``), so normalize through one canonical text round trip
     before hashing. This makes the pre-save hash equal the hash recomputed from
     the saved file.
+
+    The round trip is a function of the payload alone, so its result is kept
+    by that payload: a repeat is the same hash, byte for byte, without it.
     """
+
+    key = canonical_json(design.model_dump(mode="json"), ASCII_NAN_PERMITTED)
+    with _DESIGN_HASHES_LOCK:
+        cached = _DESIGN_HASHES.get(key)
+        if cached is not None:
+            _DESIGN_HASHES.move_to_end(key)
+            return cached
 
     from server.design.textcfg import parse, serialize
 
     normalized = parse(serialize(design)).design
     canonical = canonical_json(normalized.model_dump(mode="json"), ASCII_NAN_PERMITTED).encode("utf-8")
-    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+    value = "sha256:" + hashlib.sha256(canonical).hexdigest()
+    with _DESIGN_HASHES_LOCK:
+        _DESIGN_HASHES[key] = value
+        _DESIGN_HASHES.move_to_end(key)
+        while len(_DESIGN_HASHES) > _DESIGN_HASHES_LIMIT:
+            _DESIGN_HASHES.popitem(last=False)
+    return value
 
 
 def truncated_design_hash(full_hash: str) -> str:

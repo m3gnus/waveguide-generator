@@ -231,3 +231,38 @@ process.stdout.write(generateMWGConfigContent(params));
     )
     assert completed.returncode == 0, completed.stderr
     assert parse(completed.stdout).cadlink == parse(tagged).cadlink
+
+
+def test_a_repeated_design_hash_is_the_same_bytes_without_a_second_round_trip(monkeypatch) -> None:
+    """The hash is kept by the payload it was computed from, never recomputed."""
+
+    from server.cadlink import identity
+    from server.design import textcfg
+
+    from server.design.schema import DesignConfig
+
+    design = DesignConfig.model_validate(
+        {"formula": "OSSE", "L": 117, "a": 41, "mesh": {"vertical_offset": 80, "quadrants": 1}}
+    )
+    first = design_hash(design)
+    calls: list[str] = []
+    real_parse = textcfg.parse
+
+    def counting_parse(text: str, **kwargs):
+        calls.append(text)
+        return real_parse(text, **kwargs)
+
+    monkeypatch.setattr(textcfg, "parse", counting_parse)
+    assert design_hash(design) == first
+    assert design_hash(design.model_copy(deep=True)) == first
+    assert calls == []
+
+    # Uncached, the same bytes.
+    identity._DESIGN_HASHES.clear()
+    assert design_hash(design) == first
+    assert len(calls) == 1
+
+    # A different payload is its own entry.
+    other = DesignConfig.model_validate({"formula": "OSSE", "L": 118, "a": 41})
+    assert design_hash(other) != first
+    assert len(calls) == 2
