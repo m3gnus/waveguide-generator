@@ -54,7 +54,6 @@
 .cad-overflow-menu > button { display: flex; align-items: center; gap: 5px; color: var(--fg1); }
 .cad-overflow-menu > button svg { flex: none; width: 12px; height: 12px; }
 .cad-overflow-path { overflow: hidden; border-top: 1px solid var(--hair-soft); color: var(--fg3); font-family: var(--mono); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
-.cad-projects-folder-error { margin: 2px 7px 4px; color: var(--red); font-size: var(--text-micro); }
 
 /* ---- 2 · CAD Link ---- */
 .cad-link-card.attention { border-color: color-mix(in srgb, var(--amber) 45%, var(--hair)); }
@@ -114,8 +113,6 @@
 .cad-solve-settings .link-button { margin-left: auto; }
 .cad-solver-frame-summary { display: grid; gap: 2px; }
 .cad-solver-frame-chooser { margin: 0; color: var(--fg1); font-weight: 600; }
-.cad-solve-actions { display: grid; gap: 4px; }
-.cad-solve-run-warn { color: var(--amber); }
 .cad-solver-frame-error { color: var(--red); }
 .cad-state-chip { flex: none; padding: 1px 4px; border: 1px solid var(--hair); background: var(--ov1); color: var(--fg3); font: var(--text-micro) var(--mono); letter-spacing: 0; text-transform: lowercase; }
 .cad-state-chip.warn { border-color: color-mix(in srgb, var(--amber) 45%, var(--hair)); color: var(--amber); }
@@ -129,7 +126,7 @@ details.cad-check > summary::-webkit-details-marker { display: none; }
 .cad-check b { flex: none; width: 72px; color: var(--fg); font-weight: 500; }
 .cad-check-verdict { flex: 1; min-width: 0; color: var(--fg2); overflow-wrap: anywhere; }
 .cad-check-glyph { flex: none; width: 13px; color: var(--fg3); font-weight: 700; text-align: center; }
-.cad-check-ok > .cad-check-glyph, .cad-check-ok > summary .cad-check-glyph, .cad-check-glyph.ok { color: var(--green); }
+.cad-check-ok > .cad-check-glyph, .cad-check-ok > summary .cad-check-glyph { color: var(--green); }
 .cad-check-warn > .cad-check-glyph, .cad-check-warn > summary .cad-check-glyph { color: var(--amber); }
 .cad-check-warn .cad-check-verdict { color: var(--fg1); }
 .cad-check-chevron { flex: none; color: var(--fg3); font-size: 10px; transition: transform .12s; }
@@ -154,7 +151,6 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-detail { color: var(--fg3); font-size: var(--text-micro); }
 .cad-verdict { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 3px 8px; margin: 4px 0; padding: 5px; border-left: 2px solid var(--amber); background: var(--ov1); }
 .cad-verdict.ok { border-color: var(--green); }
-.cad-verdict.neutral { border-color: var(--fg3); }
 .cad-verdict small { grid-column: 2; color: var(--fg3); font-size: var(--text-micro); }
 .cad-row { display: grid; grid-template-columns: minmax(90px, 1fr) auto; align-items: center; gap: 6px; padding: 4px 0; border-top: 1px solid var(--hair); }
 .cad-row small { grid-column: 1 / -1; color: var(--fg3); font-size: var(--text-micro); }
