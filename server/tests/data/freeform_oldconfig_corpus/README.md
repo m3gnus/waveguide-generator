@@ -13,7 +13,13 @@ by up to a few millimetres between the axes. On WG
 `322d4a95048af34f0866ecb2f5ee8c09c2817327`, which builds outer walls around
 tight mouth bends as an envelope instead of a folded offset, every case kept its
 bytes except FF21, whose wall the earlier mesher refused as folding and which now
-builds; its mesh and STEP were re-frozen. `manifest.json` records the
+builds; its mesh and STEP were re-frozen. On WG `d49f5d3ca` with mesher
+`8952c639a868b4b4e8088183ad5a4298b23329fa`, File > STEP puts the throat centre at
+the origin instead of applying `Mesh.VerticalOffset` (Magnus, 23 Nov 2026). Only FF12
+has an offset (4 mm at Scale 0.5, so 2 mm); its STEP was re-frozen after proving the
+new solid is the old one moved by (0, -2, 0) mm: the same 24/44/21/1 entities, volume
+and face areas within 1e-10, the same bounds, and every one of 2,182 sampled surface
+points within 5e-12 mm of the old surface shifted down 2 mm. `manifest.json` records the
 current reference and names every source and covered feature.
 Inputs are small saved text files or flat WG design JSON, including legacy
 millimetre-axis payloads. No external checkout, audit folder or network access
