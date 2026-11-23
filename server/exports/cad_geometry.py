@@ -45,6 +45,10 @@ class CadGeometry:
     #: What determines the geometry: the planned config and the mesher. Two
     #: designs with one key build one solid (see ``solid_known_to_build``).
     build_key: str = ""
+    #: The Onshape send's placed frame (``Mesh.VerticalOffset`` applied, the
+    #: throat at its own station), which its existing documents were built in;
+    #: every other CAD output has the throat centre at the origin.
+    placed: bool = False
 
     def sampling_record(self) -> dict[str, Any]:
         """The plan as an artifact records it (the WGLink manifest's ``cad_sampling``)."""
@@ -60,7 +64,7 @@ class CadGeometry:
 _STRICT_SCALAR = re.compile(r"^(\S+) must be a finite scalar expression$")
 
 
-def _cad_base_config(design: DesignConfig) -> dict[str, Any]:
+def _cad_base_config(design: DesignConfig, *, placed: bool = False) -> dict[str, Any]:
     """``_solver_mesher_config``, its refusals told as a CAD fix.
 
     Its plain ``ValueError`` refusals speak of the solver; a CAD export or send
@@ -70,7 +74,7 @@ def _cad_base_config(design: DesignConfig) -> dict[str, Any]:
     from hornlab_mesher.errors import UserRefusal, numeric_refusal
 
     try:
-        return _solver_mesher_config(design)
+        return _solver_mesher_config(design, keep_placement=placed)
     except UserRefusal:
         raise
     except ValueError as exc:
@@ -88,7 +92,7 @@ def _cad_base_config(design: DesignConfig) -> dict[str, Any]:
         raise
 
 
-def cad_mesher_config(design: DesignConfig) -> dict[str, Any]:
+def cad_mesher_config(design: DesignConfig, *, placed: bool = False) -> dict[str, Any]:
     """The mesher config every CAD output resolves, before its sampling is chosen.
 
     The solver's own config, so the part is the geometry that was solved rather
@@ -103,13 +107,15 @@ def cad_mesher_config(design: DesignConfig) -> dict[str, Any]:
       moves no CAD output. A CAD program places the part itself -- Fusion
       records that as the link's occurrence transform, which the return leg
       inverts -- so the Fusion document origin is the throat of an unmoved
-      link, and File -> STEP writes the same part.
+      link, and File -> STEP writes the same part. ``placed`` is the one
+      exception: the Onshape send keeps the offset (and the bundle's 1.2
+      placed frame) so documents already built from it do not move.
     * Export corner arcs, set before sampling is chosen, so the planner
       measures the arcs that will be written rather than the design's own
       count.
     """
 
-    config = retain_mesher_construction(_cad_base_config(design))
+    config = retain_mesher_construction(_cad_base_config(design, placed=placed))
     config["mesh"] = {
         **(config.get("mesh") or {}),
         "cornerSegments": EXPORT_CORNER_SEGMENTS,
@@ -119,7 +125,7 @@ def cad_mesher_config(design: DesignConfig) -> dict[str, Any]:
     return config
 
 
-def resolve_cad_geometry(design: DesignConfig) -> CadGeometry:
+def resolve_cad_geometry(design: DesignConfig, *, placed: bool = False) -> CadGeometry:
     """Plan the CAD sampling and resolve the geometry every CAD output writes.
 
     The solver's mm resolutions used to size the CAD point grid as well, so
@@ -133,7 +139,7 @@ def resolve_cad_geometry(design: DesignConfig) -> CadGeometry:
 
     from hornlab_mesher.config_builder import resolve_geometry
 
-    config = cad_mesher_config(design)
+    config = cad_mesher_config(design, placed=placed)
     plan = plan_cad_resolution(config, tolerance_mm=STEP_SURFACE_TOLERANCE_MM)
     written = _with_resolution(config, plan.resolution_mm)
     resolved = plan.resolved
@@ -147,7 +153,9 @@ def resolve_cad_geometry(design: DesignConfig) -> CadGeometry:
     )
     if plan.warning:
         logger.warning("CAD geometry sizing: %s", plan.warning)
-    return CadGeometry(resolved=resolved, plan=plan, build_key=_build_key(written))
+    return CadGeometry(
+        resolved=resolved, plan=plan, build_key=_build_key(written), placed=placed
+    )
 
 
 def _build_key(config: dict[str, Any]) -> str:
@@ -217,8 +225,9 @@ def write_cad_step(cad: CadGeometry, path: Path) -> CadInfo:
     # allowing the pinned mesher to own a native session.
     with _preserve_native_windows_path():
         # The WGLink bundle's frame (throat centre at the origin), so this
-        # solid and the body Fusion lofts from a Send are one part.
-        _, info = write_step(cad.resolved.geometry, path, link_frame=True)
+        # solid and the body Fusion lofts from a Send are one part; the
+        # Onshape send's placed geometry keeps its placement.
+        _, info = write_step(cad.resolved.geometry, path, link_frame=not cad.placed)
     return info
 
 

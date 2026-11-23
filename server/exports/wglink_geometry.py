@@ -46,7 +46,9 @@ def build_bundle(
     mesher_version = _mesher_version()
     resolved, geometry_hash = resolve_design_identity(design, mesher_version_value=mesher_version)
     # The body Fusion lofts: the same CAD geometry File -> STEP writes.
-    cad = resolve_cad_geometry(design)
+    # Onshape (``include_step``) keeps the placed frame its existing
+    # documents were built in; Fusion gets the throat at the origin.
+    cad = resolve_cad_geometry(design, placed=include_step)
     staged = Path(staged_path)
     bundle_identity = WgLinkIdentity(
         bundle={"id": facts["bundleId"], "created_at": facts["createdAt"]},
@@ -99,6 +101,7 @@ def build_bundle(
         # The current design schema owns exactly one horn throat. Give
         # it an explicit acoustic identity at export time so the
         # return leg never guesses HF from anonymous CAD geometry.
+        link_frame=not cad.placed,
         interface_sources=[
             WgLinkSourceInterface(
                 id="source-hf",

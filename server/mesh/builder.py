@@ -380,14 +380,18 @@ def _progress(
         progress_cb(stage, float(progress), message)
 
 
-def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
+def _solver_mesher_config(
+    design: DesignConfig, *, keep_placement: bool = False
+) -> dict[str, Any]:
     """Restore solver-domain controls hidden by preview translation.
 
     Preview always expands to 1234 quadrants; solve meshes preserve ATH's
     reduced-domain rules (v1 ``mesher_adapter.py:140-187,342-424``).
 
-    ``mesh.vertical_offset`` is never applied (see below); the CAD exports
-    build from this config too, with the throat centre at the origin.
+    ``mesh.vertical_offset`` is not applied (see below); the CAD exports build
+    from this config too, with the throat centre at the origin.
+    ``keep_placement`` is for the Onshape send alone, which keeps the placed
+    frame its existing documents were built in.
     """
 
     root = design.root
@@ -413,7 +417,8 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
     from server.design.native import NATIVE_FORMULAS
 
     if root.formula in NATIVE_FORMULAS:
-        config["mesh"]["vertical_offset_mm"] = 0.0
+        if not keep_placement:
+            config["mesh"]["vertical_offset_mm"] = 0.0
         return config
     mesh = config.setdefault("mesh", {})
     quadrants, _ = _resolve_quadrants(design)
@@ -439,7 +444,8 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
     # on the translated mesh, which is one of the two reasons a grounded solve
     # retains none (server/solver/bempp.py).
     _strict_scalar(root.mesh.vertical_offset, 0.0, "mesh.vertical_offset")
-    mesh["verticalOffset"] = 0.0
+    if not keep_placement:
+        mesh["verticalOffset"] = 0.0
 
     # No sharp-edge fallback here.  V1 flattened the enclosure roundover to zero
     # on any reduced domain whose edge radius reached its smallest margin

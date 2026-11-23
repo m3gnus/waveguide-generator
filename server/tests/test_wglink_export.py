@@ -74,7 +74,11 @@ def _stub_cad_geometry(monkeypatch) -> None:
     monkeypatch.setattr(
         wglink_geometry,
         "resolve_cad_geometry",
-        lambda _design: CadGeometry(resolved=SimpleNamespace(geometry=None, mode="freestanding"), plan=CadPlan(12.0, None)),
+        lambda _design, placed=False: CadGeometry(
+            resolved=SimpleNamespace(geometry=None, mode="freestanding"),
+            plan=CadPlan(12.0, None),
+            placed=placed,
+        ),
     )
 
     def fake_step(_cad, path):
@@ -267,6 +271,63 @@ def test_an_ath_slot_throat_is_at_the_origin_in_both_cad_outputs(tmp_path: Path)
     )
 
 
+def test_the_onshape_send_keeps_the_placed_frame(tmp_path: Path) -> None:
+    """Existing Onshape documents were built from placed bundles; they must
+    not move. Only the Onshape send (``include_step``) keeps the 1.2 frame:
+    Mesh.VerticalOffset applied to the grid, datums, parameters and STEP."""
+
+    import numpy as np
+
+    from server.exports.cad_geometry import resolve_cad_geometry
+    from server.exports.wglink_geometry import ONSHAPE_STEP_FILE, build_bundle
+    from server.mesh.gmsh_worker import _run_in_gmsh_session
+
+    design = DesignConfig.model_validate(
+        {"formula": "OSSE", "L": 120, "a": 45, "mesh": {"vertical_offset": 30}}
+    )
+    facts = {
+        "bundleId": "wgb_01J4Y2ZF000000000000000000", "createdAt": "2026-11-23T14:47:00Z",
+        "designId": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M", "editVersion": 1,
+        "designHash": "sha256:" + "1" * 64, "exportId": "wge_01J4Y2ZD000000000000000000",
+        "sequence": 1, "parentExportId": None,
+    }
+    bundles = {}
+    for name, include_step in (("fusion", False), ("onshape", True)):
+        staged = tmp_path / f"{name}.wglink"
+        _run_in_gmsh_session(
+            build_bundle, design.model_dump(mode="json", by_alias=True), str(staged),
+            facts, "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4N", "horn", "horn", "0.0.0-test",
+            include_step,
+        )
+        bundles[name] = (
+            json.loads((staged / "wglink.json").read_text()),
+            np.asarray(json.loads((staged / "point-grid.json").read_text())["inner_points"]),
+        )
+    stored = np.asarray(resolve_cad_geometry(design).resolved.geometry.inner_points)
+
+    onshape, onshape_grid = bundles["onshape"]
+    assert onshape["wglink_version"] == "1.2"
+    assert "throat-origin-frame-v1" not in onshape["required_features"]
+    np.testing.assert_allclose(onshape_grid, stored + [0.0, 30.0, 0.0], atol=1e-9)
+    assert onshape["datums"]["WG_AXIS"]["origin_mm"] == [0.0, 30.0, 0.0]
+    # The uploaded solid is the File -> STEP solid moved up by the offset.
+    from server.exports.cad_geometry import write_cad_step
+
+    centred = _run_in_gmsh_session(
+        write_cad_step, resolve_cad_geometry(design), tmp_path / "centred.step"
+    )
+    np.testing.assert_allclose(
+        np.asarray(onshape["step"]["bbox_mm"]),
+        np.asarray(centred.bounding_box_mm) + [0.0, 30.0, 0.0],
+        atol=1e-6,
+    )
+    assert ONSHAPE_STEP_FILE in onshape["files"]
+
+    fusion, fusion_grid = bundles["fusion"]
+    assert fusion["wglink_version"] == WGLINK_BUNDLE_VERSION
+    np.testing.assert_allclose(fusion_grid, stored, atol=1e-9)
+
+
 def test_send_to_cad_checks_the_solid_builds_unless_this_child_built_it(
     monkeypatch, tmp_path: Path,
 ) -> None:
@@ -330,7 +391,7 @@ def test_cad_refusals_come_before_any_send_work_and_say_how_to_fix(
 
     monkeypatch.setattr(
         wglink_geometry, "resolve_cad_geometry",
-        lambda _design: pytest.fail("the planner started before the CAD refusal"),
+        lambda _design, **_kwargs: pytest.fail("the planner started before the CAD refusal"),
     )
     design = DesignConfig.model_validate(
         {"formula": "OSSE", "L": 120, "a": 45, "source": {"contours": "1 0 0"}}
@@ -362,7 +423,7 @@ def test_an_unverified_cad_sampling_warning_reaches_the_send(
     monkeypatch.setattr(
         wglink_geometry,
         "resolve_cad_geometry",
-        lambda _design: CadGeometry(
+        lambda _design, **_kwargs: CadGeometry(
             resolved=SimpleNamespace(geometry=None, mode="freestanding"), plan=CadPlan(12.0, None, note)
         ),
     )
