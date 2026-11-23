@@ -79,9 +79,16 @@ def _group_option_problem(group: Mapping[str, Any], protocol_message: str) -> st
     if member[:1] == ["lining"]:
         if group.get("kind") != "rigid":
             return "lining is accepted only on a rigid group"
-        # The protocol reaches a number only once the model is Miki and no
-        # member is unknown; a missing number is a lining without its inputs.
-        if len(member) == 2 and member[1] in _LINING_NUMBERS and member[1] in group["lining"]:
+        # A number is named only when the lining is otherwise complete: a Miki
+        # lining with exactly its three members. Anything else, a missing number
+        # included, is a lining without its inputs, whichever member the
+        # protocol happened to check first.
+        lining = group["lining"]
+        complete = (
+            isinstance(lining, Mapping) and set(lining) == {"model", *_LINING_NUMBERS}
+            and lining["model"] == "miki"
+        )
+        if complete and len(member) == 2 and member[1] in _LINING_NUMBERS:
             return f"lining {member[1]} must be finite and positive"
         return "lining requires the Miki model, thickness and airflow resistivity"
     if member[:1] == ["relative_level_db"]:

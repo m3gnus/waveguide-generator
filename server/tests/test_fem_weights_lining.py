@@ -300,3 +300,15 @@ def test_record_option_guard_is_the_protocol_rule_in_wg_words(group):
     with pytest.raises(FemRegionMeshError, match=r"^L: (lining|relative_level_db) ") if protocol_refused \
             else nullcontext():
         validate_group_options(group, "L")
+
+
+@pytest.mark.parametrize("thickness", [float("nan"), -1., 0., "30", True])
+def test_a_lining_missing_its_flow_resistivity_reads_as_incomplete(thickness):
+    """The protocol checks thickness before it notices the missing key; WG still
+    names the lining as incomplete, as its own validator always did."""
+    from server.mesh.fem_regions import FemRegionMeshError, validate_group_options
+
+    group = {"kind": "rigid", "lining": {"model": "miki", "thickness_mm": thickness}}
+    with pytest.raises(FemRegionMeshError) as refused:
+        validate_group_options(group, "L")
+    assert str(refused.value) == "L: lining requires the Miki model, thickness and airflow resistivity"
