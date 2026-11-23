@@ -210,7 +210,7 @@ function notObservedView(view: CadWorkflowView, status: FusionCadStatus): CadWor
   return {
     ...view,
     headline: `Fusion 360 · last reported${when}`,
-    detail: `The Waveguide Generator add-in in Fusion reports only when it runs a command (its background checks are off), so WG has not observed Fusion since${when ? ` then` : ''}. Send, Solve and Refresh still work: each checks Fusion when it runs. As of that report: ${view.detail}`,
+    detail: `The Waveguide Generator add-in in Fusion reports only when it runs a command (its background checks are off), so WG has not observed Fusion since${when ? ` then` : ''}. Send and Solve still work: each checks Fusion when it runs. As of that report: ${view.detail}`,
   };
 }
 
@@ -372,7 +372,7 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
     // review finding D5, handed to A6: `action` stayed `update`, so the only
     // thing lost was the copy that says what actually changed.
     const wgCopy = status.wgChangesAvailable ? ` ${wgChangeDetail()}` : '';
-    const remedy = ' Bring the Fusion geometry into WG to find out: the Waveguide Generator add-in in Fusion measures the model as it exports it.';
+    const remedy = ' Use Send to WG in Fusion to find out: the Waveguide Generator add-in in Fusion measures the model as it exports it.';
     const headline = (unknownHalf: string): string => (
       status.wgChangesAvailable ? `WG design changed${named}` : `${unknownHalf}${named}`
     );
@@ -397,7 +397,7 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   if (!status.wgChangesAvailable && status.fusionChangesAvailable) return {
     state: 'stale',
     headline: `Fusion geometry has changed${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: explainedStaleDetail(status, 'The parametric WG design has not changed. Bring the Fusion geometry into WG before rebuilding the Fusion waveguide from WG.'),
+    detail: explainedStaleDetail(status, 'The parametric WG design has not changed. Use Send to WG in Fusion before rebuilding the Fusion waveguide from WG.'),
     action: null,
   };
   if (!status.wgChangesAvailable) return {
@@ -407,7 +407,7 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
     action: null,
   };
   const conflictCopy = status.fusionChangesAvailable
-    ? ' Fusion geometry also changed; choose which direction to synchronize.'
+    ? ' Fusion geometry also changed: to keep the Fusion edits, use Send to WG in Fusion first.'
     : '';
   return {
     state: 'stale',

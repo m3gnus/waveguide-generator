@@ -1483,6 +1483,8 @@ describe('CadLinkPanel', () => {
     // And the freshness caveat is still there, with its remedy.
     expect(view.detail).toContain('moved on since the Waveguide Generator add-in in Fusion measured it');
     expect(view.detail).toContain('the Waveguide Generator add-in in Fusion measures the model as it exports it');
+    // The remedy names the control that exists: Send to WG, in Fusion.
+    expect(view.detail).toContain('Use Send to WG in Fusion to find out');
 
     // Never measured at all, with the same WG-side change.
     const unmeasured = fusionWorkflowView({ ...both, observationFreshness: 'none' as const });
@@ -1501,6 +1503,13 @@ describe('CadLinkPanel', () => {
     expect(fusionOnly.headline).not.toContain('WG design changed');
     expect(fusionOnly.detail).not.toContain('WG is now R-OSSE');
     expect(fusionOnly.action).toBeNull();
+    // Fusion changed too: WG sends only its own way, so the copy names the
+    // control that brings Fusion's edits in (Pull from WG was retired).
+    const fusionChanged = { ...both, fusionChangesAvailable: true };
+    expect(fusionWorkflowView(fusionChanged).detail)
+      .toContain('Fusion geometry also changed: to keep the Fusion edits, use Send to WG in Fusion first.');
+    expect(fusionWorkflowView({ ...fusionChanged, wgChangesAvailable: false }).detail)
+      .toContain('Use Send to WG in Fusion before rebuilding the Fusion waveguide from WG.');
   });
 
   it('refuses an add-in older than WG with the remedy startup left', () => {

@@ -362,6 +362,9 @@ describe('WGLink that reports only on command', () => {
     const view = fusionWorkflowView({ ...reported, statusObserved: false, observedAt: '2026-09-21T11:50:00Z' });
     expect(view.headline).toMatch(/^Fusion 360 · last reported/);
     expect(view.detail).toContain('reports only when it runs a command');
+    // Only controls WG still has: Pull from WG (the old Refresh) was retired.
+    expect(view.detail).toContain('Send and Solve still work');
+    expect(view.detail).not.toMatch(/Refresh/);
     expect(`${view.headline} ${view.detail}`).not.toMatch(/offline|closed|Up to date/i);
     expect(view.state).not.toBe('current');
   });
