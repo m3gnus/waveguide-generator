@@ -211,13 +211,6 @@ export function mountCadWorkspaceOwners(): () => void {
     reportStatus('Solving the current geometry.');
     return 'solving';
   };
-  /** A Solve the triangle ceiling stopped waits for the pop-up, whose
-   * Solve anyway prepares and solves; it is not a failure. */
-  const ceilingStopped = (error: unknown, bundlePath: string | undefined): boolean => {
-    if (!(error instanceof CadLinkApiError) || error.code !== 'mesh_too_large' || !bundlePath) return false;
-    reportStatus(null);
-    return true;
-  };
   const prepareAndSolve = async (options: { meshLimitOverride?: boolean } = {}): Promise<'solving' | 'blocked' | 'failed'> => {
     const attention = solveAttention.armSolve();
     const bundlePath = useCadReturnStore.getState().selectedBundle?.bundlePath;
@@ -228,7 +221,12 @@ export function mountCadWorkspaceOwners(): () => void {
       return await solvePrepared(prepared, bundlePath, choice, attention);
     } catch (error) {
       if (error instanceof SupersededError) return 'blocked';
-      if (ceilingStopped(error, bundlePath)) return 'blocked';
+      // A Solve the triangle ceiling stopped waits for the pop-up, whose
+      // Solve anyway prepares and solves; it is not a failure.
+      if (error instanceof CadLinkApiError && error.code === 'mesh_too_large' && bundlePath) {
+        reportStatus(null);
+        return 'blocked';
+      }
       reportStatus(null);
       // A failed preparation already reported itself in CAD Link.
       if (!(error instanceof CadLinkApiError)) reportError(failureWords(error));

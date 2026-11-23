@@ -423,9 +423,7 @@ export function CadLinkPanel() {
         {!onshape && !unlinkedOnScreen && workflow.action === 'open' && <button className="btn-primary primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Open in Fusion 360'}</button>}
         {/* Fusion's changes come in only when the user sends them from Fusion. */}
         {!onshape && fusionStatus?.fusionChangesAvailable && <p className="cad-detail">Use Send to WG in Fusion to bring the current model into WG.</p>}
-        {!onshape && !unlinkedOnScreen && workflow.action === 'update' && <div>
-          <button className="btn-primary primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Send WG changes to Fusion'}</button>
-        </div>}
+        {!onshape && !unlinkedOnScreen && workflow.action === 'update' && <button className="btn-primary primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Send WG changes to Fusion'}</button>}
         {/* Onshape: the same card carries its send/return pair. */}
         {onshape && workflow.state !== 'not-configured' && !confirmPublicDocument && workflow.action && <button className="btn-primary primary cad-primary-action" disabled={sendingToOnshape || Boolean(cadLimitation)} title={cadLimitation} onClick={() => void sendToOnshape()}>{sendingToOnshape ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : onshapeActionLabel}</button>}
         {onshape && linkedDocument && workflow.state !== 'not-configured' && <button className="btn cad-secondary-action" disabled={ingesting} onClick={() => { void cadWorkspaceView.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Receiving & preparing…' : 'Bring Onshape geometry into WG'}</button>}
