@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from server.cadlink.fusion.fusion_outcomes import RECOVERY_NOTICE_SCHEMA, recovery_document_id, settle_from_heartbeat
 from server.cadlink import ipc
 from server.cadlink.store import CadLinkStore
-from server.contracts.wglink_protocol import FUSION_REQUEST_DELIVERY_VERSION
+from server.cadlink.fusion.fusion_status import FusionStatusUnreadable, delivers_requests, read_status_file
 
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
 
@@ -57,22 +57,29 @@ def _json(value: object) -> Mapping[str, Any]:
         return {}
 
 
-def file_evidence(data_dir: Path, *, for_loudness: bool = False) -> Mapping[str, Any] | None:
+#: ``report`` was not supplied: read the file.
+_UNREAD: Any = object()
+
+
+def _read_report(data_dir: Path) -> Mapping[str, Any] | None:
+    try:
+        return read_status_file(ipc.ipc_folder(data_dir))
+    except FusionStatusUnreadable:
+        return None
+
+
+def file_evidence(
+    data_dir: Path, *, for_loudness: bool = False, report: Mapping[str, Any] | None = _UNREAD,
+) -> Mapping[str, Any] | None:
     """Fresh evidence settles; the last command-driven report only stays loud.
 
     Freshness controls settlement; a missing/stale report never erases
-    durable recovery.
+    durable recovery. ``report`` is the status file a caller already read;
+    without it this reads the file.
     """
     try:
-        path = ipc.ipc_folder(data_dir) / ".fusion-status.json"
-        if path.is_symlink() or path.stat().st_size > 256 * 1024:
-            return None
-        value = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(value, Mapping):
-            return None
-        version = value.get("deliveryVersion")
-        if (value.get("schemaVersion") != 1 or value.get("cadApplication") != "fusion360"
-                or type(version) is not int or version < FUSION_REQUEST_DELIVERY_VERSION):
+        value = _read_report(data_dir) if report is _UNREAD else report
+        if not isinstance(value, Mapping) or not delivers_requests(value):
             return None
         updated = datetime.fromisoformat(str(value.get("updatedAt")).replace("Z", "+00:00"))
         age = datetime.now(timezone.utc) - updated
@@ -92,8 +99,9 @@ def file_evidence(data_dir: Path, *, for_loudness: bool = False) -> Mapping[str,
 
 
 def recovery_notices(store: CadLinkStore, data_dir: Path) -> RecoveryNoticesResponse:
-    heartbeat = file_evidence(data_dir)
-    last_report = file_evidence(data_dir, for_loudness=True)
+    report = _read_report(data_dir)
+    heartbeat = file_evidence(data_dir, report=report)
+    last_report = file_evidence(data_dir, for_loudness=True, report=report)
     store.initialize()
     # Use the operation store's lock for evidence, metadata, and dismissal:
     # binding and an overlapping dismissal cannot revive the same request.

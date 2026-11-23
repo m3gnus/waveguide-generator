@@ -1386,3 +1386,91 @@ def test_missing_cad_folder_still_reports_repair_path_with_a_return_on_screen(tm
     assert status["cadFolderConfigured"] is False
     assert status["cadFolderMissingPath"] == str(chosen / "cadlink")
     assert not (chosen / "cadlink").exists()
+
+
+def test_one_status_file_reader_tells_no_file_from_a_failed_read(tmp_path: Path) -> None:
+    from server.cadlink.fusion.fusion_status import FusionStatusUnreadable, read_status_file
+
+    ipc = tmp_path / "ipc"
+    ipc.mkdir()
+    marker = ipc / FUSION_STATUS_FILENAME
+    assert read_status_file(ipc) is None  # absent
+    marker.write_text("[1, 2]", encoding="utf-8")
+    assert read_status_file(ipc) is None  # not an object
+    marker.write_text(" " * (256 * 1024 + 1), encoding="utf-8")
+    assert read_status_file(ipc) is None  # oversized
+    marker.write_text('{"schemaVersion": 1', encoding="utf-8")
+    with pytest.raises(FusionStatusUnreadable):
+        read_status_file(ipc)  # a writer between bytes: no observation
+    marker.write_text('{"schemaVersion": 1}', encoding="utf-8")
+    assert read_status_file(ipc) == {"schemaVersion": 1}
+    target = tmp_path / "elsewhere.json"
+    target.write_text('{"schemaVersion": 1}', encoding="utf-8")
+    marker.unlink()
+    marker.symlink_to(target)
+    assert read_status_file(ipc) is None
+
+
+@pytest.mark.parametrize(
+    ("system", "tool", "returncode", "stdout", "state"),
+    [
+        ("Darwin", "pgrep", 0, b"", "running"),
+        ("Darwin", "pgrep", 1, b"", "closed"),
+        ("Darwin", "pgrep", 2, b"", "unknown"),
+        ("Darwin", None, 0, b"", "unknown"),
+        ("Windows", "tasklist", 0, b"Fusion360.exe 1 Console", "running"),
+        ("Windows", "tasklist", 0, b"INFO: No tasks", "closed"),
+        ("Windows", "tasklist", 1, b"", "unknown"),
+        ("Linux", "pgrep", 0, b"", "closed"),
+    ],
+)
+def test_process_presence_is_the_process_state_running(
+    monkeypatch, system, tool, returncode, stdout, state,
+) -> None:
+    from server.cadlink.fusion.fusion_status import fusion_process_state
+
+    monkeypatch.setattr(
+        "server.cadlink.fusion.fusion_status.shutil.which",
+        lambda name: f"/usr/bin/{name}" if tool else None,
+    )
+    monkeypatch.setattr(
+        "server.cadlink.fusion.fusion_status.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=returncode, stdout=stdout),
+    )
+    assert fusion_process_state(system=system) == state
+    assert fusion_process_running(system=system) is (state == "running")
+
+
+@pytest.mark.parametrize("fresh", [True, False], ids=["fresh-heartbeat", "no-heartbeat"])
+def test_status_endpoint_reads_the_file_once_and_asks_the_os_only_without_a_heartbeat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fresh: bool,
+) -> None:
+    from server.cadlink.fusion import fusion_status as status_module
+
+    app = create_app(data_dir=tmp_path / "data")
+    if fresh:
+        _write_status(tmp_path / "data", links=[], updated_at=datetime.now(timezone.utc))
+    probes: list[bool] = []
+    reads: list[Path] = []
+    real_read = status_module.read_status_file
+
+    def counted_read(ipc: Path):
+        reads.append(ipc)
+        return real_read(ipc)
+
+    def probe() -> bool:
+        probes.append(True)
+        return False
+
+    monkeypatch.setattr(status_module, "read_status_file", counted_read)
+    monkeypatch.setattr("server.cadlink.api.fusion_process_running", probe)
+    payload = FusionStatusRequest.model_validate({"design": {"formula": "OSSE", "L": 120, "a": 45}})
+    response = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
+
+    assert len(reads) == 1
+    if fresh:
+        assert probes == []
+        assert response["running"] is True and response["processRunning"] is True
+    else:
+        assert probes == [True]
+        assert response["state"] == "closed"

@@ -112,39 +112,6 @@ def _observation_freshness(link: Mapping[str, Any]) -> str:
     return OBSERVATION_STALE
 
 
-def fusion_process_running(*, system: str | None = None) -> bool:
-    """Detect Fusion without activating it or claiming that WGLink is alive."""
-
-    resolved = platform.system() if system is None else system
-    if resolved == "Darwin":
-        pgrep = shutil.which("pgrep")
-        command = [pgrep, "-x", "Autodesk Fusion"] if pgrep else None
-    elif resolved == "Windows":
-        tasklist = shutil.which("tasklist")
-        command = (
-            [tasklist, "/FI", "IMAGENAME eq Fusion360.exe", "/NH"]
-            if tasklist
-            else None
-        )
-    else:
-        command = None
-    if command is None:
-        return False
-    try:
-        completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            command,
-            check=False,
-            capture_output=True,
-            timeout=2,
-            **background_process_kwargs(system=resolved),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    if resolved == "Windows":
-        return completed.returncode == 0 and b"Fusion360.exe" in completed.stdout
-    return completed.returncode == 0
-
-
 FUSION_RUNNING = "running"
 FUSION_CLOSED = "closed"
 FUSION_UNKNOWN = "unknown"
@@ -190,6 +157,17 @@ def fusion_process_state(*, system: str | None = None) -> str:
     if completed.returncode == 0:
         return FUSION_RUNNING
     return FUSION_CLOSED if completed.returncode == 1 else FUSION_UNKNOWN
+
+
+def fusion_process_running(*, system: str | None = None) -> bool:
+    """Detect Fusion without activating it or claiming that WGLink is alive.
+
+    Presence only: a check that cannot tell (``unknown``) reads as not
+    running. Anything that must not act while Fusion is open uses
+    :func:`fusion_process_state` instead.
+    """
+
+    return fusion_process_state(system=system) == FUSION_RUNNING
 
 
 def _utc_now() -> datetime:
@@ -276,20 +254,70 @@ def heartbeat_problem(payload: object, checked_at: datetime | None = None) -> tu
     return None
 
 
-def _read_file_heartbeat(data_dir: Path) -> object:
-    marker = data_dir.resolve() / IPC_SUBDIRECTORY / FUSION_STATUS_FILENAME
+class FusionStatusUnreadable(Exception):
+    """A read of ``.fusion-status.json`` failed part-way.
+
+    An atomic writer may be between bytes, or Windows may deny the read for a
+    moment. That is no observation, which a change detector must tell apart
+    from "there is no file".
+    """
+
+
+def read_status_file(ipc: Path) -> Mapping[str, Any] | None:
+    """The add-in's ``.fusion-status.json`` in ``ipc``, parsed, or None.
+
+    The one reader of the file. None means there is no usable file: it is
+    absent, a symlink, larger than ``_MAX_STATUS_BYTES``, or not a JSON
+    object. A read that fails raises :class:`FusionStatusUnreadable`. Schema,
+    version and freshness are each caller's own rule.
+    """
+
+    marker = ipc / FUSION_STATUS_FILENAME
     try:
         if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > _MAX_STATUS_BYTES:
             return None
-        return json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        raise FusionStatusUnreadable(str(exc)) from exc
+    return payload if isinstance(payload, Mapping) else None
+
+
+def delivers_requests(payload: Mapping[str, Any]) -> bool:
+    """A schema 1 Fusion report from an add-in that takes WG's requests."""
+
+    version = addin_delivery_version(payload)
+    return (
+        payload.get("schemaVersion") == 1
+        and payload.get("cadApplication") == "fusion360"
+        and version is not None
+        and version >= DELIVERY_VERSION
+    )
+
+
+def read_heartbeat_report(data_dir: Path) -> Mapping[str, Any] | None:
+    """The file heartbeat as written, unvalidated; None when there is none.
+
+    A caller that reads it once passes it to :func:`select_heartbeat`,
+    :func:`last_fusion_heartbeat` and :func:`read_fusion_status` as
+    ``report``, so one answer reads the file once.
+    """
+
+    try:
+        return read_status_file(data_dir.resolve() / IPC_SUBDIRECTORY)
+    except FusionStatusUnreadable:
         return None
 
 
-def last_fusion_heartbeat(data_dir: Path, now: datetime | None = None) -> Mapping[str, Any] | None:
+#: ``report`` was not supplied: read the file.
+_UNREAD: Any = object()
+
+
+def last_fusion_heartbeat(
+    data_dir: Path, now: datetime | None = None, *, report: Mapping[str, Any] | None = _UNREAD,
+) -> Mapping[str, Any] | None:
     """The last valid report, including an old report, never a future timestamp."""
     checked_at = now or _utc_now()
-    payload = _read_file_heartbeat(data_dir)
+    payload = read_heartbeat_report(data_dir) if report is _UNREAD else report
     problem = heartbeat_problem(payload, checked_at)
     if problem not in (None, (HEARTBEAT_STALE, "updatedAt")) or not isinstance(payload, Mapping):
         return None
@@ -303,13 +331,15 @@ def wg_request_pickup(payload: Mapping[str, Any] | None) -> int | None:
     return value if type(value) is int and value >= 1 else None
 
 
-def select_heartbeat(data_dir: Path, now: datetime | None = None) -> SelectedHeartbeat:
+def select_heartbeat(
+    data_dir: Path, now: datetime | None = None, *, report: Mapping[str, Any] | None = _UNREAD,
+) -> SelectedHeartbeat:
     """A fresh file heartbeat and its transport, or none.
 
     One status answer selects once and shares that evidence with settlement.
     """
     checked_at = now or _utc_now()
-    payload = _read_file_heartbeat(data_dir)
+    payload = read_heartbeat_report(data_dir) if report is _UNREAD else report
     if payload is not None and heartbeat_problem(payload, checked_at) is None:
         return payload, HEARTBEAT_FILE  # type: ignore[return-value]
     return None, None
@@ -580,22 +610,20 @@ def addin_inbox_session_signature(data_dir: Path | None) -> tuple[str | None, bo
 
     if data_dir is None:
         return None, False
-    marker = data_dir.resolve() / IPC_SUBDIRECTORY / FUSION_STATUS_FILENAME
     try:
-        if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > _MAX_STATUS_BYTES:
-            return None, False
-        payload = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
-        # An atomic writer may be between bytes, or Windows may temporarily
-        # deny the read. This is no observation; the caller retains its last
-        # signature until a complete read proves a transition.
+        payload = read_status_file(data_dir.resolve() / IPC_SUBDIRECTORY)
+    except FusionStatusUnreadable:
+        # No observation; the caller retains its last signature until a
+        # complete read proves a transition.
         return None
-    if not isinstance(payload, Mapping):
+    if payload is None:
         return None, False
     return _string(payload.get("sessionId")), addin_declares_inbox_transfer(payload)
 
 
-def _command_driven_heartbeat(data_dir: Path, checked_at: datetime) -> Mapping[str, Any] | None:
+def _command_driven_heartbeat(
+    payload: Mapping[str, Any] | None, checked_at: datetime,
+) -> Mapping[str, Any] | None:
     """The file heartbeat of an add-in that runs no automatic coordination.
 
     Only when it is otherwise valid and merely older than the freshness window
@@ -604,7 +632,6 @@ def _command_driven_heartbeat(data_dir: Path, checked_at: datetime) -> Mapping[s
     is offline, and stays reported so.
     """
 
-    payload = _read_file_heartbeat(data_dir)
     if heartbeat_problem(payload, checked_at) != (HEARTBEAT_STALE, "updatedAt"):
         return None
     assert isinstance(payload, Mapping)
@@ -641,15 +668,20 @@ def read_fusion_status(
     returned_manifest: Mapping[str, Any] | None = None,
     now: datetime | None = None,
     heartbeat: SelectedHeartbeat | None = None,
+    report: Mapping[str, Any] | None = _UNREAD,
 ) -> dict[str, Any]:
     """Classify the active Fusion document against the design on screen.
 
     ``workspace_root`` is WG's data directory. ``heartbeat`` is a selection a
     caller already made with :func:`select_heartbeat` for this same answer;
-    without it this selects for itself. It is never read twice.
+    without it this selects for itself. ``report`` is the file as the caller
+    read it with :func:`read_heartbeat_report`; without it this reads the
+    file once for itself.
     """
 
     checked_at = now or _utc_now()
+    if report is _UNREAD:
+        report = read_heartbeat_report(workspace_root)
     closed: dict[str, Any] = {
         "cadApplication": "fusion360",
         "state": "addin_offline" if process_running else "closed",
@@ -683,13 +715,18 @@ def read_fusion_status(
         "statusTtlSeconds": FUSION_STATUS_TTL.total_seconds(),
         "observationPolicy": None,
         "addinInboxTransfer": False,
-        "wgRequestPickup": wg_request_pickup(last_fusion_heartbeat(workspace_root, checked_at)),
+        "wgRequestPickup": wg_request_pickup(
+            last_fusion_heartbeat(workspace_root, checked_at, report=report)
+        ),
         "immutableBundles": False,
     }
-    payload, transport = heartbeat if heartbeat is not None else select_heartbeat(workspace_root, checked_at)
+    payload, transport = (
+        heartbeat if heartbeat is not None
+        else select_heartbeat(workspace_root, checked_at, report=report)
+    )
     # A future timestamp is not trusted either (``FUSION_STATUS_MAX_SKEW``).
     if payload is None or heartbeat_problem(payload, checked_at) is not None:
-        reported = _command_driven_heartbeat(workspace_root, checked_at) if process_running else None
+        reported = _command_driven_heartbeat(report, checked_at) if process_running else None
         if reported is None:
             return closed
         # The last status that add-in chose to report, classified as of when it
@@ -707,6 +744,7 @@ def read_fusion_status(
                 returned_manifest=returned_manifest,
                 now=_timestamp(reported.get("updatedAt")),
                 heartbeat=(reported, HEARTBEAT_FILE),
+                report=report,
             )
         )
     updated_at = _timestamp(payload.get("updatedAt"))
@@ -905,15 +943,19 @@ __all__ = [
     "FUSION_CLOSED",
     "FUSION_RUNNING",
     "FUSION_UNKNOWN",
+    "FusionStatusUnreadable",
     "OBSERVATION_CURRENT",
     "OBSERVATION_NONE",
     "OBSERVATION_STALE",
     "OBSERVATION_UNKNOWN",
+    "delivers_requests",
     "fusion_process_running",
     "fusion_process_state",
     "heartbeat_now",
     "heartbeat_problem",
     "read_fusion_status",
+    "read_heartbeat_report",
+    "read_status_file",
     "select_heartbeat",
     "settleable_heartbeat",
 ]
