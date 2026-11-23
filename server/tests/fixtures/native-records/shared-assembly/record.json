@@ -1,0 +1,946 @@
+{
+ "acoustic_domain": "free-space",
+ "artifact_sha256": "sha256:144f0aeb3b0fa345da6eade99df20e55fb6a3ab2874ff0bf7a99475d9943d29d",
+ "bundle_store_path": "<bundle>",
+ "created_at": "2026-11-23T13:16:57Z",
+ "domain_interpretation": {
+  "type": "native-shared-horn-woofer-closed-enclosure"
+ },
+ "finding_ids": [],
+ "findings": [],
+ "freshness": {
+  "instances": [],
+  "verdict": "unlinked"
+ },
+ "healing": {
+  "attempted": false,
+  "mode": "none",
+  "options": [],
+  "original_mesh_error": null,
+  "performed": false,
+  "rejected_attempts": [],
+  "roles_became_ambiguous": [],
+  "selector_reanchor": {
+   "gates": {
+    "area_rel": 0.02,
+    "centroid_mm": 5.0
+   },
+   "matched_surfaces": 9,
+   "max_area_relative_error": 0.0,
+   "max_centroid_distance_mm": 0.0,
+   "required": false,
+   "residuals": []
+  },
+  "topology_after": {
+   "curves": 16,
+   "points": 11,
+   "surfaces": 9,
+   "volumes": 0
+  },
+  "topology_before": {
+   "curves": 16,
+   "points": 11,
+   "surfaces": 9,
+   "volumes": 0
+  },
+  "trigger": "unhealed-mesh-succeeded"
+ },
+ "identity": {
+  "instances": [],
+  "schema_version": 1,
+  "selected_instance_id": null,
+  "solver_anchor_instance_id": null
+ },
+ "ingest_id": "wgi_01M848TWKP3G9EMFNARFPMPVKD",
+ "manifest_sha256": "sha256:6dd5beec45cf09c897a698e9f5716aba7c6d2d39e9ead6c2aebd95d838c3f3b3",
+ "mesh": {
+  "geometric_quality": {
+   "method": "finite-shared-assembly-lipschitz-v1",
+   "moving_patch_bounds_mm": {
+    "horn/piston": 0.1490928992532909,
+    "woofer/piston": 0.1491585896944234
+   },
+   "rigid_bound_mm": 0.14970118386310713,
+   "tolerance_mm": 0.15
+  },
+  "integrity": {
+   "degenerate_triangle_count": 0,
+   "duplicate_triangle_count": 0,
+   "element_quality": {
+    "excluded_triangle_count": 0,
+    "mean_radius_ratio": 0.9630949760978944,
+    "measured_triangle_count": 2490,
+    "min_angle_deg": 20.496045041829163,
+    "min_angle_threshold_deg": 5.0,
+    "min_radius_ratio": 0.33965592877351586,
+    "poor_min_angle_count": 0,
+    "poor_radius_ratio_count": 0,
+    "radius_ratio_threshold": 0.1,
+    "valid": true,
+    "worst_triangles": [
+     {
+      "area": 1.1637936383488984e-06,
+      "min_angle_deg": 24.999999999999776,
+      "radius_ratio": 0.33965592877351586
+     },
+     {
+      "area": 1.1637936383488888e-06,
+      "min_angle_deg": 24.999999999999854,
+      "radius_ratio": 0.3396559287735189
+     },
+     {
+      "area": 1.163793638348893e-06,
+      "min_angle_deg": 24.999999999999794,
+      "radius_ratio": 0.33965592877351924
+     },
+     {
+      "area": 1.1637936383489032e-06,
+      "min_angle_deg": 24.999999999999943,
+      "radius_ratio": 0.3396559287735195
+     },
+     {
+      "area": 1.1637936383489e-06,
+      "min_angle_deg": 24.999999999999915,
+      "radius_ratio": 0.3396559287735196
+     },
+     {
+      "area": 1.1637936383489005e-06,
+      "min_angle_deg": 24.999999999999975,
+      "radius_ratio": 0.33965592877351963
+     },
+     {
+      "area": 1.163793638348908e-06,
+      "min_angle_deg": 24.999999999999897,
+      "radius_ratio": 0.33965592877351986
+     },
+     {
+      "area": 1.1637936383489113e-06,
+      "min_angle_deg": 24.999999999999883,
+      "radius_ratio": 0.33965592877352013
+     }
+    ]
+   },
+   "inconsistent_edge_count": 0,
+   "invalid_index_triangle_count": 0,
+   "is_watertight": true,
+   "nonmanifold_edge_count": 0,
+   "off_plane_open_edge_count": 0,
+   "off_plane_open_edges_sample": [],
+   "open_edge_count": 0,
+   "open_edges_sample": [],
+   "orientation_valid": true,
+   "self_intersection": {
+    "checked": true,
+    "coplanar_overlap_count": 0,
+    "intersecting_triangle_count": 0,
+    "proper_crossing_count": 0,
+    "samples": []
+   },
+   "signed_volume": 0.0002481085725474925,
+   "valid": true
+  },
+  "metadata": {
+   "element_shape": {
+    "excluded_triangle_count": 0,
+    "mean_radius_ratio": 0.9630949760978944,
+    "measured_triangle_count": 2490,
+    "min_angle_deg": 20.496045041829163,
+    "min_angle_threshold_deg": 5.0,
+    "min_radius_ratio": 0.33965592877351586,
+    "poor_min_angle_count": 0,
+    "poor_radius_ratio_count": 0,
+    "radius_ratio_threshold": 0.1,
+    "valid": true,
+    "worst_triangles": [
+     {
+      "area": 1.1637936383488984e-06,
+      "min_angle_deg": 24.999999999999776,
+      "radius_ratio": 0.33965592877351586
+     },
+     {
+      "area": 1.1637936383488888e-06,
+      "min_angle_deg": 24.999999999999854,
+      "radius_ratio": 0.3396559287735189
+     },
+     {
+      "area": 1.163793638348893e-06,
+      "min_angle_deg": 24.999999999999794,
+      "radius_ratio": 0.33965592877351924
+     },
+     {
+      "area": 1.1637936383489032e-06,
+      "min_angle_deg": 24.999999999999943,
+      "radius_ratio": 0.3396559287735195
+     },
+     {
+      "area": 1.1637936383489e-06,
+      "min_angle_deg": 24.999999999999915,
+      "radius_ratio": 0.3396559287735196
+     },
+     {
+      "area": 1.1637936383489005e-06,
+      "min_angle_deg": 24.999999999999975,
+      "radius_ratio": 0.33965592877351963
+     },
+     {
+      "area": 1.163793638348908e-06,
+      "min_angle_deg": 24.999999999999897,
+      "radius_ratio": 0.33965592877351986
+     },
+     {
+      "area": 1.1637936383489113e-06,
+      "min_angle_deg": 24.999999999999883,
+      "radius_ratio": 0.33965592877352013
+     }
+    ]
+   },
+   "mesh_frequency_validation": {
+    "edge_limit_m": null,
+    "edge_limit_step_units": null,
+    "elements_per_wavelength": 6.0,
+    "frequency_policy": "global_warn_source_hard",
+    "global_max_edge_m": 0.010604873632747433,
+    "global_max_edge_step_units": 10.604873632747433,
+    "global_max_valid_frequency_hz": 5390.603287354433,
+    "global_p95_edge_m": 0.008129102875806949,
+    "global_p95_edge_step_units": 8.129102875806948,
+    "global_status": "unknown",
+    "invalid_sources": [],
+    "max_valid_frequency_hz": 5390.603287354433,
+    "per_source": {
+     "horn/piston": {
+      "effective_max_valid_frequency_hz": 25226.186814770026,
+      "max_edge_m": 0.0011927431940263289,
+      "max_edge_step_units": 1.192743194026329,
+      "max_valid_frequency_hz": 47928.730134849764,
+      "name": "horn/piston",
+      "p95_edge_m": 0.0011148249373666408,
+      "p95_edge_step_units": 1.1148249373666408,
+      "requested_resolution_mm": 0.9797958971132712,
+      "status": "unknown",
+      "tag": 101,
+      "triangle_count": 138,
+      "wall_distance_mm": 6.0,
+      "wall_max_edge_m": 0.002266163613487369,
+      "wall_max_edge_step_units": 2.2661636134873686,
+      "wall_max_valid_frequency_hz": 25226.186814770026,
+      "wall_p95_edge_m": 0.0019795350061682228,
+      "wall_p95_edge_step_units": 1.9795350061682226,
+      "wall_triangle_count": 182
+     },
+     "woofer/piston": {
+      "effective_max_valid_frequency_hz": 8228.204192635501,
+      "max_edge_m": 0.0017706926898504215,
+      "max_edge_step_units": 1.7706926898504214,
+      "max_valid_frequency_hz": 32284.91708038609,
+      "name": "woofer/piston",
+      "p95_edge_m": 0.0015247581378616678,
+      "p95_edge_step_units": 1.5247581378616677,
+      "requested_resolution_mm": 1.3856406460551018,
+      "status": "unknown",
+      "tag": 102,
+      "triangle_count": 265,
+      "wall_distance_mm": 6.0,
+      "wall_max_edge_m": 0.006947648032098256,
+      "wall_max_edge_step_units": 6.947648032098256,
+      "wall_max_valid_frequency_hz": 8228.204192635501,
+      "wall_p95_edge_m": 0.005139404344962365,
+      "wall_p95_edge_step_units": 5.139404344962365,
+      "wall_triangle_count": 128
+     }
+    },
+    "requested_max_frequency_hz": null,
+    "scope": "global_warn_source_hard",
+    "speed_of_sound_m_s": 343.0,
+    "status": "unknown",
+    "warnings": []
+   },
+   "occ_tessellation": {
+    "algorithm": 6,
+    "mesh_size_max_mm": 8.0,
+    "mesh_size_min_mm": 0.4898979485566356,
+    "surface_deviation_mm": 0.1
+   },
+   "postprocess": {
+    "after": {
+     "boundary_edges": 0,
+     "free_edges": 0,
+     "inconsistent_edges": 0,
+     "n_edges": 3735,
+     "nonmanifold_edges": 0,
+     "signed_volume_step_units3": 248108.57254749245
+    },
+    "before": {
+     "boundary_edges": 0,
+     "free_edges": 0,
+     "inconsistent_edges": 0,
+     "n_edges": 3735,
+     "nonmanifold_edges": 0,
+     "signed_volume_step_units3": 248108.57254749245
+    },
+    "bore_alignment_flipped": 0,
+    "bore_alignment_kept": 0,
+    "degenerate_triangles_removed": 0,
+    "flipped_consistency": 0,
+    "flipped_global": 0,
+    "reduced_orientation": "mirrored-parent",
+    "symmetry_parent_volume_flipped": 0,
+    "symmetry_parent_volume_kept": 0,
+    "symmetry_source_parent_conflicts": 0,
+    "symmetry_volume_fallback_flipped": 0,
+    "symmetry_volume_fallback_kept": 0,
+    "unjudged_symmetry_components": 0,
+    "unjudged_symmetry_no_source": 0,
+    "unresolved_symmetry_components": 0,
+    "welded_vertices": 0
+   },
+   "surface_deviation": {
+    "mean_mm": 0.009263540998019801,
+    "method": "facet barycentric lattice projected to its originating OCC face",
+    "p95_mm": 0.04345174619891822,
+    "peak_facet_longest_edge_mm": 2.0280478391541075,
+    "peak_mm": 0.0956296423697067,
+    "peak_point_mm": [
+     -8.634142238361912,
+     14.23799742047131,
+     -11.941005742543446
+    ],
+    "peak_surface": 2,
+    "peak_surface_type": "Cone",
+    "rms_mm": 0.01841069903391904,
+    "sample_count": 1771,
+    "sampled_triangle_count": 253,
+    "triangle_count": 2490
+   },
+   "surface_deviation_mm": 0.1,
+   "tag_map": {
+    "1": {
+     "instance_id": null,
+     "role": "rigid",
+     "source_id": null
+    },
+    "101": {
+     "instance_id": null,
+     "role": "HF",
+     "source_id": "horn/piston"
+    },
+    "102": {
+     "instance_id": null,
+     "role": "LF",
+     "source_id": "woofer/piston"
+    }
+   },
+   "tag_namespace": "wg-import-v1",
+   "topology": {
+    "axis_normalization": {
+     "reflected_axes": [],
+     "symmetry_planes": []
+    },
+    "boundary_edges": 0,
+    "expected_symmetry_planes": [],
+    "free_edges": 0,
+    "inconsistent_edges": 0,
+    "nonmanifold_edges": 0,
+    "signed_volume_step_units3": 248108.57254749245,
+    "source_normal_projections": {
+     "horn/piston": {
+      "projection_x_step_units2": 0.0,
+      "projection_y_step_units2": 0.0,
+      "projection_z_step_units2": 99.55531634362397,
+      "tag": 101,
+      "triangle_count": 138,
+      "vector_step_units2": [
+       0.0,
+       0.0,
+       99.55531634362397
+      ]
+     },
+     "woofer/piston": {
+      "projection_x_step_units2": 0.0,
+      "projection_y_step_units2": 0.0,
+      "projection_z_step_units2": 400.19394252213846,
+      "tag": 102,
+      "triangle_count": 265,
+      "vector_step_units2": [
+       0.0,
+       0.0,
+       400.19394252213846
+      ]
+     }
+    },
+    "triangles": 2490,
+    "unexpected_free_edge_midpoint_samples": [],
+    "unexpected_free_edges": 0,
+    "vertices": 1247
+   }
+  },
+  "stats": {
+   "artifact_actual_domain_triangle_limit": 22000,
+   "bounds_m": {
+    "max_x": 0.035,
+    "max_y": 0.045,
+    "max_z": 0.007,
+    "min_x": -0.035,
+    "min_y": -0.045,
+    "min_z": -0.033
+   },
+   "dense_solver_aperture_triangle_count": 0,
+   "dense_solver_bempp_bytes_per_vertex_squared": 24,
+   "dense_solver_bempp_estimate_bytes": 37320216,
+   "dense_solver_domain_multiplier": 1,
+   "dense_solver_memory_estimate_bytes": 136840792,
+   "dense_solver_memory_limit_bytes": 34359738368,
+   "dense_solver_memory_limit_source": "physical-memory",
+   "dense_solver_metal_bytes_per_dof_squared": 88,
+   "dense_solver_metal_dof_count": 1247,
+   "dense_solver_metal_estimate_bytes": 136840792,
+   "dense_solver_physical_memory_bytes": 68719476736,
+   "dense_solver_physical_memory_known": true,
+   "dense_solver_physical_memory_source": "sysconf",
+   "dense_solver_used_vertex_count": 1247,
+   "domain_multiplier": 1.0,
+   "generated_by": "hornlab-waveguide-mesher",
+   "integrity": {
+    "degenerate_triangle_count": 0,
+    "duplicate_triangle_count": 0,
+    "element_quality": {
+     "excluded_triangle_count": 0,
+     "mean_radius_ratio": 0.9630949760978944,
+     "measured_triangle_count": 2490,
+     "min_angle_deg": 20.496045041829163,
+     "min_angle_threshold_deg": 5.0,
+     "min_radius_ratio": 0.33965592877351586,
+     "poor_min_angle_count": 0,
+     "poor_radius_ratio_count": 0,
+     "radius_ratio_threshold": 0.1,
+     "valid": true,
+     "worst_triangles": [
+      {
+       "area": 1.1637936383488984e-06,
+       "min_angle_deg": 24.999999999999776,
+       "radius_ratio": 0.33965592877351586
+      },
+      {
+       "area": 1.1637936383488888e-06,
+       "min_angle_deg": 24.999999999999854,
+       "radius_ratio": 0.3396559287735189
+      },
+      {
+       "area": 1.163793638348893e-06,
+       "min_angle_deg": 24.999999999999794,
+       "radius_ratio": 0.33965592877351924
+      },
+      {
+       "area": 1.1637936383489032e-06,
+       "min_angle_deg": 24.999999999999943,
+       "radius_ratio": 0.3396559287735195
+      },
+      {
+       "area": 1.1637936383489e-06,
+       "min_angle_deg": 24.999999999999915,
+       "radius_ratio": 0.3396559287735196
+      },
+      {
+       "area": 1.1637936383489005e-06,
+       "min_angle_deg": 24.999999999999975,
+       "radius_ratio": 0.33965592877351963
+      },
+      {
+       "area": 1.163793638348908e-06,
+       "min_angle_deg": 24.999999999999897,
+       "radius_ratio": 0.33965592877351986
+      },
+      {
+       "area": 1.1637936383489113e-06,
+       "min_angle_deg": 24.999999999999883,
+       "radius_ratio": 0.33965592877352013
+      }
+     ]
+    },
+    "inconsistent_edge_count": 0,
+    "invalid_index_triangle_count": 0,
+    "is_watertight": true,
+    "nonmanifold_edge_count": 0,
+    "off_plane_open_edge_count": 0,
+    "off_plane_open_edges_sample": [],
+    "open_edge_count": 0,
+    "open_edges_sample": [],
+    "orientation_valid": true,
+    "self_intersection": {
+     "checked": true,
+     "coplanar_overlap_count": 0,
+     "intersecting_triangle_count": 0,
+     "proper_crossing_count": 0,
+     "samples": []
+    },
+    "signed_volume": 0.0002481085725474925,
+    "valid": true
+   },
+   "source": "hornlab_waveguide_mesher_step_import",
+   "tag_counts": {
+    "1": 2087,
+    "101": 138,
+    "102": 265
+   },
+   "triangle_count": 2490,
+   "units": "m",
+   "vertex_count": 1247,
+   "warnings": []
+  }
+ },
+ "mesh_content_sha256": "sha256:7e64e311db1ffacbdafbebcf462834cd9590af3c71c0f9372b686c12a558327c",
+ "mesh_sizes": {
+  "rigid_size_mm": 8.0,
+  "source_size_mm": {
+   "horn/piston": 0.9797958971132712,
+   "woofer/piston": 1.3856406460551018
+  },
+  "transition_mm": 6.0
+ },
+ "mesh_store_path": "<bundle>/solve.msh",
+ "native_source": {
+  "channels": [
+   {
+    "id": "hf",
+    "motion": "normal",
+    "patch_weights": {
+     "horn/piston": 1.0
+    },
+    "physical_source_id": "horn",
+    "source_ids": [
+     "horn/piston"
+    ]
+   },
+   {
+    "id": "lf",
+    "motion": "axial",
+    "patch_weights": {
+     "woofer/piston": 1.0
+    },
+    "physical_source_id": "woofer",
+    "source_ids": [
+     "woofer/piston"
+    ]
+   }
+  ],
+  "excitation_sha256": "sha256:a915daf5047e976e30f0f673c2ac2c175d09c8a0c4223ad67089d50bd4a91dda",
+  "geometry_sha256": "sha256:56fa0379b1b060df6c8ba056f5541d85defac00e12b0d5edf96221e99fd0c4be",
+  "mesh_density_sha256": "sha256:cf0102b4bfaecca20f31b3c5572f697d78ac4743caa644735b0475961cb68173",
+  "observation_frame": {
+   "axis": [
+    0,
+    0,
+    1
+   ],
+   "mouth_center_m": [
+    0,
+    0,
+    0.007
+   ],
+   "origin_m": [
+    0,
+    0,
+    0.007
+   ],
+   "source_center_m": [
+    0,
+    0,
+    0.007
+   ],
+   "u": [
+    1,
+    0,
+    0
+   ],
+   "v": [
+    0,
+    1,
+    0
+   ]
+  },
+  "patches": [
+   {
+    "advanced_face_indices": [
+     17
+    ],
+    "area_mm2": 50.265482457436704,
+    "band": "HF",
+    "id": "horn/piston",
+    "local_patch_id": "piston",
+    "mesh_tag": 1001,
+    "physical_source_id": "horn",
+    "role": "moving"
+   },
+   {
+    "advanced_face_indices": [
+     258
+    ],
+    "area_mm2": 201.06192982974682,
+    "band": "LF",
+    "id": "woofer/piston",
+    "local_patch_id": "piston",
+    "mesh_tag": 1002,
+    "physical_source_id": "woofer",
+    "role": "moving"
+   }
+  ],
+  "recipe": {
+   "aperture_radius_mm": 8.0,
+   "depth_mm": 40.0,
+   "frame": "aligned-z-mm-v1",
+   "front_z_mm": 7.0,
+   "height_mm": 90.0,
+   "horn": {
+    "physical_source_id": "horn",
+    "points": [
+     {
+      "id": "pole",
+      "r_mm": 0.0,
+      "z_mm": 0.0
+     },
+     {
+      "id": "rim",
+      "r_mm": 4.0,
+      "z_mm": 0.0
+     }
+    ],
+    "rim_id": "horn.rim",
+    "segments": [
+     {
+      "center_mm": null,
+      "direction": "ccw",
+      "end": "rim",
+      "id": "piston",
+      "kind": "line",
+      "role": "moving",
+      "start": "pole"
+     }
+    ],
+    "version": 1
+   },
+   "horn_length_mm": 24.0,
+   "horn_xy_mm": [
+    -13.0,
+    17.0
+   ],
+   "mouth_radius_mm": 10.0,
+   "version": 1,
+   "width_mm": 70.0,
+   "woofer": {
+    "physical_source_id": "woofer",
+    "points": [
+     {
+      "id": "pole",
+      "r_mm": 0.0,
+      "z_mm": 0.0
+     },
+     {
+      "id": "rim",
+      "r_mm": 8.0,
+      "z_mm": 0.0
+     }
+    ],
+    "rim_id": "woofer.rim",
+    "segments": [
+     {
+      "center_mm": null,
+      "direction": "ccw",
+      "end": "rim",
+      "id": "piston",
+      "kind": "line",
+      "role": "moving",
+      "start": "pole"
+     }
+    ],
+    "version": 1
+   },
+   "woofer_xy_mm": [
+    9.0,
+    -15.0
+   ]
+  },
+  "required_features": [
+   "native-source-contour-v1",
+   "native-shared-horn-woofer-v1"
+  ],
+  "source_frames": {
+   "horn": {
+    "axis": [
+     0,
+     0,
+     1
+    ],
+    "origin_m": [
+     -0.013000000000000001,
+     0.017,
+     -0.017
+    ]
+   },
+   "woofer": {
+    "axis": [
+     0,
+     0,
+     1
+    ],
+    "origin_m": [
+     0.009000000000000001,
+     -0.015,
+     0.007
+    ]
+   }
+  }
+ },
+ "normalisation": {
+  "matrix": [
+   [
+    1,
+    0,
+    0,
+    0
+   ],
+   [
+    0,
+    1,
+    0,
+    0
+   ],
+   [
+    0,
+    0,
+    1,
+    0
+   ],
+   [
+    0,
+    0,
+    0,
+    1
+   ]
+  ],
+  "source_frame": {
+   "axis": [
+    0,
+    0,
+    1
+   ],
+   "mouth_center_m": [
+    0,
+    0,
+    0.007
+   ],
+   "origin_m": [
+    0,
+    0,
+    0.007
+   ],
+   "source_center_m": [
+    0,
+    0,
+    0.007
+   ],
+   "u": [
+    1,
+    0,
+    0
+   ],
+   "v": [
+    0,
+    1,
+    0
+   ]
+  }
+ },
+ "polar_grid_derivation": {
+  "axes": {
+   "diagonal": {
+    "maximum_deg": 180.0,
+    "may_widen_not_narrow": true,
+    "minimum_deg": -180.0,
+    "plane": "x0+y0",
+    "symmetry_accepted": false
+   },
+   "horizontal": {
+    "maximum_deg": 180.0,
+    "may_widen_not_narrow": true,
+    "minimum_deg": -180.0,
+    "plane": "x0",
+    "symmetry_accepted": false
+   },
+   "vertical": {
+    "maximum_deg": 180.0,
+    "may_widen_not_narrow": true,
+    "minimum_deg": -180.0,
+    "plane": "y0",
+    "symmetry_accepted": false
+   }
+  },
+  "cut_planes": []
+ },
+ "post_cut_source_areas": {
+  "horn/piston": {
+   "parent_area_mm2": 50.26548245743667,
+   "predicted_retained_fraction": 1.0,
+   "relative_share_error": 0.0,
+   "retained_child_area_mm2": 50.26548245743667,
+   "retained_fraction": 1.0
+  },
+  "woofer/piston": {
+   "parent_area_mm2": 201.06192982974667,
+   "predicted_retained_fraction": 1.0,
+   "relative_share_error": 0.0,
+   "retained_child_area_mm2": 201.06192982974667,
+   "retained_fraction": 1.0
+  }
+ },
+ "producer": "native",
+ "report_sha256": "sha256:1523d6df66057bf04dfcaf12b089a69b4a64d688f0386907b9609cf1d0433e6d",
+ "requested_mesh_sizes": {
+  "rigid_size_mm": 8.0,
+  "source_size_mm": {
+   "horn/piston": 4.0,
+   "woofer/piston": 4.0
+  },
+  "transition_mm": 6.0
+ },
+ "return_id": "native:wgi_01M848TWKP3G9EMFNARFPMPVKD",
+ "role_resolution": {
+  "horn/piston": {
+   "area_drift_overridden": false,
+   "area_mm2": 50.26548245743667,
+   "area_relative_drift": 7.067899292141147e-16,
+   "connected_components": 1,
+   "method": "declared-selectors",
+   "origins": [
+    "advanced_face_indices"
+   ],
+   "skipped": false,
+   "source_id": "horn/piston",
+   "surfaces": [
+    1
+   ]
+  },
+  "woofer/piston": {
+   "area_drift_overridden": false,
+   "area_mm2": 201.06192982974667,
+   "area_relative_drift": 7.067899292141147e-16,
+   "connected_components": 1,
+   "method": "declared-selectors",
+   "origins": [
+    "advanced_face_indices"
+   ],
+   "skipped": false,
+   "source_id": "woofer/piston",
+   "surfaces": [
+    4
+   ]
+  }
+ },
+ "scope": {
+  "degraded_skip_count": 0,
+  "status": "full"
+ },
+ "sizing_estimate": {
+  "basis": "area-over-h-squared",
+  "curvature_aware": false,
+  "feasibility": "ok",
+  "freq_count": 1,
+  "is_lower_bound": true,
+  "measured": {
+   "feasibility": "ok",
+   "freq_count": 1,
+   "n_triangles": 2490,
+   "ram_bytes": 99201600,
+   "ram_gb": 0.099,
+   "solve_seconds_cubic_upper_per_freq": 0.014,
+   "solve_seconds_per_freq": 0.059,
+   "solve_seconds_total": 0.1
+  },
+  "n_triangles": 1295,
+  "per_role_triangles": {
+   "horn/piston": 120,
+   "rigid": 933,
+   "woofer/piston": 241
+  },
+  "per_role_valid_f_max_hz": {
+   "horn/piston": 58345.5,
+   "rigid": 7145.8,
+   "woofer/piston": 41256.5
+  },
+  "ram_bytes": 26832400,
+  "ram_gb": 0.027,
+  "solve_seconds_cubic_upper_per_freq": 0.002,
+  "solve_seconds_per_freq": 0.012,
+  "solve_seconds_total": 0.0
+ },
+ "skipped_source_ids": [],
+ "solve_model_sha256": "sha256:7485a33a62432928fbc93f1ffbbb0db37374403feaffea8af78a4e45ed232391",
+ "source_tags": {
+  "horn/piston": 101,
+  "woofer/piston": 102
+ },
+ "sources": [
+  {
+   "expected_connected_components": 1,
+   "id": "horn/piston",
+   "instance_id": null,
+   "label": "horn/piston",
+   "observed": {
+    "face_count": 1,
+    "total_area_mm2": 50.265482457436704
+   },
+   "patch_policy": "single-connected",
+   "required": true,
+   "role": "HF",
+   "selectors": {
+    "advanced_face_indices": [
+     17
+    ]
+   }
+  },
+  {
+   "expected_connected_components": 1,
+   "id": "woofer/piston",
+   "instance_id": null,
+   "label": "woofer/piston",
+   "observed": {
+    "face_count": 1,
+    "total_area_mm2": 201.06192982974682
+   },
+   "patch_policy": "single-connected",
+   "required": true,
+   "role": "LF",
+   "selectors": {
+    "advanced_face_indices": [
+     258
+    ]
+   }
+  }
+ ],
+ "symmetry": {
+  "cut_planes": [],
+  "declared_cut_planes": [],
+  "domain_planes": [],
+  "mode": "auto-cut",
+  "note": "surface root bodies preserve the full domain",
+  "reflected_planes": [],
+  "requested_mode": "full"
+ },
+ "tag_map": {
+  "1": {
+   "instance_id": null,
+   "role": "rigid",
+   "source_id": null
+  },
+  "101": {
+   "instance_id": null,
+   "role": "HF",
+   "source_id": "horn/piston"
+  },
+  "102": {
+   "instance_id": null,
+   "role": "LF",
+   "source_id": "woofer/piston"
+  }
+ },
+ "transformed_geometry_hash": "sha256:65e50f417bcf705fb9310e72a05221e55e3e7259965c5fab973dbbd269cdf7fd"
+}

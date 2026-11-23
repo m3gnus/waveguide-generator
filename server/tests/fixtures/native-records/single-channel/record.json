@@ -1,0 +1,695 @@
+{
+ "acoustic_domain": "free-space",
+ "artifact_sha256": "sha256:2d5ac5d2ff89ee69388ffc2afd14091d79cebbf25661071341ffbe8b73c9d9df",
+ "bundle_store_path": "<bundle>",
+ "created_at": "2026-11-23T13:16:53Z",
+ "domain_interpretation": {
+  "type": "native-full-circle-closed-housing"
+ },
+ "finding_ids": [],
+ "findings": [],
+ "freshness": {
+  "instances": [],
+  "verdict": "unlinked"
+ },
+ "healing": {
+  "attempted": false,
+  "mode": "none",
+  "options": [],
+  "original_mesh_error": null,
+  "performed": false,
+  "rejected_attempts": [],
+  "roles_became_ambiguous": [],
+  "selector_reanchor": {
+   "gates": {
+    "area_rel": 0.02,
+    "centroid_mm": 5.0
+   },
+   "matched_surfaces": 5,
+   "max_area_relative_error": 0.0,
+   "max_centroid_distance_mm": 0.0,
+   "required": false,
+   "residuals": []
+  },
+  "topology_after": {
+   "curves": 6,
+   "points": 4,
+   "surfaces": 5,
+   "volumes": 0
+  },
+  "topology_before": {
+   "curves": 6,
+   "points": 4,
+   "surfaces": 5,
+   "volumes": 0
+  },
+  "trigger": "unhealed-mesh-succeeded"
+ },
+ "identity": {
+  "instances": [],
+  "schema_version": 1,
+  "selected_instance_id": null,
+  "solver_anchor_instance_id": null
+ },
+ "ingest_id": "wgi_01M848TS2K9W36JS4M19ZTGGNJ",
+ "manifest_sha256": "sha256:fa35817ea7d283a1044cc34e3f3a5f545541c70bcce0bdcd863b72dbec9c3373",
+ "mesh": {
+  "geometric_quality": {
+   "method": "finite-meridian-lipschitz-v1",
+   "moving_patch_bounds_mm": {
+    "piston": 0.1127973650445479
+   },
+   "rigid_bound_mm": 0.14974400599507334,
+   "tolerance_mm": 0.15
+  },
+  "integrity": {
+   "degenerate_triangle_count": 0,
+   "duplicate_triangle_count": 0,
+   "element_quality": {
+    "excluded_triangle_count": 0,
+    "mean_radius_ratio": 0.9741938413948001,
+    "measured_triangle_count": 5144,
+    "min_angle_deg": 20.60756786240953,
+    "min_angle_threshold_deg": 5.0,
+    "min_radius_ratio": 0.5767323153995436,
+    "poor_min_angle_count": 0,
+    "poor_radius_ratio_count": 0,
+    "radius_ratio_threshold": 0.1,
+    "valid": true,
+    "worst_triangles": [
+     {
+      "area": 1.3346011440961652e-06,
+      "min_angle_deg": 20.60756786240953,
+      "radius_ratio": 0.5767323153995436
+     },
+     {
+      "area": 1.3346011440961478e-06,
+      "min_angle_deg": 20.607567862410722,
+      "radius_ratio": 0.5767323153995914
+     },
+     {
+      "area": 1.349067047332114e-06,
+      "min_angle_deg": 20.642792911332887,
+      "radius_ratio": 0.5803383487606181
+     },
+     {
+      "area": 1.3490670473321476e-06,
+      "min_angle_deg": 20.642792911334567,
+      "radius_ratio": 0.5803383487606776
+     },
+     {
+      "area": 1.3324543804304254e-06,
+      "min_angle_deg": 20.841480349223225,
+      "radius_ratio": 0.5856752001936686
+     },
+     {
+      "area": 1.3324543804304194e-06,
+      "min_angle_deg": 20.841480349223335,
+      "radius_ratio": 0.5856752001936708
+     },
+     {
+      "area": 1.351211217710016e-06,
+      "min_angle_deg": 20.94715549599431,
+      "radius_ratio": 0.590246348701676
+     },
+     {
+      "area": 1.3512112177099998e-06,
+      "min_angle_deg": 20.947155495994412,
+      "radius_ratio": 0.5902463487016767
+     }
+    ]
+   },
+   "inconsistent_edge_count": 0,
+   "invalid_index_triangle_count": 0,
+   "is_watertight": true,
+   "nonmanifold_edge_count": 0,
+   "off_plane_open_edge_count": 0,
+   "off_plane_open_edges_sample": [],
+   "open_edge_count": 0,
+   "open_edges_sample": [],
+   "orientation_valid": true,
+   "self_intersection": {
+    "checked": true,
+    "coplanar_overlap_count": 0,
+    "intersecting_triangle_count": 0,
+    "proper_crossing_count": 0,
+    "samples": []
+   },
+   "signed_volume": 5.9632385084083274e-05,
+   "valid": true
+  },
+  "metadata": {
+   "element_shape": {
+    "excluded_triangle_count": 0,
+    "mean_radius_ratio": 0.9741938413948001,
+    "measured_triangle_count": 5144,
+    "min_angle_deg": 20.60756786240953,
+    "min_angle_threshold_deg": 5.0,
+    "min_radius_ratio": 0.5767323153995436,
+    "poor_min_angle_count": 0,
+    "poor_radius_ratio_count": 0,
+    "radius_ratio_threshold": 0.1,
+    "valid": true,
+    "worst_triangles": [
+     {
+      "area": 1.3346011440961652e-06,
+      "min_angle_deg": 20.60756786240953,
+      "radius_ratio": 0.5767323153995436
+     },
+     {
+      "area": 1.3346011440961478e-06,
+      "min_angle_deg": 20.607567862410722,
+      "radius_ratio": 0.5767323153995914
+     },
+     {
+      "area": 1.349067047332114e-06,
+      "min_angle_deg": 20.642792911332887,
+      "radius_ratio": 0.5803383487606181
+     },
+     {
+      "area": 1.3490670473321476e-06,
+      "min_angle_deg": 20.642792911334567,
+      "radius_ratio": 0.5803383487606776
+     },
+     {
+      "area": 1.3324543804304254e-06,
+      "min_angle_deg": 20.841480349223225,
+      "radius_ratio": 0.5856752001936686
+     },
+     {
+      "area": 1.3324543804304194e-06,
+      "min_angle_deg": 20.841480349223335,
+      "radius_ratio": 0.5856752001936708
+     },
+     {
+      "area": 1.351211217710016e-06,
+      "min_angle_deg": 20.94715549599431,
+      "radius_ratio": 0.590246348701676
+     },
+     {
+      "area": 1.3512112177099998e-06,
+      "min_angle_deg": 20.947155495994412,
+      "radius_ratio": 0.5902463487016767
+     }
+    ]
+   },
+   "mesh_frequency_validation": {
+    "edge_limit_m": null,
+    "edge_limit_step_units": null,
+    "elements_per_wavelength": 6.0,
+    "frequency_policy": "global_warn_source_hard",
+    "global_max_edge_m": 0.0037624136734418123,
+    "global_max_edge_step_units": 3.762413673441812,
+    "global_max_valid_frequency_hz": 15194.147063146105,
+    "global_p95_edge_m": 0.00297201988702131,
+    "global_p95_edge_step_units": 2.9720198870213097,
+    "global_status": "unknown",
+    "invalid_sources": [],
+    "max_valid_frequency_hz": 15194.147063146105,
+    "per_source": {
+     "piston": {
+      "effective_max_valid_frequency_hz": 15585.517734544794,
+      "max_edge_m": 0.0036095156814254193,
+      "max_edge_step_units": 3.6095156814254192,
+      "max_valid_frequency_hz": 15837.766534952749,
+      "name": "piston",
+      "p95_edge_m": 0.0028919104038198696,
+      "p95_edge_step_units": 2.8919104038198697,
+      "requested_resolution_mm": 4.0,
+      "status": "unknown",
+      "tag": 101,
+      "triangle_count": 604,
+      "wall_distance_mm": 8.0,
+      "wall_max_edge_m": 0.003667935043310022,
+      "wall_max_edge_step_units": 3.6679350433100217,
+      "wall_max_valid_frequency_hz": 15585.517734544794,
+      "wall_p95_edge_m": 0.002908610601145393,
+      "wall_p95_edge_step_units": 2.908610601145393,
+      "wall_triangle_count": 844
+     }
+    },
+    "requested_max_frequency_hz": null,
+    "scope": "global_warn_source_hard",
+    "speed_of_sound_m_s": 343.0,
+    "status": "unknown",
+    "warnings": []
+   },
+   "occ_tessellation": {
+    "algorithm": 6,
+    "mesh_size_max_mm": 2.727636339397171,
+    "mesh_size_min_mm": 1.3638181696985856,
+    "surface_deviation_mm": 0.1
+   },
+   "postprocess": {
+    "after": {
+     "boundary_edges": 0,
+     "free_edges": 0,
+     "inconsistent_edges": 0,
+     "n_edges": 7716,
+     "nonmanifold_edges": 0,
+     "signed_volume_step_units3": 59632.3850840833
+    },
+    "before": {
+     "boundary_edges": 0,
+     "free_edges": 0,
+     "inconsistent_edges": 0,
+     "n_edges": 7716,
+     "nonmanifold_edges": 0,
+     "signed_volume_step_units3": 59632.3850840833
+    },
+    "bore_alignment_flipped": 0,
+    "bore_alignment_kept": 0,
+    "degenerate_triangles_removed": 0,
+    "flipped_consistency": 0,
+    "flipped_global": 0,
+    "reduced_orientation": "mirrored-parent",
+    "symmetry_parent_volume_flipped": 0,
+    "symmetry_parent_volume_kept": 0,
+    "symmetry_source_parent_conflicts": 0,
+    "symmetry_volume_fallback_flipped": 0,
+    "symmetry_volume_fallback_kept": 0,
+    "unjudged_symmetry_components": 0,
+    "unjudged_symmetry_no_source": 0,
+    "unresolved_symmetry_components": 0,
+    "welded_vertices": 0
+   },
+   "surface_deviation": {
+    "mean_mm": 0.010639195047359013,
+    "method": "facet barycentric lattice projected to its originating OCC face",
+    "p95_mm": 0.02699906370388473,
+    "peak_facet_longest_edge_mm": 3.1250669948574314,
+    "peak_mm": 0.03914386108824443,
+    "peak_point_mm": [
+     10.609238105644764,
+     -22.131604070050997,
+     1.9465630138123085
+    ],
+    "peak_surface": 2,
+    "peak_surface_type": "Cone",
+    "rms_mm": 0.014670048602760192,
+    "sample_count": 1729,
+    "sampled_triangle_count": 247,
+    "triangle_count": 5144
+   },
+   "surface_deviation_mm": 0.1,
+   "tag_map": {
+    "1": {
+     "instance_id": null,
+     "role": "rigid",
+     "source_id": null
+    },
+    "101": {
+     "instance_id": null,
+     "role": "HF",
+     "source_id": "piston"
+    }
+   },
+   "tag_namespace": "wg-import-v1",
+   "topology": {
+    "axis_normalization": {
+     "reflected_axes": [],
+     "symmetry_planes": []
+    },
+    "boundary_edges": 0,
+    "expected_symmetry_planes": [],
+    "free_edges": 0,
+    "inconsistent_edges": 0,
+    "nonmanifold_edges": 0,
+    "signed_volume_step_units3": 59632.3850840833,
+    "source_normal_projections": {
+     "piston": {
+      "projection_x_step_units2": 0.0,
+      "projection_y_step_units2": 0.0,
+      "projection_z_step_units2": 3611.5261411882966,
+      "tag": 101,
+      "triangle_count": 604,
+      "vector_step_units2": [
+       0.0,
+       0.0,
+       3611.5261411882966
+      ]
+     }
+    },
+    "triangles": 5144,
+    "unexpected_free_edge_midpoint_samples": [],
+    "unexpected_free_edges": 0,
+    "vertices": 2574
+   }
+  },
+  "stats": {
+   "artifact_actual_domain_triangle_limit": 22000,
+   "bounds_m": {
+    "max_x": 0.031,
+    "max_y": 0.03099282356137662,
+    "max_z": 0.02,
+    "min_x": -0.030999999989377858,
+    "min_y": -0.03099732047111021,
+    "min_z": -0.015
+   },
+   "dense_solver_aperture_triangle_count": 0,
+   "dense_solver_bempp_bytes_per_vertex_squared": 24,
+   "dense_solver_bempp_estimate_bytes": 159011424,
+   "dense_solver_domain_multiplier": 1,
+   "dense_solver_memory_estimate_bytes": 583041888,
+   "dense_solver_memory_limit_bytes": 34359738368,
+   "dense_solver_memory_limit_source": "physical-memory",
+   "dense_solver_metal_bytes_per_dof_squared": 88,
+   "dense_solver_metal_dof_count": 2574,
+   "dense_solver_metal_estimate_bytes": 583041888,
+   "dense_solver_physical_memory_bytes": 68719476736,
+   "dense_solver_physical_memory_known": true,
+   "dense_solver_physical_memory_source": "sysconf",
+   "dense_solver_used_vertex_count": 2574,
+   "domain_multiplier": 1.0,
+   "generated_by": "hornlab-waveguide-mesher",
+   "integrity": {
+    "degenerate_triangle_count": 0,
+    "duplicate_triangle_count": 0,
+    "element_quality": {
+     "excluded_triangle_count": 0,
+     "mean_radius_ratio": 0.9741938413948001,
+     "measured_triangle_count": 5144,
+     "min_angle_deg": 20.60756786240953,
+     "min_angle_threshold_deg": 5.0,
+     "min_radius_ratio": 0.5767323153995436,
+     "poor_min_angle_count": 0,
+     "poor_radius_ratio_count": 0,
+     "radius_ratio_threshold": 0.1,
+     "valid": true,
+     "worst_triangles": [
+      {
+       "area": 1.3346011440961652e-06,
+       "min_angle_deg": 20.60756786240953,
+       "radius_ratio": 0.5767323153995436
+      },
+      {
+       "area": 1.3346011440961478e-06,
+       "min_angle_deg": 20.607567862410722,
+       "radius_ratio": 0.5767323153995914
+      },
+      {
+       "area": 1.349067047332114e-06,
+       "min_angle_deg": 20.642792911332887,
+       "radius_ratio": 0.5803383487606181
+      },
+      {
+       "area": 1.3490670473321476e-06,
+       "min_angle_deg": 20.642792911334567,
+       "radius_ratio": 0.5803383487606776
+      },
+      {
+       "area": 1.3324543804304254e-06,
+       "min_angle_deg": 20.841480349223225,
+       "radius_ratio": 0.5856752001936686
+      },
+      {
+       "area": 1.3324543804304194e-06,
+       "min_angle_deg": 20.841480349223335,
+       "radius_ratio": 0.5856752001936708
+      },
+      {
+       "area": 1.351211217710016e-06,
+       "min_angle_deg": 20.94715549599431,
+       "radius_ratio": 0.590246348701676
+      },
+      {
+       "area": 1.3512112177099998e-06,
+       "min_angle_deg": 20.947155495994412,
+       "radius_ratio": 0.5902463487016767
+      }
+     ]
+    },
+    "inconsistent_edge_count": 0,
+    "invalid_index_triangle_count": 0,
+    "is_watertight": true,
+    "nonmanifold_edge_count": 0,
+    "off_plane_open_edge_count": 0,
+    "off_plane_open_edges_sample": [],
+    "open_edge_count": 0,
+    "open_edges_sample": [],
+    "orientation_valid": true,
+    "self_intersection": {
+     "checked": true,
+     "coplanar_overlap_count": 0,
+     "intersecting_triangle_count": 0,
+     "proper_crossing_count": 0,
+     "samples": []
+    },
+    "signed_volume": 5.9632385084083274e-05,
+    "valid": true
+   },
+   "source": "hornlab_waveguide_mesher_step_import",
+   "tag_counts": {
+    "1": 4540,
+    "101": 604
+   },
+   "triangle_count": 5144,
+   "units": "m",
+   "vertex_count": 2574,
+   "warnings": []
+  }
+ },
+ "mesh_content_sha256": "sha256:d02630478866fb8978f0540c172e6cfe2dfa6a127a249b57eb0db57998b10538",
+ "mesh_sizes": {
+  "rigid_size_mm": 2.727636339397171,
+  "source_size_mm": {
+   "piston": 4.0
+  },
+  "transition_mm": 8.0
+ },
+ "mesh_store_path": "<bundle>/solve.msh",
+ "native_source": {
+  "channel": {
+   "id": "motor",
+   "motion": "normal",
+   "patch_weights": {
+    "piston": 1.0
+   },
+   "physical_source_id": "diaphragm",
+   "source_ids": [
+    "piston"
+   ]
+  },
+  "excitation_sha256": "sha256:4f0bba3457742308e76945a221337af890958aa93f1db68e2dd8b4b2c9747e02",
+  "geometry_sha256": "sha256:2f9883c0fcad4d09fddf8a8dc1d40d9ae8410cc3eeda4838cad67c0240238a63",
+  "mesh_density_sha256": "sha256:a2a2ecb0efee6110916b3aa8316ec9388671425ad9bf242fa8cc637057830f2b",
+  "patches": [
+   {
+    "advanced_face_indices": [
+     17
+    ],
+    "area_mm2": 1809.5573684677208,
+    "id": "piston",
+    "mesh_tag": 1001,
+    "role": "moving"
+   }
+  ],
+  "required_features": [
+   "native-source-contour-v1"
+  ]
+ },
+ "normalisation": {
+  "anchor_throat_frame": {
+   "axis": [
+    0,
+    0,
+    1
+   ],
+   "mouth_center_m": [
+    0,
+    0,
+    0.02
+   ],
+   "origin_m": [
+    0,
+    0,
+    0
+   ],
+   "source_center_m": [
+    0,
+    0,
+    0
+   ],
+   "u": [
+    1,
+    0,
+    0
+   ],
+   "v": [
+    0,
+    1,
+    0
+   ]
+  },
+  "matrix": [
+   [
+    1,
+    0,
+    0,
+    0
+   ],
+   [
+    0,
+    1,
+    0,
+    0
+   ],
+   [
+    0,
+    0,
+    1,
+    0
+   ],
+   [
+    0,
+    0,
+    0,
+    1
+   ]
+  ]
+ },
+ "polar_grid_derivation": {
+  "axes": {
+   "diagonal": {
+    "maximum_deg": 180.0,
+    "may_widen_not_narrow": true,
+    "minimum_deg": -180.0,
+    "plane": "x0+y0",
+    "symmetry_accepted": false
+   },
+   "horizontal": {
+    "maximum_deg": 180.0,
+    "may_widen_not_narrow": true,
+    "minimum_deg": -180.0,
+    "plane": "x0",
+    "symmetry_accepted": false
+   },
+   "vertical": {
+    "maximum_deg": 180.0,
+    "may_widen_not_narrow": true,
+    "minimum_deg": -180.0,
+    "plane": "y0",
+    "symmetry_accepted": false
+   }
+  },
+  "cut_planes": []
+ },
+ "post_cut_source_areas": {
+  "piston": {
+   "parent_area_mm2": 1809.5573684677213,
+   "predicted_retained_fraction": 1.0,
+   "relative_share_error": 0.0,
+   "retained_child_area_mm2": 1809.5573684677213,
+   "retained_fraction": 1.0
+  }
+ },
+ "producer": "native",
+ "report_sha256": "sha256:a484c3b8e72f3d8c61eddbd38315e999837073eb260d7e6e48581bb94493930f",
+ "requested_mesh_sizes": {
+  "rigid_size_mm": 10.0,
+  "source_size_mm": {
+   "piston": 4.0
+  },
+  "transition_mm": 8.0
+ },
+ "return_id": "native:wgi_01M848TS2K9W36JS4M19ZTGGNJ",
+ "role_resolution": {
+  "piston": {
+   "area_drift_overridden": false,
+   "area_mm2": 1809.5573684677213,
+   "area_relative_drift": 2.513030859427964e-16,
+   "connected_components": 1,
+   "method": "declared-selectors",
+   "origins": [
+    "advanced_face_indices"
+   ],
+   "skipped": false,
+   "source_id": "piston",
+   "surfaces": [
+    1
+   ]
+  }
+ },
+ "scope": {
+  "degraded_skip_count": 0,
+  "status": "full"
+ },
+ "sizing_estimate": {
+  "basis": "area-over-h-squared",
+  "curvature_aware": false,
+  "feasibility": "ok",
+  "freq_count": 1,
+  "is_lower_bound": true,
+  "measured": {
+   "feasibility": "ok",
+   "freq_count": 1,
+   "n_triangles": 5144,
+   "ram_bytes": 423371776,
+   "ram_gb": 0.423,
+   "solve_seconds_cubic_upper_per_freq": 0.128,
+   "solve_seconds_per_freq": 0.344,
+   "solve_seconds_total": 0.3
+  },
+  "n_triangles": 4455,
+  "per_role_triangles": {
+   "piston": 260,
+   "rigid": 4195
+  },
+  "per_role_valid_f_max_hz": {
+   "piston": 14291.7,
+   "rigid": 20958.3
+  },
+  "ram_bytes": 317552400,
+  "ram_gb": 0.318,
+  "solve_seconds_cubic_upper_per_freq": 0.083,
+  "solve_seconds_per_freq": 0.243,
+  "solve_seconds_total": 0.2
+ },
+ "skipped_source_ids": [],
+ "solve_model_sha256": "sha256:7867a902fbbcbe8a9eee44f84841a8b1bb5c8980ae61f9b98a599cd72a457742",
+ "source_tags": {
+  "piston": 101
+ },
+ "sources": [
+  {
+   "expected_connected_components": 1,
+   "id": "piston",
+   "instance_id": null,
+   "label": "piston",
+   "observed": {
+    "face_count": 1,
+    "total_area_mm2": 1809.5573684677208
+   },
+   "patch_policy": "single-connected",
+   "required": true,
+   "role": "HF",
+   "selectors": {
+    "advanced_face_indices": [
+     17
+    ]
+   }
+  }
+ ],
+ "symmetry": {
+  "cut_planes": [],
+  "declared_cut_planes": [],
+  "domain_planes": [],
+  "mode": "auto-cut",
+  "note": "surface root bodies preserve the full domain",
+  "reflected_planes": [],
+  "requested_mode": "full"
+ },
+ "tag_map": {
+  "1": {
+   "instance_id": null,
+   "role": "rigid",
+   "source_id": null
+  },
+  "101": {
+   "instance_id": null,
+   "role": "HF",
+   "source_id": "piston"
+  }
+ },
+ "transformed_geometry_hash": "sha256:34297f76e98d477256a4a5be3dfe3688cda8ef68702cc54f58a67dfa5e03eade"
+}
