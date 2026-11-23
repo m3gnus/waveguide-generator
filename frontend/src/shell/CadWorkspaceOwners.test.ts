@@ -166,11 +166,29 @@ it('a Solve stopped at the triangle ceiling asks Solve anyway, which prepares wi
   expect(solve).not.toHaveBeenCalled();
   // Solve anyway: one preparation with the override, then the same public Solve.
   expect(await cadWorkspace.getSnapshot().prepareAndSolve({ meshLimitOverride: true })).toBe('solving');
-  expect(bodies.map((body) => body.meshLimitOverride ?? false).at(-1)).toBe(true);
-  expect(bodies.slice(0, -1).every((body) => !body.meshLimitOverride)).toBe(true);
+  // Selecting the model prepares it automatically first (stopped at the same
+  // ceiling), then the Solve's own preparation, then Solve anyway's override.
+  expect(bodies.map((body) => body.meshLimitOverride ?? false)).toEqual([false, false, true]);
   expect(useCadReturnStore.getState().ingestRecord?.mesh_limit_override).toBe(true);
   expect(solve).toHaveBeenCalledOnce();
   meshCeilingChoice.clear();
+});
+
+it('a Prepare and solve whose preparation failed says so once, on the model\'s status line, never as a red error', async () => {
+  const calm = 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.';
+  const solve = vi.fn(async () => 'submitted' as const);
+  vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input) !== '/api/cadlink/ingest' ? base(input, init)
+    : Promise.resolve(json({ detail: { code: 'preparation_failed', failure: 'internal', message: calm, retry: true, diagnostic: 'worker exited 9' } }, 422)));
+  returns = [bundle];
+  stop = mountCadWorkspaceOwners(); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  expect(await cadWorkspace.getSnapshot().prepareAndSolve()).toBe('failed');
+  expect(cadWorkspace.getSnapshot().error).toBeNull();
+  expect(cadWorkspace.getSnapshot().ingestError).toBe(calm);
+  expect(cadWorkspace.getSnapshot().ingestFailure).toEqual({ recorded: true, retry: true, diagnostic: 'worker exited 9' });
+  expect(solve).not.toHaveBeenCalled();
 });
 
 it.each([false, true])('Prepare and solve waits for the model\'s frame read and rechecks supersession (%s)', async (superseded) => {
