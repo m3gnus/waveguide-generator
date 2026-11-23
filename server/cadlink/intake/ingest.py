@@ -1743,7 +1743,10 @@ def _ingest_bundle(
                 # cut was prepared under before reflection existed.
                 mirrored_options.pop("reflect_planes")
             try:
-                chosen = mesh_for(mirrored_options, include_viewport=True)
+                chosen = mesh_for(
+                    mirrored_options,
+                    include_viewport=viewport_for(mirrored_options)[5] is None and not defer_viewport,
+                )
             except IngestRefusal as exc:
                 if plan.strict:
                     raise IngestRefusal(
@@ -1761,7 +1764,7 @@ def _ingest_bundle(
                 # In the solver frame: a turned frame can undo or make a reflection.
                 reflected_planes = reflected_cad_planes(options)
         built, cache_key, cache_hit, mesh_path = chosen
-        built_inline_viewport = bool(applied_planes)
+        built_inline_viewport = bool(applied_planes) and not defer_viewport
     else:
         viewport_state = viewport_for(options)
         built, cache_key, cache_hit, mesh_path = mesh_for(

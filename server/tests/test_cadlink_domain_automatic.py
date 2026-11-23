@@ -811,6 +811,46 @@ def test_open_half_with_provenance_is_mirrored_and_its_second_plane_cut(tmp_path
     _no_blocking_domain_finding(record)
 
 
+def test_a_mirrored_half_defers_its_display_tessellation_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``defer_viewport`` holds on the evidence path too, and moves rather than changes.
+
+    The mirrored mesh used to be built with its viewport in line whatever the
+    caller asked. Deferred, the record publishes with the display pending, the
+    solve mesh is the same bytes, and the deferred build reproduces the in-line
+    display artifact exactly.
+    """
+
+    from server.cadlink.intake import ingest as ingest_module
+
+    bundle = _bundle(tmp_path, "half-provenance", _open_half, HORN_THROAT, cut=[provenance("body-0")])
+    inline = _ingest(bundle, tmp_path / "inline")
+
+    requested: list[bool] = []
+    real_build = ingest_module.build_imported_mesh_isolated
+
+    def recording(*args: Any, **kwargs: Any) -> Any:
+        requested.append(bool(kwargs.get("include_viewport_mesh")))
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", recording)
+    deferred_dir = tmp_path / "deferred"
+    with closing(CadLinkStore(deferred_dir / "cadlink.db")) as store:
+        deferred = _run_in_gmsh_session(
+            ingest_bundle, bundle, _sizes(bundle), [], store, deferred_dir,
+            prep_options={"symmetry_mode": "auto"}, defer_viewport=True,
+        )
+
+    assert _interpretation(deferred)["evidence"]["applied"] is True
+    assert requested and not any(requested)
+    assert deferred["viewport_mesh"]["pending"] is True
+    assert deferred["mesh_content_sha256"] == inline["mesh_content_sha256"]
+    built = ingest_module.build_deferred_viewport(deferred, deferred_dir)
+    assert built is not None
+    assert built["content_sha256"] == inline["viewport_mesh"]["content_sha256"]
+
+
 def test_the_same_open_half_without_provenance_is_recovered_from_its_geometry(tmp_path: Path) -> None:
     """Every flip condition holds: the cut half is solved as the whole speaker's reduced domain."""
 
