@@ -2131,9 +2131,12 @@ async def list_cad_operations(
     def load() -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for kind in KINDS:
+            # Only a solve's state is derived from its job (``operation_summary``);
+            # every other kind shows its row's state, so the query filters those.
+            states = _PENDING_STATES if pending and kind != PREPARE_AND_SOLVE else STATES
             cursor = 0
             while True:
-                page = ctx.store.operation_page(kind=kind, states=STATES, after_rowid=cursor, limit=100)
+                page = ctx.store.operation_page(kind=kind, states=states, after_rowid=cursor, limit=100)
                 if not page:
                     break
                 for cursor, row in page:

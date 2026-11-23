@@ -265,3 +265,27 @@ def test_disabled_solve_intake_keeps_observing_outbound_results(monkeypatch, tmp
             with pytest.raises(asyncio.CancelledError):
                 await state.cad_delivery_task
     asyncio.run(exercise())
+
+
+def test_pending_list_asks_the_store_only_for_unfinished_non_solve_rows(monkeypatch, tmp_path):
+    from server.cadlink.operations import PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
+
+    store, state, _events = _state(tmp_path, monkeypatch)
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    assert [item['operationId'] for item in
+            asyncio.run(api.list_cad_operations(request, pending=True, limit=100))['operations']] == ['update-1']
+    _report(tmp_path, outcome='applied')
+    asked: dict[str, set[str]] = {}
+    page = store.operation_page
+
+    def spy(*, kind, states, **kwargs):
+        asked[kind] = set(states)
+        return page(kind=kind, states=states, **kwargs)
+
+    monkeypatch.setattr(store, 'operation_page', spy)
+    assert asyncio.run(api.list_cad_operations(request, pending=True, limit=100))['operations'] == []
+    # A solve's state comes from its job, so every solve row is still read.
+    assert asked.pop(PREPARE_AND_SOLVE) == set(STATES)
+    assert asked and all(states == set(STATES) - TERMINAL_STATES for states in asked.values())
+    listed = asyncio.run(api.list_cad_operations(request, pending=False, limit=100))['operations']
+    assert [item['operationId'] for item in listed] == ['update-1']
