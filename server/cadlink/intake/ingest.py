@@ -10,6 +10,7 @@ import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import secrets
@@ -223,6 +224,12 @@ def _package_version(name: str) -> str:
 
 
 def _fingerprints_match(first: Any, second: Any) -> bool | None:
+    """Compare two body fingerprints: ``True``/``False``, or ``None`` if unreadable.
+
+    A non-finite volume or bound is unreadable evidence, never a match: every
+    comparison against NaN is false, so without the check below a NaN would
+    pass every tolerance test and read as an unmodified body.
+    """
     if not isinstance(first, Mapping) or not isinstance(second, Mapping):
         return None
     try:
@@ -230,12 +237,16 @@ def _fingerprints_match(first: Any, second: Any) -> bool | None:
             return False
         volume_a = float(first["volume_mm3"])
         volume_b = float(second["volume_mm3"])
+        if not (math.isfinite(volume_a) and math.isfinite(volume_b)):
+            return None
         volume_tolerance = max(1.0e-3, 1.0e-6 * max(abs(volume_a), abs(volume_b)))
         if abs(volume_a - volume_b) > volume_tolerance:
             return False
         bbox_a = [float(item) for item in first["bbox_mm"]]
         bbox_b = [float(item) for item in second["bbox_mm"]]
         if len(bbox_a) != 6 or len(bbox_b) != 6:
+            return None
+        if not all(math.isfinite(value) for value in (*bbox_a, *bbox_b)):
             return None
         for left, right in zip(bbox_a, bbox_b, strict=True):
             tolerance = max(1.0e-4, 1.0e-7 * max(abs(left), abs(right)))

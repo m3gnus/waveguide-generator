@@ -165,6 +165,30 @@ def test_freshness_null_design_hash_is_unknown_when_no_later_row_matches() -> No
     assert result["verdict"] == "unknown"
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("field", ["volume_mm3", "bbox_mm"])
+def test_freshness_nonfinite_fingerprint_is_unreadable_not_a_match(field, value) -> None:
+    observed = _fingerprint()
+    if field == "volume_mm3":
+        observed["volume_mm3"] = value
+    else:
+        observed["bbox_mm"] = [0, 0, value, 1, 1, 1]
+    for baseline, seen in ((_fingerprint(), observed), (observed, observed)):
+        result = evaluate_instance_freshness(
+            _instance(
+                body_evidence={
+                    "local_body_state": "unmodified",
+                    "baseline_fingerprint": baseline,
+                    "observed_fingerprint": seen,
+                }
+            ),
+            _Store({"design_hash": "dh"}),
+            recompute=lambda _head: "gh",
+        )
+        assert result["fingerprints_match"] is None
+        assert result["verdict"] == "unknown"
+
+
 @pytest.mark.parametrize(
     ("kind", "reason"),
     [
