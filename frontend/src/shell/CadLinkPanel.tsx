@@ -92,11 +92,10 @@ function CadModelDeveloperDetails({ staleReason }: { staleReason: string | null 
 
 /** Explain the file transport's idle observation policy. */
 export function CadCoordinationNote() {
-  const coordinator = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot);
   // How the transport polls is developer detail.
   const developerDetails = useDeveloperDetails();
+  const inbox = useCadConnectionStore((current) => current.fusionStatus?.addinInboxTransfer === true);
   if (!developerDetails) return null;
-  const inbox = coordinator.fusionStatus?.addinInboxTransfer === true;
   return <p className="cad-detail cad-coordination-state" data-coordination="off">
     {inbox
       ? 'Background checks are off. WG checks models from CAD and Fusion status while CAD work is in progress, and when you act.'
@@ -180,7 +179,7 @@ export function CadLinkPanel() {
   const preferences = usePreferences();
   const design = useDesignStore((current) => current.design);
   const cadLimitation = nativeCadLimitation(design.formula);
-  const observedFusionStatus = useCadConnectionStore((current) => current.fusionStatus);
+  const fusionStatus = useCadConnectionStore((current) => current.fusionStatus);
   const designRevision = useDesignStore((current) => current.designRevision);
   const documentName = useDocumentStore((current) => current.designName);
   const identity = useDocumentStore((current) => current.identity);
@@ -202,7 +201,7 @@ export function CadLinkPanel() {
     } catch (error) {
       detail = error instanceof Error ? error.message : 'Could not install the Waveguide Generator add-in in Fusion. Try again.';
     }
-    setAddinReply({ detail, under: cadWorkspace.getSnapshot().fusionStatus });
+    setAddinReply({ detail, under: useCadConnectionStore.getState().fusionStatus });
     setInstallingAddin(false);
   }
   const onshapeSendGeneration = useRef(0);
@@ -216,7 +215,6 @@ export function CadLinkPanel() {
     errorDiagnostics,
     status,
     viewportNotice,
-    fusionStatus,
     onshapeStatus,
     onshapeConnection,
   } = cadWorkspaceView;
@@ -457,7 +455,7 @@ export function CadLinkPanel() {
       >
         <option value="" disabled>Choose an instance</option>
         {matchingFusionLinks.map((link) => {
-          const name = fusionLinkDisplayName(observedFusionStatus?.matchingLinks?.find((item) => item.instanceId === link.instanceId) ?? link);
+          const name = fusionLinkDisplayName(fusionStatus?.matchingLinks?.find((item) => item.instanceId === link.instanceId) ?? link);
           return <option value={link.instanceId} key={link.instanceId}>
             {name ? `${name} · ` : ''}{link.instanceId}
           </option>;

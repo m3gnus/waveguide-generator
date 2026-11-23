@@ -117,7 +117,7 @@ describe('CadLinkPanel', () => {
     capabilityClient.clear();
     publishCadJobs([]); sessionStorage.clear();
     reviewDetail = undefined; missingReview = false;
-    useCadConnectionStore.setRecoveryError(null); cadReceiptsStore.setState({ recoveryError: null });
+    useCadConnectionStore.invalidate(); useCadConnectionStore.setRecoveryError(null); cadReceiptsStore.setState({ recoveryError: null });
     fixtureOperations = {}; reportedRecovery = null; cadRecoveryNoticesStore.setState({ notices: {}, recoveryError: null });
 
     workspaceModeStore.setMode('parametric');
@@ -140,7 +140,7 @@ describe('CadLinkPanel', () => {
   it('never offers the parametric Fusion actions for a selected unprepared CAD-authored return', async () => {
     const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
     const ingest = vi.fn().mockResolvedValue(undefined);
-    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: currentFusion, ingest }, true);
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, ingest }, true); useCadConnectionStore.setState({ fusionStatus: currentFusion });
     workspaceModeStore.setMode('cad');
     useDocumentStore.setState({ identity: { designId: 'parked-design', lineageId: 'parked-project' } as never });
     useCadReturnStore.getState().selectBundle({ ...listing.items[0], designIds: [] });
@@ -163,7 +163,7 @@ describe('CadLinkPanel', () => {
 
   it('keeps a quiet connection line below the runs and no Install add-in for a current add-in', async () => {
     const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
-    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: { ...currentFusion, immutableBundles: true } }, true);
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false }, true); useCadConnectionStore.setState({ fusionStatus: { ...currentFusion, immutableBundles: true } });
     workspaceModeStore.setMode('cad');
     useCadReturnStore.getState().selectBundle({ ...listing.items[0], designIds: [] });
     await act(async () => root.render(<QueryClientProvider client={capabilityClient}><CadLinkPanel/></QueryClientProvider>));
@@ -178,7 +178,7 @@ describe('CadLinkPanel', () => {
 
   it('leads with a connection that needs the user, and offers Install add-in for an outdated add-in', async () => {
     const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
-    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: { ...currentFusion, state: 'addin_outdated' } }, true);
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false }, true); useCadConnectionStore.setState({ fusionStatus: { ...currentFusion, state: 'addin_outdated' } });
     workspaceModeStore.setMode('cad');
     await act(async () => root.render(<QueryClientProvider client={capabilityClient}><CadLinkPanel/></QueryClientProvider>));
     const panel = host.querySelector('.cadlink-panel')!;
@@ -212,7 +212,7 @@ describe('CadLinkPanel', () => {
 
   it('tells a Fusion request pointer whose preparation failed WG\'s words, never a Prepare simulation it cannot offer', async () => {
     const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
-    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: closedFusion }, true);
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false }, true); useCadConnectionStore.setState({ fusionStatus: closedFusion });
     workspaceModeStore.setMode('cad');
     const calm = 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.';
     const failed = cadJobFixture({
@@ -243,7 +243,7 @@ describe('CadLinkPanel', () => {
       return json(record);
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); });
-    await vi.waitFor(() => expect(cadWorkspace.getSnapshot().fusionStatus?.running).toBe(true));
+    await vi.waitFor(() => expect(useCadConnectionStore.getState().fusionStatus?.running).toBe(true));
     const message = 'Update the Fusion add-in to let manual Update follow newer exports.';
     expect(host.textContent?.includes(message)).toBe(immutableBundles !== true);
     // A current add-in needs nothing from the user: WG keeps it up to date.
@@ -1089,7 +1089,7 @@ describe('CadLinkPanel', () => {
     openHistory();
     act(() => host.querySelector<HTMLButtonElement>('.cad-bundle-list button')!.click());
     await clickIngest();
-    await vi.waitFor(() => expect(cadWorkspace.getSnapshot().fusionStatus?.running).toBe(false));
+    await vi.waitFor(() => expect(useCadConnectionStore.getState().fusionStatus?.running).toBe(false));
     const posted = recordOperationRequests({ detailFromStore: true });
     act(() => {
       applyCadRequest(cadOperation({

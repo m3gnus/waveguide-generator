@@ -384,7 +384,6 @@ export function mountCadWorkspaceOwners(): () => void {
         ...(state.status !== previous.status ? { status: state.status } : {}) }); changed();
       if (previous.pullingFromFusion && !state.pullingFromFusion) autoIngestSelected();
     }),
-    useCadConnectionStore.subscribe((state) => publish({ fusionStatus: state.fusionStatus })),
     cadReceiptsStore.subscribe((state, previous) => {
       if (Object.keys(previous.receipts).length > 0 && Object.keys(state.receipts).length === 0) refreshOwedInitialChoice();
       if (state.receipts !== previous.receipts || state.displayRetries !== previous.displayRetries) autoIngestSelected();

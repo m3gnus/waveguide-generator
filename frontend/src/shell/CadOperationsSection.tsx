@@ -8,6 +8,7 @@ import { isPendingCadOperation, reconcileCadOperation } from '../api/cadOperatio
 import { createCadRequestActions, selectCadRequests, useCadRecoveryNotices, type CadRequest } from '../stores/cadRecoveryNotices';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { cadWorkspace } from '../stores/cadWorkspace';
+import { useCadConnectionStore } from '../stores/cadConnection';
 import { openImported } from '../stores/importedModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { openCadProject } from './CadProjectPanel';
@@ -401,8 +402,9 @@ function RecoveryOperationCard({ request, requestActions }: { request: CadReques
   const coordinator = useSyncExternalStore(
     cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot,
   );
+  const activeDocumentName = useCadConnectionStore((current) => current.fusionStatus?.documentName ?? null);
   const { busy, error, ask } = useRequestAction();
-  const documentName = operation.snapshot?.documentName ?? coordinator.fusionStatus?.documentName ?? null;
+  const documentName = operation.snapshot?.documentName ?? activeDocumentName;
   const label = documentName ?? 'the Fusion document';
   return <Notice tone="warning" role={null} className="cad-operation cad-operation-recovery" data-operation-id={operation.operationId} data-request-id={request.id} tabIndex={-1} title={<>Update interrupted — recovery required{documentName ? ` · ${documentName}` : ''}</>} actions={<div className="cad-confirm-actions">
       <button className="btn"

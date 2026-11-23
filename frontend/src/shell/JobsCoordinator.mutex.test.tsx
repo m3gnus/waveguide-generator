@@ -28,6 +28,7 @@ import type { SolveBlocker, EngineCapability } from '../jobs/actions';
 import { SolvePlanRefused, SolveSubmissionRefused, type ImportedSolveSubmission, type ModelSolvePress } from '../jobs/actions';
 import { SOLVE_PLAN_DEBOUNCE_MS } from '../jobs/planQueryPolicy';
 import { bundleIdentity, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { useCadConnectionStore } from '../stores/cadConnection';
 import { resolveOuterBodyMode } from '../design/ParamPanel';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
@@ -390,6 +391,7 @@ describe('solve invocation mutex', () => {
   afterEach(() => {
     setProfileDraft(null);
     act(() => root.unmount());
+    useCadConnectionStore.invalidate();
     host.remove();
     publishJobs([]);
     compareSelection.clear();
@@ -3539,11 +3541,11 @@ describe('solve invocation mutex', () => {
       ...cadWorkspace.getSnapshot(),
       pullAndSolve,
       pullFromFusion,
-      fusionStatus: {
-        running: true, state: 'stale', fusionChangesAvailable,
-        observationFreshness: 'current', documentChangeDetectable: true,
-      } as never,
     });
+    useCadConnectionStore.setState({ fusionStatus: {
+      running: true, state: 'stale', fusionChangesAvailable,
+      observationFreshness: 'current', documentChangeDetectable: true,
+    } as never });
     act(() => { readyCad('wgi_displayed'); workspaceModeStore.setMode('cad'); });
     await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
 
@@ -3565,8 +3567,8 @@ describe('solve invocation mutex', () => {
     vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
       ...cadWorkspace.getSnapshot(),
       pullAndSolve,
-      fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never,
     });
+    useCadConnectionStore.setState({ fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never });
     act(() => { readyCad('wgi_displayed'); workspaceModeStore.setMode('cad'); });
     await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
 
@@ -3584,8 +3586,8 @@ describe('solve invocation mutex', () => {
     vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
       ...cadWorkspace.getSnapshot(),
       pullFromFusion,
-      fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never,
     });
+    useCadConnectionStore.setState({ fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never });
     act(() => { readyCad('wgi_displayed'); workspaceModeStore.setMode('cad'); });
     await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
 

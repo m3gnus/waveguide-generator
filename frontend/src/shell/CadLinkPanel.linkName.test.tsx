@@ -42,7 +42,8 @@ describe('CadLinkPanel Fusion connection', () => {
     preferencesStore.update(originalPreferences); vi.restoreAllMocks(); vi.unstubAllGlobals();
   });
   function render(status: CadConnectionStatus | null, overrides: Partial<ReturnType<typeof cadWorkspace.getSnapshot>> = {}) {
-    const snapshot = { ...cadWorkspace.getSnapshot(), fusionStatus: status, ...overrides };
+    useCadConnectionStore.setState({ fusionStatus: status });
+    const snapshot = { ...cadWorkspace.getSnapshot(), ...overrides };
     vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue(snapshot);
     act(() => root.render(<QueryClientProvider client={client}><CadLinkPanel/></QueryClientProvider>));
   }
@@ -72,8 +73,7 @@ describe('CadLinkPanel Fusion connection', () => {
   });
 
   it('uses connection store labels in the chooser while preserving the document card', async () => {
-    await useCadConnectionStore.read(async () => fusionStatus([link('instance-1', 'Store label'), link('instance-2', 'Second label')]));
-    render(fusionStatus([link('instance-1'), link('instance-2')]));
+    render(fusionStatus([link('instance-1', 'Store label'), link('instance-2', 'Second label')]));
     const select = host.querySelector<HTMLSelectElement>('[aria-label="Linked Fusion instance"]')!;
     expect([...select.options].map((option) => [option.value, option.textContent])).toEqual([
       ['', 'Choose an instance'], ['instance-1', 'Store label · instance-1'], ['instance-2', 'Second label · instance-2'],
@@ -82,7 +82,7 @@ describe('CadLinkPanel Fusion connection', () => {
     expect(host.querySelector('.cad-link-card')?.textContent).toContain('Assembly document');
   });
 
-  it('keeps a connection store label out of the card without a coordinator status', async () => {
+  it('keeps a connection store label out of the card once the status is gone', async () => {
     await useCadConnectionStore.read(async () => fusionStatus([link('instance-1', 'Store label')]));
     render(null);
     expect(host.querySelector('.cad-link-card')?.textContent).not.toContain('Fusion link:');
