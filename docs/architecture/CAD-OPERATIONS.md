@@ -2214,10 +2214,9 @@ ships.
 
 ## Capability file
 
-`GET /api/cadlink/returns` retains `coordination: "off"` as a compatibility
-observation policy consumed by the frontend scheduler. It is constant; the old
-server gate and `WG2_CAD_COORDINATION` switch no longer exist. Clients also treat
-a missing field as off. Older-server `on` responses remain understood.
+`GET /api/cadlink/returns` still sends a constant `coordination: "off"` for
+compatibility. The frontend no longer reads it: idle observation is always off,
+and the old server gate and `WG2_CAD_COORDINATION` switch no longer exist.
 
 WG tells the add-in which delivery version it reads, which WG-bound request schema it
 reads, and which optional return features

@@ -272,7 +272,9 @@ it('stays idle after the listing answers, without a gate request (row 10)', asyn
   const base = fetcher.getMockImplementation()!;
   fetcher.mockImplementation((input, init) => String(input).endsWith('/returns')
     ? Promise.resolve(json({ items: [], cadFolderConfigured: true })) : base(input, init));
+  expect(cadWorkspace.getSnapshot().cadFolderConfigured).toBeNull();
   stop = mountCadWorkspaceOwners(); await flush();
+  expect(cadWorkspace.getSnapshot().cadFolderConfigured).toBe(true);
   const statusReads = calls('/api/cadlink/fusion-status').length;
   const returnReads = calls('/api/cadlink/returns').length;
   await vi.advanceTimersByTimeAsync(600_000);

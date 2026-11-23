@@ -292,17 +292,34 @@ describe('CAD observation scheduler without the coordinator', () => {
     expect(reads()[1] - running[1]).toBeGreaterThan(20);
   });
 
-  it.each(['listing change', 'Send'])('off: %s resets the quiet clock of legacy discovery; coarse job notifications do not (row 10)', async () => {
+  it.each(['listing change', 'Send'] as const)('off: %s resets the quiet clock of legacy discovery; a moving job keeps status reads, not discovery, fast (row 10)', async (activityKind) => {
     activity.workspaceMode = 'parametric'; activity.activityRevision = 0;
     readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false, addinInboxTransfer: false }));
+    snapshot.jobs = [cadJob()];
     await mount(); await vi.advanceTimersByTimeAsync(60_000);
     for (let tick = 0; tick < 4; tick += 1) { jobsChanged(); await vi.advanceTimersByTimeAsync(2_500); }
     const quiet = reads();
-    await vi.advanceTimersByTimeAsync(10_000); expect(reads()).toEqual(quiet);
-    change({ activityRevision: 1 });
-    await vi.advanceTimersByTimeAsync(2_500); expect(reads()).toEqual([quiet[0], quiet[1] + 1]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(reads()[1]).toBe(quiet[1]);
+    expect(reads()[0] - quiet[0]).toBe(4);
+    // A listing change only notes activity; a Send also leaves its request pending.
+    change(activityKind === 'Send'
+      ? { activityRevision: 1, requests: [{ id: 'send-1', state: 'processing' }] }
+      : { activityRevision: 1 });
+    const woke = reads();
+    await vi.advanceTimersByTimeAsync(2_500); expect(reads()[1]).toBe(woke[1] + 1);
     await vi.advanceTimersByTimeAsync(27_500); const quietAgain = reads();
-    await vi.advanceTimersByTimeAsync(29_999); expect(reads()).toEqual(quietAgain);
+    await vi.advanceTimersByTimeAsync(29_999); expect(reads()[1]).toBe(quietAgain[1]);
+    expect(reads()[0] - quietAgain[0]).toBeGreaterThanOrEqual(11);
+  });
+
+  it('off: a legacy add-in with no folder selected looks for one every 30 seconds', async () => {
+    activity.workspaceMode = 'parametric'; activity.cadFolderConfigured = false;
+    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false, addinInboxTransfer: false }));
+    await mount(); const before = reads();
+    await vi.advanceTimersByTimeAsync(29_999); expect(reads()).toEqual(before);
+    await vi.advanceTimersByTimeAsync(1); expect(reads()).toEqual([before[0], before[1] + 1]);
+    await vi.advanceTimersByTimeAsync(30_000); expect(reads()).toEqual([before[0], before[1] + 2]);
   });
 
   it('a job ends while disconnected: reconnect reloads jobs and exact awaited receipt IDs before pending reload drops them', async () => {

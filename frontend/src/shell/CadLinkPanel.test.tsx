@@ -2825,15 +2825,28 @@ describe('CadLinkPanel', () => {
     expect(linkedCard.querySelector('.cad-primary-action')?.textContent).toBe('Open in Fusion 360');
   });
 
-  it('mentions that background checks are off only in developer details', async () => {
+  it('mentions that background checks are off only in developer details, for Fusion, once the listing answered', async () => {
     const { CadCoordinationNote } = await import('./CadLinkPanel');
-    preferencesStore.update({ showDeveloperDetails: false });
+    const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
+    preferencesStore.update({ showDeveloperDetails: true, cadApplication: 'fusion360' });
+    cadWorkspace.setState({ ...emptyCadWorkspace, cadFolderConfigured: null }, true);
     await act(async () => { root.render(<CadCoordinationNote/>); });
     expect(host.textContent).toBe('');
-    preferencesStore.update({ showDeveloperDetails: true });
-    await act(async () => { root.render(<CadCoordinationNote/>); });
+    act(() => cadWorkspace.setState({ cadFolderConfigured: true }));
     expect(host.textContent).toContain('Background checks are off');
     expect(host.textContent).not.toContain('WG2_CAD_COORDINATION');
+    act(() => preferencesStore.update({ showDeveloperDetails: false }));
+    expect(host.textContent).toBe('');
+  });
+
+  it('never shows the Fusion background-check note in Onshape mode', async () => {
+    const { CadCoordinationNote } = await import('./CadLinkPanel');
+    preferencesStore.setOnshapeAvailable(true);
+    preferencesStore.update({ showDeveloperDetails: true, cadApplication: 'onshape' });
+    act(() => cadWorkspace.setState({ cadFolderConfigured: true }));
+    await act(async () => { root.render(<CadCoordinationNote/>); });
+    expect(host.textContent).toBe('');
+    preferencesStore.setOnshapeAvailable(false);
   });
 
   it('flags only mistakes in the checks: a declared cut that fails, never a candidate plane, hidden skips of construction, or double counts', async () => {

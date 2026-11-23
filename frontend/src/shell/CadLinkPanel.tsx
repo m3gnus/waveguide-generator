@@ -94,8 +94,11 @@ function CadModelDeveloperDetails({ staleReason }: { staleReason: string | null 
 export function CadCoordinationNote() {
   // How the transport polls is developer detail.
   const developerDetails = useDeveloperDetails();
+  const fusion = usePreferences().cadApplication === 'fusion360';
   const inbox = useCadConnectionStore((current) => current.fusionStatus?.addinInboxTransfer === true);
-  if (!developerDetails) return null;
+  // The Fusion returns listing reports the folder; until it has answered, say nothing.
+  const listed = useSyncExternalStore(cadWorkspace.subscribe, () => cadWorkspace.getSnapshot().cadFolderConfigured !== null, () => cadWorkspace.getSnapshot().cadFolderConfigured !== null);
+  if (!developerDetails || !fusion || !listed) return null;
   return <p className="cad-detail cad-coordination-state" data-coordination="off">
     {inbox
       ? 'Background checks are off. WG checks models from CAD and Fusion status while CAD work is in progress, and when you act.'

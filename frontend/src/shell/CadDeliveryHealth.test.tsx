@@ -410,7 +410,9 @@ describe('the CAD Link panel says why the listing still runs (review F5)', () =>
   ])('with the add-in declaring the inbox transfer = %s, says the listing is needed = %s', async (declares, needed) => {
     const { CadCoordinationNote } = await import('./CadLinkPanel');
     const { useCadConnectionStore } = await import('../stores/cadConnection');
+    const { cadWorkspace } = await import('../stores/cadWorkspace');
     preferencesStore.update({ showDeveloperDetails: true });
+    cadWorkspace.setState({ cadFolderConfigured: true });
     useCadConnectionStore.setState({ fusionStatus: { running: true, state: 'current', addinInboxTransfer: declares } as unknown as FusionCadStatus });
     const host = document.createElement('div');
     document.body.append(host);
@@ -419,7 +421,7 @@ describe('the CAD Link panel says why the listing still runs (review F5)', () =>
     expect(host.textContent?.includes('older Fusion add-in needs WG to keep checking')).toBe(needed);
     act(() => root.unmount());
     host.remove();
-    useCadConnectionStore.invalidate();
+    useCadConnectionStore.invalidate(); cadWorkspace.setState({ cadFolderConfigured: null });
     vi.restoreAllMocks();
   });
 });

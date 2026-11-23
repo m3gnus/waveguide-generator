@@ -68,9 +68,15 @@ export function mountCadWorkspaceOwners(): () => void {
   let activityRevision = 0;
   const activityListeners = new Set<() => void>();
   const changed = () => activityListeners.forEach((listener) => listener());
-  const noteCadActivity = () => { activityRevision += 1; changed(); };
   const publish = (patch: Partial<typeof emptyCadWorkspace>) => {
     if (mounted.current) cadWorkspace.setState(patch);
+  };
+  // A returns listing that changes the folder answer also notes activity, so
+  // the first answer is published here.
+  const noteCadActivity = () => {
+    activityRevision += 1;
+    if (cadWorkspace.getSnapshot().cadFolderConfigured !== cadFolderConfigured.current) publish({ cadFolderConfigured: cadFolderConfigured.current });
+    changed();
   };
   const reportError = (error: string | null) => publish({ error });
   const reportStatus = (status: string | null) => publish({ status });

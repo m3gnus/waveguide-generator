@@ -42,6 +42,8 @@ export interface CadWorkspaceSnapshot {
   errorDiagnostics: ErrorDiagnostics | null;
   status: string | null;
   viewportNotice: string | null;
+  /** The returns listing's folder answer; null until a listing has answered. */
+  cadFolderConfigured: boolean | null;
   onshapeStatus: OnshapeStatus | null;
   onshapeConnection: OnshapeConnection | null;
   pendingFusionConflict: boolean;
@@ -85,6 +87,7 @@ export const emptyCadWorkspace: CadWorkspaceSnapshot = {
   errorDiagnostics: null,
   status: null,
   viewportNotice: null,
+  cadFolderConfigured: null,
   onshapeStatus: null,
   onshapeConnection: null,
   pendingFusionConflict: false,

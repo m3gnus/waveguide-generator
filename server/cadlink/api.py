@@ -605,8 +605,8 @@ async def get_delivery_status(request: Request) -> dict[str, Any]:
 @router.get("/returns")
 async def list_returns(request: Request) -> dict[str, Any]:
     workspace: WorkspaceState = request.app.state.cad_workspace
-    # Compatibility observation policy still read by the frontend scheduler;
-    # idle file transport always reports off, independent of environment.
+    # Constant, kept only for compatibility: the frontend no longer reads it, and
+    # idle observation is always off.
     coordination = "off"
     selected = workspace.selected_path()
     if selected is None:

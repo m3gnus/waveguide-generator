@@ -6,7 +6,7 @@ import { cadStartupHello } from '../stores/cadStartupHello';
 // CAD observation and idle backoff cadences.
 export const CAD_OBSERVATION_INTERVALS = {
   returnsMs: 2_500, returnsIdleMs: 30_000,
-  fusionStatusMs: 2_500, fusionStatusIdleMs: 30_000, quietMs: 30_000,
+  fusionStatusMs: 2_500, quietMs: 30_000,
   /** A burst of design edits (a slider drag) reads Fusion status at its start and once after it settles. */
   contextReadMs: 300,
 } as const;
@@ -79,17 +79,18 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     const input = options.getActivity();
     if (input.cadApplication !== 'fusion360' || !visible()) return null;
     const base = listing ? CAD_OBSERVATION_INTERVALS.returnsMs : CAD_OBSERVATION_INTERVALS.fusionStatusMs;
-    const idle = listing ? CAD_OBSERVATION_INTERVALS.returnsIdleMs : CAD_OBSERVATION_INTERVALS.fusionStatusIdleMs;
     // Idle observation stops unless an older add-in needs the folder listing
     // to discover what it sends (it does not declare the inbox transfer).
     if (!listing || declaredInbox) return working() ? base : null;
+    // From here on this is legacy return discovery only.
+    const idle = CAD_OBSERVATION_INTERVALS.returnsIdleMs;
     // CAD mode keeps the base rate while Fusion may deliver. Once Fusion reports it
     // is closed, nothing can arrive until it starts again, which its add-in push,
     // focus or a quiet-rate listing notices; until then quiet cadence applies.
     const fusionClosed = connection.getState().fusionStatus?.state === 'closed';
     if ((input.workspaceMode === 'cad' && !fusionClosed)
       || connection.getState().fusionStatus?.processRunning || input.awaitingReturn) return base;
-    if (input.cadFolderConfigured === false) return listing ? idle : null;
+    if (input.cadFolderConfigured === false) return idle;
     return now() - lastActivityAt >= CAD_OBSERVATION_INTERVALS.quietMs ? idle : base;
   };
   /** Rejects when an attempted read published no report (failed or fenced). */

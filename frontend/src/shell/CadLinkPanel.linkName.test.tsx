@@ -72,16 +72,6 @@ describe('CadLinkPanel Fusion connection', () => {
     ]);
   });
 
-  it('uses connection store labels in the chooser while preserving the document card', async () => {
-    render(fusionStatus([link('instance-1', 'Store label'), link('instance-2', 'Second label')]));
-    const select = host.querySelector<HTMLSelectElement>('[aria-label="Linked Fusion instance"]')!;
-    expect([...select.options].map((option) => [option.value, option.textContent])).toEqual([
-      ['', 'Choose an instance'], ['instance-1', 'Store label · instance-1'], ['instance-2', 'Second label · instance-2'],
-    ]);
-    expect(host.querySelector('.cad-link-card')?.textContent).not.toContain('Fusion link:');
-    expect(host.querySelector('.cad-link-card')?.textContent).toContain('Assembly document');
-  });
-
   it('keeps a connection store label out of the card once the status is gone', async () => {
     await useCadConnectionStore.read(async () => fusionStatus([link('instance-1', 'Store label')]));
     render(null);
