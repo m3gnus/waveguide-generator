@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from server.cadlink.fusion.fusion_outcomes import RECOVERY_NOTICE_SCHEMA, recovery_document_id, settle_from_heartbeat
 from server.cadlink import ipc
 from server.cadlink.store import CadLinkStore
-from server.cadlink.fusion.fusion_status import FusionStatusUnreadable, delivers_requests, read_status_file
+from server.cadlink.fusion.fusion_status import REPORT_UNREAD, delivers_requests, read_heartbeat_report
 
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
 
@@ -57,19 +57,8 @@ def _json(value: object) -> Mapping[str, Any]:
         return {}
 
 
-#: ``report`` was not supplied: read the file.
-_UNREAD: Any = object()
-
-
-def _read_report(data_dir: Path) -> Mapping[str, Any] | None:
-    try:
-        return read_status_file(ipc.ipc_folder(data_dir))
-    except FusionStatusUnreadable:
-        return None
-
-
 def file_evidence(
-    data_dir: Path, *, for_loudness: bool = False, report: Mapping[str, Any] | None = _UNREAD,
+    data_dir: Path, *, for_loudness: bool = False, report: Mapping[str, Any] | None = REPORT_UNREAD,
 ) -> Mapping[str, Any] | None:
     """Fresh evidence settles; the last command-driven report only stays loud.
 
@@ -78,7 +67,7 @@ def file_evidence(
     without it this reads the file.
     """
     try:
-        value = _read_report(data_dir) if report is _UNREAD else report
+        value = read_heartbeat_report(data_dir) if report is REPORT_UNREAD else report
         if not isinstance(value, Mapping) or not delivers_requests(value):
             return None
         updated = datetime.fromisoformat(str(value.get("updatedAt")).replace("Z", "+00:00"))
@@ -99,7 +88,7 @@ def file_evidence(
 
 
 def recovery_notices(store: CadLinkStore, data_dir: Path) -> RecoveryNoticesResponse:
-    report = _read_report(data_dir)
+    report = read_heartbeat_report(data_dir)
     heartbeat = file_evidence(data_dir, report=report)
     last_report = file_evidence(data_dir, for_loudness=True, report=report)
     store.initialize()

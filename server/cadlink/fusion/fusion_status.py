@@ -308,16 +308,17 @@ def read_heartbeat_report(data_dir: Path) -> Mapping[str, Any] | None:
         return None
 
 
-#: ``report`` was not supplied: read the file.
-_UNREAD: Any = object()
+#: A ``report`` argument's default: the caller has not read the file, so the
+#: callee reads it.
+REPORT_UNREAD: Any = object()
 
 
 def last_fusion_heartbeat(
-    data_dir: Path, now: datetime | None = None, *, report: Mapping[str, Any] | None = _UNREAD,
+    data_dir: Path, now: datetime | None = None, *, report: Mapping[str, Any] | None = REPORT_UNREAD,
 ) -> Mapping[str, Any] | None:
     """The last valid report, including an old report, never a future timestamp."""
     checked_at = now or _utc_now()
-    payload = read_heartbeat_report(data_dir) if report is _UNREAD else report
+    payload = read_heartbeat_report(data_dir) if report is REPORT_UNREAD else report
     problem = heartbeat_problem(payload, checked_at)
     if problem not in (None, (HEARTBEAT_STALE, "updatedAt")) or not isinstance(payload, Mapping):
         return None
@@ -332,16 +333,16 @@ def wg_request_pickup(payload: Mapping[str, Any] | None) -> int | None:
 
 
 def select_heartbeat(
-    data_dir: Path, now: datetime | None = None, *, report: Mapping[str, Any] | None = _UNREAD,
+    data_dir: Path, now: datetime | None = None, *, report: Mapping[str, Any] | None = REPORT_UNREAD,
 ) -> SelectedHeartbeat:
     """A fresh file heartbeat and its transport, or none.
 
     One status answer selects once and shares that evidence with settlement.
     """
     checked_at = now or _utc_now()
-    payload = read_heartbeat_report(data_dir) if report is _UNREAD else report
+    payload = read_heartbeat_report(data_dir) if report is REPORT_UNREAD else report
     if payload is not None and heartbeat_problem(payload, checked_at) is None:
-        return payload, HEARTBEAT_FILE  # type: ignore[return-value]
+        return payload, HEARTBEAT_FILE
     return None, None
 
 
@@ -668,7 +669,7 @@ def read_fusion_status(
     returned_manifest: Mapping[str, Any] | None = None,
     now: datetime | None = None,
     heartbeat: SelectedHeartbeat | None = None,
-    report: Mapping[str, Any] | None = _UNREAD,
+    report: Mapping[str, Any] | None = REPORT_UNREAD,
 ) -> dict[str, Any]:
     """Classify the active Fusion document against the design on screen.
 
@@ -680,7 +681,7 @@ def read_fusion_status(
     """
 
     checked_at = now or _utc_now()
-    if report is _UNREAD:
+    if report is REPORT_UNREAD:
         report = read_heartbeat_report(workspace_root)
     closed: dict[str, Any] = {
         "cadApplication": "fusion360",
@@ -948,6 +949,7 @@ __all__ = [
     "OBSERVATION_NONE",
     "OBSERVATION_STALE",
     "OBSERVATION_UNKNOWN",
+    "REPORT_UNREAD",
     "delivers_requests",
     "fusion_process_running",
     "fusion_process_state",
