@@ -320,24 +320,37 @@ def _schedule_deferred_viewport(
     _DEFERRED_VIEWPORTS[lookup_key] = _spawn_background(build())
 
 
+async def _read_viewport_record(store: CadLinkStore, ingest_id: str) -> Mapping[str, Any] | None:
+    """An ingestion record, read off the loop, under today's viewport contract."""
+
+    record = await asyncio.to_thread(get_ingestion_record, store, ingest_id)
+    return None if record is None else current_viewport_record(record)
+
+
+def _ensure_deferred_viewport(state: Any, record: Mapping[str, Any]) -> None:
+    """Start (or join) a record's deferred display build, announcing readiness on the jobs socket."""
+
+    runtime = getattr(state, "jobs_runtime", None)
+    _schedule_deferred_viewport(record, Path(state.data_dir), getattr(runtime, "events", None))
+
+
 def _start_prepared_viewport(state: Any, ingest_id: str) -> None:
     """Start a queued CAD solve's deferred display tessellation in the background.
 
-    Fusion Solve prepares with ``defer_viewport`` so the solve starts sooner;
-    this builds the display mesh while the solver runs, through the same
-    registry the viewport-mesh route joins, so a reader that arrives meanwhile
-    waits for this build rather than starting another, and a retiring backend
-    counts it (``background_work_in_flight``).
+    Fusion Solve prepares with ``defer_viewport`` so the solve starts sooner.
+    A viewer showing the preparation already asked for this build; this covers
+    the solve nobody was watching (another model on screen, no window), so the
+    run opens without waiting. It is the route's own build: one per lookup key,
+    joined by any reader meanwhile, and counted by ``background_work_in_flight``.
     """
 
     async def start() -> None:
-        record = await asyncio.to_thread(get_ingestion_record, state.cadlink_store, ingest_id)
-        if record is None:
-            return
-        runtime = getattr(state, "jobs_runtime", None)
-        _schedule_deferred_viewport(
-            current_viewport_record(record), Path(state.data_dir), getattr(runtime, "events", None)
-        )
+        try:
+            record = await _read_viewport_record(state.cadlink_store, ingest_id)
+            if record is not None:
+                _ensure_deferred_viewport(state, record)
+        except Exception:  # noqa: BLE001 - display fidelity only; the solve is queued
+            logger.warning("Could not start the display mesh of %s.", ingest_id, exc_info=True)
 
     _spawn_background(start())
 
@@ -1273,10 +1286,9 @@ async def get_ingest_viewport_mesh(
     if _INGEST_ID.fullmatch(ingest_id) is None:
         raise HTTPException(status_code=422, detail="WG cannot find this model. Send it again from Fusion.")
     store: CadLinkStore = request.app.state.cadlink_store
-    record = await asyncio.to_thread(get_ingestion_record, store, ingest_id)
+    record = await _read_viewport_record(store, ingest_id)
     if record is None:
         raise HTTPException(status_code=404, detail="WG cannot find this model. Send it again from Fusion.")
-    record = current_viewport_record(record)
     viewport = record.get("viewport_mesh")
     if isinstance(viewport, dict) and viewport.get("available") is True:
         try:
@@ -1298,8 +1310,7 @@ async def get_ingest_viewport_mesh(
         # Join this ingest to an existing build before answering, or start one
         # when the process was restarted or an earlier attempt failed. Every
         # caller receiving 202 then receives its own readiness notification.
-        runtime = getattr(request.app.state, "jobs_runtime", None)
-        _schedule_deferred_viewport(record, data_dir, getattr(runtime, "events", None))
+        _ensure_deferred_viewport(request.app.state, record)
         return PlainTextResponse(
             "", status_code=202, media_type="text/plain; charset=utf-8"
         )

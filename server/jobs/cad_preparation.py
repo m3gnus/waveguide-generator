@@ -1325,7 +1325,10 @@ async def _bind(
         try:
             host.start_deferred_viewport(ingest_id)
         except Exception:  # noqa: BLE001 - display fidelity only; the solve is queued
-            logger.warning("Could not start the display mesh of CAD job %s.", run.job_id, exc_info=True)
+            logger.warning(
+                "Could not start the display mesh of CAD job %s (preparation %s).",
+                run.job_id, ingest_id, exc_info=True,
+            )
     return "bound"
 
 

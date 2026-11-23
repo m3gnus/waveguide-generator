@@ -949,3 +949,19 @@ def test_preparation_context_requires_the_jobs_runtime(tmp_path):
 
     with pytest.raises(RuntimeError, match="CAD preparation requires the jobs runtime"):
         PreparationContext(store=None, data_dir=tmp_path, workspace_root=None, runtime=None)
+
+
+def test_the_app_host_starts_a_queued_solves_display_mesh_through_the_viewport_route(h, monkeypatch):
+    started: list[tuple[object, str]] = []
+    monkeypatch.setattr(api, "_start_prepared_viewport", lambda state, ingest_id: started.append((state, ingest_id)))
+    request = _request(h)
+    request.app.state.cad_job_shims = False
+
+    async def configure():
+        api._preparation_context(request.app.state)
+
+    h._loop.run(configure())
+    host = h.runtime._cad_host
+    assert host is not None
+    host.start_deferred_viewport("wgi_queued")
+    assert started == [(request.app.state, "wgi_queued")]

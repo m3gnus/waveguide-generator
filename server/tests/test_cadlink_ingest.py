@@ -13,6 +13,7 @@ from pathlib import Path
 import threading
 from types import SimpleNamespace
 import asyncio
+import logging
 
 import pytest
 import numpy as np
@@ -1718,6 +1719,28 @@ def test_a_queued_cad_solve_builds_its_display_mesh_before_the_viewer_asks(
 
     assert builds == [ingest_id]
     assert published == [{"v": 1, "kind": "cadViewportReady", "ingestId": ingest_id}]
+
+
+def test_a_display_mesh_that_cannot_start_is_logged_with_its_preparation(
+    monkeypatch, tmp_path: Path, caplog
+) -> None:
+    from server.cadlink import api
+
+    def unreadable(_store, _ingest_id):
+        raise OSError("store unavailable")
+
+    monkeypatch.setattr(api, "get_ingestion_record", unreadable)
+    state = SimpleNamespace(cadlink_store=object(), data_dir=str(tmp_path), jobs_runtime=None)
+
+    async def run() -> None:
+        api._start_prepared_viewport(state, "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C")
+        await asyncio.gather(*list(api._BACKGROUND_TASKS))
+
+    with caplog.at_level(logging.WARNING, logger="server.cadlink.api"):
+        asyncio.run(run())
+
+    assert "Could not start the display mesh of wgi_01J5A8QK3M9T2XVBH0RD7NWE6C" in caplog.text
+    assert "store unavailable" in caplog.text
 
 
 def test_deferred_viewport_publishes_a_ready_event(monkeypatch, tmp_path: Path) -> None:
