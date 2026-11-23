@@ -172,7 +172,6 @@ def publish_locator(store: CadLinkStore, row: Mapping[str, Any]) -> None:
             return  # Legacy stable folders have no locator.
         latest = max(candidates, key=lambda candidate: candidate["sequence"])
         store.make_durable()
-        bundle_products(Path(latest["bundle_path"]), row_facts(latest))
         locator = root / f"{_component(latest['design_id'])}.latest.json"
         if locator.is_symlink():
             raise PublicationConflict("CAD-link locator is a symlink")
@@ -202,9 +201,12 @@ def publish_locator(store: CadLinkStore, row: Mapping[str, Any]) -> None:
             except (ValueError, TypeError, KeyError) as exc:
                 raise PublicationConflict(f"CAD-link locator is invalid: {exc}") from exc
             if previous == payload:
-                # Also repairs a directory fsync interrupted after replacement.
+                # The bundle was validated when this locator was written, so
+                # startup does not re-hash every design's newest bundle. Also
+                # repairs a directory fsync interrupted after replacement.
                 _sync_directory(root)
                 return
+        bundle_products(Path(latest["bundle_path"]), row_facts(latest))
         atomic_json(locator, payload)
 
 
