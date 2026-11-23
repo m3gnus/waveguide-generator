@@ -631,23 +631,8 @@ def test_the_fusion_datum_model_matches_a_live_wglink_return() -> None:
     assert _fusion_throat_datums([0.0, 80.0, 0.0]) == live
 
 
-def _translate_step(path: Path, offset_mm: tuple[float, float, float]) -> None:
-    """Move every body of a written STEP rigidly, as CAD moves a body."""
-
-    import gmsh
-
-    gmsh.option.setNumber("General.Terminal", 0)
-    gmsh.clear()
-    gmsh.model.occ.importShapes(str(path), highestDimOnly=True)
-    gmsh.model.occ.synchronize()
-    gmsh.model.occ.translate(gmsh.model.getEntities(3), *offset_mm)
-    gmsh.model.occ.synchronize()
-    gmsh.write(str(path))
-    gmsh.clear()
-
-
 def _sent_design_bundle(
-    tmp_path: Path, design: Any, *, throat_at_origin: bool = False, name: str = "sent"
+    tmp_path: Path, design: Any, *, name: str = "sent"
 ) -> Path:
     """Send ``design`` to CAD and return what WGLink sends back, unedited.
 
@@ -659,9 +644,11 @@ def _sent_design_bundle(
     source contract is read off the construction ``wglink_core._build_datums``
     builds from the bundle's datums (see :func:`_fusion_throat_datums`).
 
-    ``throat_at_origin`` returns it the way a link built with the throat at
-    the origin does: the body moved down by its design's vertical offset, the
-    datums with it, and the design config echoed unchanged.
+    Since bundle format 1.3 the sent geometry has its throat centre at the
+    origin whatever the design's vertical offset, so this is the return of a
+    throat-origin link; the design config is echoed unchanged. A link built
+    before that, with the offset baked in, is ``_horn_bundle``'s
+    ``vertical_offset_mm``.
     """
 
     from hornlab_mesher.cad import write_step
@@ -714,12 +701,6 @@ def _sent_design_bundle(
         float(datums["WG_THROAT_PLANE"]["origin_mm"][2]),
     ]
     bbox_mm = [list(info.bounding_box_mm[0]), list(info.bounding_box_mm[1])]
-    if throat_at_origin:
-        shift = -centre[1]
-        _run_in_gmsh_session(_translate_step, bundle / "assembly.step", (0.0, shift, 0.0))
-        centre[1] = 0.0
-        for corner in bbox_mm:
-            corner[1] += shift
     return _write_return(
         bundle,
         name,
@@ -742,11 +723,11 @@ def test_a_sent_offset_quarter_design_comes_back_as_a_quarter(tmp_path: Path) ->
     """Send to CAD and back, with nothing hand-written on the WG side.
 
     260308tritonia-q (Mesh.VerticalOffset 80, Mesh.Quadrants 1, an enclosure)
-    came back from Fusion and solved as a half: the recentre read its offset
-    from a ``root`` key the exported config never has, and the throat frame
-    took the throat plane's origin -- the link origin, 80 mm below the throat --
-    as the observation origin. Both passed here only because this module's
-    fixtures were written in those same wrong shapes.
+    came back from Fusion and solved as a half. Since bundle format 1.3 the
+    sent part has its throat at the origin, so it comes back on the solver's
+    mirror planes with no recentre at all, and the throat is the observation
+    origin. (A link inserted with the offset baked in is
+    ``test_a_legacy_offset_link_is_recentred_after_the_design_offset_changed``.)
     """
 
     pytest.importorskip("gmsh")
@@ -772,30 +753,29 @@ def test_a_sent_offset_quarter_design_comes_back_as_a_quarter(tmp_path: Path) ->
 
     recentre = record["normalisation"]["vertical_recentre"]
     assert recentre["recorded_offset_mm"] == 80.0
-    assert recentre["applied"] is True
-    assert recentre["applied_offset_mm"] == 80.0
+    assert recentre["throat_centre_y_mm"] == pytest.approx(0.0, abs=1.0e-9)
+    assert recentre["applied"] is False
+    assert record["normalisation"]["matrix"][1][3] == pytest.approx(0.0, abs=1.0e-12)
 
     assert record["symmetry"]["cut_planes"] == ["x0", "y0"]
     assert record["symmetry_verification"]["verified"] is True
     assert record["domain_decision"]["solver_domain"]["planes"] == ["x0", "y0"]
     assert record["mesh"]["stats"]["domain_multiplier"] == 4.0
 
-    # The observation origin is the throat centre, now at the solver origin.
+    # The observation origin is the throat centre, at the solver origin; so is
+    # the throat plane's own origin, and the axis is square to the plane.
     frame = record["anchor"]["throat_frame"]
     for name in ("origin_m", "source_center_m"):
         assert frame[name] == pytest.approx([0.0, 0.0, 0.0], abs=1.0e-9), name
-    # The plane datum's own origin, recentred, is 80 mm below; the record says
-    # which point the frame took, and that the axis is square to the plane.
     plane = record["normalisation"]["anchor_manifest_throat_plane"]
-    assert plane["origin_mm"] == pytest.approx([0.0, -80.0, 0.0], abs=1.0e-9)
+    assert plane["origin_mm"] == pytest.approx([0.0, 0.0, 0.0], abs=1.0e-9)
     assert plane["throat_centre_mm"] == pytest.approx([0.0, 0.0, 0.0], abs=1.0e-9)
     assert plane["axis_tilt_deg"] == pytest.approx(0.0, abs=1.0e-9)
     assert plane["axis_tilt_within_limit"] is True
 
-    # As sent, the enclosure spans y = -10..170 mm, 90 mm either side of the
-    # throat at y = 80. The quarter kept is the one on the solver's mirror
-    # planes: it starts on y = 0 and reaches the enclosure's 90 mm half-height.
-    assert recentre["midpoint_residual_mm"] <= recentre["midpoint_tolerance_mm"]
+    # As sent, the enclosure spans y = -90..90 mm about the throat. The quarter
+    # kept is the one on the solver's mirror planes: it starts on y = 0 and
+    # reaches the enclosure's 90 mm half-height.
     bounds = record["mesh"]["stats"]["bounds_m"]
     assert bounds["min_x"] == pytest.approx(0.0, abs=1.0e-9)
     assert bounds["min_y"] == pytest.approx(0.0, abs=1.0e-9)
@@ -862,7 +842,7 @@ def test_a_throat_centred_return_of_an_offset_design_is_not_moved(tmp_path: Path
     )
     record = _ingest(
         tmp_path,
-        _sent_design_bundle(tmp_path, design, throat_at_origin=True, name="sent-centred"),
+        _sent_design_bundle(tmp_path, design, name="sent-centred"),
     )
 
     recentre = record["normalisation"]["vertical_recentre"]
