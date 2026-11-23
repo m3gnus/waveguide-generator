@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
+import logging
 import math
 import re
 from pathlib import Path
@@ -51,6 +52,8 @@ from server.mesh.integrity import (
     mesh_self_intersection_report,
 )
 from server.platform.temp_session import temporary_directory_root
+
+logger = logging.getLogger(__name__)
 
 
 def _sagitta_background_view(gmsh: Any, **kwargs: Any) -> int:
@@ -867,10 +870,12 @@ def _transform_direction(matrix: np.ndarray, direction: Iterable[float]) -> np.n
 
 
 class ThroatDisc(NamedTuple):
-    """The disc a throat contract describes: its centre (mm) and unit normal."""
+    """The disc a throat contract describes: its centre (mm), its unit normal,
+    and how far the contract's axis is tilted from that normal (degrees)."""
 
     centre_mm: np.ndarray
     normal: np.ndarray
+    axis_tilt_deg: float
 
 
 def throat_disc(
@@ -905,11 +910,12 @@ def throat_disc(
     normal = normal / normal_length
     direction = direction / direction_length
     along = float(np.dot(direction, normal))
+    tilt_deg = math.degrees(math.acos(min(1.0, abs(along))))
     minimum = 1.0e-9 if max_tilt_deg is None else math.cos(math.radians(max_tilt_deg))
     if abs(along) < minimum:
         raise RoleResolutionError(
             "role resolution: this throat's axis is not perpendicular to its own "
-            f"throat plane (off by {math.degrees(math.acos(min(1.0, abs(along)))):.4g} "
+            f"throat plane (off by {tilt_deg:.4g} "
             "degrees), so the centre of the disc it describes is undefined"
         )
     plane_origin = np.asarray(contract["plane_origin_mm"], dtype=float)
@@ -917,7 +923,7 @@ def throat_disc(
     centre = axis_origin + direction * (
         float(np.dot(plane_origin - axis_origin, normal)) / along
     )
-    return ThroatDisc(centre_mm=centre, normal=normal)
+    return ThroatDisc(centre_mm=centre, normal=normal, axis_tilt_deg=tilt_deg)
 
 
 @dataclass(frozen=True)
@@ -986,7 +992,7 @@ def declared_disc_reduction(
     # normal. If the two are not parallel, the disc a declared cut would halve
     # is not the face being matched, and the direction its centroid would move
     # in is undefined -- so this is refused rather than approximated.
-    centre, normal = throat_disc(contract, max_tilt_deg=NORMAL_ANGLE_DEG)
+    centre, normal, _tilt = throat_disc(contract, max_tilt_deg=NORMAL_ANGLE_DEG)
     radius = 0.5 * float(contract["throat_diameter_mm"])
 
     fraction = 1.0
@@ -2689,29 +2695,26 @@ def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
             "so their orientation was left exactly as imported and may be inverted; "
             "check that every source face kept its label through STEP import"
         )
-    # Deliberately not warned about: bore_alignment_kept and
-    # bore_alignment_flipped are the collar reaching a verdict from the source
-    # cap, which is the contract rather than a fallback from it. Warning on a
-    # correct answer is how a user learns to ignore warnings. They are counted
-    # so a reader can tell a collar verdict from a volume guess, and the flip
-    # is surfaced -- quietly, as information -- because a component arriving
-    # inverted is worth knowing even when the mesher fixed it.
+    # Deliberately not warned about: the collar reaching a verdict from the
+    # source cap (bore_alignment_kept, bore_alignment_flipped), and a reduced
+    # component wound like the full model it mirrors against its source cap's
+    # rule (symmetry_source_parent_conflicts, ``_reduced_orientation_kwargs``:
+    # a throat plug's rear face, or a collar read on the outside of a solid
+    # wall). Each is the right winding, and a warning that says "no action is
+    # needed" is how a user learns to ignore warnings. The counts stay in the
+    # mesh metadata (``postprocess``) for a developer, are logged here at
+    # debug, and ``verify_reduced_orientation`` still judges the winding.
     corrected = int(repair.get("bore_alignment_flipped") or 0)
-    if corrected:
-        warnings.append(
-            f"{corrected} symmetry-reduced component(s) were imported wound away "
-            "from the bore and re-oriented from their source cap; the solve uses "
-            "the corrected winding, and no action is needed"
+    conflicts = int(repair.get("symmetry_source_parent_conflicts") or 0)
+    if corrected or conflicts:
+        logger.debug(
+            "imported orientation: %d component(s) re-oriented from their source "
+            "cap; %d reduced component(s) wound like their full model against "
+            "their source cap (%s)",
+            corrected,
+            conflicts,
+            repair.get("reduced_orientation"),
         )
-    # Not warned about either: where the mesher can, it winds each reduced
-    # component like the full model it mirrors (``_reduced_orientation_kwargs``)
-    # and counts the components its source-cap rules would have wound the
-    # other way -- a source facing away from the open axis (a throat plug's
-    # rear face), or a throat collar read on the outside of a solid wall. The
-    # second is a correctly tagged source and the winding is right, so there
-    # is nothing for the user to do. The count stays in the mesh metadata
-    # (``postprocess.symmetry_source_parent_conflicts``) for a developer, and
-    # ``verify_reduced_orientation`` still judges the winding it produced.
     return warnings
 
 
@@ -2996,6 +2999,19 @@ def build_imported_mesh(
     styled_step = parse_styled_face_groups_from_text(step_text)
     del step_text
 
+    # The recentre's bounds depend only on the file and the normalisation, so
+    # they are measured once -- by the first attempt, the unhealed import --
+    # and every rung of the ladder reads the same answer instead of importing
+    # the STEP a second time again.
+    recentre_bounds: list[tuple[float, ...]] = []
+
+    def recentre_bounds_mm() -> tuple[float, ...]:
+        if not recorded_offset_mm:
+            return (0.0,) * 6
+        if not recentre_bounds:
+            recentre_bounds.append(tessellated_bounds_mm(gmsh, assembly_path, normalization))
+        return recentre_bounds[0]
+
     # The unhealed import supplies the topology reference used by the fallback
     # ladder.  Only mesh-generation failure is allowed to enter that ladder.
     def attempt(
@@ -3028,14 +3044,10 @@ def build_imported_mesh(
         # geometry fingerprint of this model bit for bit: composing them into
         # one move on one side only would round differently and fail that
         # check. The recentre reads the bounds of the normalised model, and
-        # only an offset return has its bounds measured.
+        # only an offset return has its bounds measured (once, above).
         recentre = resolve_vertical_recentre(
             recorded_offset_mm,
-            bounds_mm=(
-                tessellated_bounds_mm(gmsh, assembly_path, normalization)
-                if recorded_offset_mm
-                else (0.0,) * 6
-            ),
+            bounds_mm=recentre_bounds_mm(),
         )
         solver_from_assembly = applied_normalization
         if recentre["applied"]:
@@ -3174,10 +3186,34 @@ def build_imported_mesh(
             # axis pierces the throat plane -- not the plane datum's own
             # origin, which on a WGLink return is the link origin projected
             # onto the plane, one vertical offset below the throat.
-            throat_origin_m = throat_disc(anchor_contract).centre_mm * 1.0e-3
+            #
+            # A tilted axis is recorded and flagged rather than refused: the
+            # linked-throat face match below still bounds where the throat can
+            # be, and refusing here would reject returns that resolve today.
+            # The flag uses the declared-cut path's own perpendicularity limit.
+            disc = throat_disc(anchor_contract)
+            throat_origin_m = disc.centre_mm * 1.0e-3
+            tilt_within_limit = disc.axis_tilt_deg <= NORMAL_ANGLE_DEG
+            if not tilt_within_limit:
+                logger.warning(
+                    "CAD return throat axis is %.4g degrees off its throat plane's "
+                    "normal (limit %g); the observation origin is where that axis "
+                    "pierces the plane",
+                    disc.axis_tilt_deg,
+                    NORMAL_ANGLE_DEG,
+                )
             normalisation_record["anchor_manifest_throat_plane"] = {
+                # The plane datum as the CAD app reported it: any point of the
+                # plane. WGLink's is the link origin projected onto it, which
+                # is not the throat.
                 "origin_mm": [float(value) for value in anchor_contract["plane_origin_mm"]],
                 "normal": [float(value) for value in anchor_contract["plane_normal"]],
+                # The throat frame's origin: where the throat axis pierces this
+                # plane (``throat_disc``), not ``origin_mm`` above.
+                "throat_centre_mm": [float(value) for value in disc.centre_mm],
+                "axis_tilt_deg": disc.axis_tilt_deg,
+                "axis_tilt_limit_deg": NORMAL_ANGLE_DEG,
+                "axis_tilt_within_limit": tilt_within_limit,
             }
             normalisation_record["anchor_throat_frame"] = {
                 "axis": [float(value) for value in axis],

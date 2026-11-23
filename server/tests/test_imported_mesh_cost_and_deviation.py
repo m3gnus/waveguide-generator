@@ -140,24 +140,30 @@ def test_a_collar_verdict_that_kept_the_winding_is_not_warned_about():
     assert _orientation_warnings({"bore_alignment_kept": 3}) == []
 
 
-def test_a_collar_correction_is_reported_without_asking_for_action():
-    """An inverted import is worth knowing even though the mesher fixed it."""
-    warnings = _orientation_warnings({"bore_alignment_flipped": 2})
-    assert len(warnings) == 1
-    assert "re-oriented from their source cap" in warnings[0]
-    assert "no action is needed" in warnings[0]
-    # It must not read like the unresolved cases, which genuinely may be wrong.
-    assert "may be inverted" not in warnings[0]
+def test_a_collar_correction_is_developer_metadata_not_a_warning(caplog):
+    """An inverted import the mesher fixed from its source cap is the right winding.
+
+    Like a reduced component wound like its full model, it says "no action is
+    needed", so it is not a user warning: the count stays in the mesh metadata
+    and is logged for a developer.
+    """
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="server.mesh.imported"):
+        warnings = _orientation_warnings(
+            {"bore_alignment_flipped": 2, "symmetry_source_parent_conflicts": 1}
+        )
+    assert warnings == []
+    assert any("2 component(s) re-oriented" in record.getMessage() for record in caplog.records)
 
 
-def test_a_collar_verdict_and_a_volume_fallback_are_reported_separately():
-    """They are different levels of confidence and must not merge into one."""
+def test_a_volume_fallback_is_still_warned_about_beside_a_collar_verdict():
+    """A signed-volume guess is a lower confidence and stays a warning."""
     warnings = _orientation_warnings(
         {"bore_alignment_flipped": 1, "symmetry_volume_fallback_flipped": 1}
     )
-    assert len(warnings) == 2
-    assert any("signed volume rather than from a source cap" in line for line in warnings)
-    assert any("re-oriented from their source cap" in line for line in warnings)
+    assert len(warnings) == 1
+    assert "signed volume rather than from a source cap" in warnings[0]
 
 
 def test_orientation_warnings_tolerate_a_mesher_older_than_the_collar():

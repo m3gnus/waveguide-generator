@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from scripts.imported_ingest_fixtures import echoed_design_config
 from server.cadlink.intake.ingest import build_deferred_viewport, ingest_bundle, solve_model_sha256
 from server.cadlink.intake.isolated import _inject_mesh_child_fault
 from server.cadlink.store import CadLinkStore
@@ -214,7 +215,7 @@ def _horn_bundle(
         name,
         bbox_mm=bbox_mm,
         assembly_from_link=assembly_from_link,
-        config=_echoed_design_config(vertical_offset_mm),
+        config=echoed_design_config(vertical_offset_mm),
         source_contract={
             "role": "HF",
             "throat_z_mm": throat["centre"][2],
@@ -347,26 +348,6 @@ def _write_return(
         json.dumps(manifest, sort_keys=True), encoding="utf-8"
     )
     return bundle
-
-
-def _echoed_design_config(vertical_offset_mm: float) -> dict[str, Any]:
-    """``instances[].config`` as a send ships it and WGLink echoes it back.
-
-    The export writes ``DesignConfig.model_dump(mode="json", by_alias=True)``
-    (``server/exports/wglink_geometry.py``): a flat formula config, with no
-    ``root`` wrapper.
-    """
-
-    from server.design.schema import DesignConfig
-
-    return DesignConfig.model_validate(
-        {
-            "formula": "OSSE",
-            "L": 60,
-            "a": 45,
-            "mesh": {"vertical_offset": vertical_offset_mm, "quadrants": 1},
-        }
-    ).model_dump(mode="json", by_alias=True)
 
 
 def _fusion_throat_datums(throat_centre_mm: list[float]) -> dict[str, Any]:
@@ -626,6 +607,22 @@ def test_vertically_offset_return_keeps_the_quarter_reduction(tmp_path: Path) ->
     assert 0.95 <= vertex_ratio <= 1.05
 
 
+def test_the_fusion_datum_model_matches_a_live_wglink_return() -> None:
+    """``_fusion_throat_datums`` is a model of Fusion; this pins it to the real thing.
+
+    WGLink's datum code needs Fusion (``wglink_core`` imports ``adsk`` and
+    reads the datums' ``geometry`` off Fusion construction objects), so the
+    round trip cannot run it. These are the datums the live 23 Nov return of
+    260308tritonia-q carried (Mesh.VerticalOffset 80, throat at z = 0).
+    """
+
+    live = {
+        "throat_plane_link": {"origin_mm": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0]},
+        "axis_link": {"origin_mm": [0.0, 80.0, 0.0], "direction": [0.0, 0.0, 1.0]},
+    }
+    assert _fusion_throat_datums([0.0, 80.0, 0.0]) == live
+
+
 def _sent_design_bundle(tmp_path: Path, design: Any) -> Path:
     """Send ``design`` to CAD and return what WGLink sends back, unedited.
 
@@ -751,6 +748,13 @@ def test_a_sent_offset_quarter_design_comes_back_as_a_quarter(tmp_path: Path) ->
     frame = record["anchor"]["throat_frame"]
     for name in ("origin_m", "source_center_m"):
         assert frame[name] == pytest.approx([0.0, 0.0, 0.0], abs=1.0e-9), name
+    # The plane datum's own origin, recentred, is 80 mm below; the record says
+    # which point the frame took, and that the axis is square to the plane.
+    plane = record["normalisation"]["anchor_manifest_throat_plane"]
+    assert plane["origin_mm"] == pytest.approx([0.0, -80.0, 0.0], abs=1.0e-9)
+    assert plane["throat_centre_mm"] == pytest.approx([0.0, 0.0, 0.0], abs=1.0e-9)
+    assert plane["axis_tilt_deg"] == pytest.approx(0.0, abs=1.0e-9)
+    assert plane["axis_tilt_within_limit"] is True
 
     # As sent, the enclosure spans y = -10..170 mm, 90 mm either side of the
     # throat at y = 80. The quarter kept is the one on the solver's mirror

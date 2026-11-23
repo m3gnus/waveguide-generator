@@ -1912,6 +1912,33 @@ def test_the_committed_return_fixture_matches_its_own_manifest() -> None:
     assert sum(entry["size_bytes"] for entry in files.values()) < 300_000
 
 
+def test_imported_return_fixture_configs_are_real_design_config_dumps() -> None:
+    """Every committed imported return echoes the config a send really ships.
+
+    A ``root``-wrapped config is not what ``DesignConfig.model_dump`` writes,
+    and fixtures in that shape let the offset reader read nothing from every
+    real return while they passed.
+    """
+
+    from scripts.imported_ingest_fixtures import echoed_design_config
+    from server.design.schema import DesignConfig
+
+    produced = echoed_design_config(80.0)
+    assert "root" not in produced
+    assert produced["mesh"]["vertical_offset"]["value"] == 80.0
+
+    fixtures = sorted(FIXTURE.parent.glob("*.wgreturn"))
+    assert fixtures
+    for bundle in fixtures:
+        manifest = json.loads((bundle / "wgreturn.json").read_text(encoding="utf-8"))
+        for instance in manifest["instances"]:
+            config = instance["config"]
+            assert "root" not in config, bundle.name
+            assert DesignConfig.model_validate(config).model_dump(
+                mode="json", by_alias=True
+            ) == config, bundle.name
+
+
 def test_the_fixture_binds_the_throat_to_the_bore_facing_disc() -> None:
     """The builder's flat membrane: the contract names the disc in the throat plane.
 

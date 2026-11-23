@@ -158,6 +158,28 @@ def _fingerprint(volume: float) -> dict[str, Any]:
     return {"is_solid": True, "volume_mm3": volume, "bbox_mm": [0, 0, 0, 1, 1, 1]}
 
 
+def echoed_design_config(vertical_offset_mm: float) -> dict[str, Any]:
+    """``instances[].config`` as a send ships it and WGLink echoes it back.
+
+    The export writes ``DesignConfig.model_dump(mode="json", by_alias=True)``
+    (``server/exports/wglink_geometry.py``): a flat formula config with no
+    ``root`` wrapper. A hand-written ``root``-wrapped config here is how the
+    offset reader once read nothing from every real return while every
+    fixture passed.
+    """
+
+    from server.design.schema import DesignConfig
+
+    return DesignConfig.model_validate(
+        {
+            "formula": "OSSE",
+            "L": 60,
+            "a": 45,
+            "mesh": {"vertical_offset": vertical_offset_mm, "quadrants": 1},
+        }
+    ).model_dump(mode="json", by_alias=True)
+
+
 def linked_return(
     root: Path,
     name: str,
@@ -242,7 +264,7 @@ def linked_return(
                 "lineage_id": None,
                 "edit_version": 1,
                 "design_hash": "sha256:" + "1" * 64,
-                "config": {"root": {"mesh": {"vertical_offset": {"value": 0.0, "raw": None}}}},
+                "config": echoed_design_config(0.0),
                 "export_id": "wge_01J4Y2ZD000000000000000000",
                 "export_sequence": 1,
                 "geometry_hash": "sha256:" + "2" * 64,

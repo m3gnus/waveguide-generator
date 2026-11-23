@@ -541,6 +541,12 @@ def test_the_throat_centre_is_where_the_axis_pierces_the_throat_plane() -> None:
     contract["axis_origin_mm"] = [0.0, 80.0, -35.0]
     contract["plane_origin_mm"] = [12.0, -4.0, 0.0]
     assert throat_disc(contract).centre_mm == pytest.approx([0.0, 80.0, 0.0])
+    assert throat_disc(contract).axis_tilt_deg == pytest.approx(0.0)
+    # A tilted axis is measured; only the declared-cut path refuses it.
+    contract["axis_direction"] = [0.05, 0.0, 1.0]
+    assert throat_disc(contract).axis_tilt_deg == pytest.approx(math.degrees(math.atan(0.05)))
+    with pytest.raises(RoleResolutionError, match="not perpendicular to its own throat plane"):
+        throat_disc(contract, max_tilt_deg=0.1)
     # An axis lying in its plane never pierces it.
     contract["axis_direction"] = [0.0, 1.0, 0.0]
     with pytest.raises(RoleResolutionError, match="not perpendicular to its own throat plane"):
