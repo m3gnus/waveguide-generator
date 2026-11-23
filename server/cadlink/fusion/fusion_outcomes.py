@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
+import sqlite3
 from typing import Any, Mapping
 
 from server.contracts.canonical import canonical_ascii_json
@@ -458,26 +459,31 @@ def retire_return_requests(store: CadLinkStore) -> int:
     WG no longer asks Fusion to send its model back (``request_return``); the
     user sends it with Send to WG in Fusion. Rows an earlier WG left waiting
     would otherwise wait forever, so startup cancels them with the remedy. A
-    row that cannot be settled is logged and left as it is: it never stops WG.
+    row that cannot be settled is logged and left as it is, and a registry
+    that cannot be read or written (busy, read-only, an I/O error) is logged
+    and skipped: it never stops WG. The next start tries again.
     """
-    store.initialize()
-    with store._lock:
-        rows = [dict(row) for row in store._connect().execute(
-            "SELECT * FROM cad_operations WHERE kind = ? AND state NOT IN (?, ?, ?) ORDER BY rowid",
-            (REQUEST_RETURN, *sorted(TERMINAL_STATES)),
-        ).fetchall()]
     changed = 0
-    for row in rows:
-        try:
-            value = _record(store, row, CANCELLED, outcome={"message": RETIRED_RETURN_MESSAGE})
-        except (TypeError, ValueError) as exc:
-            logger.warning("Could not settle retired Fusion return request %s: %s",
-                           row.get("operation_id"), exc)
-            continue
-        changed += value is not None
-    if changed:
-        store.make_durable()
-        logger.info("Cancelled %d unfinished Pull from WG request(s); Pull from WG is retired.", changed)
+    try:
+        store.initialize()
+        with store._lock:
+            rows = [dict(row) for row in store._connect().execute(
+                "SELECT * FROM cad_operations WHERE kind = ? AND state NOT IN (?, ?, ?) ORDER BY rowid",
+                (REQUEST_RETURN, *sorted(TERMINAL_STATES)),
+            ).fetchall()]
+        for row in rows:
+            try:
+                value = _record(store, row, CANCELLED, outcome={"message": RETIRED_RETURN_MESSAGE})
+            except (TypeError, ValueError, sqlite3.Error) as exc:
+                logger.warning("Could not settle retired Fusion return request %s: %s",
+                               row.get("operation_id"), exc)
+                continue
+            changed += value is not None
+        if changed:
+            store.make_durable()
+            logger.info("Cancelled %d unfinished Pull from WG request(s); Pull from WG is retired.", changed)
+    except sqlite3.Error as exc:
+        logger.warning("Could not settle retired Fusion return requests: %s", exc)
     return changed
 
 

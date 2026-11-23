@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -84,6 +85,41 @@ def test_a_row_that_cannot_be_settled_never_stops_the_others(tmp_path, monkeypat
     assert store.get_operation("pull-good")["state"] == "cancelled"
     assert store.get_operation("pull-bad")["state"] == "received"
     assert "pull-bad" in caplog.text
+    store.close()
+
+
+def test_a_registry_error_on_one_row_never_stops_the_others(tmp_path, monkeypatch, caplog):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    _return_row(store, "pull-busy", "received")
+    _return_row(store, "pull-good", "received")
+    original = store.record_outcome
+
+    def record(operation_id, *args, **kwargs):
+        if operation_id == "pull-busy":
+            raise sqlite3.OperationalError("database is locked")
+        return original(operation_id, *args, **kwargs)
+
+    monkeypatch.setattr(store, "record_outcome", record)
+    assert retire_return_requests(store) == 1
+    assert store.get_operation("pull-good")["state"] == "cancelled"
+    assert store.get_operation("pull-busy")["state"] == "received"
+    assert "pull-busy" in caplog.text
+    store.close()
+
+
+def test_an_unreadable_registry_is_logged_and_never_stops_startup(tmp_path, monkeypatch, caplog):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    _return_row(store, "pull-1", "received")
+
+    def unreadable():
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(store, "_connect", unreadable)
+    assert retire_return_requests(store) == 0
+    assert "disk I/O error" in caplog.text
+    monkeypatch.undo()
+    assert store.get_operation("pull-1")["state"] == "received"
+    assert retire_return_requests(store) == 1  # the next start settles it
     store.close()
 
 
