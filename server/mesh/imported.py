@@ -1944,7 +1944,8 @@ def _post_cut_source_area_record(
     return record
 
 
-def _surface_normal(gmsh: Any, surface: int) -> np.ndarray:
+def surface_normal(gmsh: Any, surface: int) -> np.ndarray:
+    """A face's unit normal at the middle of its parameter range (zero when gmsh has none)."""
     lower, upper = gmsh.model.getParametrizationBounds(2, surface)
     params = [(float(lower[0]) + float(upper[0])) / 2.0, (float(lower[1]) + float(upper[1])) / 2.0]
     normal = np.asarray(gmsh.model.getNormal(surface, params), dtype=float).reshape(-1, 3)[0]
@@ -3178,7 +3179,7 @@ def build_imported_mesh(
                     center = np.asarray(gmsh.model.occ.getCenterOfMass(2, surface), dtype=float)
                     planar = str(gmsh.model.getType(2, surface)).casefold() == "plane"
                     try:
-                        face_normal = _surface_normal(gmsh, surface)
+                        face_normal = surface_normal(gmsh, surface)
                         angle = math.degrees(math.acos(min(1.0, max(-1.0, abs(float(np.dot(face_normal, plane_normal)))))))
                     except Exception:
                         angle = math.inf
@@ -4229,5 +4230,6 @@ __all__ = [
     "resolve_user_source",
     "rigid_inverse",
     "rigid_occ_motion",
+    "surface_normal",
     "validate_imported_sizes",
 ]

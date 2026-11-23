@@ -20,7 +20,7 @@ import numpy as np
 
 from server.contracts.canonical import canonical_ascii_strict_bytes as _canonical
 
-from server.mesh.imported import geometry_candidate_matches
+from server.mesh.imported import geometry_candidate_matches, surface_normal
 
 
 _VOLUME_REL_TOLERANCE = 3.0e-5
@@ -35,17 +35,6 @@ class ReturnedStepError(ValueError):
 
 def _sha256(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
-
-
-def _surface_normal(gmsh: Any, surface: int) -> np.ndarray:
-    lower, upper = gmsh.model.getParametrizationBounds(2, surface)
-    params = [
-        (float(lower[0]) + float(upper[0])) / 2.0,
-        (float(lower[1]) + float(upper[1])) / 2.0,
-    ]
-    normal = np.asarray(gmsh.model.getNormal(surface, params), dtype=float).reshape(-1, 3)[0]
-    length = float(np.linalg.norm(normal))
-    return normal / length if length > 0 else normal
 
 
 def _fingerprints_match(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
@@ -192,7 +181,7 @@ def observe_returned_step(
     for _dim, surface in gmsh.model.getEntities(2):
         center = np.asarray(gmsh.model.occ.getCenterOfMass(2, surface), dtype=float)
         try:
-            normal = _surface_normal(gmsh, int(surface))
+            normal = surface_normal(gmsh, int(surface))
             angle = math.degrees(
                 math.acos(min(1.0, max(-1.0, abs(float(np.dot(normal, plane_normal))))))
             )
