@@ -54,6 +54,9 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   status, headers: { 'Content-Type': 'application/json' },
 });
 
+/** The image the fake server draws for every report chart. */
+const REPORT_IMAGE = 'data:image/png;base64,iVBORw==';
+
 /** What the archive snapshot's hold keeps on the server. */
 const HELD = { mesh: 'retained mesh' };
 
@@ -72,6 +75,14 @@ function workspace(jobId: string) {
       headers: { 'Content-Disposition': 'attachment; filename="9_OSSE.step"' },
     });
     if (path === '/api/design/serialize') return json({ text: 'cfg text' });
+    // The report's charts, drawn by hornlab-plots (server/charts/api.py): one
+    // classic line-chart spec per plot, answered with a PNG data URI.
+    if (path === '/api/render-chart') {
+      const { spec, theme } = JSON.parse(String(init!.body)) as { spec: { kind: string }; theme: string };
+      expect(theme).toBe('classic');
+      expect(spec.kind).toBe('lines');
+      return json({ image: REPORT_IMAGE });
+    }
     if (path !== '/api/workspace/write-export') return new Response('not found', { status: 404 });
     const form = init!.body as FormData;
     expect(form.get('job_id')).toBe(jobId);
@@ -177,6 +188,7 @@ describe('run archive and automatic export in one Workspace', () => {
       absolute('OSSE/9_OSSE/exports/9_OSSE.json'),
       absolute('OSSE/9_OSSE/exports/9_OSSE_report.html'),
     ]));
+    expect(files.get('OSSE/9_OSSE/exports/9_OSSE_report.html')).toContain(`src="${REPORT_IMAGE}"`);
     archived.forEach((text, path) => expect(files.get(path)).toBe(text));
     expect(writes.every(({ status }) => status === 200)).toBe(true);
   });
