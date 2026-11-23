@@ -15,7 +15,9 @@ make a test pass. A change that breaks them breaks users' saved records.
 ## How they were made
 
 At commit 6d9bcc9d2 (the last with `server/cadlink/intake/native_source.py`), in a
-scratch detached worktree, with that tree on `PYTHONPATH` and the 8d38e959e gate venv:
+scratch detached worktree, with that tree on `PYTHONPATH` and the 8d38e959e gate venv
+(hornlab-waveguide-mesher 0.2.9, commit 19f90d94dda80dc0a42d204769add556ae097b71, the
+pin in that commit's pins.json):
 
 ```
 python generate.py out      # ingests both cases, writes out/<case>/{record.json,solve.msh}

@@ -27,6 +27,7 @@ from server.jobs.runtime import ImportedSolveRefusal, JobRuntime
 from server.jobs.store import JobStore
 from server.solver import metal
 from server.solver.imported import imported_anchor_frame, read_verified_import_mesh
+from server.solver.imported_channels import channel_basis_metadata, channel_source_identity
 from server.tests.test_imported_jobs import _native_result, _PausedRegistry
 
 FIXTURES = Path(__file__).parent / "fixtures" / "native-records"
@@ -101,6 +102,11 @@ def test_single_channel_record_submits_and_refuses_a_contradicting_weight(tmp_pa
         bad.geometry.drive_channels[0].patch_weights["piston"] = 0.4
         with pytest.raises(ImportedSolveRefusal, match="contradicts"):
             await runtime.submit(bad)
+        other_engine = request(record)
+        other_engine.options.engine = "beat-cpu"
+        with pytest.raises(ImportedSolveRefusal) as refused:
+            await runtime.submit(other_engine)
+        assert refused.value.reason_code == "native_source_engine"
         job_id = await runtime.submit(request(record))
         row = runtime.store.get_job_row(job_id)
         assert row["config_json"]["geometry"]["drive_channels"][0]["patch_weights"] == {"piston": 1}
@@ -160,7 +166,14 @@ def test_shared_record_dispatch_frame_and_boundary_condition(tmp_path, monkeypat
     assert captured["mesh_text"] == read_verified_import_mesh(record)
     np.testing.assert_array_equal(captured["config"].frame_override.origin, frame["origin"])
     np.testing.assert_array_equal(captured["config"].frame_override.axis, [0, 0, 1])
+    native = record["native_source"]
+    identity = channel_source_identity(req.geometry, record)
+    basis = channel_basis_metadata(req.geometry, record, record["source_tags"], {})
     for channel, spec in zip(req.geometry.drive_channels, captured["sources"]):
+        for entry in (identity[channel.id], basis[channel.id]):
+            assert entry["excitation_sha256"] == native["excitation_sha256"]
+            assert entry["source_frame"] == native["source_frames"][channel.physical_source_id]
+        assert identity[channel.id]["excitation_contract"] == "native-shared-horn-woofer-v1"
         assert spec == {
             record["source_tags"][key]: complex(weight) for key, weight in channel.patch_weights.items()
         }
@@ -180,5 +193,6 @@ def test_shared_record_dispatch_frame_and_boundary_condition(tmp_path, monkeypat
         assert not actual[tags == 1].any()
         metadata = response["channels"][channel.id]["metadata"]
         assert metadata["physical_source_id"] == channel.physical_source_id
+        assert metadata["excitation_sha256"] == native["excitation_sha256"]
         assert metadata["source_frame"] == record["native_source"]["source_frames"][channel.physical_source_id]
         assert metadata["observation_frame"] == record["native_source"]["observation_frame"]
