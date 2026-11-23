@@ -276,6 +276,21 @@ describe('CAD observation scheduler without the coordinator', () => {
     await vi.advanceTimersByTimeAsync(60_000); expect(reads()).toEqual(inbox);
   });
 
+  it('off: in CAD mode a closed Fusion widens legacy discovery to the quiet rate, and focus wakes it (S8)', async () => {
+    readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false, addinInboxTransfer: false }));
+    await mount(); await vi.advanceTimersByTimeAsync(30_000); const quiet = reads();
+    await vi.advanceTimersByTimeAsync(29_999); expect(reads()).toEqual(quiet);
+    await vi.advanceTimersByTimeAsync(1); expect(reads()).toEqual([quiet[0], quiet[1] + 1]);
+    window.dispatchEvent(new Event('focus')); await vi.advanceTimersByTimeAsync(0);
+    expect(reads()).toEqual([quiet[0] + 1, quiet[1] + 2]);
+    await vi.advanceTimersByTimeAsync(2_500); expect(reads()).toEqual([quiet[0] + 1, quiet[1] + 3]);
+    // Fusion starts: its add-in push reads a running report, and the base rate returns.
+    readStatus.mockImplementation(async () => status({ addinInboxTransfer: false }));
+    channel.addinStatusChanged?.(); await vi.advanceTimersByTimeAsync(0);
+    const running = reads(); await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads()[1] - running[1]).toBeGreaterThan(20);
+  });
+
   it('on: with no folder, status clocks stop and discovery uses the idle rate', async () => {
     activity.coordination = 'on'; activity.workspaceMode = 'parametric'; activity.cadFolderConfigured = false;
     readStatus.mockImplementation(async () => status({ state: 'closed', running: false, processRunning: false }));

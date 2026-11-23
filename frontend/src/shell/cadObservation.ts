@@ -83,7 +83,12 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
     const base = listing ? CAD_OBSERVATION_INTERVALS.returnsMs : CAD_OBSERVATION_INTERVALS.fusionStatusMs;
     const idle = listing ? CAD_OBSERVATION_INTERVALS.returnsIdleMs : CAD_OBSERVATION_INTERVALS.fusionStatusIdleMs;
     if (input.coordination !== 'on' && !(listing && !declaredInbox)) return working() ? base : null;
-    if (input.workspaceMode === 'cad' || connection.getState().fusionStatus?.processRunning || input.awaitingReturn) return base;
+    // CAD mode keeps the base rate while Fusion may deliver. Once Fusion reports it
+    // is closed, nothing can arrive until it starts again, which its add-in push,
+    // focus or a quiet-rate listing notices; until then quiet cadence applies.
+    const fusionClosed = connection.getState().fusionStatus?.state === 'closed';
+    if ((input.workspaceMode === 'cad' && !fusionClosed)
+      || connection.getState().fusionStatus?.processRunning || input.awaitingReturn) return base;
     if (input.cadFolderConfigured === false) return listing ? idle : null;
     return now() - lastActivityAt >= CAD_OBSERVATION_INTERVALS.quietMs ? idle : base;
   };
