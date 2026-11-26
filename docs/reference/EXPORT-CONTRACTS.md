@@ -190,7 +190,8 @@ take their geometry from one resolver, `server/exports/cad_geometry.py`
 placement, export corner arcs and the 0.02 mm CAD plan. The point grid Fusion lofts is
 therefore the grid the STEP is written from, whatever the solve was set to. The plan is
 recorded in the bundle manifest's `cad_sampling` (resolution, measured deviation,
-tolerance, warning), and a plan that could not be verified returns its note as the
+tolerance, warning, and `fallback_reason`: why an unverified plan fell back, one of
+`server/exports/sizing.py` `CAD_FALLBACK_REASONS`, else null; diagnostic only), and a plan that could not be verified returns its note as the
 send's `warning`, which the app shows after the send's status. Send also proves the solid
 builds, with the STEP writer's own OCC build stopped before the write, so a solid File → STEP
 would refuse is refused at Send with the same message. The mesher child remembers the

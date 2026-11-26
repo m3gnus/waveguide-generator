@@ -142,7 +142,7 @@ def test_no_passing_reading_at_all_takes_the_fixed_fallback_not_the_floor(
     assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
     assert plan.deviation_mm is None
     assert plan.warning is not None and "unverified" in plan.warning
-    assert plan.fallback_reason in {"budget_exhausted", "search_stalled"}
+    assert plan.fallback_reason == "budget_exhausted"
 
 
 def test_a_nested_pass_survives_a_later_unmeasurable_probe(
@@ -155,6 +155,7 @@ def test_a_nested_pass_survives_a_later_unmeasurable_probe(
     assert plan.resolution_mm == pytest.approx(9.6)
     assert plan.deviation_mm == pytest.approx(0.005)
     assert plan.warning is not None and "fully verified" in plan.warning
+    assert plan.fallback_reason == "unmeasurable"
 
 
 def test_an_accepted_probe_wins_over_an_earlier_nested_pass(
@@ -182,6 +183,7 @@ def test_an_unmeasurable_probe_after_an_accepted_one_keeps_the_fixed_fallback(
     plan = plan_cad_resolution(_config(), tolerance_mm=0.02)
     assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
     assert plan.deviation_mm is None
+    assert plan.fallback_reason == "unmeasurable"
 
 
 def test_the_unverified_sampling_warning_reaches_the_export_result(
@@ -313,3 +315,77 @@ def test_an_unlisted_fallback_reason_is_logged_not_raised(caplog) -> None:
     assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
     assert plan.fallback_reason == "a_future_reason"
     assert any("a_future_reason" in record.getMessage() for record in caplog.records)
+
+
+def test_a_search_held_at_the_finest_sampling_stalls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reading far outside the target drives the probe to the 1 mm floor, where it stops."""
+
+    calls = _measure_with(monkeypatch, _reading(100.0, 100.0))
+    plan = plan_cad_resolution(_config(), tolerance_mm=0.02)
+    assert len(calls) < 6  # stopped before the attempt budget ran out
+    assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
+    assert plan.fallback_reason == "search_stalled"
+
+
+def test_a_probe_too_coarse_to_measure_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    import hornlab_mesher.config_builder as builder
+
+    monkeypatch.setattr(builder, "resolve_geometry", lambda _config: SimpleNamespace(sampling_metadata={}))
+    plan = plan_cad_resolution(_config())
+    assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
+    assert plan.fallback_reason == "probe_unsampled"
+
+
+def _lattice(n_phi: int, n_length: int, *, shift: float = 0.0):
+    """A plane lattice whose 2x refinement nests exactly unless ``shift`` moves it."""
+
+    import numpy as np
+
+    phi, z = np.meshgrid(np.arange(n_phi) / n_phi + shift, np.arange(n_length + 1) / n_length, indexing="ij")
+    return np.stack([phi, z, np.zeros_like(phi)], axis=-1), n_phi, n_length
+
+
+def _grids(monkeypatch: pytest.MonkeyPatch, *answers) -> None:
+    """``_point_grid`` answers in call order; each answer is ``(angular, length) -> grid``."""
+
+    import server.exports.sizing as sizing
+
+    calls: list[int] = []
+
+    def point_grid(_params, angular: int, length: int):
+        answer = answers[min(len(calls), len(answers) - 1)]
+        calls.append(1)
+        return answer(angular, length)
+
+    monkeypatch.setattr(sizing, "_point_grid", point_grid)
+
+
+def test_a_detuned_lattice_that_resolves_to_the_nested_one_is_unmeasurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.exports.sizing import measure_deviation
+
+    # coarse 8x4, its exact 16x8 refinement, then the detuned request snapped back to 16x8.
+    _grids(monkeypatch, lambda a, n: _lattice(a, n), lambda a, n: _lattice(a, n), lambda a, n: _lattice(16, 8))
+    why: list[str] = []
+    assert measure_deviation({}, 8, 4, why) is None
+    assert why == ["detuned_unresolved"]
+
+
+def test_a_non_nested_reference_that_is_no_finer_is_unmeasurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.exports.sizing import measure_deviation
+
+    _grids(
+        monkeypatch,
+        lambda a, n: _lattice(a, n),
+        lambda a, n: _lattice(a, n, shift=0.01),  # the angular lattice does not nest
+        lambda a, n: _lattice(a, n),              # the axial refinement does
+        lambda a, n: _lattice(8, n),              # the dense reference resolved no finer
+    )
+    why: list[str] = []
+    assert measure_deviation({}, 8, 4, why) is None
+    assert why == ["reference_not_finer"]
