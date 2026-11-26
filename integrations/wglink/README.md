@@ -106,6 +106,10 @@ Insert has its throat at the component (and, unmoved, the document) origin with 
 baffle/back or mouth planes, and a link inserted from an earlier bundle keeps its offset and
 throat station on Update.
 
+The pinned source fits a mirror-symmetric grid's rings through mirrored fit points (one quadrant
+or half, mirrored; same point count, every corner kept), so the Fusion body keeps the design's
+symmetry on Insert and Update.
+
 The current pin is the full commit in [`source.json`](source.json); its `note`
 says what that revision adds. The vendored shared protocol has its own source
 commit and SHA-256 in

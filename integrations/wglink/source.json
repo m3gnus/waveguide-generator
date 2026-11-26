@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "bc13639afe8c671ed091bdb42a5f9642b2a6b6ba",
+  "commit": "5125f05bf4e96ac3395d4336f926d658caae5728",
   "license": "AGPL-3.0-or-later",
   "addinVersion": "0.3.4",
-  "note": "Reads bundle format 1.3 (throat at the link origin): new Inserts put the throat at the component origin with hidden baffle/back (or mouth) planes only; older offset links keep their offset and throat station on Update; Send reads a throat-origin link's frame from its component origin. Includes the command-driven round (450acc9). Shared protocol bytes unchanged from 986f177. Add-in 0.3.4."
+  "note": "Adds mirrored ring fit points for mirror-symmetric grids (Insert and Update choose rays in one quadrant or half and mirror them, same point count, every corner kept; x = 0 first when only one plane fits), and treats ring near-repeats relative to the ring spacing. Reads bundle format 1.3 (throat at the link origin) as before. Shared protocol bytes unchanged from 986f177. Add-in 0.3.4."
 }

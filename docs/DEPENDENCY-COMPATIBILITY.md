@@ -278,3 +278,14 @@ to them. An earlier add-in refuses a 1.3 bundle with the update-the-add-in remed
 shared protocol names the same commit; its bytes and SHA-256 are unchanged from `986f177`, as are
 the shared fixtures. The paired endpoint oracle keeps its WG capture, add-in capture identity and
 fixture digests.
+
+WGLink `5125f05bf4e96ac3395d4336f926d658caae5728` (add-in 0.3.4) then became the package pin. When
+WG's point grid mirrors about x = 0 and/or y = 0, Insert and Update now choose the Fusion ring fit
+points in one quadrant (or half) and mirror them, still exactly the link's point count and through
+every sharp corner, so the lofted body is as symmetric as the design (stage 5 of the unified
+symmetry work). When only one plane can keep the count, x = 0 is kept. An Update of an existing
+link keeps its point count; its surfaces move by a few tenths of a millimetre toward the symmetric
+fit (accepted by Magnus, 26 Nov). Ring near-repeats are measured against the ring's own spacing. A
+grid that does not mirror gets the same fit points as before. The vendored shared protocol names the
+same commit; its bytes and SHA-256 are unchanged from `986f177`, as are the shared fixtures. The
+paired endpoint oracle keeps its WG capture, add-in capture identity and fixture digests.
