@@ -802,6 +802,103 @@ def test_viewport_sizing_change_invalidates_cached_display_meshes() -> None:
     assert '"viewport_pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT' in source
 
 
+def test_a_meshing_semantics_change_rekeys_the_display_tessellation(monkeypatch) -> None:
+    """The display mesh is cut from the solve's normalised model, so it is keyed alike.
+
+    ``linked_return_frame`` moved offset linked returns onto y = 0. The solve
+    mesh key followed it; the display key did not, so a return ingested before
+    that change was drawn from its old, unmoved tessellation.
+    """
+
+    from server.cadlink.intake import ingest
+
+    manifest = wgreturn_manifest(b"STEP")
+    bundle = SimpleNamespace(artifact_sha256="sha256:" + "1" * 64, manifest_sha256="sha256:" + "2" * 64)
+    options = {"symmetry_mode": "auto"}
+    before = _viewport_cache_lookup_key(bundle, manifest, [], options)
+    real = ingest.meshing_semantics
+    monkeypatch.setattr(
+        ingest, "meshing_semantics", lambda: {**real(), "linked_return_frame": "a-later-frame-rule"}
+    )
+    assert _viewport_cache_lookup_key(bundle, manifest, [], options) != before
+
+
+def test_a_cached_display_mesh_of_other_geometry_is_rebuilt_not_served(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """In line as when deferred: a display mesh is served only for the solve's geometry.
+
+    The display lookup key does not name the acoustic sizes, so a resized
+    return finds the tessellation it had before -- right while the normalised
+    model is the same, wrong once it moved. The second build below normalises
+    to other geometry; its record must not carry the first build's display mesh.
+    """
+
+    from server.cadlink.intake import ingest
+
+    manifest = wgreturn_manifest(b"STEP")
+    source_id = manifest["sources"][0]["id"]
+    bundle = write_bundle(tmp_path / "returns", manifest, step=b"STEP")
+    old_hash, new_hash = "sha256:" + "3" * 64, "sha256:" + "4" * 64
+    geometry = {"hash": old_hash}
+    calls: list[str] = []
+
+    def tessellation(geometry_hash: str) -> dict:
+        return {
+            "msh_text": f"$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Comment {geometry_hash}\n",
+            "stats": {"domain": "full"},
+            "metadata": {},
+        }
+
+    def build(*_args, include_viewport_mesh=True, **_kwargs):
+        calls.append("solve" + (" + display" if include_viewport_mesh else ""))
+        built = {
+            **_built_for_source(source_id),
+            "transformed_geometry_hash": geometry["hash"],
+            "viewport_recipe": {"normalisation_matrix": np.eye(4).tolist()},
+        }
+        built.pop("viewport_mesh")
+        if include_viewport_mesh:
+            display = tessellation(geometry["hash"])
+            built["viewport_msh_text"] = display["msh_text"]
+            built["viewport_mesh"] = {"available": True, "stats": display["stats"], "metadata": {}}
+        return built
+
+    def replay(*_args, expected_geometry_hash, **_kwargs):
+        calls.append("display from recipe")
+        return tessellation(expected_geometry_hash)
+
+    monkeypatch.setattr(ingest, "build_imported_mesh_isolated", build)
+    monkeypatch.setattr(ingest, "build_imported_viewport_mesh_isolated", replay)
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    data_dir = tmp_path / "data"
+    try:
+        def prepare(rigid_size_mm: float) -> dict:
+            return ingest_bundle(
+                bundle,
+                {"rigid_size_mm": rigid_size_mm, "transition_mm": 30, "source_size_mm": {source_id: 8}},
+                [], store, data_dir, expected_design_id=manifest["instances"][0]["design_id"],
+            )
+
+        first = prepare(20)
+        geometry["hash"] = new_hash
+        second = prepare(18)
+    finally:
+        store.close()
+
+    assert first["viewport_mesh"]["transformed_geometry_hash"] == old_hash
+    assert second["transformed_geometry_hash"] == new_hash
+    viewport = second["viewport_mesh"]
+    assert viewport["available"] is True
+    assert viewport["cache_hit"] is False
+    assert viewport["transformed_geometry_hash"] == new_hash
+    assert viewport["content_sha256"] != first["viewport_mesh"]["content_sha256"]
+    assert new_hash in Path(viewport["store_path"]).read_text(encoding="utf-8")
+    # The stale tessellation looked usable before the solve mesh existed, so
+    # the solve was built alone and the display mesh made from its recipe.
+    assert calls == ["solve + display", "solve", "display from recipe"]
+
+
 def test_surface_deviation_is_bounded_to_the_band_where_the_dial_has_authority() -> None:
     """Outside the band the label stops being true, so the band is the contract.
 

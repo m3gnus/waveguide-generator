@@ -966,7 +966,13 @@ def _viewport_cache_lookup_key(
     skipped_source_ids: list[str],
     options: Mapping[str, Any],
 ) -> str:
-    """Index visual tessellation independently of acoustic mesh sizing."""
+    """Index visual tessellation independently of acoustic mesh sizing.
+
+    The display mesh is cut from the same normalised model as the solve mesh,
+    so it is keyed by the same meshing semantics: a change to how a return is
+    framed (``linked_return_frame``) moves that model, and a key blind to it
+    would serve the old frame's tessellation beside the new solve mesh.
+    """
 
     from server.mesh.imported import allocate_imported_tags
 
@@ -986,6 +992,7 @@ def _viewport_cache_lookup_key(
                 "mesher_version": _package_version("hornlab-waveguide-mesher"),
                 "mesher_identity": mesher_identity(),
                 "gmsh_version": _package_version("gmsh"),
+                **_semantics_key_entry(),
             }
         )
     ).hexdigest()
@@ -1134,6 +1141,33 @@ def _viewport_paths(imports_root: Path, cache_key: str) -> tuple[Path, Path]:
 
 def _viewport_index_path(imports_root: Path, lookup_key: str) -> Path:
     return imports_root / "viewports" / "index" / f"{lookup_key}.txt"
+
+
+def _indexed_viewport_artifact(
+    imports_root: Path, lookup_key: str, *, expected_geometry_hash: str | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """The display artifact a viewport lookup key names, and its content key.
+
+    The index is a shortcut, not evidence. The artifact is served only when its
+    file name is the digest of its own bytes and, once the solve mesh is known
+    (``expected_geometry_hash``), its sidecar names the normalised geometry that
+    mesh was cut from: a tessellation of any other model would be drawn where
+    the solve mesh is not. With no expected hash the artifact is only a hint
+    that one may exist. The key comes back even when the artifact does not.
+    """
+
+    cache_key = _read_cas_index(_viewport_index_path(imports_root, lookup_key))
+    if cache_key is None:
+        return None, None
+    artifact = _load_cached_mesh(*_viewport_paths(imports_root, cache_key))
+    if artifact is None or artifact.get("content_sha256") != f"sha256:{cache_key}":
+        return cache_key, None
+    if expected_geometry_hash is not None and (
+        not expected_geometry_hash
+        or artifact.get("transformed_geometry_hash") != expected_geometry_hash
+    ):
+        return cache_key, None
+    return cache_key, artifact
 
 
 def _read_cas_index(index_path: Path) -> str | None:
@@ -1682,13 +1716,15 @@ def _ingest_bundle(
     plan = prepared.plan
     imports_root = data_paths(data_dir).root / "imports"
 
-    def viewport_for(opts: Mapping[str, Any]) -> tuple[str, Path, str | None, Path, Path, dict[str, Any] | None]:
+    def viewport_for(
+        opts: Mapping[str, Any], expected_geometry_hash: str | None = None,
+    ) -> tuple[str, str | None, Path, dict[str, Any] | None]:
         lookup = _viewport_cache_lookup_key(bundle, manifest, skipped_source_ids, opts)
-        index = _viewport_index_path(imports_root, lookup)
-        key = _read_cas_index(index)
-        mesh_file, metadata_file = _viewport_paths(imports_root, key or ".pending")
-        artifact = _load_cached_mesh(mesh_file, metadata_file) if key else None
-        return lookup, index, key, mesh_file, metadata_file, artifact
+        key, artifact = _indexed_viewport_artifact(
+            imports_root, lookup, expected_geometry_hash=expected_geometry_hash
+        )
+        mesh_file, _metadata_file = _viewport_paths(imports_root, key or ".pending")
+        return lookup, key, mesh_file, artifact
 
     def mesh_for(opts: Mapping[str, Any], *, include_viewport: bool) -> tuple[dict[str, Any], str, bool, Path]:
         """The solve mesh for ``opts``: served from the content-addressed cache, or built."""
@@ -1834,7 +1870,7 @@ def _ingest_bundle(
             try:
                 chosen = mesh_for(
                     mirrored_options,
-                    include_viewport=not defer_viewport and viewport_for(mirrored_options)[5] is None,
+                    include_viewport=not defer_viewport and viewport_for(mirrored_options)[3] is None,
                 )
             except IngestRefusal as exc:
                 if plan.strict:
@@ -1853,14 +1889,12 @@ def _ingest_bundle(
                 # In the solver frame: a turned frame can undo or make a reflection.
                 reflected_planes = reflected_cad_planes(options)
         built, cache_key, cache_hit, mesh_path = chosen
-        built_inline_viewport = bool(applied_planes) and not defer_viewport
     else:
         viewport_state = viewport_for(options)
         built, cache_key, cache_hit, mesh_path = mesh_for(
-            options, include_viewport=viewport_state[5] is None and not defer_viewport
+            options, include_viewport=viewport_state[3] is None and not defer_viewport
         )
         observations = observe_record_mesh(built)
-        built_inline_viewport = True
     if plan.source == DECLARATION:
         # A declaration never overrides a failed flip condition either: a
         # source named as one side's own driver is not one a mirror may double.
@@ -1920,13 +1954,11 @@ def _ingest_bundle(
                     options, include_viewport=not defer_viewport
                 )
                 observations = observe_record_mesh(built)
-                built_inline_viewport = not defer_viewport
             else:
                 options = recovered_options
                 built, cache_key, cache_hit, mesh_path = recovered
                 applied_planes = tuple(recovered_options["domain_interpretation"]["applied"])
                 reflected_planes = reflected_cad_planes(options)
-                built_inline_viewport = not defer_viewport
     # AUTO may reduce only when every declared air domain supports the same
     # plane. Rebuild the exterior with rejected planes excluded so its artifact,
     # replay recipe, polar grid and all FEM meshes retain one domain decision.
@@ -1963,14 +1995,14 @@ def _ingest_bundle(
                 observations = observe_record_mesh(built)
         else:
             break
+    # Now that the solve mesh is known, a cached tessellation is served only
+    # when it was cut from the same normalised model.
     (
         viewport_lookup_key,
-        _viewport_index,
         viewport_cache_key,
         viewport_mesh_path,
-        _viewport_metadata,
         viewport_artifact,
-    ) = viewport_for(options)
+    ) = viewport_for(options, str(built["transformed_geometry_hash"]))
     viewport_cache_hit = viewport_artifact is not None
     # What the record states about the frame this mesh was meshed in (None
     # for a linked return, which carries the design's own normalisation).
@@ -2022,7 +2054,11 @@ def _ingest_bundle(
                 "stats": built["viewport_mesh"]["stats"],
                 "metadata": built["viewport_mesh"]["metadata"],
             }
-        elif (cache_hit or not built_inline_viewport) and isinstance(
+        # Rebuilt from the recipe unless this very build already tried the
+        # tessellation in line (``viewport_mesh`` is set only by that attempt):
+        # a cached solve mesh, or one built while a cached tessellation looked
+        # usable that the geometry check above then refused.
+        elif (cache_hit or "viewport_mesh" not in built) and isinstance(
             built.get("viewport_recipe"), Mapping
         ):
             try:
@@ -2918,16 +2954,12 @@ def resolve_deferred_viewport(
     if lookup_key is None:
         return None
     imports_root = data_paths(data_dir).root / "imports"
-    cache_key = _read_cas_index(_viewport_index_path(imports_root, lookup_key))
-    if cache_key is None:
-        return None
-    artifact = _load_cached_mesh(*_viewport_paths(imports_root, cache_key))
+    cache_key, artifact = _indexed_viewport_artifact(
+        imports_root,
+        lookup_key,
+        expected_geometry_hash=str(record.get("transformed_geometry_hash") or ""),
+    )
     if artifact is None:
-        return None
-    if artifact.get("content_sha256") != f"sha256:{cache_key}":
-        return None
-    expected_geometry = str(record.get("transformed_geometry_hash") or "")
-    if not expected_geometry or artifact.get("transformed_geometry_hash") != expected_geometry:
         return None
     return {**artifact, "cache_key": cache_key}
 
