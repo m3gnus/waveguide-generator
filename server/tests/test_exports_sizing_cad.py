@@ -264,3 +264,52 @@ def test_an_accepted_plan_records_no_fallback_reason() -> None:
     cad = resolve_cad_geometry(_seed())
     assert cad.plan.warning is None
     assert cad.sampling_record()["fallback_reason"] is None
+
+
+def test_every_fallback_reason_the_planner_can_give_is_listed() -> None:
+    """The export no longer asserts its reasons, so this holds the list complete.
+
+    Every literal reason ``_unaccepted_cad_plan`` is given (directly, or through
+    the ``reason`` variable) and every ``measure_deviation`` reason behind the
+    ``unmeasurable_`` prefix must be in ``CAD_FALLBACK_REASONS``.
+    """
+
+    import ast
+    import inspect
+
+    import server.exports.sizing as sizing
+
+    def literals(node: ast.AST) -> set[str]:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return {node.value}
+        if isinstance(node, ast.IfExp):
+            return literals(node.body) | literals(node.orelse)
+        return set()  # the f-string: covered by the _note reasons below
+
+    given: set[str] = set()
+    for node in ast.walk(ast.parse(inspect.getsource(sizing))):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "reason" for target in node.targets
+        ):
+            given |= literals(node.value)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id == "_unaccepted_cad_plan":
+                given |= literals(node.args[2])
+            elif node.func.id == "_note":
+                given |= {f"unmeasurable_{value}" for value in literals(node.args[1])}
+    assert {"probe_exception", "probe_unsampled", "unmeasurable", "non_nested_grid",
+            "detuned_mismatch", "search_stalled", "budget_exhausted",
+            "unmeasurable_axial_not_nested"} <= given
+    assert given <= set(sizing.CAD_FALLBACK_REASONS), given - set(sizing.CAD_FALLBACK_REASONS)
+
+
+def test_an_unlisted_fallback_reason_is_logged_not_raised(caplog) -> None:
+    import logging
+
+    from server.exports.sizing import _unaccepted_cad_plan
+
+    with caplog.at_level(logging.WARNING, logger="server.exports.sizing"):
+        plan = _unaccepted_cad_plan(STEP_SURFACE_TOLERANCE_MM, None, "a_future_reason")
+    assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
+    assert plan.fallback_reason == "a_future_reason"
+    assert any("a_future_reason" in record.getMessage() for record in caplog.records)

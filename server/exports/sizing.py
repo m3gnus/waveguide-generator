@@ -1068,7 +1068,10 @@ def _unaccepted_cad_plan(
     search stopped (``CAD_FALLBACK_REASONS``); it is recorded, never acted on.
     """
 
-    assert reason in CAD_FALLBACK_REASONS, reason
+    if reason not in CAD_FALLBACK_REASONS:
+        # Recorded as given: a diagnostic must never fail an export. The
+        # sizing tests keep every call site's reason in the list.
+        logger.warning("CAD sampling fallback reason %r is not in CAD_FALLBACK_REASONS", reason)
     if nested is None:
         return CadPlan(
             _FALLBACK_CAD_RESOLUTION_MM,
