@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Regenerate CAD return endpoint and geometry fixtures with --regenerate.
 
-Run on a clean main when the Stage 2 endpoint contract intentionally changes.
+Run on a clean checkout when the Stage 2 endpoint contract intentionally
+changes; PROVENANCE.json records the commit it ran on (HEAD).
 The committed geometry oracle keeps stable verdict, identity, and plane fields;
 the domain unit tests cover the evolving decision record.
 """
@@ -219,18 +220,16 @@ def main() -> None:
     args = parser.parse_args()
     if not args.regenerate:
         parser.error("pass --regenerate to replace the committed oracle")
-    current_main = subprocess.check_output(
-        ["git", "-C", str(ROOT), "rev-parse", "main"], text=True
+    # The tree the oracle was generated from, whatever branch it is on.
+    generated_from = subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
     ).strip()
     dirty = subprocess.check_output(
         ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"],
         text=True,
     ).strip()
-    branch = subprocess.check_output(
-        ["git", "-C", str(ROOT), "branch", "--show-current"], text=True
-    ).strip()
-    if dirty and branch == "main":
-        raise SystemExit("Regenerate on a clean main, or in an isolated topic worktree")
+    if dirty:
+        raise SystemExit("Regenerate on a clean checkout, so the recorded HEAD is the tree used")
     old_members = {
         p.relative_to(DEST).as_posix(): p.read_bytes()
         for p in DEST.rglob("*")
@@ -353,7 +352,7 @@ def main() -> None:
     provenance = {
         "schema": 1,
         "generator": "server/tests/tools/generate_cadlink_endpoint_oracle.py",
-        "wg_commit": current_main,
+        "wg_commit": generated_from,
         "addin_commit": source["commit"],
         # A later pin bump moves addin_commit alone; this keeps the capture's.
         "captured_addin_commit": source["commit"],
