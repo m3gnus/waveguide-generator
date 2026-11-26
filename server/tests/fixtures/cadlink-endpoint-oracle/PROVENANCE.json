@@ -90,5 +90,5 @@
   },
   "generator": "server/tests/tools/generate_cadlink_endpoint_oracle.py",
   "schema": 1,
-  "wg_commit": "0fd8216e2c31ebdf3523f096122d028285ccf7ed"
+  "wg_commit": "c1b3d95658d888c69cceb839d43da2d6b9f53ace"
 }
