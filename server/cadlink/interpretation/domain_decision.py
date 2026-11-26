@@ -95,6 +95,7 @@ from server.cadlink.interpretation.domain_interpretation import (
     open_half_refusal_message,
     shows_cut_rim,
 )
+from server.mesh.imported import origin_shift_translation_mm
 from server.mesh.source_completion import source_completion_factors
 from server.solver.domain_record import (
     CAD_V1_CONTRACT,
@@ -162,11 +163,9 @@ def _proper_frame(normalisation: Mapping[str, Any]) -> dict[str, Any]:
     solver_frame = solver_frame if isinstance(solver_frame, Mapping) else {}
     matrix = array.tolist() if np.all(np.isfinite(array)) else None
     # The translation the matrix carries to put the throat on the mirror
-    # planes (a link inserted with its vertical offset baked in): the
-    # canonical frame of ``domain-decision-v2``.
-    recentre = normalisation.get("vertical_recentre")
-    recentre = recentre if isinstance(recentre, Mapping) else {}
-    recentred = bool(recentre.get("applied"))
+    # planes, read the one way stage 3's origin rule states it
+    # (``OriginShiftDecision``): the canonical frame of ``domain-decision-v2``.
+    translation = [float(value) for value in origin_shift_translation_mm(normalisation.get("vertical_recentre"))]
     return {
         "solver_from_cad": matrix,
         "determinant": round(determinant, 9) if np.isfinite(determinant) else None,
@@ -175,12 +174,8 @@ def _proper_frame(normalisation: Mapping[str, Any]) -> dict[str, Any]:
         "up": solver_frame.get("up"),
         "allowed_axes": list(solver_frame.get("allowed_axes") or []),
         "solver_from_input": matrix,
-        "canonical_translation_mm": [
-            0.0,
-            -float(recentre.get("applied_offset_mm") or 0.0) if recentred else 0.0,
-            0.0,
-        ],
-        "translation_reason": "throat centre" if recentred else None,
+        "canonical_translation_mm": translation,
+        "translation_reason": "throat centre" if any(translation) else None,
     }
 
 

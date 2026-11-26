@@ -602,3 +602,21 @@ def test_the_v1_projection_reproduces_what_the_last_v1_build_sealed(tmp_path: Pa
         assert by_id[key] == pytest.approx(golden["sources"]["by_id"]["throat"][key], rel=1e-9)
         by_id[key] = golden["sources"]["by_id"]["throat"][key]
     assert projected == golden
+
+
+def test_the_canonical_translation_is_stage_3s_origin_shift(tmp_path: Path) -> None:
+    """A legacy offset link, moved 80 mm down: the decision states that very move."""
+
+    pytest.importorskip("gmsh")
+    from server.mesh.imported import origin_shift_translation_mm
+    from test_cadlink_ingest_symmetry import _horn_bundle, _ingest
+
+    record = _ingest(
+        tmp_path, _horn_bundle(tmp_path, "legacy", vertical_offset_mm=80.0, echoed_offset_mm=0.0)
+    )
+    frame = record["domain_decision"]["frame"]
+    moved = origin_shift_translation_mm(record["normalisation"]["vertical_recentre"])
+    assert moved[1] == pytest.approx(-80.0, abs=1e-6)
+    assert frame["canonical_translation_mm"] == list(moved)
+    assert frame["translation_reason"] == "throat centre"
+    assert frame["solver_from_input"] == record["normalisation"]["matrix"]
