@@ -355,6 +355,8 @@ def main() -> None:
         "generator": "server/tests/tools/generate_cadlink_endpoint_oracle.py",
         "wg_commit": current_main,
         "addin_commit": source["commit"],
+        # A later pin bump moves addin_commit alone; this keeps the capture's.
+        "captured_addin_commit": source["commit"],
         "files": files,
     }
     (DEST / "PROVENANCE.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")

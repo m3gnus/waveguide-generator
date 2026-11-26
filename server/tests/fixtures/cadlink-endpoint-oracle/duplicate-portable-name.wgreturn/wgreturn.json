@@ -106,19 +106,105 @@
       "build_mode": "enclosure",
       "chirality": "original",
       "config": {
-        "dimensions": {
-          "length": {
-            "raw": "130",
-            "value": 130
-          }
+        "L": {
+          "raw": null,
+          "value": 60.0
         },
-        "extra_keys": {
-          "Symmetry": "1234",
-          "Tag": "preserved WG input"
+        "a": {
+          "raw": null,
+          "value": 45.0
         },
-        "root": {
-          "formula": "OSSE"
-        }
+        "a0": null,
+        "circ_arc_radius": null,
+        "circ_arc_term_angle": null,
+        "coverage_mode": null,
+        "enclosure": null,
+        "extra_blocks": {},
+        "extra_keys": {},
+        "formula": "OSSE",
+        "guiding_curve": {
+          "aspect_ratio": null,
+          "curve_type": null,
+          "distance": null,
+          "rotation": null,
+          "sf_a": null,
+          "sf_b": null,
+          "sf_m1": null,
+          "sf_m2": null,
+          "sf_n1": null,
+          "sf_n2": null,
+          "sf_n3": null,
+          "superellipse_n": null,
+          "superformula": null,
+          "width": null
+        },
+        "h": null,
+        "k": null,
+        "length_mode": null,
+        "mesh": {
+          "allow_large_mesh": null,
+          "angular_segments": null,
+          "aperture_resolution_scale": null,
+          "corner_segments": null,
+          "length_segments": null,
+          "max_edge": null,
+          "max_triangles": null,
+          "mouth_resolution": null,
+          "quadrants": {
+            "raw": null,
+            "value": 1.0
+          },
+          "rear_resolution": null,
+          "sampling_mode": null,
+          "throat_resolution": null,
+          "throat_segments": null,
+          "throat_slice_density": null,
+          "vertical_offset": {
+            "raw": null,
+            "value": 0.0
+          },
+          "wall_thickness": null,
+          "z_map_points": null
+        },
+        "morph": {
+          "allow_shrinkage": null,
+          "corner_radius": null,
+          "fixed_part": null,
+          "rate": null,
+          "target_exponent": null,
+          "target_height": null,
+          "target_shape": null,
+          "target_width": null
+        },
+        "n": null,
+        "output": {
+          "msh": null,
+          "stl": null
+        },
+        "q": null,
+        "r0": null,
+        "rotation": null,
+        "s": null,
+        "scale": null,
+        "simulation": {
+          "f1": null,
+          "f2": null,
+          "num_frequencies": null,
+          "sim_type": null,
+          "solver_mode": null
+        },
+        "slot_length": null,
+        "source": {
+          "contours": null,
+          "curvature": null,
+          "radius": null,
+          "shape": null,
+          "velocity": null,
+          "velocity_convention": null
+        },
+        "throat_ext_angle": null,
+        "throat_ext_length": null,
+        "throat_profile": null
       },
       "design_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
       "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",

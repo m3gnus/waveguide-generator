@@ -195,6 +195,6 @@
   },
   "onshape-linked": {
     "accepted": false,
-    "message": "stage 2 project gate: this CAD return belongs to the WG design it was exported from (wgd_01K00000000000000000000000, which is not in this workspace); open that design from File \u2192 CAD-linked designs before preparing it"
+    "message": "This model belongs to the WG design it was exported from (a design that is not in this workspace). Open its workspace and choose that design from File \u2192 CAD-linked designs before preparing it"
   }
 }

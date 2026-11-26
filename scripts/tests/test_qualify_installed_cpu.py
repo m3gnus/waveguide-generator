@@ -1912,8 +1912,29 @@ def test_the_committed_return_fixture_matches_its_own_manifest() -> None:
     assert sum(entry["size_bytes"] for entry in files.values()) < 300_000
 
 
+def _committed_return_manifests() -> list[tuple[str, dict]]:
+    """Every committed CAD-return manifest WG reads: this fixture and the endpoint oracle.
+
+    The oracle's deliberately unparsable ``wgreturn.json`` files keep their
+    manifest in ``BARE.json``. ``wglink-shared-protocol`` is not here: it is a
+    byte copy pinned to the WGLink repository and changes only with it.
+    """
+
+    oracle = Path(__file__).resolve().parents[2] / "server" / "tests" / "fixtures" / "cadlink-endpoint-oracle"
+    manifests: list[tuple[str, dict]] = []
+    for bundle in [*sorted(FIXTURE.parent.glob("*.wgreturn")), *sorted(oracle.glob("*.wgreturn"))]:
+        try:
+            manifest = json.loads((bundle / "wgreturn.json").read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            continue
+        manifests.append((bundle.name, manifest))
+    bare = json.loads((oracle / "BARE.json").read_text(encoding="utf-8"))
+    manifests.extend((f"BARE.json:{name}", manifest) for name, manifest in bare.items())
+    return manifests
+
+
 def test_imported_return_fixture_configs_are_real_design_config_dumps() -> None:
-    """Every committed imported return echoes the config a send really ships.
+    """Every committed CAD return echoes the config a send really ships.
 
     A ``root``-wrapped config is not what ``DesignConfig.model_dump`` writes,
     and fixtures in that shape let the offset reader read nothing from every
@@ -1927,16 +1948,18 @@ def test_imported_return_fixture_configs_are_real_design_config_dumps() -> None:
     assert "root" not in produced
     assert produced["mesh"]["vertical_offset"]["value"] == 80.0
 
-    fixtures = sorted(FIXTURE.parent.glob("*.wgreturn"))
-    assert fixtures
-    for bundle in fixtures:
-        manifest = json.loads((bundle / "wgreturn.json").read_text(encoding="utf-8"))
-        for instance in manifest["instances"]:
+    checked = []
+    for name, manifest in _committed_return_manifests():
+        for instance in manifest.get("instances") or []:
             config = instance["config"]
-            assert "root" not in config, bundle.name
+            assert "root" not in config, name
             assert DesignConfig.model_validate(config).model_dump(
                 mode="json", by_alias=True
-            ) == config, bundle.name
+            ) == config, name
+            checked.append(name)
+    assert "round.wgreturn" in checked
+    assert "base-1-1.wgreturn" in checked and "BARE.json:non-utf8-json" in checked
+    assert len(checked) >= 30
 
 
 def test_the_fixture_binds_the_throat_to_the_bore_facing_disc() -> None:
