@@ -160,6 +160,74 @@ def test_automatic_prewarm_starts_cpu_setup_only_after_running_solve(app, monkey
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ('namespace', 'saved'),
+    [('solveOptions', '{"state":{"engine":"metal"}}'), ('enginePreference', '{"engine":"metal"}')],
+    ids=['legacy-solve-options', 'engine-preference'],
+)
+def test_an_automatic_setup_does_not_start_cpu_setup_when_the_user_chose_metal(
+    app, monkeypatch, caplog, namespace, saved,
+):
+    """23 Nov: opening a finished Metal CAD run posted its setup's Automatic.
+
+    The user's solver was Metal, yet the prewarm started an 83 s BEAT CPU
+    Julia compile. Automatic's CPU setup follows the user's own choice; the
+    engine Automatic resolves to is still warmed.
+    """
+    import logging
+
+    from server.solver import beat_cpu_runtime
+
+    app.state.settings.put(namespace, saved)
+    started, warmed = [], []
+    monkeypatch.setattr(beat_cpu_runtime, 'cpu_preparation_in_flight', lambda: False)
+    monkeypatch.setattr(beat_cpu_runtime, 'start_selected_provisioning',
+                        lambda engine, **kwargs: started.append(engine))
+    monkeypatch.setattr(app_module, 'resolve_prewarm_engine', lambda *a, **k: asyncio.sleep(0, 'metal'))
+
+    async def prewarm_solver(engine=None):
+        warmed.append(engine)
+
+    monkeypatch.setattr(app_module, 'prewarm_solver', prewarm_solver)
+
+    async def scenario():
+        status, _, _ = await _request_with_headers(app, 'POST', '/api/runtimes/beat/prewarm',
+                                                  body={'engine': 'auto'})
+        assert status == 202
+        await app.state.beat_prewarm_task
+
+    with caplog.at_level(logging.INFO, logger='wg.solver.warmup'):
+        asyncio.run(scenario())
+    assert started == []
+    assert warmed == ['metal']
+    messages = [record.getMessage() for record in caplog.records]
+    assert 'BEAT worker prewarm requested for auto' in messages
+    assert 'Automatic BEAT CPU setup not started: the selected solver is metal' in messages
+
+
+def test_an_explicit_cpu_choice_still_starts_its_setup(app, monkeypatch):
+    """Only Automatic defers to the user's choice; a named BEAT backend is the choice."""
+    from server.solver import beat_cpu_runtime
+
+    app.state.settings.put('enginePreference', '{"engine":"metal"}')
+    started = []
+    monkeypatch.setattr(beat_cpu_runtime, 'cpu_preparation_in_flight', lambda: False)
+    monkeypatch.setattr(beat_cpu_runtime, 'start_selected_provisioning',
+                        lambda engine, **kwargs: started.append(engine))
+
+    async def fake(_registry, _settings, **kwargs):
+        return None
+
+    monkeypatch.setattr(app_module, 'beat_worker_prewarm', fake)
+
+    async def scenario():
+        await app.state.prewarm_beat_worker('beat-cpu')
+        await app.state.beat_prewarm_task
+
+    asyncio.run(scenario())
+    assert started == ['beat-cpu']
+
+
 def test_unavailable_runtime_never_launches_a_warmup(monkeypatch):
     monkeypatch.delenv('WG2_SOLVER_WARMUP', raising=False)
     monkeypatch.setattr(official_beat, 'production_statuses', lambda **kwargs: {

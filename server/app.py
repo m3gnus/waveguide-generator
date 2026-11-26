@@ -642,12 +642,14 @@ def create_app(
                 raise SessionCancelled("BEAT prewarm deferred while a solve is running")
 
         async def run_prewarm() -> None:
+            from server.solver.warmup import persisted_engine_preference
+
+            log = logging.getLogger("wg.solver.warmup")
+            log.info("BEAT worker prewarm requested for %s", engine or "the saved engine preference")
             runtime = getattr(application.state, "jobs_runtime", None)
             while runtime is not None and runtime.running_job_ids:
                 await asyncio.sleep(0.1)
             if engine is None:
-                from server.solver.warmup import persisted_engine_preference
-
                 application.state.beat_prewarm_engine = await asyncio.to_thread(
                     persisted_engine_preference, getattr(application.state, "settings", None)
                 )
@@ -660,7 +662,25 @@ def create_app(
                 while await asyncio.to_thread(cpu_preparation_in_flight):
                     await asyncio.sleep(0.1)
                 check_cancelled()
-                await asyncio.to_thread(start_selected_provisioning, engine, cancellation_callback=check_admission)
+                setup: str | None = engine
+                if engine == "auto":
+                    # The page warms whatever its active setup names, and an
+                    # opened CAD setup or a finished run can name Automatic
+                    # while the user's own solver is another (Metal, say).
+                    # Automatic's background BEAT CPU setup belongs to the
+                    # user choosing Automatic, as at launch; following a
+                    # workspace switch it cost an 80 s Julia compile on a
+                    # Metal host. The resolved engine below is still warmed.
+                    preferred = await asyncio.to_thread(
+                        persisted_engine_preference, getattr(application.state, "settings", None)
+                    )
+                    if preferred not in (None, "auto"):
+                        log.info(
+                            "Automatic BEAT CPU setup not started: the selected solver is %s", preferred
+                        )
+                        setup = None
+                if setup is not None:
+                    await asyncio.to_thread(start_selected_provisioning, setup, cancellation_callback=check_admission)
                 resolved = None if engine == "beat" or engine.startswith("beat-") else await resolve_prewarm_engine(engine_registry, engine)
                 if resolved is not None and resolved.startswith("beat-"):
                     await beat_worker_prewarm(engine_registry, getattr(application.state, "settings", None),

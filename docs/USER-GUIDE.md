@@ -567,7 +567,9 @@ private Julia runtime that has to be downloaded, instantiated, and then proved
 by actually solving a 1 kHz test frequency; only after that does the engine
 report itself available. Source installations prepare it during setup. The
 packaged application sets up BEAT · CPU in the background after launch when
-**Automatic** is selected, and otherwise sets up only the solver you select:
+**Automatic** is selected (your own choice: opening a model or run whose setup
+says Automatic does not start it while you have picked another solver), and
+otherwise sets up only the solver you select:
 choose **BEAT · CPU** in the solver picker and WG sets it up in the background,
 on Windows, Linux and macOS, without restarting. The first setup takes about
 5 minutes: a 280 MB Julia download, then a compile of about 4 minutes. The
