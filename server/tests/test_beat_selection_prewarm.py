@@ -235,6 +235,38 @@ def test_choosing_automatic_starts_cpu_setup_before_the_settings_upload_lands(ap
     assert started == ['auto']
 
 
+def test_an_automatic_setup_leaves_the_users_own_beat_preparation_alone(app, monkeypatch):
+    """Opening an Automatic CAD run while BEAT Metal sets itself up.
+
+    That prewarm prepares nothing, so it must not cancel the user's BEAT
+    Metal preparation, nor wait behind it to warm the native engine.
+    """
+    from server.solver import beat_cpu_runtime
+
+    cancelled, started, warmed = [], [], []
+    monkeypatch.setattr(beat_cpu_runtime, 'cancel_unselected_preparation', cancelled.append)
+    monkeypatch.setattr(beat_cpu_runtime, 'cpu_preparation_in_flight', lambda: True)  # BEAT Metal preparing
+    monkeypatch.setattr(beat_cpu_runtime, 'start_selected_provisioning',
+                        lambda engine, **kwargs: started.append(engine))
+    monkeypatch.setattr(app_module, 'resolve_prewarm_engine', lambda *a, **k: asyncio.sleep(0, 'metal'))
+
+    async def prewarm_solver(engine=None):
+        warmed.append(engine)
+
+    monkeypatch.setattr(app_module, 'prewarm_solver', prewarm_solver)
+
+    async def scenario():
+        status, _, _ = await _request_with_headers(app, 'POST', '/api/runtimes/beat/prewarm',
+                                                  body={'engine': 'auto', 'preference': 'beat-metal'})
+        assert status == 202
+        async with asyncio.timeout(2):
+            await app.state.beat_prewarm_task
+
+    asyncio.run(scenario())
+    assert cancelled == [] and started == []
+    assert warmed == ['metal']
+
+
 def test_an_explicit_cpu_choice_still_starts_its_setup(app, monkeypatch):
     """Only Automatic defers to the user's choice; a named BEAT backend is the choice."""
     from server.solver import beat_cpu_runtime

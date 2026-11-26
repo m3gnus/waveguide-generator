@@ -659,12 +659,6 @@ def create_app(
             if engine is not None:
                 from server.solver.beat_cpu_runtime import cancel_unselected_preparation, cpu_preparation_in_flight, start_selected_provisioning
 
-                # A previous selection may still be releasing the runtime lock.
-                # Recheck the current task's cancellation before starting new work.
-                await asyncio.to_thread(cancel_unselected_preparation, engine)
-                while await asyncio.to_thread(cpu_preparation_in_flight):
-                    await asyncio.sleep(0.1)
-                check_cancelled()
                 setup: str | None = engine
                 if engine == "auto":
                     # The page warms whatever its active setup names, and an
@@ -686,7 +680,18 @@ def create_app(
                         )
                         setup = None
                 if setup is not None:
+                    # Decided first: an Automatic that prepares nothing must
+                    # neither cancel the user's own preparation (another
+                    # BEAT backend) nor wait behind it to warm a native engine.
+                    # A previous selection may still be releasing the runtime lock.
+                    # Recheck the current task's cancellation before starting new work.
+                    await asyncio.to_thread(cancel_unselected_preparation, setup)
+                    while await asyncio.to_thread(cpu_preparation_in_flight):
+                        await asyncio.sleep(0.1)
+                    check_cancelled()
                     await asyncio.to_thread(start_selected_provisioning, setup, cancellation_callback=check_admission)
+                else:
+                    check_cancelled()
                 resolved = None if engine == "beat" or engine.startswith("beat-") else await resolve_prewarm_engine(engine_registry, engine)
                 if resolved is not None and resolved.startswith("beat-"):
                     await beat_worker_prewarm(engine_registry, getattr(application.state, "settings", None),
