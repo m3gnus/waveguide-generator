@@ -19,7 +19,7 @@ from server.mesh.imported import (
     recorded_vertical_offset_mm,
     resolve_instance_source,
     resolve_user_source,
-    resolve_vertical_recentre,
+    resolve_origin_shift,
     throat_disc,
     apply_rigid_normalisation,
     rigid_inverse,
@@ -397,41 +397,66 @@ def test_recorded_vertical_offset_reads_the_echoed_design_config() -> None:
     assert recorded_vertical_offset_mm({"config": echoed}) is None
 
 
-def test_vertical_recentre_follows_the_returned_throat() -> None:
+def test_the_origin_shift_follows_the_returned_throat() -> None:
     body = (-100.0, -20.0, 0.0, 100.0, 180.0, 300.0)
-    placed = resolve_vertical_recentre(80.0, bounds_mm=body, throat_centre_y_mm=80.0)
-    assert placed["applied"] is True
-    assert placed["applied_offset_mm"] == 80.0
+    placed = resolve_origin_shift(80.0, bounds_mm=body, throat_centre_y_mm=80.0)
+    assert placed.applied is True
+    assert placed.applied_offset_mm == 80.0
+    # Only y: the link-local frame is built about x = y = 0, and
+    # Mesh.VerticalOffset is the only placement ever baked into it.
+    assert placed.translation_mm == (0.0, -80.0, 0.0)
 
     # A legacy link keeps the offset it was inserted with: the design's offset
     # changed to 0 since, and the returned throat still decides the move.
-    legacy = resolve_vertical_recentre(0.0, bounds_mm=body, throat_centre_y_mm=80.0)
-    assert legacy["applied"] is True
-    assert legacy["applied_offset_mm"] == 80.0
-    assert legacy["recorded_offset_mm"] == 0.0
+    legacy = resolve_origin_shift(0.0, bounds_mm=body, throat_centre_y_mm=80.0)
+    assert legacy.applied is True
+    assert legacy.applied_offset_mm == 80.0
+    assert legacy.recorded_offset_mm == 0.0
 
     # A throat off y = 0 in a body not centred on it: no mirror plane through
     # the throat to put on y = 0, so nothing moves.
-    wrong = resolve_vertical_recentre(
+    wrong = resolve_origin_shift(
         80.0, bounds_mm=(-100.0, -20.0, 0.0, 100.0, 60.0, 300.0), throat_centre_y_mm=80.0
     )
-    assert wrong["applied"] is False
-    assert wrong["applied_offset_mm"] == 0.0
-    assert "y midpoint" in wrong["reason"]
+    assert wrong.applied is False
+    assert wrong.applied_offset_mm == 0.0
+    assert wrong.translation_mm == (0.0, 0.0, 0.0)
+    assert "y midpoint" in wrong.reason
 
     # A link built with its throat at the origin, returning an offset design
     # whose body happens to have its y midpoint at the offset: the throat is
     # already where the solver wants it, so nothing moves and no bounds are
     # needed.
     for bounds in (body, None):
-        centred = resolve_vertical_recentre(80.0, bounds_mm=bounds, throat_centre_y_mm=0.0)
-        assert centred["applied"] is False
-        assert centred["applied_offset_mm"] == 0.0
-        assert "already on y = 0" in centred["reason"]
-    unknown = resolve_vertical_recentre(80.0, bounds_mm=body, throat_centre_y_mm=None)
-    assert unknown["applied"] is False
+        centred = resolve_origin_shift(80.0, bounds_mm=bounds, throat_centre_y_mm=0.0)
+        assert centred.applied is False
+        assert centred.applied_offset_mm == 0.0
+        assert "already on y = 0" in centred.reason
+    unknown = resolve_origin_shift(80.0, bounds_mm=body, throat_centre_y_mm=None)
+    assert unknown.applied is False
     with pytest.raises(ValueError, match="bounds"):
-        resolve_vertical_recentre(80.0, bounds_mm=None, throat_centre_y_mm=80.0)
+        resolve_origin_shift(80.0, bounds_mm=None, throat_centre_y_mm=80.0)
+
+
+def test_the_origin_shift_record_keeps_its_keys() -> None:
+    """``normalisation["vertical_recentre"]`` is in retained records and replay packages."""
+
+    body = (-100.0, -20.0, 0.0, 100.0, 180.0, 300.0)
+    measured = resolve_origin_shift(80.0, bounds_mm=body, throat_centre_y_mm=80.0).as_record()
+    assert list(measured) == [
+        "recorded_offset_mm", "applied_offset_mm", "applied", "throat_centre_y_mm",
+        "model_y_midpoint_mm", "midpoint_residual_mm", "midpoint_tolerance_mm", "reason",
+    ]
+    assert measured["model_y_midpoint_mm"] == 80.0
+    assert measured["midpoint_residual_mm"] == 0.0
+    unmeasured = resolve_origin_shift(80.0, bounds_mm=None, throat_centre_y_mm=0.0).as_record()
+    assert unmeasured == {
+        "recorded_offset_mm": 80.0,
+        "applied_offset_mm": 0.0,
+        "applied": False,
+        "throat_centre_y_mm": 0.0,
+        "reason": "the returned throat is already on y = 0",
+    }
 
 
 _QUARTER_BOX_POINTS = np.asarray(

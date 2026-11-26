@@ -2716,6 +2716,24 @@ def _cached_fem_region(
     return built
 
 
+def _solver_placement(exterior: Mapping[str, Any]) -> dict[str, Any]:
+    """How the exterior was placed in the solve frame, for a region to repeat.
+
+    The exterior's two recorded operations (``replay_solver_placement``), so
+    a region meshed on its own lands exactly where the exterior did. An
+    exterior without a replay recipe is placed by its solve matrix alone.
+    """
+
+    recipe = exterior.get("viewport_recipe")
+    if not isinstance(recipe, Mapping):
+        return {"normalisation_matrix": exterior["normalisation"]["matrix"]}
+    return {
+        key: recipe[key]
+        for key in ("normalisation_matrix", "recentre_translation_mm")
+        if key in recipe
+    }
+
+
 def _mesh_fem_regions(
     bundle: WgReturnBundle, imports_root: Path, coupled: Mapping[str, Any] | None = None,
     *, deadline: float | None = None, exterior: Mapping[str, Any] | None = None,
@@ -2764,7 +2782,7 @@ def _mesh_fem_regions(
                     expected_sha256=member["sha256"],
                     expected_size_bytes=member["size_bytes"],
                     deadline=deadline,
-                    **({"normalisation_matrix": exterior["normalisation"]["matrix"],
+                    **({"placement": _solver_placement(exterior),
                         "domain_planes": imported_domain_planes({"symmetry": exterior.get("symmetry")}),
                         "cut_planes": tuple((exterior.get("symmetry") or {}).get("cut_planes") or ())}
                        if exterior and (exterior.get("normalisation") or {}).get("matrix") is not None else {}),

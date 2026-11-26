@@ -651,6 +651,50 @@ def apply_rigid_normalisation(gmsh: Any, dim_tags: Any, matrix: Any) -> np.ndarr
     return applied
 
 
+def apply_origin_shift(
+    gmsh: Any, dim_tags: Any, translation_mm: Any, applied: np.ndarray
+) -> np.ndarray:
+    """Move normalised OCC bodies by an origin shift; return the whole move applied.
+
+    The second of the two operations that place a CAD return in the solver
+    frame (:func:`replay_solver_placement`). ``applied`` is the rigid
+    normalisation already made, and the result is the solve's
+    ``normalisation["matrix"]``: ``applied`` itself when there is no shift.
+    """
+
+    shift = np.asarray(translation_mm, dtype=float)
+    if shift.shape != (3,) or not np.isfinite(shift).all():
+        raise ImportedMeshError("normalisation: an origin shift must be three finite millimetre values")
+    if not shift.any():
+        return applied
+    gmsh.model.occ.translate(dim_tags, *(float(value) for value in shift))
+    gmsh.model.occ.synchronize()
+    return _translation_matrix(*shift) @ applied
+
+
+def replay_solver_placement(gmsh: Any, dim_tags: Any, recipe: Mapping[str, Any]) -> np.ndarray:
+    """Place OCC bodies exactly as the solve placed its CAD return.
+
+    The solve applies the rigid normalisation and then the origin shift
+    (:class:`OriginShiftDecision`) as two OCC operations, and ``recipe`` (the
+    solve's ``viewport_recipe``) records them as ``normalisation_matrix`` and
+    ``recentre_translation_mm``. They are replayed as those two: composed into
+    one move the model would round differently, and the viewport and
+    coupled-FEM replays verify the solve's geometry fingerprint bit for bit.
+    Every replay (viewport, coupled exterior, FEM regions) goes through here,
+    so all of them land in the solve's frame. Returns the
+    solver-from-assembly matrix, the solve's ``normalisation["matrix"]``.
+    """
+
+    matrix = np.asarray(recipe.get("normalisation_matrix"), dtype=float)
+    if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
+        raise ImportedMeshError("normalisation: the recorded normalisation matrix is invalid")
+    applied = apply_rigid_normalisation(gmsh, dim_tags, matrix)
+    return apply_origin_shift(
+        gmsh, dim_tags, recipe.get("recentre_translation_mm") or (0.0, 0.0, 0.0), applied
+    )
+
+
 #: How far a reflected triangle's normal may differ from the reflected normal
 #: (unit normals, so an absolute bound); anything more is a wrong winding.
 REFLECTION_NORMAL_TOLERANCE = 1.0e-9
@@ -1247,12 +1291,66 @@ def throat_is_off_the_mirror_plane(throat_centre_y_mm: float | None) -> bool:
     )
 
 
-def resolve_vertical_recentre(
+@dataclass(frozen=True)
+class OriginShiftDecision:
+    """The one origin rule for a linked CAD return: whether, and how far, it moves.
+
+    Made by :func:`resolve_origin_shift` and applied by
+    :func:`apply_origin_shift`. Every return with a linked anchor goes through
+    it: a Fusion link inserted with its throat at the origin (bundle 1.3), a
+    Fusion link inserted earlier with ``Mesh.VerticalOffset`` baked in (1.2),
+    and every Onshape link, which stays in the placed frame for good
+    (``server/exports/wglink_geometry.py``). An unlinked return has no throat
+    datum, so it is never moved here.
+
+    Only y can be off. The rigid normalisation (the inverse of the anchor's
+    ``assembly_from_link``) already undoes wherever the CAD program put the
+    part, so what is left is the link-local frame, which the mesher builds
+    about the horn axis at x = y = 0. ``Mesh.VerticalOffset`` is the one
+    placement the mesher ever baked into it, and it is a +y move
+    (``hornlab_mesher.datums.cad_frame_shift_mm``): there is no x offset for
+    a return to carry.
+
+    :meth:`as_record` is ``normalisation["vertical_recentre"]`` with the keys
+    it has always had; retained records and replay packages carry it.
+    """
+
+    recorded_offset_mm: float | None
+    throat_centre_y_mm: float | None
+    applied: bool
+    applied_offset_mm: float
+    reason: str
+    #: The model's y midpoint, its distance from the throat, and the tolerance
+    #: it was held to -- measured only for a throat off y = 0.
+    midpoint: tuple[float, float, float] | None = None
+
+    @property
+    def translation_mm(self) -> tuple[float, float, float]:
+        """The solver-frame move: the throat's y back onto y = 0, or none."""
+
+        return (0.0, -float(self.applied_offset_mm) if self.applied else 0.0, 0.0)
+
+    def as_record(self) -> dict[str, Any]:
+        record: dict[str, Any] = {
+            "recorded_offset_mm": self.recorded_offset_mm,
+            "applied_offset_mm": self.applied_offset_mm,
+            "applied": self.applied,
+            "throat_centre_y_mm": self.throat_centre_y_mm,
+        }
+        if self.midpoint is not None:
+            record["model_y_midpoint_mm"] = self.midpoint[0]
+            record["midpoint_residual_mm"] = self.midpoint[1]
+            record["midpoint_tolerance_mm"] = self.midpoint[2]
+        record["reason"] = self.reason
+        return record
+
+
+def resolve_origin_shift(
     recorded_offset_mm: float | None,
     *,
     bounds_mm: tuple[float, ...] | None,
     throat_centre_y_mm: float | None,
-) -> dict[str, Any]:
+) -> OriginShiftDecision:
     """Decide whether to move a placed CAD return back onto its mirror plane.
 
     A linked return arrives with its throat wherever the CAD link put it. A
@@ -1279,18 +1377,15 @@ def resolve_vertical_recentre(
     ``y = 0``; see :func:`throat_is_off_the_mirror_plane`.
     """
 
-    record: dict[str, Any] = {
-        "recorded_offset_mm": recorded_offset_mm,
-        "applied_offset_mm": 0.0,
-        "applied": False,
-        "throat_centre_y_mm": throat_centre_y_mm,
-    }
+    def unmoved(reason: str, midpoint: tuple[float, float, float] | None = None) -> OriginShiftDecision:
+        return OriginShiftDecision(
+            recorded_offset_mm, throat_centre_y_mm, False, 0.0, reason, midpoint
+        )
+
     if throat_centre_y_mm is None:
-        record["reason"] = "the returned throat's position is not known"
-        return record
+        return unmoved("the returned throat's position is not known")
     if not throat_is_off_the_mirror_plane(throat_centre_y_mm):
-        record["reason"] = "the returned throat is already on y = 0"
-        return record
+        return unmoved("the returned throat is already on y = 0")
     if bounds_mm is None:
         raise ValueError("an off-axis throat needs the model's bounds to confirm its mirror plane")
     throat_y = float(throat_centre_y_mm)
@@ -1303,27 +1398,21 @@ def resolve_vertical_recentre(
         VERTICAL_OFFSET_MIDPOINT_TOLERANCE_REL * diagonal,
     )
     residual = abs(midpoint - throat_y)
-    record.update(
-        {
-            "model_y_midpoint_mm": midpoint,
-            "midpoint_residual_mm": residual,
-            "midpoint_tolerance_mm": tolerance,
-        }
-    )
+    measured = (midpoint, residual, tolerance)
     if residual > tolerance:
-        record["reason"] = (
+        return unmoved(
             f"the returned throat at y = {throat_y:.9g} mm is not the returned "
-            f"model's y midpoint {midpoint:.9g} mm"
+            f"model's y midpoint {midpoint:.9g} mm",
+            measured,
         )
-        return record
-    record.update(
-        {
-            "applied_offset_mm": throat_y,
-            "applied": True,
-            "reason": "the returned throat is the returned model's y midpoint",
-        }
+    return OriginShiftDecision(
+        recorded_offset_mm,
+        throat_centre_y_mm,
+        True,
+        throat_y,
+        "the returned throat is the returned model's y midpoint",
+        measured,
     )
-    return record
 
 
 def verify_symmetry_cut(
@@ -2493,14 +2582,6 @@ def build_imported_viewport_mesh(
             "CAD viewport meshing requires hornlab-waveguide-mesher, gmsh, and meshio"
         ) from exc
 
-    matrix = np.asarray(recipe.get("normalisation_matrix"), dtype=float)
-    if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
-        raise ImportedMeshError("viewport meshing: normalization recipe is invalid")
-    recentre = np.asarray(
-        recipe.get("recentre_translation_mm") or (0.0, 0.0, 0.0), dtype=float
-    )
-    if recentre.shape != (3,) or not np.isfinite(recentre).all():
-        raise ImportedMeshError("viewport meshing: recentre recipe is invalid")
     reference = [
         (tuple(float(value) for value in item[0]), float(item[1]))
         for item in recipe.get("surface_order_reference", ())
@@ -2530,12 +2611,8 @@ def build_imported_viewport_mesh(
         imported = _import_occ_root_bodies(gmsh, assembly_path)
         if not imported:
             raise ImportedMeshError("viewport meshing: assembly STEP contains no OCC geometry")
-        # The same call, on the same recorded matrix, as the solve: see
-        # :func:`apply_rigid_normalisation`.
-        apply_rigid_normalisation(gmsh, imported, matrix)
-        if recentre.any():
-            gmsh.model.occ.translate(imported, *(float(value) for value in recentre))
-            gmsh.model.occ.synchronize()
+        # The same calls, on the same recorded recipe, as the solve.
+        replay_solver_placement(gmsh, imported, recipe)
 
         surfaces = gmsh_surface_tags()
         geometries = gmsh_surface_geometries(surfaces)
@@ -3095,30 +3172,21 @@ def build_imported_mesh(
         # (see :func:`rigid_occ_motion`). The datums below ride the matrix
         # actually applied.
         applied_normalization = apply_rigid_normalisation(gmsh, imported, normalization)
-        # The normalisation and the recentre stay separate operations, here
-        # and in the viewport rebuild, because the viewport verifies the
-        # geometry fingerprint of this model bit for bit: composing them into
-        # one move on one side only would round differently and fail that
-        # check. The recentre reads the returned throat and, only for a throat
-        # off y = 0, the bounds of the normalised model (measured once, above).
+        # The normalisation and the origin shift are the two operations every
+        # replay repeats (:func:`replay_solver_placement`). The shift reads the
+        # returned throat and, only for a throat off y = 0, the bounds of the
+        # normalised model (measured once, above).
         throat_centre_y_mm = anchor_throat_centre_y_mm(applied_normalization)
-        recentre = resolve_vertical_recentre(
+        origin_shift = resolve_origin_shift(
             recorded_offset_mm,
             bounds_mm=recentre_bounds_mm(throat_centre_y_mm),
             throat_centre_y_mm=throat_centre_y_mm,
         )
-        solver_from_assembly = applied_normalization
-        if recentre["applied"]:
-            gmsh.model.occ.translate(
-                imported, 0.0, -float(recentre["applied_offset_mm"]), 0.0
-            )
-            gmsh.model.occ.synchronize()
-            solver_from_assembly = (
-                _translation_matrix(0.0, -float(recentre["applied_offset_mm"]), 0.0)
-                @ applied_normalization
-            )
+        solver_from_assembly = apply_origin_shift(
+            gmsh, imported, origin_shift.translation_mm, applied_normalization
+        )
         normalisation_record["matrix"] = solver_from_assembly.tolist()
-        normalisation_record["vertical_recentre"] = recentre
+        normalisation_record["vertical_recentre"] = origin_shift.as_record()
         if declared_cut_planes:
             # Overseer condition 3, on the exact CAD curves: nothing crossing
             # a pre-cut mirror plane may meet it at an angle. No declaration,
@@ -3877,12 +3945,8 @@ def build_imported_mesh(
                 "normalisation_matrix": normalization.tolist(),
                 # Replayed as a second operation, in this order, so the
                 # viewport model is bit-for-bit the model the fingerprint was
-                # taken from.
-                "recentre_translation_mm": [
-                    0.0,
-                    -float(recentre["applied_offset_mm"]) if recentre["applied"] else 0.0,
-                    0.0,
-                ],
+                # taken from (:func:`replay_solver_placement`).
+                "recentre_translation_mm": list(origin_shift.translation_mm),
                 "healing_options": list(healing_options),
                 "surface_order_reference": [
                     [list(center), float(area)]
@@ -4368,16 +4432,20 @@ __all__ = [
     "FIRST_SOURCE_TAG",
     "ImportedMeshError",
     "ImportedMeshDependencyError",
+    "OriginShiftDecision",
     "RoleResolutionError",
     "TAG_NAMESPACE",
     "allocate_imported_tags",
+    "apply_origin_shift",
     "apply_rigid_normalisation",
     "build_imported_mesh",
     "build_imported_viewport_mesh",
     "geometry_candidate_matches",
     "imported_viewport_tessellation_settings",
     "polar_grid_from_symmetry",
+    "replay_solver_placement",
     "resolve_instance_source",
+    "resolve_origin_shift",
     "resolve_user_source",
     "rigid_inverse",
     "rigid_occ_motion",

@@ -34,10 +34,10 @@ from server.exports.wglink_geometry import build_bundle
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 
 
-def _outbound(tmp_path: Path) -> tuple[dict, bytes]:
+def _outbound(tmp_path: Path, **config: object) -> tuple[dict, bytes]:
     # The real Onshape bundle: format 1.2 grid plus the solid STEP an Onshape
     # send uploads (build_bundle include_step).
-    design = DesignConfig.model_validate({"formula": "OSSE", "L": 70, "a": 45})
+    design = DesignConfig.model_validate({"formula": "OSSE", "L": 70, "a": 45, **config})
     target = tmp_path / "outbound.wglink"
     _run_in_gmsh_session(
         build_bundle,
@@ -340,6 +340,42 @@ def test_source_bearing_return_passes_the_existing_ingest_pipeline(tmp_path: Pat
         "rigid_size_mm": 25, "transition_mm": 100,
         "source_size_mm": {"source-hf": source_size},
     }
+
+
+def test_an_offset_onshape_return_is_moved_to_the_throat_origin(
+    tmp_path: Path,
+) -> None:
+    """Onshape stays in the placed frame for good, so its returns keep the origin rule.
+
+    The part is sent with Mesh.VerticalOffset baked in (bundle 1.2) and comes
+    back with its throat at y = 80. The same origin shift as a legacy Fusion
+    link moves it onto y = 0, the plane the solver mirrors across, and the
+    throat is the observation origin.
+    """
+
+    outbound, step = _outbound(tmp_path, mesh={"vertical_offset": 80})
+    assert outbound["datums"]["WG_THROAT_PLANE"]["origin_mm"][1] == pytest.approx(80.0)
+    _bundle_path, record = _run_in_gmsh_session(
+        write_and_ingest_return,
+        step,
+        link={
+            "document_id": "DID",
+            "workspace_id": "WID",
+            "part_studio_element_id": "PART",
+            "document_name": "Demo Horn",
+        },
+        export_row={"manifest_json": json.dumps(outbound)},
+        store=CadLinkStore(tmp_path / "cadlink.db"),
+        data_dir=tmp_path / "data",
+    )
+
+    recentre = record["normalisation"]["vertical_recentre"]
+    assert recentre["applied"] is True
+    assert recentre["throat_centre_y_mm"] == pytest.approx(80.0, abs=1.0e-6)
+    assert recentre["applied_offset_mm"] == pytest.approx(80.0, abs=1.0e-6)
+    assert record["normalisation"]["matrix"][1][3] == pytest.approx(-80.0, abs=1.0e-6)
+    frame = record["anchor"]["throat_frame"]
+    assert frame["origin_m"] == pytest.approx([0.0, 0.0, 0.0], abs=1.0e-9)
 
 
 def test_an_onshape_return_rebuilds_with_the_local_mesh_controls(tmp_path: Path) -> None:

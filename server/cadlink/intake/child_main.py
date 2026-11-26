@@ -367,7 +367,7 @@ def _task_fem_region(
     text_evidence = scan_step_text(source)
     scratch = out_dir.parent / "tmp"
     built = build_fem_region_mesh(source, region, scratch_dir=scratch,
-                                  normalisation_matrix=payload.get("normalisation_matrix"),
+                                  placement=payload.get("placement"),
                                   domain_planes=payload.get("domain_planes", ()),
                                   cut_planes=payload.get("cut_planes", ()))
     built["stats"] = fem_region_mesh_stats(built, region, scratch_dir=scratch)

@@ -372,7 +372,7 @@ def fragment_fundamental_domain(gmsh: Any, objects: list[tuple[int, int]],
 
 def build_fem_region_mesh(
     step_path: str | Path, region: Mapping[str, Any], *, scratch_dir: str | Path | None = None,
-    normalisation_matrix: Any = None, domain_planes: Sequence[str] = (),
+    placement: Mapping[str, Any] | None = None, domain_planes: Sequence[str] = (),
     cut_planes: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Mesh one validated ``scope.fem_regions[]`` record in the open session.
@@ -380,6 +380,11 @@ def build_fem_region_mesh(
     The STEP is in millimetres of the export frame, the same frame as the face
     descriptions, so they are compared directly. Returns the MSH 4.1 text,
     the physical-name table, which surfaces each group claimed, and counts.
+
+    ``placement`` is the exterior's replay recipe (its ``normalisation_matrix``
+    and ``recentre_translation_mm``): the region is moved into the solve frame
+    by the exterior's own operations (``replay_solver_placement``), and the
+    matrix that applied is returned as ``normalisation_matrix``.
     """
 
     import gmsh
@@ -406,9 +411,12 @@ def build_fem_region_mesh(
         )
         assigned = assign_faces(region, _surface_descriptors(gmsh, boundary))
 
-        if normalisation_matrix is not None:
-            from server.mesh.imported import apply_rigid_normalisation
-            apply_rigid_normalisation(gmsh, [(3, volumes[0])], normalisation_matrix)
+        normalisation_matrix = None
+        if placement is not None:
+            from server.mesh.imported import replay_solver_placement
+            normalisation_matrix = replay_solver_placement(
+                gmsh, [(3, volumes[0])], placement
+            ).tolist()
         verify_region_symmetry(gmsh, region, boundary, assigned, domain_planes, cut_planes)
         if domain_planes:
             copies = {tag: gmsh.model.occ.copy([(2, tag)])[0][1] for tag in boundary}

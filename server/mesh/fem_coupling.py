@@ -35,9 +35,8 @@ from server.mesh.imported import (
     _surface_group_size_targets,
     _surface_group_sizing_fields,
     apply_occ_healing_options,
-    apply_rigid_normalisation,
     declared_step_bodies,
-    rigid_occ_motion,
+    replay_solver_placement,
 )
 from server.mesh.surface_topology import open_edges, orient_closed_surface
 from server.platform.temp_session import temporary_directory_root
@@ -851,17 +850,7 @@ def build_coupled_mesh(
             assembly_path=assembly_path,
         )
         assembly = _import_occ_root_bodies(gmsh, assembly_path)
-        matrix = np.asarray(recipe.get("normalisation_matrix"), dtype=float)
-        rigid_occ_motion(matrix)
-        applied = apply_rigid_normalisation(gmsh, assembly, matrix)
-        recentre = np.asarray(recipe.get("recentre_translation_mm", [0, 0, 0]), dtype=float)
-        if recentre.shape != (3,) or not np.isfinite(recentre).all():
-            raise FemRegionMeshError("normalisation mismatch: invalid exterior recentre recipe.")
-        if recentre.any():
-            gmsh.model.occ.translate(assembly, *recentre.tolist())
-            gmsh.model.occ.synchronize()
-        total = applied.copy()
-        total[:3, 3] += recentre
+        total = replay_solver_placement(gmsh, assembly, recipe)
         if not np.allclose(total, np.asarray(normalisation_matrix), atol=1e-9, rtol=0):
             raise FemRegionMeshError(
                 "normalisation mismatch: exterior recipe and solver transform differ."
@@ -908,11 +897,8 @@ def build_coupled_mesh(
             boundary = sorted(_boundary(gmsh, volumes))
             assigned = assign_faces(region, _surface_descriptors(gmsh, boundary))
             # The SAME operations, in the SAME order, including recentring.
-            region_applied = apply_rigid_normalisation(gmsh, [(3, volumes[0])], matrix)
-            if recentre.any():
-                gmsh.model.occ.translate([(3, volumes[0])], *recentre.tolist())
-                gmsh.model.occ.synchronize()
-            if not np.allclose(region_applied, applied, atol=1e-12, rtol=0):
+            region_total = replay_solver_placement(gmsh, [(3, volumes[0])], recipe)
+            if not np.allclose(region_total, total, atol=1e-12, rtol=0):
                 raise FemRegionMeshError(f"{_label(region)} normalisation mismatch.")
             verify_region_symmetry(gmsh, region, boundary, assigned, domain_planes, cut_planes)
             region_data.append((region, volumes, boundary, assigned))

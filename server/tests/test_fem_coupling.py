@@ -601,6 +601,95 @@ def test_region_and_exterior_share_rigid_translation_and_recentring(tmp_path):
     )
 
 
+def test_a_region_meshed_alone_is_placed_by_the_exterior_operations(tmp_path):
+    """One placement for every replay of a turned, recentred linked return.
+
+    The solve normalises and then recentres in two OCC operations, and the
+    viewport and coupled replays repeat those two. A region meshed on its own
+    used to apply the composed matrix in one move instead: the same frame, a
+    few 1e-15 mm apart. It now replays the exterior's recipe too; its record
+    names the coupled replay's matrix, and its CAD vertices are where the
+    exterior's operations put them (to the MSH text's last digit).
+    """
+
+    from server.cadlink.intake.isolated import build_fem_region_mesh_isolated
+    from server.mesh.imported import (
+        _geometry_fingerprint,
+        _import_occ_root_bodies,
+        apply_rigid_normalisation,
+        rigid_inverse,
+    )
+    from hornlab_mesher.step_import import gmsh_surface_geometries, gmsh_surface_tags
+
+    bundle, manifest, region = _coupling_bundle(tmp_path / "returns")
+    assembly = bundle / "assembly.step"
+    air = bundle / region["file"]
+    exterior = build_imported_mesh_isolated(assembly, manifest, SIZES, include_viewport_mesh=False)
+    recipe = deepcopy(exterior["viewport_recipe"])
+    # A link the user turned about z and moved in CAD, inserted with an offset.
+    turn = 0.7
+    placement = np.array([
+        [np.cos(turn), -np.sin(turn), 0.0, 12.5],
+        [np.sin(turn), np.cos(turn), 0.0, -33.25],
+        [0.0, 0.0, 1.0, 7.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+    matrix = rigid_inverse(placement)
+    recentre = [0.0, -80.123456789, 0.0]
+    recipe["normalisation_matrix"] = matrix.tolist()
+    recipe["recentre_translation_mm"] = recentre
+
+    def solve_placement(path):
+        """The solve's two operations, written out, on one STEP."""
+
+        import gmsh
+
+        gmsh.clear()
+        gmsh.model.add("turned-fixture")
+        try:
+            roots = _import_occ_root_bodies(gmsh, path)
+            applied = apply_rigid_normalisation(gmsh, roots, matrix)
+            gmsh.model.occ.translate(roots, *recentre)
+            gmsh.model.occ.synchronize()
+            geometry = gmsh_surface_geometries(gmsh_surface_tags())
+            vertices = np.array([gmsh.model.getValue(0, tag, []) for _dim, tag in gmsh.model.getEntities(0)])
+            total = applied.copy()
+            total[:3, 3] += recentre
+            return _geometry_fingerprint(geometry), geometry, total, vertices
+        finally:
+            gmsh.model.remove()
+
+    fingerprint, reference, total, _ = _run_in_gmsh_session(solve_placement, assembly)
+    _, _, _, air_vertices = _run_in_gmsh_session(solve_placement, air)
+    recipe["surface_order_reference"] = reference
+    member = manifest["files"][region["file"]]
+    coupled = build_coupled_mesh_isolated(
+        assembly,
+        [region],
+        members={region["region_id"]: {"path": str(air), **member}},
+        recipe=recipe,
+        expected_geometry_hash=fingerprint,
+        normalisation_matrix=total.tolist(),
+        sizes=SIZES,
+        exterior_names={},
+    )
+    alone = build_fem_region_mesh_isolated(
+        air,
+        region,
+        expected_sha256=member["sha256"],
+        expected_size_bytes=member["size_bytes"],
+        placement={key: recipe[key] for key in ("normalisation_matrix", "recentre_translation_mm")},
+    )
+
+    assert np.asarray(alone["normalisation_matrix"]) == pytest.approx(total, abs=1e-12)
+    assert alone["normalisation_matrix"] == coupled["regions"][region["region_id"]]["normalisation_matrix"]
+    domain = read_fem_region_domain(alone["msh_text"], region["region_id"])
+    assert len(air_vertices) == 8
+    for vertex in air_vertices:
+        distance = np.linalg.norm(domain.points_mm - vertex, axis=1)
+        assert distance.min() < 1e-12, vertex
+
+
 @pytest.mark.parametrize("closed_port", [False, True], ids=["open-port", "coincident-rigid-sheet"])
 def test_sheet_walls_and_air_skin_share_the_aperture_rim(tmp_path, closed_port):
     from server.mesh.imported import _geometry_fingerprint, _import_occ_root_bodies
