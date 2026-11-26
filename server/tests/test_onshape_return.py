@@ -361,19 +361,23 @@ def test_an_offset_onshape_return_is_moved_to_the_throat_origin(
 
     outbound, step = _outbound(tmp_path, mesh={"vertical_offset": 80})
     assert outbound["datums"]["WG_THROAT_PLANE"]["origin_mm"][1] == pytest.approx(80.0)
-    _bundle_path, record = _run_in_gmsh_session(
-        write_and_ingest_return,
-        step,
-        link={
-            "document_id": "DID",
-            "workspace_id": "WID",
-            "part_studio_element_id": "PART",
-            "document_name": "Demo Horn",
-        },
-        export_row={"manifest_json": json.dumps(outbound)},
-        store=CadLinkStore(tmp_path / "cadlink.db"),
-        data_dir=tmp_path / "data",
-    )
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    try:
+        _bundle_path, record = _run_in_gmsh_session(
+            write_and_ingest_return,
+            step,
+            link={
+                "document_id": "DID",
+                "workspace_id": "WID",
+                "part_studio_element_id": "PART",
+                "document_name": "Demo Horn",
+            },
+            export_row={"manifest_json": json.dumps(outbound)},
+            store=store,
+            data_dir=tmp_path / "data",
+        )
+    finally:
+        store.close()
 
     recentre = record["normalisation"]["vertical_recentre"]
     assert recentre["applied"] is True
@@ -396,20 +400,25 @@ def test_a_moved_offset_onshape_part_is_refused_not_recentred(tmp_path: Path) ->
     """
 
     outbound, step = _outbound(tmp_path, move_mm=(0.0, 5.0, 0.0), mesh={"vertical_offset": 80})
-    with pytest.raises(OnshapeReturnError, match="linked throat"):
-        _run_in_gmsh_session(
-            write_and_ingest_return,
-            step,
-            link={
-                "document_id": "DID",
-                "workspace_id": "WID",
-                "part_studio_element_id": "PART",
-                "document_name": "Demo Horn",
-            },
-            export_row={"manifest_json": json.dumps(outbound)},
-            store=CadLinkStore(tmp_path / "cadlink.db"),
-            data_dir=tmp_path / "data",
-        )
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    try:
+        with pytest.raises(OnshapeReturnError, match="linked throat"):
+            _run_in_gmsh_session(
+                write_and_ingest_return,
+                step,
+                link={
+                    "document_id": "DID",
+                    "workspace_id": "WID",
+                    "part_studio_element_id": "PART",
+                    "document_name": "Demo Horn",
+                },
+                export_row={"manifest_json": json.dumps(outbound)},
+                store=store,
+                data_dir=tmp_path / "data",
+            )
+        assert store.ingest_records() == []
+    finally:
+        store.close()
 
 
 def test_an_onshape_return_rebuilds_with_the_local_mesh_controls(tmp_path: Path) -> None:

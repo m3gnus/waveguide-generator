@@ -314,7 +314,7 @@ def test_a_corrupt_recentre_recipe_is_a_named_normalisation_refusal(tmp_path):
     def corrupt(recipe):
         recipe["recentre_translation_mm"] = [0.0, 1.0]
 
-    with pytest.raises(FemRegionMeshError, match="Rear chamber.*normalisation mismatch: invalid exterior replay recipe"):
+    with pytest.raises(FemRegionMeshError, match="Rear chamber.*normalisation mismatch: exterior replay recipe: .*origin shift"):
         _coupled(bundle, manifest, region, mutate_recipe=corrupt)
 
 
@@ -611,6 +611,187 @@ def test_region_and_exterior_share_rigid_translation_and_recentring(tmp_path):
     )
 
 
+_TURN = 0.7
+_RECENTRE = [0.0, -80.123456789, 0.0]
+
+
+def _turned_link_matrix():
+    from server.mesh.imported import rigid_inverse
+
+    placement = np.array([
+        [np.cos(_TURN), -np.sin(_TURN), 0.0, 12.5],
+        [np.sin(_TURN), np.cos(_TURN), 0.0, -33.25],
+        [0.0, 0.0, 1.0, 7.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+    return rigid_inverse(placement)
+
+
+def test_the_replayed_placement_is_the_solve_s_two_steps_to_the_bit(tmp_path):
+    """Composed into one move the model rounds differently; the replay must not."""
+
+    from server.mesh.imported import (
+        _geometry_fingerprint,
+        apply_rigid_normalisation,
+        replay_solver_placement,
+    )
+    from hornlab_mesher.step_import import gmsh_surface_geometries, gmsh_surface_tags
+
+    air = _write_step(tmp_path / "air.step")
+    matrix = _turned_link_matrix()
+
+    def fingerprint(place):
+        import gmsh
+
+        gmsh.clear()
+        gmsh.model.add("placed")
+        try:
+            imported = gmsh.model.occ.importShapes(str(air))
+            gmsh.model.occ.synchronize()
+            volumes = [(3, tag) for dim, tag in imported if dim == 3]
+            result = place(gmsh, volumes)
+            return _geometry_fingerprint(gmsh_surface_geometries(gmsh_surface_tags())), result
+        finally:
+            gmsh.model.remove()
+
+    def two_steps(gmsh, volumes):
+        applied = apply_rigid_normalisation(gmsh, volumes, matrix)
+        gmsh.model.occ.translate(volumes, *_RECENTRE)
+        gmsh.model.occ.synchronize()
+        total = applied.copy()
+        total[:3, 3] += _RECENTRE
+        return total
+
+    solve, total = _run_in_gmsh_session(fingerprint, two_steps)
+    replayed, placement = _run_in_gmsh_session(
+        fingerprint,
+        lambda gmsh, volumes: replay_solver_placement(
+            gmsh, volumes,
+            {"normalisation_matrix": matrix.tolist(), "recentre_translation_mm": _RECENTRE},
+            expected=total,
+        ),
+    )
+    one_step, _ = _run_in_gmsh_session(
+        fingerprint, lambda gmsh, volumes: apply_rigid_normalisation(gmsh, volumes, total)
+    )
+    assert replayed == solve
+    assert one_step != solve
+    assert placement.shift_mm.tolist() == _RECENTRE
+    assert np.allclose(placement.matrix, total, atol=1e-12, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    ("recipe", "message"),
+    [
+        pytest.param({}, "normalisation matrix is invalid", id="no-matrix"),
+        pytest.param({"normalisation_matrix": "eye"}, "normalisation matrix is invalid", id="text-matrix"),
+        pytest.param({"normalisation_matrix": np.diag([1.000005, 1, 1, 1]).tolist()},
+                     "proper rigid motion", id="near-identity-stretch"),
+        pytest.param({"normalisation_matrix": np.eye(4).tolist(), "recentre_translation_mm": []},
+                     "origin shift", id="empty-shift"),
+        pytest.param({"normalisation_matrix": np.eye(4).tolist(), "recentre_translation_mm": ""},
+                     "origin shift", id="text-shift"),
+        pytest.param({"normalisation_matrix": np.eye(4).tolist(), "recentre_translation_mm": [0, "y", 0]},
+                     "origin shift", id="non-numeric-shift"),
+        pytest.param({"normalisation_matrix": np.eye(4).tolist(), "recentre_translation_mm": [0, 0, 1]},
+                     "differs from the solve", id="not-the-solve-matrix"),
+    ],
+)
+def test_a_malformed_placement_recipe_is_refused_before_it_misplaces(tmp_path, recipe, message):
+    from server.mesh.imported import ImportedMeshError, replay_solver_placement
+
+    air = _write_step(tmp_path / "air.step")
+
+    def place():
+        import gmsh
+
+        gmsh.clear()
+        gmsh.model.add("placed")
+        try:
+            imported = gmsh.model.occ.importShapes(str(air))
+            gmsh.model.occ.synchronize()
+            replay_solver_placement(gmsh, imported, recipe, expected=np.eye(4))
+        finally:
+            gmsh.model.remove()
+
+    with pytest.raises(ImportedMeshError, match=message):
+        _run_in_gmsh_session(place)
+
+
+@pytest.mark.parametrize(
+    "shift",
+    [None, [0, 0, 0], np.zeros(3), np.array(_RECENTRE)],
+    ids=["absent", "zero-list", "zero-array", "array"],
+)
+def test_a_placement_shift_may_be_absent_zero_or_an_array(tmp_path, shift):
+    from server.mesh.imported import replay_solver_placement
+
+    air = _write_step(tmp_path / "air.step")
+    recipe = {"normalisation_matrix": np.eye(4)}
+    if shift is not None:
+        recipe["recentre_translation_mm"] = shift
+    expected = np.eye(4)
+    if shift is not None:
+        expected[:3, 3] = np.asarray(shift, dtype=float)
+
+    def place():
+        import gmsh
+
+        gmsh.clear()
+        gmsh.model.add("placed")
+        try:
+            imported = gmsh.model.occ.importShapes(str(air))
+            gmsh.model.occ.synchronize()
+            placement = replay_solver_placement(gmsh, imported, recipe, expected=expected)
+            return placement, gmsh.model.getBoundingBox(-1, -1)
+        finally:
+            gmsh.model.remove()
+
+    placement, bounds = _run_in_gmsh_session(place)
+    assert placement.matrix.tolist() == expected.tolist()
+    assert bounds[1] == pytest.approx(expected[1, 3], abs=1e-6)
+
+
+def test_the_independent_region_placement_carries_the_exterior_recentre():
+    from server.cadlink.intake.ingest import _solver_placement
+
+    matrix = _turned_link_matrix().tolist()
+    recentred = {
+        "normalisation": {"matrix": [[1.0]]},
+        "viewport_recipe": {
+            "normalisation_matrix": matrix, "recentre_translation_mm": _RECENTRE,
+            "groups_by_tag": {}, "surface_order_reference": [],
+        },
+    }
+    assert _solver_placement(recentred) == {
+        "normalisation_matrix": matrix, "recentre_translation_mm": _RECENTRE,
+    }
+    # No replay recipe: the solve matrix alone (it carries any shift).
+    assert _solver_placement({"normalisation": {"matrix": matrix}}) == {"normalisation_matrix": matrix}
+    # A recipe without a matrix is passed on as it is, and refused by the replay.
+    assert _solver_placement({"normalisation": {"matrix": matrix}, "viewport_recipe": {}}) == {}
+
+
+def test_a_region_placed_by_a_partial_recipe_is_refused_not_misplaced(tmp_path):
+    """A recentred exterior whose recipe lost its shift would put the region elsewhere."""
+
+    from server.cadlink.intake.isolated import build_fem_region_mesh_isolated
+
+    bundle, manifest, region = _coupling_bundle(tmp_path / "returns")
+    member = manifest["files"][region["file"]]
+    total = np.eye(4)
+    total[:3, 3] = _RECENTRE
+    with pytest.raises(Exception, match="normalisation mismatch: exterior replay recipe: .*differs from the solve"):
+        build_fem_region_mesh_isolated(
+            bundle / region["file"],
+            region,
+            expected_sha256=member["sha256"],
+            expected_size_bytes=member["size_bytes"],
+            placement={"normalisation_matrix": np.eye(4).tolist()},
+            normalisation_matrix=total.tolist(),
+        )
+
+
 def test_a_region_meshed_alone_is_placed_by_the_exterior_operations(tmp_path):
     """One placement for every replay of a turned, recentred linked return.
 
@@ -689,10 +870,13 @@ def test_a_region_meshed_alone_is_placed_by_the_exterior_operations(tmp_path):
         expected_sha256=member["sha256"],
         expected_size_bytes=member["size_bytes"],
         placement={key: recipe[key] for key in ("normalisation_matrix", "recentre_translation_mm")},
+        normalisation_matrix=total.tolist(),
     )
 
-    assert np.asarray(alone["normalisation_matrix"]) == pytest.approx(total, abs=1e-12)
-    assert alone["normalisation_matrix"] == coupled["regions"][region["region_id"]]["normalisation_matrix"]
+    assert alone["normalisation_matrix"] == total.tolist()
+    assert np.asarray(coupled["regions"][region["region_id"]]["normalisation_matrix"]) == pytest.approx(
+        total, abs=1e-12
+    )
     domain = read_fem_region_domain(alone["msh_text"], region["region_id"])
     assert len(air_vertices) == 8
     for vertex in air_vertices:

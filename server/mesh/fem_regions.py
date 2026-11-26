@@ -372,8 +372,8 @@ def fragment_fundamental_domain(gmsh: Any, objects: list[tuple[int, int]],
 
 def build_fem_region_mesh(
     step_path: str | Path, region: Mapping[str, Any], *, scratch_dir: str | Path | None = None,
-    placement: Mapping[str, Any] | None = None, domain_planes: Sequence[str] = (),
-    cut_planes: Sequence[str] = (),
+    placement: Mapping[str, Any] | None = None, normalisation_matrix: Any = None,
+    domain_planes: Sequence[str] = (), cut_planes: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Mesh one validated ``scope.fem_regions[]`` record in the open session.
 
@@ -383,8 +383,9 @@ def build_fem_region_mesh(
 
     ``placement`` is the exterior's replay recipe (its ``normalisation_matrix``
     and ``recentre_translation_mm``): the region is moved into the solve frame
-    by the exterior's own operations (``replay_solver_placement``), and the
-    matrix that applied is returned as ``normalisation_matrix``.
+    by the exterior's own operations (``replay_solver_placement``), which must
+    reproduce ``normalisation_matrix``, the exterior's solve matrix. That
+    matrix is returned as the region's.
     """
 
     import gmsh
@@ -411,12 +412,18 @@ def build_fem_region_mesh(
         )
         assigned = assign_faces(region, _surface_descriptors(gmsh, boundary))
 
-        normalisation_matrix = None
+        if (placement is None) != (normalisation_matrix is None):
+            raise FemRegionMeshError(
+                "normalisation mismatch: a region placement needs both its recipe and the solve matrix."
+            )
         if placement is not None:
-            from server.mesh.imported import replay_solver_placement
-            normalisation_matrix = replay_solver_placement(
-                gmsh, [(3, volumes[0])], placement
-            ).tolist()
+            from server.mesh.imported import ImportedMeshError, replay_solver_placement
+            try:
+                replay_solver_placement(
+                    gmsh, [(3, volumes[0])], placement, expected=normalisation_matrix
+                )
+            except ImportedMeshError as exc:
+                raise FemRegionMeshError(f"normalisation mismatch: exterior replay recipe: {exc}.") from exc
         verify_region_symmetry(gmsh, region, boundary, assigned, domain_planes, cut_planes)
         if domain_planes:
             copies = {tag: gmsh.model.occ.copy([(2, tag)])[0][1] for tag in boundary}

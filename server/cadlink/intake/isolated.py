@@ -255,6 +255,7 @@ def build_fem_region_mesh_isolated(
     deadline: float | None = None,
     domain_planes: tuple[str, ...] = (), cut_planes: tuple[str, ...] = (),
     placement: Mapping[str, Any] | None = None,
+    normalisation_matrix: Any = None,
 ) -> dict[str, Any]:
     """Mesh one declared FEM region's STEP member in a fresh child.
 
@@ -270,7 +271,8 @@ def build_fem_region_mesh_isolated(
             "fem_region",
             {"region": dict(region), "domain_planes": list(domain_planes),
              "cut_planes": list(cut_planes),
-             "placement": dict(placement) if placement is not None else None},
+             "placement": dict(placement) if placement is not None else None,
+             "normalisation_matrix": normalisation_matrix},
             step_path=step_path,
             budget=MESH_BUDGET,
             deadline=deadline,

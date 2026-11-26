@@ -193,7 +193,7 @@ def test_real_ingest_meshes_every_region_and_retains_verified_artifacts(tmp_path
         assert kwargs.pop("deadline") > ingest.time.monotonic()
         assert kwargs.pop("domain_planes") == ()
         assert kwargs.pop("cut_planes") == ()
-        assert len(kwargs.pop("placement")["normalisation_matrix"]) == 4
+        assert kwargs.pop("placement")["normalisation_matrix"] == kwargs.pop("normalisation_matrix")
         assert kwargs == {"expected_sha256": member["sha256"], "expected_size_bytes": member["size_bytes"]}
         return region_mesh(path, region, **kwargs)
 

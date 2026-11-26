@@ -859,15 +859,13 @@ def test_a_sealed_record_with_another_models_display_mesh_is_rebuilt_on_read() -
     assert deferred_viewport_lookup_key(served) is not None
 
 
-def test_a_cached_display_mesh_of_other_geometry_is_rebuilt_not_served(
-    monkeypatch, tmp_path: Path,
-) -> None:
-    """In line as when deferred: a display mesh is served only for the solve's geometry.
+@pytest.fixture
+def stub_display_ingest(monkeypatch, tmp_path: Path):
+    """``ingest_bundle`` with the solve and display children stubbed.
 
-    The display lookup key does not name the acoustic sizes, so a resized
-    return finds the tessellation it had before -- right while the normalised
-    model is the same, wrong once it moved. The second build below normalises
-    to other geometry; its record must not carry the first build's display mesh.
+    ``geometry["hash"]`` is the normalised model the next solve build reports;
+    ``geometry["inline_fails"]`` makes the in-line tessellation fail. ``calls``
+    records every child the ingest started.
     """
 
     from server.cadlink.intake import ingest
@@ -875,8 +873,7 @@ def test_a_cached_display_mesh_of_other_geometry_is_rebuilt_not_served(
     manifest = wgreturn_manifest(b"STEP")
     source_id = manifest["sources"][0]["id"]
     bundle = write_bundle(tmp_path / "returns", manifest, step=b"STEP")
-    old_hash, new_hash = "sha256:" + "3" * 64, "sha256:" + "4" * 64
-    geometry = {"hash": old_hash}
+    geometry: dict[str, object] = {"hash": "sha256:" + "3" * 64, "inline_fails": False}
     calls: list[str] = []
 
     def tessellation(geometry_hash: str) -> dict:
@@ -894,8 +891,10 @@ def test_a_cached_display_mesh_of_other_geometry_is_rebuilt_not_served(
             "viewport_recipe": {"normalisation_matrix": np.eye(4).tolist()},
         }
         built.pop("viewport_mesh")
-        if include_viewport_mesh:
-            display = tessellation(geometry["hash"])
+        if include_viewport_mesh and geometry["inline_fails"]:
+            built["viewport_mesh"] = {"available": False, "reason": "ImportedMeshError: no display"}
+        elif include_viewport_mesh:
+            display = tessellation(str(geometry["hash"]))
             built["viewport_msh_text"] = display["msh_text"]
             built["viewport_mesh"] = {"available": True, "stats": display["stats"], "metadata": {}}
         return built
@@ -908,19 +907,35 @@ def test_a_cached_display_mesh_of_other_geometry_is_rebuilt_not_served(
     monkeypatch.setattr(ingest, "build_imported_viewport_mesh_isolated", replay)
     store = CadLinkStore(tmp_path / "cadlink.db")
     data_dir = tmp_path / "data"
-    try:
-        def prepare(rigid_size_mm: float) -> dict:
-            return ingest_bundle(
-                bundle,
-                {"rigid_size_mm": rigid_size_mm, "transition_mm": 30, "source_size_mm": {source_id: 8}},
-                [], store, data_dir, expected_design_id=manifest["instances"][0]["design_id"],
-            )
 
-        first = prepare(20)
-        geometry["hash"] = new_hash
-        second = prepare(18)
+    def prepare(rigid_size_mm: float, *, defer_viewport: bool = False) -> dict:
+        return ingest_bundle(
+            bundle,
+            {"rigid_size_mm": rigid_size_mm, "transition_mm": 30, "source_size_mm": {source_id: 8}},
+            [], store, data_dir, expected_design_id=manifest["instances"][0]["design_id"],
+            defer_viewport=defer_viewport,
+        )
+
+    try:
+        yield SimpleNamespace(prepare=prepare, geometry=geometry, calls=calls, data_dir=data_dir)
     finally:
         store.close()
+
+
+def test_a_cached_display_mesh_of_other_geometry_is_rebuilt_not_served(stub_display_ingest) -> None:
+    """In line as when deferred: a display mesh is served only for the solve's geometry.
+
+    The display lookup key does not name the acoustic sizes, so a resized
+    return finds the tessellation it had before -- right while the normalised
+    model is the same, wrong once it moved. The second build below normalises
+    to other geometry; its record must not carry the first build's display mesh.
+    """
+
+    stub = stub_display_ingest
+    old_hash, new_hash = stub.geometry["hash"], "sha256:" + "4" * 64
+    first = stub.prepare(20)
+    stub.geometry["hash"] = new_hash
+    second = stub.prepare(18)
 
     assert first["viewport_mesh"]["transformed_geometry_hash"] == old_hash
     assert second["transformed_geometry_hash"] == new_hash
@@ -932,7 +947,73 @@ def test_a_cached_display_mesh_of_other_geometry_is_rebuilt_not_served(
     assert new_hash in Path(viewport["store_path"]).read_text(encoding="utf-8")
     # The stale tessellation looked usable before the solve mesh existed, so
     # the solve was built alone and the display mesh made from its recipe.
-    assert calls == ["solve + display", "solve", "display from recipe"]
+    assert stub.calls == ["solve + display", "solve", "display from recipe"]
+
+
+def test_two_sizings_with_two_models_keep_their_own_display_meshes(stub_display_ingest) -> None:
+    """Switching between them is a cache hit each way, never a rebuild."""
+
+    stub = stub_display_ingest
+    first = stub.prepare(20)
+    stub.geometry["hash"] = "sha256:" + "4" * 64
+    second = stub.prepare(18)
+    stub.geometry["hash"] = "sha256:" + "3" * 64
+    stub.calls.clear()
+    again = stub.prepare(20)
+    stub.geometry["hash"] = "sha256:" + "4" * 64
+    other_again = stub.prepare(18)
+
+    assert again["viewport_mesh"]["cache_hit"] is True
+    assert again["viewport_mesh"]["content_sha256"] == first["viewport_mesh"]["content_sha256"]
+    assert other_again["viewport_mesh"]["cache_hit"] is True
+    assert other_again["viewport_mesh"]["content_sha256"] == second["viewport_mesh"]["content_sha256"]
+    assert "display from recipe" not in stub.calls
+
+
+def test_a_deferred_ingest_never_adopts_another_models_display_mesh(stub_display_ingest) -> None:
+    stub = stub_display_ingest
+    stub.prepare(20)
+    new_hash = "sha256:" + "4" * 64
+    stub.geometry["hash"] = new_hash
+    deferred = stub.prepare(18, defer_viewport=True)
+
+    assert deferred["viewport_mesh"]["available"] is False
+    assert deferred["viewport_mesh"]["pending"] is True
+    # Deferred, nothing reads the display index before the solve mesh exists.
+    assert stub.calls == ["solve + display", "solve"]
+    assert resolve_deferred_viewport(deferred, stub.data_dir) is None
+    built = build_deferred_viewport(deferred, stub.data_dir)
+    assert built is not None
+    assert built["transformed_geometry_hash"] == new_hash
+    assert resolve_deferred_viewport(deferred, stub.data_dir)["content_sha256"] == built["content_sha256"]
+
+
+def test_an_indexed_display_mesh_that_is_not_its_own_digest_is_rebuilt(stub_display_ingest) -> None:
+    stub = stub_display_ingest
+    first = stub.prepare(20)
+    viewports = stub.data_dir / "imports" / "viewports"
+    key = first["viewport_mesh"]["cache_key"]
+    impostor = "f" * 64
+    for suffix in (".msh", ".json"):
+        (viewports / f"{impostor}{suffix}").write_bytes((viewports / f"{key}{suffix}").read_bytes())
+    for index in (viewports / "index").glob("*.txt"):
+        index.write_text(impostor + "\n", encoding="ascii")
+    stub.calls.clear()
+    second = stub.prepare(18)
+
+    assert second["viewport_mesh"]["available"] is True
+    assert second["viewport_mesh"]["cache_hit"] is False
+    assert second["viewport_mesh"]["cache_key"] == key
+    assert stub.calls == ["solve + display"]
+
+
+def test_a_failed_in_line_display_mesh_is_not_tried_again(stub_display_ingest) -> None:
+    stub = stub_display_ingest
+    stub.geometry["inline_fails"] = True
+    record = stub.prepare(20)
+
+    assert record["viewport_mesh"] == {"available": False, "reason": "ImportedMeshError: no display"}
+    assert stub.calls == ["solve + display"]
 
 
 def test_surface_deviation_is_bounded_to_the_band_where_the_dial_has_authority() -> None:

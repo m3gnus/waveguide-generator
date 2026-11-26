@@ -1181,7 +1181,7 @@ def _indexed_viewport_artifact(
     (``expected_geometry_hash``), its sidecar names the normalised geometry that
     mesh was cut from: a tessellation of any other model would be drawn where
     the solve mesh is not. With no expected hash the artifact is only a hint
-    that one may exist. The key comes back even when the artifact does not.
+    that one may exist. Nothing comes back for a refused artifact.
     """
 
     cache_key = _read_cas_index(_viewport_index_path(imports_root, lookup_key))
@@ -1189,12 +1189,12 @@ def _indexed_viewport_artifact(
         return None, None
     artifact = _load_cached_mesh(*_viewport_paths(imports_root, cache_key))
     if artifact is None or artifact.get("content_sha256") != f"sha256:{cache_key}":
-        return cache_key, None
+        return None, None
     if expected_geometry_hash is not None and (
         not expected_geometry_hash
         or artifact.get("transformed_geometry_hash") != expected_geometry_hash
     ):
-        return cache_key, None
+        return None, None
     return cache_key, artifact
 
 
@@ -1211,10 +1211,43 @@ def _read_cas_index(index_path: Path) -> str | None:
 
 
 def _write_cas_index(index_path: Path, cache_key: str) -> None:
+    """Point an index entry at a content key, atomically.
+
+    Ingests and deferred builds write in threads of one process, so the
+    staging name is unique per write, not per process: two writers never
+    share (and truncate or remove) one staging file, and ``os.replace`` makes
+    the entry whole either way.
+    """
+
     index_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = index_path.with_name(f".{index_path.name}.{os.getpid()}.tmp")
-    temporary.write_text(cache_key + "\n", encoding="ascii")
-    os.replace(temporary, index_path)
+    temporary = index_path.with_name(
+        f".{index_path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    )
+    try:
+        temporary.write_text(cache_key + "\n", encoding="ascii")
+        os.replace(temporary, index_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _viewport_geometry_lookup_key(lookup_key: str, transformed_geometry_hash: str) -> str:
+    """The display index entry of one normalised model of one return.
+
+    :func:`_viewport_cache_lookup_key` does not name the acoustic sizes, and
+    the sizes choose the healing rung, so two ingests of one return can share
+    it with different geometry. Keyed by the geometry too, each has its own
+    entry (and its own deferred build): neither replaces the other's, and
+    switching between them is never a rebuild.
+    """
+
+    return hashlib.sha256(
+        _canonical(
+            {
+                "viewport_lookup_key": lookup_key,
+                "transformed_geometry_hash": transformed_geometry_hash,
+            }
+        )
+    ).hexdigest()
 
 
 def _publish_viewport_artifact(
@@ -1744,15 +1777,50 @@ def _ingest_bundle(
     plan = prepared.plan
     imports_root = data_paths(data_dir).root / "imports"
 
-    def viewport_for(
-        opts: Mapping[str, Any], expected_geometry_hash: str | None = None,
-    ) -> tuple[str, str | None, Path, dict[str, Any] | None]:
+    # Display artifacts read by their geometry-blind key, before any solve
+    # mesh exists, so the final lookup does not read the same file again.
+    viewport_hints: dict[str, tuple[str | None, dict[str, Any] | None]] = {}
+
+    def viewport_hint(opts: Mapping[str, Any]) -> tuple[str, str | None, dict[str, Any] | None]:
         lookup = _viewport_cache_lookup_key(bundle, manifest, skipped_source_ids, opts)
-        key, artifact = _indexed_viewport_artifact(
-            imports_root, lookup, expected_geometry_hash=expected_geometry_hash
-        )
+        if lookup not in viewport_hints:
+            viewport_hints[lookup] = _indexed_viewport_artifact(
+                imports_root, lookup, expected_geometry_hash=None
+            )
+        return (lookup, *viewport_hints[lookup])
+
+    def viewport_may_exist(opts: Mapping[str, Any]) -> bool:
+        """Whether a display mesh may already exist; only a hint before the solve mesh."""
+
+        return viewport_hint(opts)[2] is not None
+
+    def viewport_for(
+        opts: Mapping[str, Any], geometry_hash: str,
+    ) -> tuple[str, str, str | None, Path, dict[str, Any] | None]:
+        """The display mesh of this solve's own model, if one exists."""
+
+        hint_key = _viewport_cache_lookup_key(bundle, manifest, skipped_source_ids, opts)
+        lookup = _viewport_geometry_lookup_key(hint_key, geometry_hash)
+        hinted = viewport_hints.get(hint_key)
+        if hinted is not None and hinted[1] is not None and (
+            hinted[1].get("transformed_geometry_hash") == geometry_hash
+        ):
+            key, artifact = hinted
+        else:
+            key, artifact = _indexed_viewport_artifact(
+                imports_root, lookup, expected_geometry_hash=geometry_hash
+            )
+            if artifact is None and hinted is None:
+                # One published under the geometry-blind key alone.
+                key, artifact = _indexed_viewport_artifact(
+                    imports_root, hint_key, expected_geometry_hash=geometry_hash
+                )
+        if key is not None and artifact is not None:
+            with contextlib.suppress(OSError):
+                if _read_cas_index(_viewport_index_path(imports_root, lookup)) != key:
+                    _write_cas_index(_viewport_index_path(imports_root, lookup), key)
         mesh_file, _metadata_file = _viewport_paths(imports_root, key or ".pending")
-        return lookup, key, mesh_file, artifact
+        return lookup, hint_key, key, mesh_file, artifact
 
     def mesh_for(opts: Mapping[str, Any], *, include_viewport: bool) -> tuple[dict[str, Any], str, bool, Path]:
         """The solve mesh for ``opts``: served from the content-addressed cache, or built."""
@@ -1898,7 +1966,7 @@ def _ingest_bundle(
             try:
                 chosen = mesh_for(
                     mirrored_options,
-                    include_viewport=not defer_viewport and viewport_for(mirrored_options)[3] is None,
+                    include_viewport=not defer_viewport and not viewport_may_exist(mirrored_options),
                 )
             except IngestRefusal as exc:
                 if plan.strict:
@@ -1918,9 +1986,8 @@ def _ingest_bundle(
                 reflected_planes = reflected_cad_planes(options)
         built, cache_key, cache_hit, mesh_path = chosen
     else:
-        viewport_state = viewport_for(options)
         built, cache_key, cache_hit, mesh_path = mesh_for(
-            options, include_viewport=viewport_state[3] is None and not defer_viewport
+            options, include_viewport=not defer_viewport and not viewport_may_exist(options)
         )
         observations = observe_record_mesh(built)
     if plan.source == DECLARATION:
@@ -2027,6 +2094,7 @@ def _ingest_bundle(
     # when it was cut from the same normalised model.
     (
         viewport_lookup_key,
+        viewport_hint_key,
         viewport_cache_key,
         viewport_mesh_path,
         viewport_artifact,
@@ -2114,6 +2182,12 @@ def _ingest_bundle(
                     healing=built["healing"],
                     lookup_key=viewport_lookup_key,
                 )
+                # The geometry-blind hint the next ingest reads first.
+                with contextlib.suppress(OSError):
+                    _write_cas_index(
+                        _viewport_index_path(imports_root, viewport_hint_key),
+                        str(viewport_cache_key),
+                    )
             except Exception as exc:
                 viewport_artifact = None
                 viewport_failure_reason = f"{type(exc).__name__}: {exc}"
@@ -2755,7 +2829,10 @@ def _solver_placement(exterior: Mapping[str, Any]) -> dict[str, Any]:
 
     The exterior's two recorded operations (``replay_solver_placement``), so
     a region meshed on its own lands exactly where the exterior did. An
-    exterior without a replay recipe is placed by its solve matrix alone.
+    exterior without a replay recipe is placed by its solve matrix alone. The
+    replay must reproduce the exterior's solve matrix, so a partial recipe
+    (no matrix, or a recentred exterior whose shift is missing) is refused in
+    the child rather than placing the region elsewhere.
     """
 
     recipe = exterior.get("viewport_recipe")
@@ -2817,6 +2894,7 @@ def _mesh_fem_regions(
                     expected_size_bytes=member["size_bytes"],
                     deadline=deadline,
                     **({"placement": _solver_placement(exterior),
+                        "normalisation_matrix": exterior["normalisation"]["matrix"],
                         "domain_planes": imported_domain_planes({"symmetry": exterior.get("symmetry")}),
                         "cut_planes": tuple((exterior.get("symmetry") or {}).get("cut_planes") or ())}
                        if exterior and (exterior.get("normalisation") or {}).get("matrix") is not None else {}),

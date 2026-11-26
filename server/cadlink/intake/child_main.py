@@ -368,6 +368,7 @@ def _task_fem_region(
     scratch = out_dir.parent / "tmp"
     built = build_fem_region_mesh(source, region, scratch_dir=scratch,
                                   placement=payload.get("placement"),
+                                  normalisation_matrix=payload.get("normalisation_matrix"),
                                   domain_planes=payload.get("domain_planes", ()),
                                   cut_planes=payload.get("cut_planes", ()))
     built["stats"] = fem_region_mesh_stats(built, region, scratch_dir=scratch)

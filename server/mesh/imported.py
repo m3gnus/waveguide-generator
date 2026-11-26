@@ -662,7 +662,10 @@ def apply_origin_shift(
     ``normalisation["matrix"]``: ``applied`` itself when there is no shift.
     """
 
-    shift = np.asarray(translation_mm, dtype=float)
+    try:
+        shift = np.asarray(translation_mm, dtype=float)
+    except (TypeError, ValueError):
+        shift = np.asarray(())
     if shift.shape != (3,) or not np.isfinite(shift).all():
         raise ImportedMeshError("normalisation: an origin shift must be three finite millimetre values")
     if not shift.any():
@@ -672,7 +675,24 @@ def apply_origin_shift(
     return _translation_matrix(*shift) @ applied
 
 
-def replay_solver_placement(gmsh: Any, dim_tags: Any, recipe: Mapping[str, Any]) -> np.ndarray:
+class SolverPlacement(NamedTuple):
+    """What :func:`replay_solver_placement` applied."""
+
+    #: Solver-from-assembly: the solve's ``normalisation["matrix"]``.
+    matrix: np.ndarray
+    #: The rigid normalisation alone, as applied.
+    rigid: np.ndarray
+    #: The origin shift translated by afterwards (zero for none).
+    shift_mm: np.ndarray
+
+
+#: How far a replayed placement may differ from the solve's recorded matrix.
+REPLAY_MATRIX_TOLERANCE = 1.0e-9
+
+
+def replay_solver_placement(
+    gmsh: Any, dim_tags: Any, recipe: Mapping[str, Any], *, expected: Any = None
+) -> SolverPlacement:
     """Place OCC bodies exactly as the solve placed its CAD return.
 
     The solve applies the rigid normalisation and then the origin shift
@@ -682,17 +702,35 @@ def replay_solver_placement(gmsh: Any, dim_tags: Any, recipe: Mapping[str, Any])
     one move the model would round differently, and the viewport and
     coupled-FEM replays verify the solve's geometry fingerprint bit for bit.
     Every replay (viewport, coupled exterior, FEM regions) goes through here,
-    so all of them land in the solve's frame. Returns the
-    solver-from-assembly matrix, the solve's ``normalisation["matrix"]``.
+    so all of them land in the solve's frame.
+
+    A malformed recipe is refused before anything moves: the matrix must be
+    a proper rigid 4x4 (checked even near the identity, which
+    :func:`apply_rigid_normalisation` skips), and an absent
+    ``recentre_translation_mm`` is no shift while a present one must be three
+    finite numbers. ``expected`` (the solve's ``normalisation["matrix"]``)
+    is the matrix the replay must reproduce, to
+    :data:`REPLAY_MATRIX_TOLERANCE`.
     """
 
-    matrix = np.asarray(recipe.get("normalisation_matrix"), dtype=float)
+    if not isinstance(recipe, Mapping):
+        raise ImportedMeshError("normalisation: the placement recipe is missing")
+    try:
+        matrix = np.asarray(recipe.get("normalisation_matrix"), dtype=float)
+    except (TypeError, ValueError):
+        matrix = np.asarray(())
     if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
         raise ImportedMeshError("normalisation: the recorded normalisation matrix is invalid")
+    rigid_occ_motion(matrix)
+    raw_shift = recipe.get("recentre_translation_mm")
+    shift = (0.0, 0.0, 0.0) if raw_shift is None else raw_shift
     applied = apply_rigid_normalisation(gmsh, dim_tags, matrix)
-    return apply_origin_shift(
-        gmsh, dim_tags, recipe.get("recentre_translation_mm") or (0.0, 0.0, 0.0), applied
-    )
+    total = apply_origin_shift(gmsh, dim_tags, shift, applied)
+    if expected is not None and not np.allclose(
+        total, np.asarray(expected, dtype=float), atol=REPLAY_MATRIX_TOLERANCE, rtol=0.0
+    ):
+        raise ImportedMeshError("normalisation: the replayed placement differs from the solve's matrix")
+    return SolverPlacement(total, applied, np.asarray(shift, dtype=float))
 
 
 #: How far a reflected triangle's normal may differ from the reflected normal
@@ -4448,6 +4486,7 @@ __all__ = [
     "ImportedMeshDependencyError",
     "OriginShiftDecision",
     "RoleResolutionError",
+    "SolverPlacement",
     "TAG_NAMESPACE",
     "allocate_imported_tags",
     "apply_origin_shift",

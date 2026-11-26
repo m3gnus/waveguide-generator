@@ -852,14 +852,18 @@ def build_coupled_mesh(
         )
         assembly = _import_occ_root_bodies(gmsh, assembly_path)
         try:
-            total = replay_solver_placement(gmsh, assembly, recipe)
-        except ImportedMeshError as exc:
-            # A recipe that cannot be replayed is the exterior's, not the CAD's.
-            raise FemRegionMeshError(f"normalisation mismatch: invalid exterior replay recipe ({exc}).") from exc
-        if not np.allclose(total, np.asarray(normalisation_matrix), atol=1e-9, rtol=0):
-            raise FemRegionMeshError(
-                "normalisation mismatch: exterior recipe and solver transform differ."
+            placement = replay_solver_placement(
+                gmsh, assembly, recipe, expected=normalisation_matrix
             )
+        except ImportedMeshError as exc:
+            # A recipe that cannot be replayed, or does not give the solver
+            # transform, is the exterior's fault, not the CAD's.
+            raise FemRegionMeshError(f"normalisation mismatch: exterior replay recipe: {exc}.") from exc
+        total = placement.matrix
+        # The matrix these meshes record, written as it always has been: the
+        # shift summed into the rigid move's translation column.
+        recorded = placement.rigid.copy()
+        recorded[:3, 3] += placement.shift_mm
         surfaces = gmsh_surface_tags()
         geometries = gmsh_surface_geometries(surfaces)
         if _geometry_fingerprint(geometries) != expected_geometry_hash:
@@ -902,7 +906,7 @@ def build_coupled_mesh(
             boundary = sorted(_boundary(gmsh, volumes))
             assigned = assign_faces(region, _surface_descriptors(gmsh, boundary))
             # The SAME operations, in the SAME order, including recentring.
-            region_total = replay_solver_placement(gmsh, [(3, volumes[0])], recipe)
+            region_total = replay_solver_placement(gmsh, [(3, volumes[0])], recipe).matrix
             if not np.allclose(region_total, total, atol=1e-12, rtol=0):
                 raise FemRegionMeshError(f"{_label(region)} normalisation mismatch.")
             verify_region_symmetry(gmsh, region, boundary, assigned, domain_planes, cut_planes)
@@ -1289,7 +1293,7 @@ def build_coupled_mesh(
                 "region_id": region["region_id"],
                 "msh_text": text,
                 "physical_names": names,
-                "normalisation_matrix": total.tolist(),
+                "normalisation_matrix": recorded.tolist(),
                 "stats": {
                     "tetrahedra": len(tetrahedra),
                     "nodes": len(domain.points_mm),
@@ -1318,7 +1322,7 @@ def build_coupled_mesh(
                            "retained_area_mm2": sum(float(gmsh.model.occ.getMass(2, tag)) for tag in tags)}
                     for name, tags in group_surfaces.items()
                 }} if sizing_groups else {}),
-                "normalisation_matrix": total.tolist(),
+                "normalisation_matrix": recorded.tolist(),
                 "stats": {"triangles": len(oriented), "open_edges": open_edges(oriented),
                           "domain_planes": list(domain_planes)},
             },
