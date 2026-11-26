@@ -25,7 +25,12 @@ from server.jobs.models import JobStatusResponse, SolveRequest
 from server.jobs.runtime import JobRuntime, resolve_submission
 from server.jobs.store import JobStore
 from server.solver import domain_record as dr
-from test_assembly_submission import compiled_app  # noqa: F401 - the fixture
+# The assembly tests' own fixtures: ``compiled_app``, and ``own_build_session``,
+# which gives each test its own build session. Without it this test shares the
+# module-wide session of whichever assembly test ran before it in the same
+# worker, and a compile of revision 1 after that test's revision 2 is
+# (correctly) superseded: no prepared record.
+from test_assembly_submission import compiled_app, own_build_session  # noqa: F401 - fixtures
 
 
 #: The generic test design: an offset quarter (symmetric about x = 0 and,
@@ -381,7 +386,9 @@ def test_a_mesh_file_declared_half_is_declared_not_lost() -> None:
     assert decision["findings"] == []
 
 
-def test_a_design_assembly_job_records_the_whole_model(compiled_app: Any) -> None:  # noqa: F811
+def test_a_design_assembly_job_records_the_whole_model(
+    compiled_app: Any, own_build_session: None  # noqa: F811
+) -> None:
     from test_assembly_submission import compile_body, setup_for
     from test_models_api import call
 
