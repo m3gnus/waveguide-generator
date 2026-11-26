@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { formatApiDetail as ownedFormatApiDetail } from '../api/httpError';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { createImportedSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { createImportedSolveOptionsStore, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { durableSettings } from '../stores/durableSettings';
 import { formatApiDetail } from '../api/httpError';
-import { getCapabilities, planSolveDesign, postSolvePlan, postImportedSolvePlan, postSymmetry, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
+import { getCapabilities, planSolveDesign, prewarmSelectedEngine, postSolvePlan, postImportedSolvePlan, postSymmetry, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('retains the compatibility export from the single HTTP formatter owner', () => {
@@ -260,4 +261,26 @@ it('gives F2 an explicit legacy name only for an unstamped import', async () => 
   expect(payload.client_metadata).toEqual({ legacy_design_name: 'original' });
   await submitDesign(designForFamily('OSSE'), undefined, fetcher, { label: 'duplicate1', designRevision: 1 });
   expect(payload).not.toHaveProperty('client_metadata');
+});
+
+describe('engine prewarm', () => {
+  const posted = async (engine: string) => {
+    let body: unknown;
+    await prewarmSelectedEngine(engine, (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ state: 'scheduled' }), { status: 202 });
+    }) as typeof fetch);
+    return body;
+  };
+
+  it('carries the picker choice the server has not been sent yet', async () => {
+    // The settings upload is debounced; the prewarm goes in the same render.
+    useSolveOptionsStore.getState().setEngine('auto');
+    expect(await posted('auto')).toEqual({ engine: 'auto', preference: 'auto' });
+  });
+
+  it('sends the engine alone when the page holds no choice', async () => {
+    durableSettings.set('enginePreference', null);
+    expect(await posted('metal')).toEqual({ engine: 'metal' });
+  });
 });

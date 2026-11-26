@@ -205,6 +205,36 @@ def test_an_automatic_setup_does_not_start_cpu_setup_when_the_user_chose_metal(
     assert 'Automatic BEAT CPU setup not started: the selected solver is metal' in messages
 
 
+def test_choosing_automatic_starts_cpu_setup_before_the_settings_upload_lands(app, monkeypatch):
+    """The picker posts at once; the page uploads the preference 400 ms later.
+
+    The server still holds the previous choice (Metal) when the prewarm runs,
+    so the page's own preference, carried by the request, decides.
+    """
+    from server.solver import beat_cpu_runtime
+
+    app.state.settings.put('enginePreference', '{"engine":"metal"}')
+    started = []
+    monkeypatch.setattr(beat_cpu_runtime, 'cpu_preparation_in_flight', lambda: False)
+    monkeypatch.setattr(beat_cpu_runtime, 'start_selected_provisioning',
+                        lambda engine, **kwargs: started.append(engine))
+    monkeypatch.setattr(app_module, 'resolve_prewarm_engine', lambda *a, **k: asyncio.sleep(0, 'metal'))
+
+    async def prewarm_solver(engine=None):
+        return None
+
+    monkeypatch.setattr(app_module, 'prewarm_solver', prewarm_solver)
+
+    async def scenario():
+        status, _, _ = await _request_with_headers(app, 'POST', '/api/runtimes/beat/prewarm',
+                                                  body={'engine': 'auto', 'preference': 'auto'})
+        assert status == 202
+        await app.state.beat_prewarm_task
+
+    asyncio.run(scenario())
+    assert started == ['auto']
+
+
 def test_an_explicit_cpu_choice_still_starts_its_setup(app, monkeypatch):
     """Only Automatic defers to the user's choice; a named BEAT backend is the choice."""
     from server.solver import beat_cpu_runtime

@@ -607,12 +607,15 @@ def create_app(
             )
         )
 
-    async def prewarm_beat_worker(engine: str | None = None) -> None:
+    async def prewarm_beat_worker(engine: str | None = None, *, preference: str | None = None) -> None:
         """Schedule the BEAT worker prewarm alongside the BEMPP one.
 
         Registered by default for the same reason: the work happens outside
         this process, and ``shutdown_beat_worker`` below stops this server's
         workers with a bounded wait, including their persistent hosts.
+
+        ``preference`` is the user's own engine choice as the page holds it;
+        without one the stored preference is read.
         """
 
         current = getattr(application.state, "beat_prewarm_task", None)
@@ -671,7 +674,10 @@ def create_app(
                     # user choosing Automatic, as at launch; following a
                     # workspace switch it cost an 80 s Julia compile on a
                     # Metal host. The resolved engine below is still warmed.
-                    preferred = await asyncio.to_thread(
+                    # The page's own copy first: the settings store gets a
+                    # picker change only after the page's debounced upload,
+                    # so it can still hold the previous choice here.
+                    preferred = (preference or "").strip().lower() or await asyncio.to_thread(
                         persisted_engine_preference, getattr(application.state, "settings", None)
                     )
                     if preferred not in (None, "auto"):

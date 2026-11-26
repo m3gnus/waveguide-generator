@@ -5555,6 +5555,17 @@
           "engine": {
             "title": "Engine",
             "type": "string"
+          },
+          "preference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preference"
           }
         },
         "required": [

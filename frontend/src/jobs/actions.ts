@@ -7,7 +7,7 @@ import type { ExteriorTransducerForm } from '../stores/exteriorTransducer';
 import type { ExteriorDriverInputs } from '../api/drivers';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
-import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { enginePreference, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 
 
 export type OpenclUnavailableReason = 'no_device' | 'inventory_timeout' | 'smoke_test_failed' | 'smoke_test_timeout' | 'pocl_windows' | 'probe_error';
@@ -214,8 +214,12 @@ export async function getCapabilities(fetcher: typeof fetch = fetch, signal?: Ab
 
 /** The active model's selection owns preparation; inactive setup stores never warm engines. */
 export async function prewarmSelectedEngine(engine: string, fetcher: typeof fetch = fetch): Promise<void> {
+  // The user's choice as this page holds it: the server's copy arrives only
+  // with the debounced settings upload, after this request.
+  const { engine: preference } = enginePreference();
+  const body: components['schemas']['EnginePrewarmRequest'] = preference ? { engine, preference } : { engine };
   await fetcher('/api/runtimes/beat/prewarm', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ engine }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
 }
 

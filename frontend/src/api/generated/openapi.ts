@@ -4590,6 +4590,8 @@ export interface components {
         EnginePrewarmRequest: {
             /** Engine */
             engine: string;
+            /** Preference */
+            preference?: string | null;
         };
         /**
          * EngineSubstitution
