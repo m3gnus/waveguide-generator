@@ -399,6 +399,18 @@ def test_cad_reduced_replay_rebuilds_originals_offline_and_solves_exactly(tmp_pa
             store.close()
             store.initialize()
             assert await call(app, 'POST', '/api/mesh-replay', package) == opened
+            # A package an earlier build exported holds its cad-domain-decision-v1
+            # decision: it still opens, compared field for field as that build sealed it.
+            from server.cadlink.interpretation.domain_decision import CAD_V1_CONTRACT, v1_projection
+            earlier = deepcopy(package)
+            earlier['interpretation']['domain_decision'] = v1_projection(package['interpretation']['domain_decision'])
+            assert earlier['interpretation']['domain_decision']['contract'] == CAD_V1_CONTRACT
+            rehash(earlier)
+            assert await call(app, 'POST', '/api/mesh-replay', earlier) == opened
+            # ... and only while every v1 field agrees.
+            earlier['interpretation']['domain_decision']['input_reading'] = 'open-sheet'
+            rehash(earlier)
+            await call(app, 'POST', '/api/mesh-replay', earlier, expected=422)
             # Checksums are not capabilities: rehashed false physics must fail too.
             changes = [
                 (lambda p: p.update(solver_msh_text=p['solver_msh_text'] + 'changed'), False),

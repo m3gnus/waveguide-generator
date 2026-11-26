@@ -1,7 +1,8 @@
 import { engineDisplayName } from '../design/backendSupport';
 import { samplingProvenance } from './sampling';
 import type { JobItem } from '../api/jobsSocket';
-import { decisionSummaryRows, readDomainDecision, type DomainDecisionSummary } from '../api/domainDecision';
+import { decisionSummaryRows, domainRecordNotes, readDomainDecision, readDomainRecord, type DomainDecisionSummary } from '../api/domainDecision';
+import { quadrantsForCutPlanes } from '../viewport/symmetryScene';
 import { runDisplayName } from '../prefs/preferences';
 import { channelLabel } from './channelLabel';
 import { FILTER_FAMILY_SHORT, isFilterFamily } from './crossoverSpec';
@@ -139,7 +140,12 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   const solvePath = string(metadata('solve_path'));
   if (solvePath) row(solve, 'Path', readableSolvePath(solvePath), string(metadata('solve_path_reason')));
   const symmetry = object(metadata('symmetry'));
-  const quadrants = finite(symmetry?.resolved_quadrants);
+  // The run's own domain record first; a run saved before it existed states
+  // only the quadrants it resolved.
+  const record = readDomainRecord(job?.domain_decision);
+  const quadrants = record?.producer === 'parametric'
+    ? quadrantsForCutPlanes(record.solver_domain.planes)
+    : finite(symmetry?.resolved_quadrants);
   if (quadrants !== undefined) {
     const autoResolved = string(symmetry?.requested) === 'auto' && object(symmetry?.auto_resolution) !== undefined;
     row(solve, 'Symmetry', `${quadrantLabel(quadrants)}${autoResolved ? ' (server resolved)' : ''}`);
@@ -450,7 +456,10 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   // exactly why they cannot be inferred from warning_count or partial_success.
   // Merge all three stores explicitly and de-duplicate without changing their
   // server order, so a crossover-validity warning is never silently discarded.
-  const warningTexts = [...new Set([...runWarnings, ...combineWarnings, ...meshWarnings])];
+  // A mirror plane the run was expected to keep and lost
+  // (`domain_record.lost_plane_finding`): the server's own sentence.
+  const domainNotes = domainRecordNotes(job?.domain_decision);
+  const warningTexts = [...new Set([...runWarnings, ...combineWarnings, ...meshWarnings, ...domainNotes])];
   const warningCount = finite(metadata('warning_count')) ?? warningTexts.length;
   const explicitValidationState = firstString(meshValidation?.state, meshValidation?.status);
   const validationFailed = integrity?.valid === false || meshValidation?.valid === false

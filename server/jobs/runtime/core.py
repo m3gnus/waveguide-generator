@@ -100,6 +100,7 @@ from server.solver.imported import (
     read_verified_import_mesh,
     verify_record_mesh_text,
 )
+from server.solver.domain_record import imported_decision as imported_domain_decision
 from server.solver.symmetry import (
     resolve_symmetry,
     restrict_for_ground_plane,
@@ -816,6 +817,10 @@ class SubmissionResolution:
     request: SolveRequest
     engine_name: str
     symmetry_metadata: dict[str, Any]
+    #: The parametric solve's ``domain-decision-v2`` record
+    #: (``server/solver/domain_record.py``); an imported solve's comes from its
+    #: ingestion record when the job is composed.
+    domain_decision: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -1009,7 +1014,7 @@ async def resolve_submission(
 
     # ``auto`` remains a backwards-compatible wire value for Full 3D.
     solver_mode = str(request.options.solver_mode or "full_3d").strip().lower()
-    resolution = await asyncio.to_thread(resolve_symmetry, request.design)
+    resolution = geometry = await asyncio.to_thread(resolve_symmetry, request.design)
     # Subtract the mirror plane a ground plane makes unavailable before the
     # mode is validated, so AUTO degrades quarter to half_yz on a floor and
     # a forced conflicting mode fails naming the ground plane -- instead of
@@ -1129,6 +1134,39 @@ async def resolve_submission(
         request=request,
         engine_name=engine_name,
         symmetry_metadata=symmetry_metadata,
+        domain_decision=_parametric_domain_decision(
+            request, geometry, symmetry_metadata
+        ),
+    )
+
+
+def _parametric_domain_decision(
+    request: SolveRequest, geometry: Any, symmetry_metadata: Mapping[str, Any]
+) -> dict[str, Any]:
+    """The parametric solve's ``domain-decision-v2`` record.
+
+    ``geometry`` is the design's own verdict, before the ground plane, the
+    Symmetry setting and the engine constrained it; the record says which of
+    them removed a plane the design has.
+    """
+
+    from server.contracts.geometry import CUT_PLANE_BY_NATIVE_PLANE
+    from server.design.native import NATIVE_FORMULAS
+    from server.solver.domain_record import parametric_decision
+    from server.solver.ground_plane import GroundPlane
+
+    axis = _ground_plane_axis(request)
+    blocked = (
+        GroundPlane(axis=axis, height_m=0.0).blocked_symmetry_plane if axis is not None else None
+    )
+    plan = symmetry_metadata.get("solver_plan")
+    return parametric_decision(
+        geometry,
+        resolved_quadrants=int(symmetry_metadata["resolved_quadrants"]),
+        requested_mode=str(request.options.symmetry),
+        ground_blocked_plane=CUT_PLANE_BY_NATIVE_PLANE.get(str(blocked)),
+        native_formula=request.design.formula in NATIVE_FORMULAS,
+        engine_reason=(plan or {}).get("symmetry_reason") if isinstance(plan, Mapping) else None,
     )
 
 
@@ -2035,6 +2073,15 @@ class JobRuntime:
             "unavailable_reason": None,
             "persistence_warnings": [],
         }
+        # The one solve-domain record (``server/solver/domain_record.py``),
+        # whichever path this run takes.
+        domain_decision = (
+            resolved.domain_decision
+            if imported is None
+            else imported_domain_decision(imported.record)
+        )
+        if domain_decision is not None:
+            task_metadata["domain_decision"] = domain_decision
         if imported is not None:
             ingest_row = (
                 await asyncio.to_thread(self.cadlink_store.get_ingest, request.geometry.ingest_id)
@@ -5278,6 +5325,11 @@ class JobRuntime:
             "mesh_discarded_at": metadata.get("mesh_discarded_at"),
             "log_tail": metadata.get("log_tail") or [],
             "symmetry": metadata.get("symmetry") or {},
+            **(
+                {"domain_decision": dict(metadata["domain_decision"])}
+                if isinstance(metadata.get("domain_decision"), Mapping)
+                else {}
+            ),
             "solve_path": metadata.get("solve_path"),
             "axisymmetric_eligibility_reasons": metadata.get(
                 "axisymmetric_eligibility_reasons"

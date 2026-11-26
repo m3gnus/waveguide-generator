@@ -117,6 +117,9 @@ export interface JobItem extends JobNullableFields {
   /** Mesher identity and other provenance retained with this run. */
   provenance?: components['schemas']['RunProvenance'] | null;
   symmetry?: Record<string, unknown>;
+  /** The run's solve-domain record (`domain-decision-v2`), whichever path it
+   * took; absent on runs saved before it existed. Read with `readDomainDecision`. */
+  domain_decision?: Record<string, unknown> | null;
   solve_path?: 'full-3d' | 'axisymmetric-meridian' | 'interior-fem' | 'coupled-fem-bem' | null;
   axisymmetric_eligibility_reasons?: string[];
   solve_wall_time_seconds?: number | null;
@@ -472,6 +475,7 @@ function isJobItem(value: unknown): value is JobItem {
   if (hasOwn(value, 'cad_provenance') && !(value.cad_provenance === null || isRecord(value.cad_provenance))) return false;
   if (hasOwn(value, 'cad_state') && !(value.cad_state === null || isCadState(value.cad_state))) return false;
   if (hasOwn(value, 'cad_intent') && !(value.cad_intent === null || isRecord(value.cad_intent))) return false;
+  if (hasOwn(value, 'domain_decision') && !(value.domain_decision === null || isRecord(value.domain_decision))) return false;
   return true;
 }
 

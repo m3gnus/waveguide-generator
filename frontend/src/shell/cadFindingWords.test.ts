@@ -8,6 +8,12 @@ describe('finding words', () => {
     expect(findingSentence(finding)).toBe(detail);
     expect(findingName(finding)).not.toContain('whole');
   });
+  it('names a lost mirror plane and keeps the server’s sentence for which and why', () => {
+    const detail = 'This design is a quarter model, but the returned CAD model solved as a half: the y = 0 mirror was lost because its mirror check failed by up to 160 mm.';
+    const finding = { id: 'f', kind: 'symmetry-plane-lost', blocking: false, lost_planes: ['y0'], detail } as never;
+    expect(findingName(finding)).toBe('WG solved this model with less symmetry than expected');
+    expect(findingSentence(finding)).toBe(detail);
+  });
   it('keeps the server’s reason for a model WG cannot judge', () => {
     const finding = { id: 'f', kind: 'stale-detection-unavailable', blocking: false, reason: 'no_document_signature' } as never;
     expect(findingName(finding)).toBe('WG cannot tell whether this model is out of date');

@@ -3,7 +3,9 @@ import {
   decisionReading,
   decisionSummaryRows,
   displaySymmetry,
+  domainRecordNotes,
   readDomainDecision,
+  readDomainRecord,
   recordDomainDecision,
 } from './domainDecision';
 import {
@@ -29,6 +31,47 @@ describe('reading a domain decision', () => {
     expect(readDomainDecision({ contract: 'cad-domain-decision-v1' })).toBeNull();
     expect(recordDomainDecision({ domain_decision: WG_QUARTER })).toBe(WG_QUARTER);
     expect(recordDomainDecision({})).toBeNull();
+  });
+});
+
+/** A parametric run's record (`server/solver/domain_record.py`, `parametric_decision`). */
+const PARAMETRIC_RECORD = {
+  contract: 'domain-decision-v2',
+  producer: 'parametric',
+  solver_domain: { planes: ['x0'], fraction: 'half', multiplier: 2 },
+  planes: {
+    x0: { geometry: 'accepted', used: true, dropped_by: null, detail: null },
+    y0: { geometry: 'accepted', used: false, dropped_by: 'engine', detail: 'the engine needs the whole model' },
+  },
+  expected: { planes: ['x0', 'y0'], fraction: 'quarter', by: 'design', detail: null },
+  findings: [{
+    kind: 'symmetry-plane-lost', blocking: false, lost_planes: ['y0'],
+    detail: 'This design is a quarter model, but it solved as a half: the y = 0 mirror was lost because the engine needs the whole model.',
+  }],
+};
+
+describe('the v2 record every solve path writes', () => {
+  it('reads a v2 CAD decision with the v1 fields it keeps, and a v1 one as before', () => {
+    const v2 = { ...WG_QUARTER, contract: 'domain-decision-v2', producer: 'cad-unlinked', planes: {}, expected: null, findings: [] };
+    expect(readDomainDecision(v2)).toBe(v2);
+    expect(displaySymmetry({ domain_decision: v2 } as Parameters<typeof displaySymmetry>[0]))
+      .toEqual(displaySymmetry({ domain_decision: WG_QUARTER } as Parameters<typeof displaySymmetry>[0]));
+    expect(decisionReading(v2).text).toBe(decisionReading(WG_QUARTER).text);
+    expect(readDomainDecision(WG_QUARTER)).toBe(WG_QUARTER);
+  });
+
+  it('reads a parametric run\'s record and the note a lost plane raised', () => {
+    expect(readDomainRecord(PARAMETRIC_RECORD)).toBe(PARAMETRIC_RECORD);
+    expect(domainRecordNotes(PARAMETRIC_RECORD)).toEqual([PARAMETRIC_RECORD.findings[0].detail]);
+    // A parametric record is no CAD decision: it has no CAD cuts to read.
+    expect(readDomainDecision(PARAMETRIC_RECORD)).toBeNull();
+  });
+
+  it('reads nothing from a run saved before the record existed', () => {
+    expect(readDomainRecord(undefined)).toBeNull();
+    expect(readDomainRecord(WG_QUARTER)).toBeNull();
+    expect(domainRecordNotes(null)).toEqual([]);
+    expect(domainRecordNotes({ ...PARAMETRIC_RECORD, findings: [{ ...PARAMETRIC_RECORD.findings[0], blocking: true }] })).toEqual([]);
   });
 });
 

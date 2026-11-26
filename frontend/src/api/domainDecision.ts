@@ -3,7 +3,9 @@ import type { DomainReading } from './domainInterpretation';
 
 /**
  * The one domain decision WG makes about an imported model
- * (`server/cadlink/interpretation/domain_decision.py`, contract `cad-domain-decision-v1`):
+ * (`server/cadlink/interpretation/domain_decision.py`, contract `cad-domain-decision-v1`,
+ * extended to `domain-decision-v2` -- `server/solver/domain_record.py` -- which
+ * every solve path writes and which keeps every v1 field):
  * what the model is, which planes the solver mirrors, what was reflected, and
  * the frame. The ingestion record seals it (`domain_decision`), every
  * submission checks it, and a job records its summary
@@ -15,6 +17,9 @@ import type { DomainReading } from './domainInterpretation';
  * mesh the viewport draws is in.
  */
 export const DOMAIN_DECISION_CONTRACT = 'cad-domain-decision-v1';
+/** The record every solve path writes; a CAD decision of this contract keeps the v1 fields. */
+export const DOMAIN_DECISION_V2_CONTRACT = 'domain-decision-v2';
+const READABLE_CONTRACTS: readonly unknown[] = [DOMAIN_DECISION_CONTRACT, DOMAIN_DECISION_V2_CONTRACT];
 
 export type MirrorPlane = 'x0' | 'y0';
 
@@ -80,13 +85,55 @@ export interface DomainDecisionExtras {
 /** The full decision an ingestion record seals. */
 export type DomainDecision = DomainDecisionCore & DomainDecisionExtras;
 
+/** A finding the record raised (`symmetry-plane-lost`): its `detail` is the server's sentence. */
+export interface DomainRecordFinding {
+  kind: string;
+  blocking: boolean;
+  detail?: string;
+  lost_planes?: string[];
+  [key: string]: unknown;
+}
+
+/** The `domain-decision-v2` record a run keeps (`JobItem.domain_decision`), whichever path it took. */
+export interface DomainRecord {
+  contract: string;
+  producer?: 'parametric' | 'cad-linked' | 'cad-unlinked' | 'file-mesh' | 'design-assembly' | string;
+  solver_domain: { planes: string[]; fraction: 'full' | 'half' | 'quarter' | string; multiplier?: number };
+  planes?: Record<string, {
+    geometry?: 'accepted' | 'rejected' | 'not-tested' | 'declared' | string;
+    used?: boolean;
+    dropped_by?: string | null;
+    detail?: string | null;
+    [key: string]: unknown;
+  }>;
+  expected?: { planes: string[]; fraction: string; by: string } | null;
+  findings?: DomainRecordFinding[];
+  /** A CAD run's: the sealed decision this record is part of. */
+  decision_sha256?: string | null;
+}
+
+/** A run's v2 record, or null for a run saved before it existed. */
+export function readDomainRecord(value: unknown): DomainRecord | null {
+  if (!isRecord(value) || value.contract !== DOMAIN_DECISION_V2_CONTRACT) return null;
+  if (!isRecord(value.solver_domain) || !Array.isArray(value.solver_domain.planes)) return null;
+  return value as unknown as DomainRecord;
+}
+
+/** The sentences of the non-blocking findings a run's record raised. */
+export function domainRecordNotes(value: unknown): string[] {
+  const record = readDomainRecord(value);
+  return (record?.findings ?? [])
+    .filter((finding) => isRecord(finding) && !finding.blocking && typeof finding.detail === 'string')
+    .map((finding) => finding.detail as string);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** A decision (or its summary) this build can read, or null. */
 export function readDomainDecision<T extends DomainDecisionCore = DomainDecision>(value: unknown): T | null {
-  if (!isRecord(value) || value.contract !== DOMAIN_DECISION_CONTRACT) return null;
+  if (!isRecord(value) || !READABLE_CONTRACTS.includes(value.contract)) return null;
   if (!Array.isArray(value.cad_cuts) || !isRecord(value.solver_domain)) return null;
   if (!Array.isArray((value.solver_domain as Record<string, unknown>).planes)) return null;
   return value as unknown as T;

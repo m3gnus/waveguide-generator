@@ -288,3 +288,38 @@ fallback (`automatic-fallback`), and a cut refused only because the
 provisional axis was square to it is prepared again along an axis it contains.
 A full model WG cuts itself is unaffected: it is cut in whichever frame it is
 solved in.
+
+### One record from every solve path (`domain-decision-v2`)
+
+Every solve path states its domain in the same record
+(`server/solver/domain_record.py`): a parametric design, a CAD return linked to
+a WG design (`cad-linked`) or authored in CAD (`cad-unlinked`), an imported
+mesh file (`file-mesh`) and a compiled design assembly (`design-assembly`). It
+holds the solver domain as before, and per mirror plane (`x0`, `y0`) what the
+geometry said (`accepted`, `rejected`, `not-tested`, `declared`) with its
+evidence (tolerance, residual, points off the model), whether the solve uses
+it and, for a plane the geometry allows that the solve does not, what dropped
+it (`ground-plane`, `engine`, `fem`, `verification`, `user-mode`, `woofer`,
+`native-formula`). `expected` is what the model should give: the design's own
+verdict for a parametric design and for a linked return (WG's verdict for the
+design config the CAD app echoed back), the geometry's for a model authored in
+CAD, the declaration for a mesh file, nothing yet for an assembly.
+
+A CAD return seals it at ingest: the decision keeps every
+`cad-domain-decision-v1` field unchanged, so a record from an earlier build is
+still read as before and a replay package an earlier build exported is compared
+as that build sealed it (`domain_decision.v1_projection`). A job records the
+record for every path (`JobItem.domain_decision`, beside the existing
+`symmetry` metadata, which stays for replay); for a CAD return that is the
+decision's shared fields with its `decision_sha256`, beside the v1 summary the
+job already kept.
+
+When the solve keeps fewer planes than expected for a reason the user did not
+choose, the record raises a non-blocking `symmetry-plane-lost` finding whose
+sentence names the plane and why, for example "This design is a quarter model,
+but the returned CAD model solved as a half: the y = 0 mirror was lost because
+its mirror check failed by up to 160 mm: … (tolerance 0.313 mm)." It appears
+with the model's other notes on the model card and in a run's Diagnostics. A
+plane the user's own settings removed (a forced Symmetry, a ground plane) is
+recorded but raises nothing. Nothing in the record changes a mesh, a solve or
+an export.

@@ -8770,6 +8770,18 @@
             ],
             "title": "Design Uid"
           },
+          "domain_decision": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain Decision"
+          },
           "error_message": {
             "anyOf": [
               {
@@ -9537,6 +9549,18 @@
               }
             ],
             "title": "Design Uid"
+          },
+          "domain_decision": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain Decision"
           },
           "error_message": {
             "anyOf": [

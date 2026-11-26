@@ -418,6 +418,14 @@ class JobItem(JobArchiveIdentity, JobDesignIdentity):
     mesh_discarded_at: str | None = None
     log_tail: list[str]
     symmetry: dict[str, Any] = Field(default_factory=dict)
+    #: The run's solve-domain record (``domain-decision-v2``,
+    #: ``server/solver/domain_record.py``), whichever path it took: the planes
+    #: it mirrored, each plane's verdict, what was expected and the finding a
+    #: lost plane raised. Absent for a run saved before it existed, so those
+    #: responses are unchanged.
+    domain_decision: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     solve_path: Literal["full-3d", "axisymmetric-meridian", "interior-fem", "coupled-fem-bem"] | None = None
     axisymmetric_eligibility_reasons: list[str] = Field(default_factory=list)
     solve_wall_time_seconds: float | None = None

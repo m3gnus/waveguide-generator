@@ -504,6 +504,37 @@ def _scope_findings(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     return findings
 
 
+def _linked_design_expectation(manifest: Mapping[str, Any], anchor_id: Any) -> dict[str, Any] | None:
+    """What a linked return's design gives: WG's own verdict for the echoed config.
+
+    ``instances[].config`` is the design config WG shipped with the export,
+    echoed back by the CAD app (``recorded_vertical_offset_mm``). None for a
+    return with no WG instance, or a config this build cannot read: the
+    geometry's own verdict is then what the decision expects.
+    """
+
+    if anchor_id is None:
+        return None
+    instance = next(
+        (item for item in manifest["instances"] if str(item.get("instance_id")) == str(anchor_id)),
+        None,
+    )
+    config = instance.get("config") if isinstance(instance, Mapping) else None
+    if not isinstance(config, Mapping):
+        return None
+    from pydantic import ValidationError
+
+    from server.design.schema import DesignConfig
+    from server.solver.domain_record import design_expectation
+    from server.solver.symmetry import resolve_symmetry
+
+    try:
+        design = DesignConfig.model_validate(dict(config))
+    except (ValidationError, ValueError, TypeError):
+        return None
+    return design_expectation(resolve_symmetry(design))
+
+
 def _stale_link_findings(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     """A note for each included body the add-in marked degraded.
 
@@ -2136,6 +2167,10 @@ def _ingest_bundle(
             if resolution.get("skipped")
         },
         mesh_content_sha256=mesh_content_sha256,
+        expected=_linked_design_expectation(
+            manifest, built["normalisation"].get("anchor_instance_id")
+        ),
+        fem_rejected={str(note["plane"]): str(note["reason"]) for note in fem_symmetry_notes},
     )
 
     viewport_failure_reason: str | None = None
@@ -2263,6 +2298,13 @@ def _ingest_bundle(
     # M1c-auto replaced the blocking "set Model domain" finding: a model that
     # looks cut is solved as shown, or mirrored on recorded evidence, and the
     # model card states which. The finding only records it, blocking nothing.
+    # A plane the model was expected to give and the solve lost
+    # (``domain_record.lost_plane_finding``): said where the model's other
+    # notes are, never silently.
+    for lost in domain_decision.get("findings") or []:
+        findings.append(
+            {"id": _finding_id(lost["kind"], {"cache_key": cache_key, **lost}), **lost}
+        )
     interpreted = interpretation_finding(domain_interpretation, decision=domain_decision)
     if interpreted is not None:
         findings.append(

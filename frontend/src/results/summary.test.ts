@@ -295,6 +295,32 @@ describe('simulation summary groups', () => {
     expect(diagnostics?.rows.at(-1)?.value).toBe('+1 more');
   });
 
+  it('reads the run\'s domain record first and shows the note a lost plane raised', () => {
+    const lost = 'This design is a quarter model, but it solved as a half: the y = 0 mirror was lost because the engine needs the whole model.';
+    const domainDecision = {
+      contract: 'domain-decision-v2', producer: 'parametric',
+      solver_domain: { planes: ['x0'], fraction: 'half', multiplier: 2 },
+      expected: { planes: ['x0', 'y0'], fraction: 'quarter', by: 'design' },
+      findings: [{ kind: 'symmetry-plane-lost', blocking: false, lost_planes: ['y0'], detail: lost }],
+    };
+    const result: ResultPayload = {
+      frequencies: [100],
+      // The legacy field says otherwise; the record wins for a run that has one.
+      metadata: { symmetry: { requested: 'auto', resolved_quadrants: 1, auto_resolution: {} } },
+    };
+
+    const groups = summaryGroups({ result, job: job({ domain_decision: domainDecision }) });
+
+    expect(row(groups, 'Solve', 'Symmetry')?.value).toBe('quadrants 14 · half domain (server resolved)');
+    const diagnostics = groups.find(({ title }) => title === 'Diagnostics');
+    expect(diagnostics?.tone).toBe('warning');
+    expect(diagnostics?.rows).toContainEqual({ label: 'Warning', value: lost });
+    // A run saved before the record existed reads its quadrants as before.
+    expect(row(summaryGroups({ result, job: job() }), 'Solve', 'Symmetry')?.value)
+      .toBe('quadrant 1 · quarter domain (server resolved)');
+    expect(summaryGroups({ result, job: job() }).find(({ title }) => title === 'Diagnostics')).toBeUndefined();
+  });
+
   it('shows mesh builder warning text, which the solver never copies into metadata.warnings', () => {
     const large = 'Large solve mesh: 5,488 triangles against a warning threshold of 4,500.';
     const result: ResultPayload = {

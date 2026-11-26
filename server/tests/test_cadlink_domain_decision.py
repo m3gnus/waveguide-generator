@@ -1,4 +1,4 @@
-"""One domain decision per prepared CAD snapshot (``cad-domain-decision-v1``).
+"""One domain decision per prepared CAD snapshot (``cad-domain-decision-v1``, now v2).
 
 Stage 3, branch 1: ``server/cadlink/interpretation/domain_decision.py`` states, once, what
 an imported model is (full, cut, open sheet, unresolved), where each CAD cut
@@ -469,6 +469,13 @@ def test_preview_plan_preparation_and_job_consume_the_same_decision(tmp_path: Pa
 
     assert item["cad_source"]["domain_decision"] == summary
     assert JobStatusResponse.model_validate(item).cad_source.domain_decision == summary
+    # And the record every solve path writes (``domain-decision-v2``): the
+    # shared part of the decision ingest sealed, naming it.
+    from server.solver.domain_record import record_core
+
+    assert job["task_metadata"]["domain_decision"] == record_core(decision)
+    assert item["domain_decision"]["decision_sha256"] == decision["identity"]["decision_sha256"]
+    assert item["domain_decision"]["planes"] == decision["planes"]
     assert job["task_metadata"]["symmetry"]["cut_planes"] == summary["solver_domain"]["planes"]
 
 

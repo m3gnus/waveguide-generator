@@ -1,6 +1,10 @@
 """One decision about an imported model's solve domain and frame.
 
-Stage 3 of the CAD Link simplification (``cad-domain-decision-v1``). WG makes
+Stage 3 of the CAD Link simplification (``cad-domain-decision-v1``), extended
+to the record every solve path writes (``domain-decision-v2``,
+``server/solver/domain_record.py``): the v1 fields below are unchanged, and
+the decision adds the producer, per-plane verdicts, what the model was
+expected to give and the finding a lost plane raises. WG makes
 one decision per prepared snapshot and every later reader consumes it rather
 than deriving its own answer:
 
@@ -52,6 +56,11 @@ The result states, in the CAD (exported) frame unless named otherwise:
 ``identity``
     Hashes of the snapshot, the observations, the resolved choice, the solve
     mesh, and of the decision itself.
+
+And, since ``domain-decision-v2``: ``producer`` (``cad-linked`` or
+``cad-unlinked``), ``planes`` (each mirror plane's verdict and evidence),
+``expected`` (a linked return's design verdict, else the geometry's),
+``verification`` (the post-mesh check of a reduced mesh) and ``findings``.
 """
 
 from __future__ import annotations
@@ -87,9 +96,16 @@ from server.cadlink.interpretation.domain_interpretation import (
     shows_cut_rim,
 )
 from server.mesh.source_completion import source_completion_factors
-
-
-CONTRACT = "cad-domain-decision-v1"
+from server.solver.domain_record import (
+    CAD_V1_CONTRACT,
+    CONTRACT,
+    CONTRACTS,
+    PRODUCER_CAD_LINKED,
+    PRODUCER_CAD_UNLINKED,
+    cad_plane_entries,
+    decision_record,
+    geometry_expectation,
+)
 
 INPUT_FULL = "full"
 INPUT_CUT = "cut"
@@ -108,7 +124,6 @@ CONFIDENCE_REFUSED = "refused"
 OPEN_HALF_CODE = "imported_open_half_shell"
 MISMATCH_CODE = "imported_domain_decision_mismatch"
 
-_FRACTION = {0: "full", 1: "half", 2: "quarter"}
 _DETERMINANT_TOLERANCE = 1.0e-6
 
 
@@ -145,13 +160,51 @@ def _proper_frame(normalisation: Mapping[str, Any]) -> dict[str, Any]:
     )
     solver_frame = normalisation.get("solver_frame")
     solver_frame = solver_frame if isinstance(solver_frame, Mapping) else {}
+    matrix = array.tolist() if np.all(np.isfinite(array)) else None
+    # The translation the matrix carries to put the throat on the mirror
+    # planes (a link inserted with its vertical offset baked in): the
+    # canonical frame of ``domain-decision-v2``.
+    recentre = normalisation.get("vertical_recentre")
+    recentre = recentre if isinstance(recentre, Mapping) else {}
+    recentred = bool(recentre.get("applied"))
     return {
-        "solver_from_cad": array.tolist() if np.all(np.isfinite(array)) else None,
+        "solver_from_cad": matrix,
         "determinant": round(determinant, 9) if np.isfinite(determinant) else None,
         "proper": proper,
         "axis": solver_frame.get("axis"),
         "up": solver_frame.get("up"),
         "allowed_axes": list(solver_frame.get("allowed_axes") or []),
+        "solver_from_input": matrix,
+        "canonical_translation_mm": [
+            0.0,
+            -float(recentre.get("applied_offset_mm") or 0.0) if recentred else 0.0,
+            0.0,
+        ],
+        "translation_reason": "throat centre" if recentred else None,
+    }
+
+
+def _verification(verification: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """What the post-mesh check of a reduced mesh found, in brief."""
+
+    if not isinstance(verification, Mapping) or not verification:
+        return None
+    detection = verification.get("detection")
+    detection = detection if isinstance(detection, Mapping) else {}
+    orientation = verification.get("reduced_orientation")
+    orientation = orientation if isinstance(orientation, Mapping) else {}
+    fallback = verification.get("fallback")
+    return {
+        "verified": verification.get("verified"),
+        "reason": verification.get("reason"),
+        "cut_planes": list(verification.get("cut_planes") or []),
+        "plane_free_edge_counts": dict(detection.get("plane_free_edge_counts") or {}),
+        "capped_planes": list(verification.get("capped_planes") or []),
+        "straddling_planes": list(verification.get("straddling_planes") or []),
+        "wrong_side_planes": list(verification.get("wrong_side_planes") or []),
+        "off_plane_free_edge_count": verification.get("off_plane_free_edge_count"),
+        "inverted_component_count": orientation.get("inverted_component_count"),
+        "fallback_reason": fallback.get("reason") if isinstance(fallback, Mapping) else None,
     }
 
 
@@ -226,6 +279,8 @@ def decide_domain_and_frame(
     recovery: Mapping[str, Any] | None = None,
     reflected: Sequence[str] = (),
     manifest_sources: Sequence[Mapping[str, Any]] = (),
+    expected: Mapping[str, Any] | None = None,
+    fem_rejected: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The interpretation record and the decision, for the mesh the snapshot is solved with.
 
@@ -234,7 +289,10 @@ def decide_domain_and_frame(
     result, ``applied`` the evidenced planes that revalidated and were
     mirrored, ``recovery`` the verdict on the cuts the geometry shows
     (``cut_recovery.CutRecovery.to_json``) and ``reflected`` the mirrored
-    planes whose mesh was reflected. Returns ``(domain_interpretation,
+    planes whose mesh was reflected. ``expected`` is what a linked return's
+    design gives (``domain_record.design_expectation``); without it the
+    geometry's own verdict is expected. ``fem_rejected`` names the planes a
+    FEM region refused, with the reason. Returns ``(domain_interpretation,
     domain_decision)``: the first is the M1c-auto record; the second the
     decision every later reader consumes.
     """
@@ -274,6 +332,11 @@ def decide_domain_and_frame(
             for source in manifest_sources
             if isinstance(source, Mapping)
         },
+        expected=expected,
+        fem_rejected=fem_rejected,
+        verification=built.get("symmetry_verification")
+        if isinstance(built.get("symmetry_verification"), Mapping)
+        else None,
     )
     return interpretation, decision
 
@@ -295,6 +358,9 @@ def _decide(
     recovery: Mapping[str, Any] | None = None,
     reflection: Mapping[str, Any] | None = None,
     channels: Mapping[str, Any] | None = None,
+    expected: Mapping[str, Any] | None = None,
+    fem_rejected: Mapping[str, str] | None = None,
+    verification: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     observed_json = observations.to_json() if observations is not None else None
     observed_planes: Mapping[str, Mapping[str, Any]] = (observed_json or {}).get("planes") or {}
@@ -472,20 +538,13 @@ def _decide(
     else:
         confidence = CONFIDENCE_UNRESOLVED
 
-    fraction = _FRACTION.get(len(domain_planes), "unsupported")
-    decision: dict[str, Any] = {
-        "contract": CONTRACT,
+    v1_fields: dict[str, Any] = {
         "input_reading": input_reading,
         "resolved_reading": reading,
         "cad_cuts": cad_cuts,
         "off_centre_cuts": off_centre,
         "oblique_cuts": oblique,
         "wg_cut_planes": wg_cut_planes,
-        "solver_domain": {
-            "planes": domain_planes,
-            "fraction": fraction,
-            "multiplier": 2 ** len(domain_planes),
-        },
         "reflected_axes": reflection_axes,
         "reflection": {
             "implemented": True,
@@ -521,6 +580,26 @@ def _decide(
             "source_map_sha256": source_map_sha256(source_tags, tag_map),
         },
     }
+    planes = cad_plane_entries(
+        symmetry,
+        domain_planes=domain_planes,
+        verification=verification,
+        fem_rejected=fem_rejected,
+    )
+    decision = decision_record(
+        producer=(
+            PRODUCER_CAD_LINKED
+            if normalisation.get("anchor_instance_id") is not None
+            else PRODUCER_CAD_UNLINKED
+        ),
+        domain_planes=domain_planes,
+        planes=planes,
+        # A refused model solves nothing it could lose a plane from.
+        expected=None if refusal is not None else (
+            expected if expected is not None else geometry_expectation(planes)
+        ),
+        extra={**v1_fields, "verification": _verification(verification)},
+    )
     decision = json.loads(_canonical(decision))
     decision["identity"]["decision_sha256"] = decision_sha256(decision)
     return decision
@@ -578,6 +657,36 @@ def decision_sha256(decision: Mapping[str, Any]) -> str:
     return str(_sha256(body))
 
 
+#: The fields a ``cad-domain-decision-v1`` decision had, and its frame's.
+V1_FIELDS = frozenset({
+    "cad_cuts", "confidence", "contract", "evidence", "frame", "identity", "input_reading",
+    "oblique_cuts", "off_centre_cuts", "offered_changes", "reflected_axes", "reflection",
+    "refusal", "resolved_reading", "solver_domain", "sources", "wg_cut_planes",
+})
+V1_FRAME_FIELDS = frozenset({"solver_from_cad", "determinant", "proper", "axis", "up", "allowed_axes"})
+
+
+def v1_projection(decision: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``cad-domain-decision-v1`` decision an earlier build sealed for the same model.
+
+    A v2 decision keeps every v1 field as it was, so dropping what v2 added
+    and hashing the rest again is, byte for byte, what that build wrote: how
+    something an earlier build exported (a CAD replay package) is compared.
+    """
+
+    body = json.loads(_canonical(dict(decision)))
+    projected = {key: value for key, value in body.items() if key in V1_FIELDS}
+    projected["contract"] = CAD_V1_CONTRACT
+    frame = projected.get("frame")
+    if isinstance(frame, Mapping):
+        projected["frame"] = {key: value for key, value in frame.items() if key in V1_FRAME_FIELDS}
+    identity = dict(projected.get("identity") or {})
+    identity.pop("decision_sha256", None)
+    projected["identity"] = identity
+    projected["identity"]["decision_sha256"] = decision_sha256(projected)
+    return projected
+
+
 def decision_problem(record: Mapping[str, Any]) -> str | None:
     """Why this record's decision does not describe the record, or None.
 
@@ -591,7 +700,7 @@ def decision_problem(record: Mapping[str, Any]) -> str | None:
     decision = record.get("domain_decision")
     if decision is None:
         return None
-    if not isinstance(decision, Mapping) or decision.get("contract") != CONTRACT:
+    if not isinstance(decision, Mapping) or decision.get("contract") not in CONTRACTS:
         return "its domain decision is missing or from an unknown contract"
     identity = decision.get("identity")
     if not isinstance(identity, Mapping):
@@ -711,7 +820,11 @@ def decision_summary(record: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 __all__ = [
+    "CAD_V1_CONTRACT",
+    "V1_FIELDS",
+    "V1_FRAME_FIELDS",
     "CONTRACT",
+    "CONTRACTS",
     "INPUT_CUT",
     "INPUT_FULL",
     "INPUT_OPEN_SHEET",
@@ -726,4 +839,5 @@ __all__ = [
     "decision_summary",
     "job_decision_problem",
     "source_map_sha256",
+    "v1_projection",
 ]

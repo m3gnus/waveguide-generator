@@ -5598,6 +5598,10 @@ export interface components {
             design_revision: number;
             /** Design Uid */
             design_uid?: string | null;
+            /** Domain Decision */
+            domain_decision?: {
+                [key: string]: unknown;
+            } | null;
             /** Error Message */
             error_message: string | null;
             /** Exported Files */
@@ -5817,6 +5821,10 @@ export interface components {
             design_revision: number;
             /** Design Uid */
             design_uid?: string | null;
+            /** Domain Decision */
+            domain_decision?: {
+                [key: string]: unknown;
+            } | null;
             /** Error Message */
             error_message: string | null;
             /** Exported Files */
