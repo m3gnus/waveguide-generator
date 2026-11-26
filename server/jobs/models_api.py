@@ -1106,7 +1106,7 @@ def mount_models_api(application: FastAPI) -> None:
                 ),
             },
             422: {"model": ErrorEnvelope, "description": "Setup or request refused"},
-            503: {"model": ErrorEnvelope, "description": "Engine unavailable"},
+            503: {"model": ErrorEnvelope, "description": "Engine unavailable, or the jobs store could not save the solve yet"},
         },
     )
     async def solve(model_id: str, body: ModelSolveRequest) -> Any:

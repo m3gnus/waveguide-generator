@@ -21,6 +21,7 @@ from typing import Any
 from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, UNAVAILABLE_BUNDLE_PATH, cad_of, solve_settings_items
 from server.jobs.solve_anyway import Answered, Pressed, carries
 from server.jobs.design_reader import read_request
+from server.jobs.store import JobsStoreBusy
 from server.cadlink.operations import (
     CANCEL_REQUESTED,
     NEEDS_USER_INPUT,
@@ -249,12 +250,31 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
         job = await asyncio.to_thread(runtime.store.get_job_row, job_id)
         if job["status"] in {"preparing", "queued", "running"}:
             await runtime.stop(job_id)
-    await asyncio.to_thread(runtime.store.make_durable)
+    await make_jobs_durable(runtime.store)
     if row["state"] not in TERMINAL_STATES:
         await asyncio.to_thread(record_job_acceptance, ctx, operation_id, job_id)
     current = await asyncio.to_thread(store.get_operation, operation_id)
     _publish(ctx, current)
     return job_id
+
+
+#: Waits before each retry of a jobs checkpoint a reader of the log held up.
+#: A reader holds it for microseconds; these make a lasting pin the only failure.
+DURABLE_RETRY_DELAYS_S = (0.05, 0.1, 0.2)
+
+
+async def make_jobs_durable(store: Any) -> None:
+    """``JobStore.make_durable``, retried while a reader holds the log; then ``JobsStoreBusy``."""
+
+    for delay in (*DURABLE_RETRY_DELAYS_S, None):
+        try:
+            await asyncio.to_thread(store.make_durable)
+            return
+        except JobsStoreBusy:
+            if delay is None:
+                raise
+            logger.info("Jobs checkpoint held up by a reader; retrying in %.2f s", delay)
+            await asyncio.sleep(delay)
 
 
 async def sweep_pending_solves(ctx: Any) -> int:
@@ -300,7 +320,7 @@ async def accept_operation_solve_isolated(ctx, operation_id, **kwargs):
                         cancelled=row["state"] == "cancel_requested",
                     )
                 if result is not None:
-                    await asyncio.to_thread(ctx.runtime.store.make_durable)
+                    await make_jobs_durable(ctx.runtime.store)
                     if row["state"] not in TERMINAL_STATES:
                         await asyncio.to_thread(record_job_acceptance, ctx, operation_id, result)
         retries.pop(operation_id, None)

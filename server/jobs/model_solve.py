@@ -87,7 +87,7 @@ from server.jobs.runtime import (
     SymmetryValidationError,
     UnknownEngineError,
 )
-from server.jobs.store import SubmissionConflictError
+from server.jobs.store import JobsStoreBusy, SubmissionConflictError
 from server.mesh.builder import _enforce_artifact_triangle_ceiling
 from server.mesh.errors import MeshTooLarge
 from server.mesh.prepared_record import READY_MESH_PRODUCERS, is_ready_mesh
@@ -798,12 +798,37 @@ def _press(
     }
 
 
+#: A CAD Solve press whose job the jobs store could not make durable.
+JOBS_STORE_BUSY_MESSAGE = "WG could not save this solve yet. Press Solve again."
+
+
+async def _accept_manual(state: Any, runtime: Any, operation_id: str, prepared_id: str) -> str:
+    """``accept_manual_solve``, refused as a retryable 503 when its job could not be saved.
+
+    Its checkpoint is retried first (``make_jobs_durable``). If a reader still
+    holds the jobs log, the job it already created is stopped: a refusal tells
+    the page no job exists, and the next press mints a new operation, so a
+    job left waiting here would be stranded.
+    """
+
+    from server.cadlink.api import accept_manual_solve
+
+    try:
+        return await accept_manual_solve(state, operation_id, prepared_id)
+    except JobsStoreBusy as exc:
+        job_id = await asyncio.to_thread(runtime.store.job_for_submission_key, f"cad-solve:{operation_id}")
+        if job_id is not None:
+            try:
+                await runtime.stop(job_id)
+            except JobConflictError:
+                pass  # already finished: nothing is left waiting
+        raise ModelSolveRefusal(503, "jobs_store_busy", JOBS_STORE_BUSY_MESSAGE, retryable=True) from exc
+
+
 async def _solve_cad(
     state: Any, runtime: Any, store: Any, model_id: str, body: ModelSolveRequest,
     record: Mapping[str, Any],
 ) -> str:
-    from server.cadlink.api import accept_manual_solve
-
     operation_id = f"manual-solve:{body.client_request_id}"
     started = await asyncio.to_thread(runtime.store.job_for_submission_key, f"cad-solve:{operation_id}")
     continued = (
@@ -824,7 +849,7 @@ async def _solve_cad(
             # A replay recovers the original job, however it ended, without
             # another press, retention or an open restart latch.
             try:
-                return await accept_manual_solve(state, operation_id, body.prepared_id)
+                return await _accept_manual(state, runtime, operation_id, body.prepared_id)
             except OperationConflict as exc:
                 raise ModelSolveRefusal(409, "submission_key_conflict", str(exc)) from exc
     else:
@@ -871,7 +896,7 @@ async def _solve_cad(
             await asyncio.to_thread(_record_for_model, store, model_id, record, revision_id)
             return job_id
         try:
-            job_id = await accept_manual_solve(state, operation_id, body.prepared_id)
+            job_id = await _accept_manual(state, runtime, operation_id, body.prepared_id)
         except UnknownIngest as exc:
             raise ModelSolveRefusal(404, "prepared_unavailable", str(exc)) from exc
         except SnapshotNotRetained as exc:

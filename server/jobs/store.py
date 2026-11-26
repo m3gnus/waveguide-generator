@@ -158,6 +158,10 @@ class SubmissionConflictError(RuntimeError):
     """A submission key was replayed with a different normalized request."""
 
 
+class JobsStoreBusy(sqlite3.OperationalError):
+    """``make_durable``'s checkpoint was held up by a reader of the log."""
+
+
 logger = logging.getLogger(__name__)
 
 #: Windows sharing/access errors a held handle (a scanner, or a manual
@@ -3810,7 +3814,7 @@ class JobStore:
             finally:
                 conn.execute(f"PRAGMA busy_timeout = {timeout}")
         if busy or (frames >= 0 and copied < frames):
-            raise sqlite3.OperationalError("The jobs acceptance could not be made durable; a reader held the log")
+            raise JobsStoreBusy("The jobs acceptance could not be made durable; a reader held the log")
 
     def checkpoint(self) -> None:
         """Fold the WAL back into the database file.

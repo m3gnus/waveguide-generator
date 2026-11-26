@@ -21003,7 +21003,7 @@
                 }
               }
             },
-            "description": "Engine unavailable"
+            "description": "Engine unavailable, or the jobs store could not save the solve yet"
           }
         },
         "summary": "Solve",

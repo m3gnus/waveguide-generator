@@ -11373,7 +11373,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Engine unavailable */
+            /** @description Engine unavailable, or the jobs store could not save the solve yet */
             503: {
                 headers: {
                     [name: string]: unknown;

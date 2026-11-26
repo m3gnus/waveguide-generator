@@ -1115,3 +1115,59 @@ def test_solve_anyway_does_not_carry_to_other_skipped_sources(harness) -> None:
     # Another mesh, not a press WG cannot prepare.
     assert _anyway_key(harness, retained["manifest_sha256"], one) != record["mesh_lookup_key"]
     assert _carries(harness, record, one, target) is False
+
+
+def test_a_reader_pinning_the_jobs_log_refuses_the_press_and_leaves_no_job_waiting(harness, monkeypatch) -> None:
+    """A Solve press whose job cannot be made durable is a retryable 503, not a 500.
+
+    A real reader holds the jobs log at an older snapshot through every retry.
+    The job the press created is stopped: the page treats a refusal as "no
+    job", and the next press is a new operation.
+    """
+    import sqlite3
+
+    from server.cadlink.joblane import job_shims
+    from server.jobs.model_solve import JOBS_STORE_BUSY_MESSAGE
+
+    monkeypatch.setattr(job_shims, "DURABLE_RETRY_DELAYS_S", (0.0, 0.0))
+    app = _models_app(harness)
+    model = _cad_model(harness)
+    reader = sqlite3.connect(str(harness.jobs_store.db_path), timeout=0)
+    try:
+        reader.execute("BEGIN")
+        reader.execute("SELECT count(*) FROM simulation_jobs").fetchone()
+        status, refused = _solve(harness, app, model, client_request_id="press-busy", setup=_setup(engine="metal"))
+    finally:
+        reader.close()
+    assert status == 503, refused
+    assert refused["error"]["code"] == "jobs_store_busy"
+    assert refused["error"]["retryable"] is True
+    assert refused["detail"] == JOBS_STORE_BUSY_MESSAGE
+    job_id = harness.jobs_store.job_for_submission_key("cad-solve:manual-solve:press-busy")
+    assert harness.jobs_store.get_job_row(job_id)["status"] == "cancelled"
+
+    status, accepted = _solve(harness, app, model, client_request_id="press-again", setup=_setup(engine="metal"))
+    assert status == 200, accepted
+    assert accepted["job_id"] != job_id
+
+
+def test_a_briefly_held_jobs_log_is_retried_before_the_press_answers(harness, monkeypatch) -> None:
+    from server.cadlink.joblane import job_shims
+    from server.jobs.store import JobsStoreBusy
+
+    monkeypatch.setattr(job_shims, "DURABLE_RETRY_DELAYS_S", (0.0, 0.0))
+    real = harness.jobs_store.make_durable
+    calls = []
+
+    def held_once() -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise JobsStoreBusy("The jobs acceptance could not be made durable; a reader held the log")
+        real()
+
+    monkeypatch.setattr(harness.jobs_store, "make_durable", held_once)
+    app = _models_app(harness)
+    status, accepted = _solve(harness, app, _cad_model(harness), client_request_id="press-1",
+                              setup=_setup(engine="metal"))
+    assert status == 200, accepted
+    assert len(calls) == 2
