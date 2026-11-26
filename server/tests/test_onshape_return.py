@@ -17,6 +17,7 @@ from server.app import create_app
 from server.cadlink.api import CadReturnIngestRequest, post_ingest
 from server.cadlink.onshape.return_leg import (
     RETURN_SUBDIRECTORY,
+    OnshapeReturnError,
     write_and_ingest_return,
     write_return_bundle,
 )
@@ -34,7 +35,9 @@ from server.exports.wglink_geometry import build_bundle
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 
 
-def _outbound(tmp_path: Path, **config: object) -> tuple[dict, bytes]:
+def _outbound(
+    tmp_path: Path, *, move_mm: tuple[float, float, float] | None = None, **config: object
+) -> tuple[dict, bytes]:
     # The real Onshape bundle: format 1.2 grid plus the solid STEP an Onshape
     # send uploads (build_bundle include_step).
     design = DesignConfig.model_validate({"formula": "OSSE", "L": 70, "a": 45, **config})
@@ -86,6 +89,9 @@ def _outbound(tmp_path: Path, **config: object) -> tuple[dict, bytes]:
         # the tangency. The overlap is what the fixture always meant.
         radius = diameter / 2.0 + max(diameter * 1.0e-3, 1.0e-3)
         gmsh.model.occ.addDisk(*throat, radius, radius)
+        if move_mm is not None:
+            # The part moved in its Part Studio after it was inserted.
+            gmsh.model.occ.translate(gmsh.model.occ.getEntities(), *move_mm)
         gmsh.model.occ.synchronize()
         gmsh.write(str(path))
         return path.read_bytes()
@@ -376,6 +382,34 @@ def test_an_offset_onshape_return_is_moved_to_the_throat_origin(
     assert record["normalisation"]["matrix"][1][3] == pytest.approx(-80.0, abs=1.0e-6)
     frame = record["anchor"]["throat_frame"]
     assert frame["origin_m"] == pytest.approx([0.0, 0.0, 0.0], abs=1.0e-9)
+    # The display mesh is the recentred model's, not the placed one's.
+    assert record["viewport_mesh"]["available"] is True
+    assert record["viewport_mesh"]["transformed_geometry_hash"] == record["transformed_geometry_hash"]
+
+
+def test_a_moved_offset_onshape_part_is_refused_not_recentred(tmp_path: Path) -> None:
+    """An Onshape link has no placement of its own (``assembly_from_link`` is I).
+
+    So a part moved in its Part Studio cannot be undone the way a moved Fusion
+    occurrence is: its throat is no longer where the link says. It is refused
+    at the linked throat, before any origin shift could be read from it.
+    """
+
+    outbound, step = _outbound(tmp_path, move_mm=(0.0, 5.0, 0.0), mesh={"vertical_offset": 80})
+    with pytest.raises(OnshapeReturnError, match="linked throat"):
+        _run_in_gmsh_session(
+            write_and_ingest_return,
+            step,
+            link={
+                "document_id": "DID",
+                "workspace_id": "WID",
+                "part_studio_element_id": "PART",
+                "document_name": "Demo Horn",
+            },
+            export_row={"manifest_json": json.dumps(outbound)},
+            store=CadLinkStore(tmp_path / "cadlink.db"),
+            data_dir=tmp_path / "data",
+        )
 
 
 def test_an_onshape_return_rebuilds_with_the_local_mesh_controls(tmp_path: Path) -> None:

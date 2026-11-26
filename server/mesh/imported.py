@@ -1328,7 +1328,7 @@ class OriginShiftDecision:
     def translation_mm(self) -> tuple[float, float, float]:
         """The solver-frame move: the throat's y back onto y = 0, or none."""
 
-        return (0.0, -float(self.applied_offset_mm) if self.applied else 0.0, 0.0)
+        return origin_shift_translation_mm(self.as_record())
 
     def as_record(self) -> dict[str, Any]:
         record: dict[str, Any] = {
@@ -1343,6 +1343,20 @@ class OriginShiftDecision:
             record["midpoint_tolerance_mm"] = self.midpoint[2]
         record["reason"] = self.reason
         return record
+
+
+def origin_shift_translation_mm(record: Any) -> tuple[float, float, float]:
+    """The solver-frame move a ``normalisation["vertical_recentre"]`` record states.
+
+    The one reading of that record: :attr:`OriginShiftDecision.translation_mm`
+    is this, and anything that describes the move from a sealed record (a
+    domain decision, a replay) reads it here rather than from the record's
+    keys. No record, or one that did not move, is no move.
+    """
+
+    if not isinstance(record, Mapping) or not record.get("applied"):
+        return (0.0, 0.0, 0.0)
+    return (0.0, -float(record.get("applied_offset_mm") or 0.0), 0.0)
 
 
 def resolve_origin_shift(
@@ -4442,6 +4456,7 @@ __all__ = [
     "build_imported_viewport_mesh",
     "geometry_candidate_matches",
     "imported_viewport_tessellation_settings",
+    "origin_shift_translation_mm",
     "polar_grid_from_symmetry",
     "replay_solver_placement",
     "resolve_instance_source",

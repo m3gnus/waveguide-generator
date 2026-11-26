@@ -34,6 +34,7 @@ from server.mesh.imported import (
     _restrict_sizing_field,
     _surface_group_size_targets,
     _surface_group_sizing_fields,
+    ImportedMeshError,
     apply_occ_healing_options,
     declared_step_bodies,
     replay_solver_placement,
@@ -850,7 +851,11 @@ def build_coupled_mesh(
             assembly_path=assembly_path,
         )
         assembly = _import_occ_root_bodies(gmsh, assembly_path)
-        total = replay_solver_placement(gmsh, assembly, recipe)
+        try:
+            total = replay_solver_placement(gmsh, assembly, recipe)
+        except ImportedMeshError as exc:
+            # A recipe that cannot be replayed is the exterior's, not the CAD's.
+            raise FemRegionMeshError(f"normalisation mismatch: invalid exterior replay recipe ({exc}).") from exc
         if not np.allclose(total, np.asarray(normalisation_matrix), atol=1e-9, rtol=0):
             raise FemRegionMeshError(
                 "normalisation mismatch: exterior recipe and solver transform differ."

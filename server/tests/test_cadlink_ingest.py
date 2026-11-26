@@ -42,6 +42,7 @@ from server.cadlink.intake.ingest import (
     _canonical,
     build_deferred_viewport,
     compute_freshness,
+    current_viewport_record,
     deferred_viewport_lookup_key,
     evaluate_instance_freshness,
     ingest_bundle,
@@ -821,6 +822,41 @@ def test_a_meshing_semantics_change_rekeys_the_display_tessellation(monkeypatch)
         ingest, "meshing_semantics", lambda: {**real(), "linked_return_frame": "a-later-frame-rule"}
     )
     assert _viewport_cache_lookup_key(bundle, manifest, [], options) != before
+    framed = _viewport_cache_lookup_key(bundle, manifest, [], options)
+    # The solve's surface sizing does not tessellate the display mesh.
+    monkeypatch.setattr(
+        ingest,
+        "meshing_semantics",
+        lambda: {**real(), "linked_return_frame": "a-later-frame-rule", "surface_deviation_mm": 0.123},
+    )
+    assert _viewport_cache_lookup_key(bundle, manifest, [], options) == framed
+
+
+def test_a_sealed_record_with_another_models_display_mesh_is_rebuilt_on_read() -> None:
+    """A record sealed before the in-line geometry check can name a foreign display mesh."""
+
+    geometry_hash = "sha256:" + "3" * 64
+    viewport = {
+        "available": True,
+        "pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
+        "store_path": "/nonexistent/viewport.msh",
+        "cache_key": "4" * 64,
+        "content_sha256": mesh_text_sha256("old visual"),
+        "transformed_geometry_hash": geometry_hash,
+    }
+    record = {
+        "ingest_id": "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C",
+        "manifest_sha256": "sha256:" + "1" * 64,
+        "artifact_sha256": "sha256:" + "2" * 64,
+        "transformed_geometry_hash": geometry_hash,
+        "viewport_mesh": viewport,
+    }
+    assert current_viewport_record(record) is record
+    moved = {**record, "transformed_geometry_hash": "sha256:" + "5" * 64}
+    served = current_viewport_record(moved)
+    assert served["viewport_mesh"]["available"] is False
+    assert served["viewport_mesh"]["pending"] is True
+    assert deferred_viewport_lookup_key(served) is not None
 
 
 def test_a_cached_display_mesh_of_other_geometry_is_rebuilt_not_served(

@@ -308,6 +308,16 @@ def test_normalisation_mismatch_is_a_named_refusal(tmp_path):
         _coupled(bundle, manifest, region, normalisation=bad.tolist())
 
 
+def test_a_corrupt_recentre_recipe_is_a_named_normalisation_refusal(tmp_path):
+    bundle, manifest, region = _coupling_bundle(tmp_path / "returns")
+
+    def corrupt(recipe):
+        recipe["recentre_translation_mm"] = [0.0, 1.0]
+
+    with pytest.raises(FemRegionMeshError, match="Rear chamber.*normalisation mismatch: invalid exterior replay recipe"):
+        _coupled(bundle, manifest, region, mutate_recipe=corrupt)
+
+
 def test_uncovered_wall_refuses_instead_of_sealing_the_air(tmp_path):
     bundle, manifest, region = _coupling_bundle(tmp_path / "returns", missing_wall=True)
     with pytest.raises(FemRegionMeshError, match="Rear chamber.*Port.*not closed"):

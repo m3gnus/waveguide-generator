@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 
 import numpy as np
@@ -19,6 +20,7 @@ from server.mesh.imported import (
     recorded_vertical_offset_mm,
     resolve_instance_source,
     resolve_user_source,
+    origin_shift_translation_mm,
     resolve_origin_shift,
     throat_disc,
     apply_rigid_normalisation,
@@ -436,6 +438,24 @@ def test_the_origin_shift_follows_the_returned_throat() -> None:
     assert unknown.applied is False
     with pytest.raises(ValueError, match="bounds"):
         resolve_origin_shift(80.0, bounds_mm=None, throat_centre_y_mm=80.0)
+
+
+def test_a_sealed_origin_shift_record_reads_back_as_the_decided_move() -> None:
+    """One reader of ``vertical_recentre``: what a record states is what was applied."""
+
+    body = (-100.0, -20.0, 0.0, 100.0, 180.0, 300.0)
+    for throat_y, bounds in ((80.0, body), (0.0, body), (80.0, (-1.0, 0.0, 0.0, 1.0, 1.0, 1.0)), (None, body)):
+        decision = resolve_origin_shift(80.0, bounds_mm=bounds, throat_centre_y_mm=throat_y)
+        record = json.loads(json.dumps(decision.as_record()))
+        assert origin_shift_translation_mm(record) == decision.translation_mm
+        # The inline reading domain-decision-v2 made of the same record.
+        assert list(decision.translation_mm) == [
+            0.0,
+            -float(record.get("applied_offset_mm") or 0.0) if record.get("applied") else 0.0,
+            0.0,
+        ]
+    assert origin_shift_translation_mm(None) == (0.0, 0.0, 0.0)
+    assert origin_shift_translation_mm({}) == (0.0, 0.0, 0.0)
 
 
 def test_the_origin_shift_record_keeps_its_keys() -> None:

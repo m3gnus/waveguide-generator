@@ -173,6 +173,29 @@ def meshing_semantics_fingerprint() -> str:
     return "sha256:" + hashlib.sha256(_canonical(meshing_semantics())).hexdigest()
 
 
+#: The entries of :func:`meshing_semantics` that size the solve's surface mesh
+#: and nothing else; every other entry decides the normalised model itself.
+_SURFACE_SIZING_SEMANTICS = frozenset({
+    "surface_deviation_mm",
+    "surface_deviation_min_mm",
+    "surface_deviation_max_mm",
+    "sagitta_flat_curvature",
+    "sagitta_grid_samples",
+    "sagitta_quantise_log",
+})
+
+
+def _model_semantics_fingerprint() -> str:
+    """The fingerprint of the semantics that decide the normalised model (not its sizing)."""
+
+    model = {
+        name: value
+        for name, value in meshing_semantics().items()
+        if name not in _SURFACE_SIZING_SEMANTICS
+    }
+    return "sha256:" + hashlib.sha256(_canonical(model)).hexdigest()
+
+
 def _semantics_key_entry() -> dict[str, str]:
     fingerprint = meshing_semantics_fingerprint()
     return {} if fingerprint == _BASELINE_MESHING_SEMANTICS else {"meshing_semantics": fingerprint}
@@ -969,9 +992,14 @@ def _viewport_cache_lookup_key(
     """Index visual tessellation independently of acoustic mesh sizing.
 
     The display mesh is cut from the same normalised model as the solve mesh,
-    so it is keyed by the same meshing semantics: a change to how a return is
-    framed (``linked_return_frame``) moves that model, and a key blind to it
-    would serve the old frame's tessellation beside the new solve mesh.
+    so it is keyed by the meshing semantics that decide that model: a change
+    to how a return is framed (``linked_return_frame``) moves it, and a key
+    blind to it would serve the old frame's tessellation beside the new solve
+    mesh. The solve's surface sizing constants are left out: the display mesh
+    is tessellated by its own settings (``imported_viewport_tessellation_settings``).
+    They could change the model only by changing which healing rung meshes,
+    and that depends on the solve sizes too, which this key never names; the
+    geometry hash check on every read is what guards that case.
     """
 
     from server.mesh.imported import allocate_imported_tags
@@ -992,7 +1020,7 @@ def _viewport_cache_lookup_key(
                 "mesher_version": _package_version("hornlab-waveguide-mesher"),
                 "mesher_identity": mesher_identity(),
                 "gmsh_version": _package_version("gmsh"),
-                **_semantics_key_entry(),
+                "model_semantics": _model_semantics_fingerprint(),
             }
         )
     ).hexdigest()
@@ -2665,7 +2693,13 @@ def _fem_meshing_fingerprint() -> str | None:
         sources = [
             inspect.getsource(fem_regions),
             inspect.getsource(child_main._task_fem_region),
+            # Everything that places a region in the solve frame.
+            inspect.getsource(imported.replay_solver_placement),
             inspect.getsource(imported.apply_rigid_normalisation),
+            inspect.getsource(imported.apply_origin_shift),
+            inspect.getsource(imported.rigid_occ_motion),
+            inspect.getsource(imported._axis_angle_matrix),
+            inspect.getsource(imported._translation_matrix),
         ]
     except (OSError, TypeError):
         return None
@@ -2924,7 +2958,13 @@ def current_viewport_record(record: Mapping[str, Any]) -> Mapping[str, Any]:
     viewport = record.get("viewport_mesh")
     if not isinstance(viewport, Mapping):
         return record
-    if viewport.get("pipeline_contract") == IMPORT_VIEWPORT_PIPELINE_CONTRACT:
+    # A record sealed before the in-line ingest checked the display mesh's
+    # geometry can name one cut from another model (an older frame or healing
+    # rung). It is not shown; it is rebuilt like a pre-contract one.
+    foreign = viewport.get("available") is True and viewport.get(
+        "transformed_geometry_hash"
+    ) != record.get("transformed_geometry_hash")
+    if viewport.get("pipeline_contract") == IMPORT_VIEWPORT_PIPELINE_CONTRACT and not foreign:
         return record
     if viewport.get("available") is not True and viewport.get("pending") is not True:
         return record
