@@ -21,6 +21,7 @@ from typing import Any
 
 from server.platform.json_file import staged_json
 from server.contracts.canonical import canonical_normalized_bytes as _canonical
+from server.contracts.geometry import DOMAIN_FRACTION_BY_PLANE_COUNT
 
 from server.cadlink.intake.isolated import (
     build_coupled_mesh_isolated,
@@ -509,8 +510,11 @@ def _linked_design_expectation(manifest: Mapping[str, Any], anchor_id: Any) -> d
 
     ``instances[].config`` is the design config WG shipped with the export,
     echoed back by the CAD app (``recorded_vertical_offset_mm``). None for a
-    return with no WG instance, or a config this build cannot read: the
-    geometry's own verdict is then what the decision expects.
+    return with no WG instance, a config this build cannot read, or a design
+    WG cannot sample (a native formula, a sampling failure): the geometry's
+    own verdict is then what the decision expects. ``resolve_symmetry`` is
+    memoised on the design's mesher config, so a design open in this session
+    (``POST /api/design/symmetry``) costs nothing here; a cold one about 1 s.
     """
 
     if anchor_id is None:
@@ -522,17 +526,17 @@ def _linked_design_expectation(manifest: Mapping[str, Any], anchor_id: Any) -> d
     config = instance.get("config") if isinstance(instance, Mapping) else None
     if not isinstance(config, Mapping):
         return None
-    from pydantic import ValidationError
-
-    from server.design.schema import DesignConfig
+    from server.jobs.design_reader import read_design
     from server.solver.domain_record import design_expectation
-    from server.solver.symmetry import resolve_symmetry
+    from server.solver.symmetry import resolution_was_sampled, resolve_symmetry
 
     try:
-        design = DesignConfig.model_validate(dict(config))
-    except (ValidationError, ValueError, TypeError):
+        # The one saved-design reader: an older echoed config is migrated.
+        design = read_design(dict(config))
+    except (ValueError, TypeError, KeyError):
         return None
-    return design_expectation(resolve_symmetry(design))
+    resolution = resolve_symmetry(design)
+    return design_expectation(resolution, sampled=resolution_was_sampled(resolution))
 
 
 def _stale_link_findings(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -2089,6 +2093,7 @@ def _ingest_bundle(
     # plane. Rebuild the exterior with rejected planes excluded so its artifact,
     # replay recipe, polar grid and all FEM meshes retain one domain decision.
     fem_symmetry_notes = []
+    fem_rejected: dict[str, dict[str, Any]] = {}
     while True:
         fem_deadline = time.monotonic() + FEM_REGIONS_WALL_TIME_S
         reflected = (set(reflected_planes) | set(options.get("reflect_planes", ()))
@@ -2113,6 +2118,18 @@ def _ingest_bundle(
                     or plane in set(options["declared_cut_planes"]) | set(applied_planes)):
                 raise
             reason = str(exc)
+            # The verdict of the pass this refusal undoes: the re-mesh below
+            # no longer tests the plane, and the domain decision keeps it.
+            verdict = ((built.get("symmetry") or {}).get("planes") or {}).get(plane)
+            fem_rejected[str(plane)] = {
+                "reason": reason,
+                "verdict": verdict,
+                # A top/bottom-only half after the left/right plane went: the
+                # FEM solve cannot use it alone (``_refuse_fem_domain``).
+                "dropped_with": [
+                    earlier for earlier in fem_rejected if plane == "y0" and earlier == "x0"
+                ],
+            }
             fem_symmetry_notes.append({"plane": plane, "reason": reason})
             options["fem_rejected_symmetry_planes"] = [
                 *options.get("fem_rejected_symmetry_planes", ()), plane]
@@ -2170,7 +2187,7 @@ def _ingest_bundle(
         expected=_linked_design_expectation(
             manifest, built["normalisation"].get("anchor_instance_id")
         ),
-        fem_rejected={str(note["plane"]): str(note["reason"]) for note in fem_symmetry_notes},
+        fem_rejected=fem_rejected,
     )
 
     viewport_failure_reason: str | None = None
@@ -2238,7 +2255,24 @@ def _ingest_bundle(
 
     findings = list(scope_findings)
     findings.extend(_stale_link_findings(manifest))
+    # One note per lost plane (``domain_record.lost_plane_finding``). A plane
+    # lost only to WG's own failed cut is the viewport's mesh-recovery line
+    # (``symmetry-cut-unverified`` below); a FEM refusal of a plane the note
+    # names is said once, by the note.
+    lost_notes = [
+        dict(item) for item in domain_decision.get("findings") or []
+        if not all(
+            ((domain_decision.get("planes") or {}).get(plane) or {}).get("dropped_by")
+            == "verification"
+            for plane in item.get("lost_planes") or []
+        ) or not isinstance(
+            (built.get("symmetry_verification") or {}).get("fallback"), Mapping
+        )
+    ]
+    noted = {plane for item in lost_notes for plane in item.get("lost_planes") or []}
     for note in fem_symmetry_notes:
+        if note["plane"] in noted:
+            continue
         findings.append({"id": _finding_id("fem-symmetry-fallback", note),
                          "kind": "fem-symmetry-fallback", "blocking": False, **note})
     from server.solver.coupled_admission import fem_termination_problem
@@ -2301,7 +2335,7 @@ def _ingest_bundle(
     # A plane the model was expected to give and the solve lost
     # (``domain_record.lost_plane_finding``): said where the model's other
     # notes are, never silently.
-    for lost in domain_decision.get("findings") or []:
+    for lost in lost_notes:
         findings.append(
             {"id": _finding_id(lost["kind"], {"cache_key": cache_key, **lost}), **lost}
         )
@@ -2586,7 +2620,7 @@ def _ingest_bundle(
 
 
 #: What a solve mesh is of the model, by the number of planes it is mirrored on.
-SOLVED_DOMAIN_BY_PLANES = {0: "full", 1: "half", 2: "quarter"}
+SOLVED_DOMAIN_BY_PLANES = DOMAIN_FRACTION_BY_PLANE_COUNT
 
 
 def symmetry_fallback_detail(solved_domain: str) -> str:

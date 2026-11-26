@@ -314,12 +314,28 @@ record for every path (`JobItem.domain_decision`, beside the existing
 decision's shared fields with its `decision_sha256`, beside the v1 summary the
 job already kept.
 
-When the solve keeps fewer planes than expected for a reason the user did not
-choose, the record raises a non-blocking `symmetry-plane-lost` finding whose
-sentence names the plane and why, for example "This design is a quarter model,
-but the returned CAD model solved as a half: the y = 0 mirror was lost because
-its mirror check failed by up to 160 mm: … (tolerance 0.313 mm)." It appears
-with the model's other notes on the model card and in a run's Diagnostics. A
-plane the user's own settings removed (a forced Symmetry, a ground plane) is
-recorded but raises nothing. Nothing in the record changes a mesh, a solve or
-an export.
+When the solve keeps fewer planes than expected, the record raises a
+non-blocking `symmetry-plane-lost` finding only for a loss the user can act on
+or should know about: a mirror check that failed, WG's own cut failing its mesh
+check, a FEM region that does not mirror, a CAD cut WG could not rebuild. A
+plane removed by the user's own setting (a forced Symmetry, a ground plane) or
+by a limit with no user fix (an engine that solves the whole model, a native
+formula, a design assembly) is recorded in `planes` and raises nothing. The
+sentence is built from the record's structured evidence, never from raw
+reasons, names each plane with its own reason (planes sharing one share it)
+and adds the fix where there is one, for example "This design is a quarter
+model, but WG solves the returned CAD model as a half: the top/bottom (y = 0)
+mirror was lost because the model differs from its mirror image by up to
+160 mm (… checked points; WG allows 0.313 mm). If the model was not meant to
+change in CAD, update it from its design and send it again to solve it as a
+quarter." The model card shows it once with its other notes: it replaces the
+FEM fallback note for the planes it names, and a loss only to WG's own failed
+cut stays the viewport's mesh-recovery line. A run's Diagnostics show it.
+
+A design WG cannot sample (a native formula, a sampling failure) expects
+nothing: its "full" means unknown. A plane's mirror verdict survives a
+fallback re-mesh (`symmetry_verification.fallback.plane_verdicts`) and a FEM
+refusal, so a dropped plane keeps the evidence that accepted it; a cut the
+cutter itself refused records no verdict. A CAD replay compares the decision as
+its v1 fields only: what v2 adds describes the decision and never breaks a
+package. Nothing in the record changes a mesh, a solve or an export.

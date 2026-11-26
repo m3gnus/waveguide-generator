@@ -56,6 +56,7 @@ from server.cadlink.wgreturn import (
     DOMAIN_PLANES,
 )
 
+from server.contracts.geometry import plane_words
 from server.mesh.source_completion import TOLERANCE_MM
 
 
@@ -94,10 +95,6 @@ ORIGIN_PLANE = {plane: origin for origin, plane in CUT_ORIGIN_PLANES.items()}
 
 class DomainReadingError(ValueError):
     """A reading this record cannot take."""
-
-
-def plane_words(plane: str) -> str:
-    return f"{_LETTER[plane]} = 0"
 
 
 def side_words(plane: str, side: str | None) -> str:

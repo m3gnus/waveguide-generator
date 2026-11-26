@@ -20,6 +20,14 @@ CUT_PLANE_AXIS = {"x0": 0, "y0": 1, "z0": 2}
 # Native solvers support x0 and y0 cuts only; z0 remains an OCC axis.
 SUPPORTED_CUT_PLANES = tuple(CUT_PLANE_BY_NATIVE_PLANE.values())
 SYMMETRY_PLANE_AXIS = {plane: CUT_PLANE_AXIS[plane] for plane in SUPPORTED_CUT_PLANES}
+#: What a solve mesh is of the model, by the number of planes it is mirrored on.
+DOMAIN_FRACTION_BY_PLANE_COUNT = {0: "full", 1: "half", 2: "quarter"}
+
+
+def plane_words(plane: str) -> str:
+    """``x = 0``: a cut plane in words."""
+
+    return f"{plane[0]} = 0"
 CUT_PLANES_BY_QUADRANTS = {
     quadrants: tuple(CUT_PLANE_BY_NATIVE_PLANE[part] for part in plane.split("+"))
     if plane is not None

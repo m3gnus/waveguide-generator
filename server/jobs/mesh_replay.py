@@ -95,20 +95,19 @@ class CadReplayInterpretation(JobModel):
             raise ValueError("This CAD run has no complete retained interpretation. Prepare and solve it again before exporting replay.")
         return cls.model_validate({key: record[key] for key in cls.model_fields})
 
-    def as_exported(self, exported: CadReplayInterpretation) -> CadReplayInterpretation:
-        """This interpretation in the form ``exported`` was written in.
+    def solve_form(self) -> CadReplayInterpretation:
+        """This interpretation as a replay compares it: only what the solve uses.
 
-        A package an earlier build exported holds its ``cad-domain-decision-v1``
-        decision; this build's v2 decision keeps every v1 field, so it is
-        compared as that build sealed it (``domain_decision.v1_projection``).
+        The domain decision is compared as its v1 fields (``v1_projection``):
+        everything the solve reads. What v2 added describes the decision
+        (what was expected, per-plane evidence, the note's sentence) and may be
+        worded or evaluated differently by a later build without changing the
+        mesh or the physics; a package an earlier build exported holds v1 only.
         """
 
-        from server.cadlink.interpretation.domain_decision import CAD_V1_CONTRACT, v1_projection
+        from server.cadlink.interpretation.domain_decision import v1_projection
 
-        if (exported.domain_decision.get("contract") == CAD_V1_CONTRACT
-                and self.domain_decision.get("contract") != CAD_V1_CONTRACT):
-            return self.model_copy(update={"domain_decision": v1_projection(self.domain_decision)})
-        return self
+        return self.model_copy(update={"domain_decision": v1_projection(self.domain_decision)})
 
 
 class CadMeshReplayPackage(JobModel):
@@ -436,8 +435,8 @@ def _restore_cad_mesh(runtime: Any, store: Any, data_dir: Path, package: CadMesh
         if (record["manifest_sha256"] != package.request.geometry.manifest_sha256
                 or record["artifact_sha256"] != package.request.geometry.artifact_sha256
                 or _cad_preparation(record) != package.preparation
-                or CadReplayInterpretation.from_record(record).as_exported(package.interpretation)
-                != package.interpretation
+                or CadReplayInterpretation.from_record(record).solve_form()
+                != package.interpretation.solve_form()
                 or solve_model_sha256(record) != package.solve_model_sha256
                 or read_verified_import_mesh(record) != package.solver_msh_text):
             raise ValueError("This WG version cannot reconstruct the CAD run's exact mesh and interpretation. Open it with the exporting version, or send the model again and start a new solve.")

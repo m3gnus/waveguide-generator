@@ -42,7 +42,9 @@ from typing import Any
 from server.contracts.geometry import (
     CUT_PLANE_BY_NATIVE_PLANE,
     CUT_PLANES_BY_QUADRANTS,
+    DOMAIN_FRACTION_BY_PLANE_COUNT,
     SUPPORTED_CUT_PLANES,
+    SYMMETRY_MODE_QUADRANTS,
     normalise_quadrants,
 )
 
@@ -75,10 +77,18 @@ DROPPED_BY_VERIFICATION = "verification"
 DROPPED_BY_USER_MODE = "user-mode"
 DROPPED_BY_WOOFER = "woofer"
 DROPPED_BY_NATIVE_FORMULA = "native-formula"
+#: WG could not rebuild a model cut in CAD (``cut_recovery``) and solved it whole.
+DROPPED_BY_RECOVERY = "recovery"
+#: Nothing recorded says why: never silent.
+DROPPED_BY_UNKNOWN = "unknown"
 
-#: Losses the user chose (a forced Symmetry, a ground plane): the run's own
-#: settings say so, so they are recorded but raise no finding.
-USER_CHOSEN = frozenset({DROPPED_BY_USER_MODE, DROPPED_BY_GROUND_PLANE})
+#: Losses recorded but never shown as a note: the user's own settings (a
+#: forced Symmetry, a ground plane) and limits of the engine or the model kind
+#: the user has no fix for. The run's own settings and plan say so already.
+SILENT_LOSSES = frozenset({
+    DROPPED_BY_USER_MODE, DROPPED_BY_GROUND_PLANE, DROPPED_BY_ENGINE,
+    DROPPED_BY_NATIVE_FORMULA, DROPPED_BY_WOOFER,
+})
 
 EXPECTED_BY_DESIGN = "design"
 EXPECTED_BY_GEOMETRY = "geometry"
@@ -86,8 +96,9 @@ EXPECTED_BY_DECLARATION = "declaration"
 
 LOST_PLANE_KIND = "symmetry-plane-lost"
 
-_FRACTION = {0: "full", 1: "half", 2: "quarter"}
 _FRACTION_WORDS = {"full": "the whole model", "half": "a half", "quarter": "a quarter"}
+#: The planes in the user's words (decision 6's "top/bottom mirror").
+_MIRROR_WORDS = {"x0": "left/right (x = 0)", "y0": "top/bottom (y = 0)"}
 
 
 def ordered_planes(planes: Iterable[str]) -> list[str]:
@@ -103,7 +114,7 @@ def solver_domain(planes: Sequence[str]) -> dict[str, Any]:
     planes = [str(plane) for plane in planes]
     return {
         "planes": planes,
-        "fraction": _FRACTION.get(len(planes), "unsupported"),
+        "fraction": DOMAIN_FRACTION_BY_PLANE_COUNT.get(len(planes), "unsupported"),
         "multiplier": 2 ** len(planes),
     }
 
@@ -120,8 +131,17 @@ def plane_entry(
     points_off: int | None = None,
     worst_off_mm: float | None = None,
     detail: str | None = None,
+    dropped_with: Iterable[str] = (),
+    role_mismatches: int | None = None,
 ) -> dict[str, Any]:
-    """One plane's verdict and evidence."""
+    """One plane's verdict and evidence.
+
+    ``dropped_with`` names the planes whose failure took this one with it (an
+    all-or-nothing fallback, a half the solve cannot use alone);
+    ``role_mismatches`` counts mirrored samples that land on a surface of
+    another role (a driver mirrored onto a wall); ``detail`` is the raw
+    evidence, for developers, never a user's sentence.
+    """
 
     return {
         "geometry": geometry,
@@ -132,8 +152,10 @@ def plane_entry(
         "max_residual_mm": _number(max_residual_mm),
         "points_tested": _count(points_tested),
         "points_off": _count(points_off),
+        "role_mismatches": _count(role_mismatches),
         "worst_off_mm": _number(worst_off_mm),
         "detail": detail,
+        "dropped_with": ordered_planes(dropped_with),
     }
 
 
@@ -145,7 +167,7 @@ def expectation(
     ordered = ordered_planes(planes)
     return {
         "planes": ordered,
-        "fraction": _FRACTION[len(ordered)],
+        "fraction": DOMAIN_FRACTION_BY_PLANE_COUNT[len(ordered)],
         "by": by,
         "detail": detail,
     }
@@ -161,10 +183,14 @@ def resolution_planes(resolution: Any) -> list[str]:
     )
 
 
-def design_expectation(resolution: Any) -> dict[str, Any]:
-    """What a design gives, from WG's own verdict for it (``resolve_symmetry``)."""
+def design_expectation(resolution: Any, *, sampled: bool) -> dict[str, Any] | None:
+    """What a design gives, from WG's own verdict for it (``resolve_symmetry``).
 
-    return expectation(resolution_planes(resolution), by=EXPECTED_BY_DESIGN)
+    None when the design was not sampled (a native formula, a sampling
+    failure; ``symmetry.resolution_was_sampled``): its "full" means unknown.
+    """
+
+    return expectation(resolution_planes(resolution), by=EXPECTED_BY_DESIGN) if sampled else None
 
 
 def geometry_expectation(planes: Mapping[str, Mapping[str, Any]]) -> dict[str, Any] | None:
@@ -223,6 +249,7 @@ def decision_record(
 def parametric_decision(
     geometry: Any,
     *,
+    sampled: bool,
     resolved_quadrants: int,
     requested_mode: str,
     ground_blocked_plane: str | None,
@@ -232,36 +259,47 @@ def parametric_decision(
     """A parametric design's record.
 
     ``geometry`` is ``resolve_symmetry``'s verdict before any solve constraint
-    (the design's own planes, which is also ``expected``);
-    ``ground_blocked_plane`` the cut plane a ground plane blocks;
-    ``engine_reason`` set when the engine overrode the domain to full.
+    (the design's own planes, which is also ``expected``), ``sampled`` whether
+    it was really sampled; ``ground_blocked_plane`` the cut plane a ground
+    plane blocks; ``engine_reason`` set when the engine overrode the domain.
+    A plane a forced Symmetry leaves out is the user's choice, whatever the
+    engine would also have done.
     """
 
     used = set(CUT_PLANES_BY_QUADRANTS[normalise_quadrants(resolved_quadrants)])
     accepted = set(resolution_planes(geometry))
+    mode = str(requested_mode).strip().lower()
+    forced = SYMMETRY_MODE_QUADRANTS.get(mode) if mode != "auto" else None
+    # The planes a forced Symmetry keeps (None: AUTO, nothing forced).
+    forced_planes = (
+        set(CUT_PLANES_BY_QUADRANTS[normalise_quadrants(forced)]) if forced is not None else None
+    )
     native_by_plane = {cut: native for native, cut in CUT_PLANE_BY_NATIVE_PLANE.items()}
     reasons = getattr(geometry, "reasons", {}) or {}
     tolerance = _number(getattr(geometry, "tolerance_mm", None))
     planes: dict[str, dict[str, Any]] = {}
     for plane in SUPPORTED_CUT_PLANES:
         detail = "; ".join(str(item) for item in reasons.get(native_by_plane[plane]) or []) or None
-        if native_formula:
+        if native_formula or not sampled:
             planes[plane] = plane_entry(
                 GEOMETRY_NOT_TESTED, used=plane in used,
-                dropped_by=DROPPED_BY_NATIVE_FORMULA, detail=detail,
+                dropped_by=DROPPED_BY_NATIVE_FORMULA if native_formula else None, detail=detail,
             )
             continue
         dropped_by: str | None = None
         if plane in accepted and plane not in used:
-            if plane == ground_blocked_plane:
+            if forced_planes is not None and plane not in forced_planes:
+                dropped_by = DROPPED_BY_USER_MODE
+                detail = f"Symmetry is set to {mode}"
+            elif plane == ground_blocked_plane:
                 dropped_by = DROPPED_BY_GROUND_PLANE
                 detail = "a rigid ground plane bounds this plane"
             elif engine_reason:
                 dropped_by = DROPPED_BY_ENGINE
                 detail = engine_reason
             else:
-                dropped_by = DROPPED_BY_USER_MODE
-                detail = f"Symmetry is set to {requested_mode}"
+                dropped_by = DROPPED_BY_UNKNOWN
+                detail = None
         planes[plane] = plane_entry(
             GEOMETRY_ACCEPTED if plane in accepted else GEOMETRY_REJECTED,
             used=plane in used,
@@ -274,7 +312,36 @@ def parametric_decision(
         producer=PRODUCER_PARAMETRIC,
         domain_planes=ordered_planes(used),
         planes=planes,
-        expected=None if native_formula else design_expectation(geometry),
+        expected=None if native_formula else design_expectation(geometry, sampled=sampled),
+    )
+
+
+def _occ_verdict(verdict: Any) -> Mapping[str, Any] | None:
+    """A plane's OCC mirror verdict, when it is one (``evaluate_occ_plane_symmetry``)."""
+
+    if isinstance(verdict, Mapping) and "accepted" in verdict and "points_tested" in verdict:
+        return verdict
+    return None
+
+
+def _verdict_entry(
+    verdict: Mapping[str, Any], *, used: bool, tolerance: float | None,
+    dropped_by: str | None = None, detail: str | None = None, dropped_with: Iterable[str] = (),
+) -> dict[str, Any]:
+    accepted = bool(verdict.get("accepted"))
+    return plane_entry(
+        GEOMETRY_ACCEPTED if accepted else GEOMETRY_REJECTED,
+        used=used,
+        dropped_by=dropped_by if accepted and not used else None,
+        tolerance_mm=_number(verdict.get("tolerance_step_units")) or tolerance,
+        tolerance_class=TOLERANCE_FITTED,
+        max_residual_mm=verdict.get("max_residual_step_units"),
+        points_tested=verdict.get("points_tested"),
+        points_off=verdict.get("points_off_model"),
+        worst_off_mm=verdict.get("worst_off_model_distance_step_units"),
+        role_mismatches=verdict.get("role_mismatches"),
+        detail=detail if detail is not None else (str(verdict.get("reason")) if verdict.get("reason") else None),
+        dropped_with=dropped_with,
     )
 
 
@@ -283,14 +350,20 @@ def cad_plane_entries(
     *,
     domain_planes: Sequence[str],
     verification: Mapping[str, Any] | None = None,
-    fem_rejected: Mapping[str, str] | None = None,
+    fem_rejected: Mapping[str, Mapping[str, Any]] | None = None,
+    recovery_failures: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Per-plane verdicts for a CAD return, from what the preparation recorded.
+    """Per-plane verdicts for a CAD return: only what the preparation knows.
 
-    ``symmetry`` is the mesher's report (``built["symmetry"]``: the OCC mirror
-    verdicts, in STEP units, which WG reads in millimetres); ``verification``
-    the post-mesh check with its fallback; ``fem_rejected`` the planes a FEM
-    region refused, with the reason.
+    ``symmetry`` is the mesher's report of the mesh solved (``built["symmetry"]``:
+    the OCC mirror verdicts, in STEP units, which WG reads in millimetres).
+    When that mesh is a fallback (the whole model after a reduced one failed),
+    the verdicts that chose the failed reduction travel in
+    ``verification["fallback"]["plane_verdicts"]``, and a FEM refusal carries
+    the verdict of the pass it refused (``fem_rejected[plane]["verdict"]``).
+    ``fem_rejected`` names the planes a FEM region refused (``reason``,
+    ``dropped_with``); ``recovery_failures`` the flip conditions a CAD cut
+    failed (``cut_recovery``), after which the model is meshed whole.
     """
 
     used = {str(plane) for plane in domain_planes}
@@ -299,55 +372,84 @@ def cad_plane_entries(
     report = report if isinstance(report, Mapping) else {}
     fallback = (verification or {}).get("fallback")
     fallback = fallback if isinstance(fallback, Mapping) else {}
-    fallback_planes = {
-        str(plane)
-        for plane in [
-            *(fallback.get("rejected_cut_planes") or []),
-            *(fallback.get("detected_planes") or []),
-        ]
-    }
+    first_pass = fallback.get("plane_verdicts")
+    first_pass = first_pass if isinstance(first_pass, Mapping) else {}
+    # The planes WG cut and the mesh check then refused (an empty list with a
+    # fallback: the cutter itself refused, and no verdict survives).
+    cut_then_refused = {str(plane) for plane in fallback.get("rejected_cut_planes") or []}
+    cut_refused = bool(fallback) and not cut_then_refused
+    # Which of those cuts failed the check, when it says so: a capped plane, or
+    # a cut plane the mesh is not open on. The others went with them.
+    failing = {str(plane) for plane in fallback.get("capped_planes") or []} & cut_then_refused
+    detected = fallback.get("detected_planes")
+    if cut_then_refused and isinstance(detected, list):
+        failing |= {plane for plane in cut_then_refused if plane not in detected}
     fem_rejected = fem_rejected or {}
     requested_full = symmetry.get("requested_mode") == "full"
+    recovery_failed = bool(recovery_failures) and requested_full
     tolerance = _number(symmetry.get("tolerance_step_units"))
     entries: dict[str, dict[str, Any]] = {}
     for plane in SUPPORTED_CUT_PLANES:
-        verdict = report.get(plane)
-        verdict = verdict if isinstance(verdict, Mapping) else None
+        in_use = plane in used
+        rejected = fem_rejected.get(plane)
+        verdict = (
+            _occ_verdict(report.get(plane))
+            or _occ_verdict(first_pass.get(plane))
+            or (_occ_verdict(rejected.get("verdict")) if isinstance(rejected, Mapping) else None)
+        )
         if plane in declared:
             entries[plane] = plane_entry(
-                GEOMETRY_DECLARED, used=plane in used,
-                detail=str((verdict or {}).get("source") or "declared-by-cad-author"),
+                GEOMETRY_DECLARED, used=in_use,
+                detail=str((report.get(plane) or {}).get("source") or "declared-by-cad-author"),
             )
-        elif verdict is not None and "accepted" in verdict and "points_tested" in verdict:
-            accepted = bool(verdict.get("accepted"))
-            entries[plane] = plane_entry(
-                GEOMETRY_ACCEPTED if accepted else GEOMETRY_REJECTED,
-                used=plane in used,
-                dropped_by=DROPPED_BY_VERIFICATION if accepted and plane not in used else None,
-                tolerance_mm=_number(verdict.get("tolerance_step_units")) or tolerance,
-                tolerance_class=TOLERANCE_FITTED,
-                max_residual_mm=verdict.get("max_residual_step_units"),
-                points_tested=verdict.get("points_tested"),
-                points_off=verdict.get("points_off_model"),
-                worst_off_mm=verdict.get("worst_off_model_distance_step_units"),
-                detail=str(verdict.get("reason")) if verdict.get("reason") else None,
+        elif isinstance(rejected, Mapping):
+            # The FEM loop refuses only a plane WG's mirror test accepted and cut.
+            fem = dict(
+                used=in_use, dropped_by=DROPPED_BY_FEM,
+                detail=str(rejected.get("reason") or "") or None,
+                dropped_with=rejected.get("dropped_with") or (),
             )
-        elif plane in fallback_planes:
+            entries[plane] = (
+                _verdict_entry(verdict, tolerance=tolerance, **fem)  # type: ignore[arg-type]
+                if verdict is not None else plane_entry(GEOMETRY_ACCEPTED, **fem)  # type: ignore[arg-type]
+            )
+        elif plane in cut_then_refused:
             # WG's mirror test accepted and cut it; the reduced mesh then
             # failed its check and the whole model was meshed instead.
+            check = dict(
+                used=in_use, dropped_by=DROPPED_BY_VERIFICATION,
+                detail=str(fallback.get("reason")) if fallback.get("reason") else None,
+                dropped_with=sorted(failing) if failing and plane not in failing else (),
+            )
+            entries[plane] = (
+                _verdict_entry(verdict, tolerance=tolerance, **check)  # type: ignore[arg-type]
+                if verdict is not None else plane_entry(GEOMETRY_ACCEPTED, **check)  # type: ignore[arg-type]
+            )
+        elif verdict is not None:
+            entries[plane] = _verdict_entry(
+                verdict, used=in_use, tolerance=tolerance, dropped_by=DROPPED_BY_UNKNOWN,
+            )
+        elif cut_refused and plane in {str(item) for item in fallback.get("detected_planes") or []}:
+            # The cutter refused its own cut: WG never learnt whether this
+            # plane mirrors, only that it could not cut there.
             entries[plane] = plane_entry(
-                GEOMETRY_ACCEPTED, used=plane in used,
-                dropped_by=DROPPED_BY_VERIFICATION,
+                GEOMETRY_NOT_TESTED, used=in_use, dropped_by=DROPPED_BY_VERIFICATION,
                 detail=str(fallback.get("reason")) if fallback.get("reason") else None,
             )
-        elif plane in fem_rejected:
+        elif recovery_failed:
+            failed = (recovery_failures or {}).get(plane)
             entries[plane] = plane_entry(
-                GEOMETRY_NOT_TESTED, used=plane in used,
-                dropped_by=DROPPED_BY_FEM, detail=fem_rejected[plane],
+                GEOMETRY_NOT_TESTED, used=in_use,
+                dropped_by=DROPPED_BY_RECOVERY,
+                detail="; ".join(
+                    str(item.get("message")) for item in failed or []
+                    if isinstance(item, Mapping) and item.get("message")
+                ) or "a CAD cut could not be rebuilt, so the model is meshed whole",
+                dropped_with=() if failed else ordered_planes(recovery_failures or {}),
             )
         else:
             entries[plane] = plane_entry(
-                GEOMETRY_NOT_TESTED, used=plane in used,
+                GEOMETRY_NOT_TESTED, used=in_use,
                 dropped_by=DROPPED_BY_USER_MODE if requested_full else None,
                 detail=(
                     "Symmetry is set to full"
@@ -359,28 +461,44 @@ def cad_plane_entries(
 
 
 def file_mesh_decision(record: Mapping[str, Any]) -> dict[str, Any]:
-    """An imported mesh file's record: the planes its import declared."""
+    """An imported mesh file's record: the planes its import declared or found.
+
+    New imports are declaration only; a historical preparation may have cut
+    the file itself (``auto_cut``), and those planes are the geometry's.
+    """
 
     from server.solver.imported import imported_domain_planes
 
     domain = list(imported_domain_planes(record))
     symmetry = record.get("symmetry")
     symmetry = symmetry if isinstance(symmetry, Mapping) else {}
-    cut = {str(plane) for plane in symmetry.get("cut_planes") or []}
+    source = record.get("source_file")
+    source = source if isinstance(source, Mapping) else {}
+    declared = {str(plane) for plane in source.get("domain_planes") or []}
+    cut = {str(plane) for plane in symmetry.get("cut_planes") or []} - declared
+    report = ((source.get("transform") or {}).get("symmetry_report") or {}) if isinstance(
+        source.get("transform"), Mapping
+    ) else {}
+    note = str(report.get("note")) if isinstance(report, Mapping) and report.get("note") else None
     planes = {
         plane: plane_entry(
-            GEOMETRY_ACCEPTED if plane in cut else GEOMETRY_DECLARED if plane in domain
+            GEOMETRY_DECLARED if plane in declared
+            else GEOMETRY_ACCEPTED if plane in cut
             else GEOMETRY_NOT_TESTED,
             used=plane in domain,
-            detail=None if plane in domain else "a mesh file is solved as declared on import",
+            detail=None if plane in domain else note or "a mesh file is solved as declared on import",
         )
         for plane in SUPPORTED_CUT_PLANES
     }
+    if source.get("auto_cut"):
+        expected = geometry_expectation(planes)
+    else:
+        expected = expectation(domain, by=EXPECTED_BY_DECLARATION)
     return decision_record(
         producer=PRODUCER_FILE_MESH,
         domain_planes=domain,
         planes=planes,
-        expected=expectation(domain, by=EXPECTED_BY_DECLARATION),
+        expected=expected,
     )
 
 
@@ -390,11 +508,19 @@ def design_assembly_decision(record: Mapping[str, Any]) -> dict[str, Any]:
     from server.solver.imported import imported_domain_planes
 
     domain = list(imported_domain_planes(record))
+    woofers = any(
+        isinstance(radiator, Mapping) and radiator.get("role") == "LF"
+        and radiator.get("state") in {"compiled", "rigid"}
+        for radiator in record.get("radiators") or []
+    )
     planes = {
         plane: plane_entry(
             GEOMETRY_NOT_TESTED, used=plane in domain,
-            dropped_by=None if plane in domain else DROPPED_BY_WOOFER,
-            detail=None if plane in domain else "a design with woofers is solved as the whole model",
+            dropped_by=None if plane in domain else DROPPED_BY_WOOFER if woofers else None,
+            detail=None if plane in domain else (
+                "a design with woofers is solved as the whole model" if woofers
+                else "a compiled design assembly is solved as the whole model"
+            ),
         )
         for plane in SUPPORTED_CUT_PLANES
     }
@@ -457,89 +583,111 @@ def lost_planes(record: Mapping[str, Any]) -> list[str]:
     return [plane for plane in ordered_planes(expected.get("planes") or []) if plane not in solved]
 
 
-def plane_words(plane: str) -> str:
-    return f"{plane[0]} = 0"
+def _mirrors(planes: Sequence[str]) -> str:
+    words = " and ".join(_MIRROR_WORDS[plane] for plane in planes)
+    return f"the {words} {'mirrors were' if len(planes) > 1 else 'mirror was'}"
 
 
-def _plane_loss_reason(entry: Mapping[str, Any]) -> str:
+def _plane_loss(
+    plane: str, entry: Mapping[str, Any], *, producer: Any, expected_words: str
+) -> tuple[str, str | None]:
+    """Why a plane was lost, in the user's words, and what to do: ``(reason, fix)``.
+
+    Built only from the record's structured evidence; the raw ``detail`` is
+    developer evidence and never reaches the sentence.
+    """
+
     geometry = entry.get("geometry")
     dropped_by = entry.get("dropped_by")
-    detail = entry.get("detail")
-    tolerance = entry.get("tolerance_mm")
+    with_planes = list(entry.get("dropped_with") or [])
+    if with_planes:
+        others = " and ".join(_MIRROR_WORDS[plane] for plane in with_planes)
+        if dropped_by == DROPPED_BY_VERIFICATION:
+            return (f"WG solves the whole model when one of its cuts fails its mesh check, "
+                    f"and the {others} cut did"), None
+        if dropped_by == DROPPED_BY_FEM:
+            return (f"with the {others} mirror gone, a model with FEM regions cannot be "
+                    "solved mirrored top/bottom only"), None
+        return f"it went with the {others} mirror", None
     if geometry == GEOMETRY_REJECTED:
-        off, tested, worst = entry.get("points_off"), entry.get("points_tested"), entry.get("worst_off_mm")
-        tolerance_words = f" (tolerance {_mm(tolerance)})" if tolerance is not None else ""
-        if off and tested and worst is not None:
-            return (
-                f"its mirror check failed by up to {_mm(worst)}: {off} of {tested} "
-                f"sampled points do not mirror onto the model{tolerance_words}"
-            )
-        residual = entry.get("max_residual_mm")
-        if residual is not None:
-            return f"its mirror check failed by up to {_mm(residual)}{tolerance_words}"
-        return f"its mirror check failed ({detail})" if detail else "its mirror check failed"
-    if dropped_by == DROPPED_BY_VERIFICATION:
-        return (
-            f"the model cut there did not pass the mesh check ({detail})"
-            if detail else "the model cut there did not pass the mesh check"
+        fix = (
+            f"If the model was not meant to change in CAD, update it from its design and send "
+            f"it again to solve it as {expected_words}."
+            if producer == PRODUCER_CAD_LINKED else None
         )
+        off, tested, worst = entry.get("points_off"), entry.get("points_tested"), entry.get("worst_off_mm")
+        tolerance, residual = entry.get("tolerance_mm"), entry.get("max_residual_mm")
+        allows = f"; WG allows {_mm(tolerance)}" if tolerance is not None else ""
+        if off and tested and worst is not None:
+            return (f"the model differs from its mirror image by up to {_mm(worst)} "
+                    f"({off} of {tested} checked points{allows})"), fix
+        if entry.get("role_mismatches"):
+            return ("a driver, port or other source surface mirrors onto a surface that "
+                    "is not the same kind"), fix
+        if residual is not None and tolerance is not None and residual > tolerance:
+            return f"the model differs from its mirror image by up to {_mm(residual)}{allows}", fix
+        return "the model does not mirror there", fix
+    if dropped_by == DROPPED_BY_VERIFICATION:
+        if geometry == GEOMETRY_NOT_TESTED:
+            return "WG could not cut the model there", None
+        return "WG's cut there did not pass its mesh check", None
     if dropped_by == DROPPED_BY_FEM:
-        return f"a FEM region does not allow it ({detail})" if detail else "a FEM region does not allow it"
-    if dropped_by == DROPPED_BY_ENGINE:
-        return f"the engine needs the whole model ({detail})" if detail else "the engine needs the whole model"
-    if dropped_by == DROPPED_BY_WOOFER:
-        return "a design with woofers is solved as the whole model"
-    if dropped_by == DROPPED_BY_NATIVE_FORMULA:
-        return "this formula is solved as the whole model"
+        return ("a FEM region in the model does not mirror there",
+                f"Make the FEM region symmetric about the {_MIRROR_WORDS[plane]} plane to "
+                f"solve it as {expected_words}.")
+    if dropped_by == DROPPED_BY_RECOVERY:
+        return "WG could not rebuild the model cut in CAD there", "Send the uncut model from CAD."
     if geometry == GEOMETRY_NOT_TESTED:
-        return f"WG did not test it ({detail})" if detail else "WG did not test it"
-    return detail or "WG did not use it"
+        return "WG could not check this mirror for this model", None
+    return "WG could not use it for this solve", None
 
 
 def lost_plane_finding(record: Mapping[str, Any]) -> dict[str, Any] | None:
     """The non-blocking finding a lost plane raises, or None.
 
-    A plane the user's own settings removed (a forced Symmetry, a ground
-    plane) is recorded in ``planes`` but raises nothing: the run says so.
+    Only for a loss the user can act on or should know about (a mirror or
+    mesh check that failed, a FEM region, a CAD cut WG could not rebuild).
+    A plane removed by the user's own settings or by a limit with no user fix
+    (``SILENT_LOSSES``) is recorded in ``planes`` and raises nothing. One
+    sentence: planes lost for the same reason share it.
     """
 
     lost = lost_planes(record)
     planes = record.get("planes")
     planes = planes if isinstance(planes, Mapping) else {}
     entries = {plane: planes.get(plane) if isinstance(planes.get(plane), Mapping) else {} for plane in lost}
-    lost = [plane for plane in lost if entries[plane].get("dropped_by") not in USER_CHOSEN]
+    lost = [plane for plane in lost if entries[plane].get("dropped_by") not in SILENT_LOSSES]
     if not lost:
         return None
     expected = record["expected"]
     domain = record.get("solver_domain") or {}
     expected_fraction = str(expected.get("fraction"))
     solved_fraction = str(domain.get("fraction"))
+    expected_words = _FRACTION_WORDS.get(expected_fraction, expected_fraction)
     solved_words = _FRACTION_WORDS.get(solved_fraction, solved_fraction)
     producer = record.get("producer")
+    cad = producer in (PRODUCER_CAD_LINKED, PRODUCER_CAD_UNLINKED)
+    subject = "the returned CAD model" if cad else "it"
     if expected.get("by") == EXPECTED_BY_DESIGN:
-        subject = (
-            "the returned CAD model"
-            if producer in (PRODUCER_CAD_LINKED, PRODUCER_CAD_UNLINKED)
-            else "it"
-        )
-        opening = (
-            f"This design is {_FRACTION_WORDS.get(expected_fraction, expected_fraction)} model, "
-            f"but {subject} solved as {solved_words}"
-        )
+        opening = f"This design is {expected_words} model, but WG solves {subject} as {solved_words}"
     else:
-        mirrored = " and ".join(plane_words(plane) for plane in expected.get("planes") or [])
-        opening = f"The model mirrors at {mirrored}, but it solved as {solved_words}"
-    losses = "; ".join(
-        f"the {plane_words(plane)} mirror was lost because {_plane_loss_reason(entries[plane])}"
-        for plane in lost
-    )
+        mirrored = " and ".join(_MIRROR_WORDS[plane] for plane in expected.get("planes") or [])
+        opening = f"The model mirrors {mirrored}, but WG solves it as {solved_words}"
+    reasons: dict[str, list[str]] = {}
+    fixes: list[str] = []
+    for plane in lost:
+        reason, fix = _plane_loss(plane, entries[plane], producer=producer, expected_words=expected_words)
+        reasons.setdefault(reason, []).append(plane)
+        if fix and fix not in fixes:
+            fixes.append(fix)
+    losses = "; ".join(f"{_mirrors(group)} lost because {reason}" for reason, group in reasons.items())
     return {
         "kind": LOST_PLANE_KIND,
         "blocking": False,
         "lost_planes": lost,
         "expected_fraction": expected_fraction,
         "solved_fraction": solved_fraction,
-        "detail": f"{opening}: {losses}.",
+        "detail": " ".join([f"{opening}: {losses}.", *fixes]),
     }
 
 
@@ -558,7 +706,9 @@ def _count(value: Any) -> int | None:
 
 def _mm(value: Any) -> str:
     number = _number(value)
-    return "an unknown distance" if number is None else f"{number:.3g} mm"
+    if number is None:
+        return "an unknown distance"
+    return f"{number:.0f} mm" if abs(number) >= 100 else f"{number:.3g} mm"
 
 
 __all__ = [
@@ -567,6 +717,7 @@ __all__ = [
     "CONTRACTS",
     "LOST_PLANE_KIND",
     "RECORD_FIELDS",
+    "SILENT_LOSSES",
     "cad_plane_entries",
     "decision_record",
     "design_assembly_decision",

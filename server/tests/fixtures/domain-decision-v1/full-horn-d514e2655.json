@@ -1,0 +1,108 @@
+{
+ "cad_cuts": [],
+ "confidence": "established",
+ "contract": "cad-domain-decision-v1",
+ "evidence": {
+  "conflicts": [],
+  "ignored": [],
+  "supporting": []
+ },
+ "frame": {
+  "allowed_axes": [
+   "+z",
+   "-z",
+   "+x",
+   "-x",
+   "+y",
+   "-y"
+  ],
+  "axis": "+z",
+  "determinant": 1.0,
+  "proper": true,
+  "solver_from_cad": [
+   [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    1.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  ],
+  "up": "+y"
+ },
+ "identity": {
+  "choice_sha256": null,
+  "decision_sha256": "sha256:0915f99fcd8ac44029d88e3a5a3a4578630e84843dcb5cb365289db1a885eefd",
+  "mesh_content_sha256": "sha256:a5787ed3818d95e0e5cbbe34f356902f83b8f7d6c70ad27dee7f4dc985302013",
+  "observations_sha256": "sha256:5b2c3b0e5d0e94a896c193a2378f6962963e7c6100f91ba7044527d54022c207",
+  "snapshot_sha256": "sha256:e52ce87774c0c5b102dc32ed9c7afb3d4f8dcba55725b4deccd33c9c92a20d0f",
+  "source_map_sha256": "sha256:353a8762b0f77b212221e5f6159d45387a082a81bf0474de870da850ab547c4a"
+ },
+ "input_reading": "full",
+ "oblique_cuts": [],
+ "off_centre_cuts": [],
+ "offered_changes": [],
+ "reflected_axes": [],
+ "reflection": {
+  "axes": [],
+  "by": null,
+  "implemented": true,
+  "parity": 0,
+  "planes": [],
+  "winding_reversed": false
+ },
+ "refusal": null,
+ "resolved_reading": "full",
+ "solver_domain": {
+  "fraction": "quarter",
+  "multiplier": 4,
+  "planes": [
+   "x0",
+   "y0"
+  ]
+ },
+ "sources": {
+  "by_id": {
+   "throat": {
+    "bisected_by": [
+     "x0",
+     "y0"
+    ],
+    "channel": "drive-throat",
+    "completion_factor": 1.0,
+    "meets_planes": [
+     "x0",
+     "y0",
+     "z0"
+    ],
+    "parent_area_mm2": 314.24226416446663,
+    "reflected": null,
+    "retained_area_mm2": 78.56056604113698,
+    "retained_fraction": 0.25000000000006467,
+    "tag": 101
+   }
+  },
+  "skipped": []
+ },
+ "wg_cut_planes": [
+  "x0",
+  "y0"
+ ]
+}

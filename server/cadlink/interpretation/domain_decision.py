@@ -280,7 +280,7 @@ def decide_domain_and_frame(
     reflected: Sequence[str] = (),
     manifest_sources: Sequence[Mapping[str, Any]] = (),
     expected: Mapping[str, Any] | None = None,
-    fem_rejected: Mapping[str, str] | None = None,
+    fem_rejected: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The interpretation record and the decision, for the mesh the snapshot is solved with.
 
@@ -292,7 +292,8 @@ def decide_domain_and_frame(
     planes whose mesh was reflected. ``expected`` is what a linked return's
     design gives (``domain_record.design_expectation``); without it the
     geometry's own verdict is expected. ``fem_rejected`` names the planes a
-    FEM region refused, with the reason. Returns ``(domain_interpretation,
+    FEM region refused (``reason``, the refused pass's ``verdict``,
+    ``dropped_with``). Returns ``(domain_interpretation,
     domain_decision)``: the first is the M1c-auto record; the second the
     decision every later reader consumes.
     """
@@ -359,7 +360,7 @@ def _decide(
     reflection: Mapping[str, Any] | None = None,
     channels: Mapping[str, Any] | None = None,
     expected: Mapping[str, Any] | None = None,
-    fem_rejected: Mapping[str, str] | None = None,
+    fem_rejected: Mapping[str, Mapping[str, Any]] | None = None,
     verification: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     observed_json = observations.to_json() if observations is not None else None
@@ -585,6 +586,7 @@ def _decide(
         domain_planes=domain_planes,
         verification=verification,
         fem_rejected=fem_rejected,
+        recovery_failures=failures,
     )
     decision = decision_record(
         producer=(
@@ -781,14 +783,20 @@ def decision_refusal(record: Mapping[str, Any]) -> tuple[str, str] | None:
 
 
 def decision_summary(record: Mapping[str, Any]) -> dict[str, Any] | None:
-    """What a job and the Solve card record of the decision: the values the solve uses."""
+    """What a job and the Solve card record of the decision: the values the solve uses.
+
+    Its shape is the v1 summary's whatever the decision's contract, so it is
+    labelled ``cad-domain-decision-v1`` (any v1 reader reads it); the v2
+    fields travel in the job's own record (``domain_record.record_core``), and
+    ``decision_sha256`` names the sealed decision either way.
+    """
 
     decision = record.get("domain_decision")
     if not isinstance(decision, Mapping):
         return None
     identity = decision.get("identity") or {}
     return {
-        "contract": decision.get("contract"),
+        "contract": CAD_V1_CONTRACT if decision.get("contract") in CONTRACTS else decision.get("contract"),
         "decision_sha256": identity.get("decision_sha256"),
         "input_reading": decision.get("input_reading"),
         "resolved_reading": decision.get("resolved_reading"),

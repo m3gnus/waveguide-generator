@@ -41,12 +41,12 @@ const PARAMETRIC_RECORD = {
   solver_domain: { planes: ['x0'], fraction: 'half', multiplier: 2 },
   planes: {
     x0: { geometry: 'accepted', used: true, dropped_by: null, detail: null },
-    y0: { geometry: 'accepted', used: false, dropped_by: 'engine', detail: 'the engine needs the whole model' },
+    y0: { geometry: 'accepted', used: false, dropped_by: 'fem', detail: 'FEM region refused y0' },
   },
   expected: { planes: ['x0', 'y0'], fraction: 'quarter', by: 'design', detail: null },
   findings: [{
     kind: 'symmetry-plane-lost', blocking: false, lost_planes: ['y0'],
-    detail: 'This design is a quarter model, but it solved as a half: the y = 0 mirror was lost because the engine needs the whole model.',
+    detail: 'This design is a quarter model, but WG solves it as a half: the top/bottom (y = 0) mirror was lost because a FEM region in the model does not mirror there. Make the FEM region symmetric about the top/bottom (y = 0) plane to solve it as a quarter.',
   }],
 };
 
@@ -70,6 +70,8 @@ describe('the v2 record every solve path writes', () => {
   it('reads nothing from a run saved before the record existed', () => {
     expect(readDomainRecord(undefined)).toBeNull();
     expect(readDomainRecord(WG_QUARTER)).toBeNull();
+    // A decision summary is never read as a record, whatever its label says.
+    expect(readDomainRecord({ ...summaryOf(WG_QUARTER), contract: 'domain-decision-v2' })).toBeNull();
     expect(domainRecordNotes(null)).toEqual([]);
     expect(domainRecordNotes({ ...PARAMETRIC_RECORD, findings: [{ ...PARAMETRIC_RECORD.findings[0], blocking: true }] })).toEqual([]);
   });

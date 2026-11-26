@@ -4395,6 +4395,9 @@ def build_imported_mesh(
         and (not declared_cut_planes or bool((result.get("symmetry") or {}).get("cut_planes")))
     ):
         rejected = dict(verification)
+        # The mirror verdicts that chose the refused reduction: the rebuild
+        # tests no plane, and the domain decision states what was known.
+        first_pass_verdicts = dict((result.get("symmetry") or {}).get("planes") or {})
         result, healing = build(allow_symmetry_reduction=False)
         result["symmetry_verification"] = {
             **result.get("symmetry_verification", {}),
@@ -4409,6 +4412,7 @@ def build_imported_mesh(
                 ),
                 "remedy": rejected.get("remedy"),
                 "reduced_orientation": rejected.get("reduced_orientation"),
+                "plane_verdicts": first_pass_verdicts,
             },
         }
     # A declared reduced domain has no full-domain version to fall back to: the

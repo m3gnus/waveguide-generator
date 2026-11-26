@@ -296,10 +296,11 @@ describe('simulation summary groups', () => {
   });
 
   it('reads the run\'s domain record first and shows the note a lost plane raised', () => {
-    const lost = 'This design is a quarter model, but it solved as a half: the y = 0 mirror was lost because the engine needs the whole model.';
+    const lost = 'This design is a quarter model, but WG solves it as a half: the top/bottom (y = 0) mirror was lost because a FEM region in the model does not mirror there. Make the FEM region symmetric about the top/bottom (y = 0) plane to solve it as a quarter.';
     const domainDecision = {
       contract: 'domain-decision-v2', producer: 'parametric',
       solver_domain: { planes: ['x0'], fraction: 'half', multiplier: 2 },
+      planes: { x0: { geometry: 'accepted', used: true }, y0: { geometry: 'accepted', used: false, dropped_by: 'fem' } },
       expected: { planes: ['x0', 'y0'], fraction: 'quarter', by: 'design' },
       findings: [{ kind: 'symmetry-plane-lost', blocking: false, lost_planes: ['y0'], detail: lost }],
     };

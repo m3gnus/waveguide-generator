@@ -407,10 +407,21 @@ def test_cad_reduced_replay_rebuilds_originals_offline_and_solves_exactly(tmp_pa
             assert earlier['interpretation']['domain_decision']['contract'] == CAD_V1_CONTRACT
             rehash(earlier)
             assert await call(app, 'POST', '/api/mesh-replay', earlier) == opened
+            # What v2 adds describes the decision, never the solve: a later
+            # build that words or evaluates it differently still opens it.
+            described = deepcopy(package)
+            decision = described['interpretation']['domain_decision']
+            decision['expected'] = None
+            decision['findings'] = [{'kind': 'symmetry-plane-lost', 'detail': 'other words'}]
+            for entry in decision['planes'].values():
+                entry['detail'] = 'other evidence words'
+            rehash(described)
+            assert await call(app, 'POST', '/api/mesh-replay', described) == opened
             # ... and only while every v1 field agrees.
-            earlier['interpretation']['domain_decision']['input_reading'] = 'open-sheet'
-            rehash(earlier)
-            await call(app, 'POST', '/api/mesh-replay', earlier, expected=422)
+            tampered = deepcopy(earlier)
+            tampered['interpretation']['domain_decision']['input_reading'] = 'open-sheet'
+            rehash(tampered)
+            await call(app, 'POST', '/api/mesh-replay', tampered, expected=422)
             # Checksums are not capabilities: rehashed false physics must fail too.
             changes = [
                 (lambda p: p.update(solver_msh_text=p['solver_msh_text'] + 'changed'), False),
@@ -434,6 +445,20 @@ def test_cad_reduced_replay_rebuilds_originals_offline_and_solves_exactly(tmp_pa
                 await call(app, 'POST', '/api/mesh-replay', corrupted, expected=422)
                 assert len(store.ingest_records()) == 1
                 assert runtime.store.list_jobs()[1] == 0
+        finally:
+            await runtime.shutdown()
+            store.close()
+        # The earlier build's package, opened cold: no record of this build to reuse.
+        app, store, runtime, engine = app_for(tmp_path / 'fresh-v1')
+        try:
+            cold = await call(app, 'POST', '/api/mesh-replay', earlier)
+            assert cold['record']['domain_decision']['contract'] == 'domain-decision-v2'
+            assert cold['record']['solve_model_sha256'] == record['solve_model_sha256']
+        finally:
+            await runtime.shutdown()
+            store.close()
+        app, store, runtime, engine = app_for(tmp_path / 'fresh')
+        try:
             accepted = await call(app, 'POST', '/api/solve', opened['request'])
             await runtime.wait_idle()
             assert runtime.store.get_job_row(accepted['job_id'])['status'] == 'complete'

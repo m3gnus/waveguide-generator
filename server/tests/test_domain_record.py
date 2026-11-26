@@ -141,39 +141,180 @@ def test_a_forced_full_domain_is_the_users_choice_and_raises_nothing() -> None:
     assert record["findings"] == []
 
 
-def test_an_engine_that_needs_the_whole_model_loses_both_planes_visibly() -> None:
-    """BEMPP's coupled infinite baffle solves the full domain: a loss the user did not choose."""
-
-    design = {**OFFSET_QUARTER, "enclosure": None}
-    request = _request(design, engine="bempp")
+def _infinite_baffle(**options: Any) -> SolveRequest:
+    request = _request({**OFFSET_QUARTER, "enclosure": None}, engine="bempp", **options)
     request.design.root.simulation.sim_type = "infinite-baffle"
-    record = _resolve(request)
+    return request
+
+
+def test_an_engine_limit_with_no_user_fix_is_recorded_without_a_note() -> None:
+    """BEMPP's coupled infinite baffle solves the whole model: nothing the user can change."""
+
+    record = _resolve(_infinite_baffle())
 
     assert record["solver_domain"]["planes"] == []
+    assert record["expected"]["planes"] == ["x0", "y0"]
     assert {entry["dropped_by"] for entry in record["planes"].values()} == {dr.DROPPED_BY_ENGINE}
+    assert dr.lost_planes(record) == ["x0", "y0"]
+    assert record["findings"] == []
+
+
+def test_forced_full_on_an_engine_that_also_needs_it_is_the_users_choice() -> None:
+    """The user's own Symmetry is the reason, decided before the engine's (review P2-1)."""
+
+    record = _resolve(_infinite_baffle(symmetry="full"))
+
+    assert {entry["dropped_by"] for entry in record["planes"].values()} == {dr.DROPPED_BY_USER_MODE}
+    assert record["findings"] == []
+
+
+def _verdict(*, xz: bool, yz: bool, tolerance: float = 0.05) -> Any:
+    from server.solver.symmetry import SymmetryResolution
+
+    return SymmetryResolution(quadrants=1, xz=xz, yz=yz, reasons={"xz": [], "yz": []}, tolerance_mm=tolerance)
+
+
+def test_an_unexplained_parametric_loss_is_never_silent() -> None:
+    record = dr.parametric_decision(
+        _verdict(xz=True, yz=True), sampled=True, resolved_quadrants=14, requested_mode="auto",
+        ground_blocked_plane=None, native_formula=False,
+    )
+    assert record["planes"]["y0"]["dropped_by"] == dr.DROPPED_BY_UNKNOWN
     (finding,) = record["findings"]
-    assert finding["kind"] == dr.LOST_PLANE_KIND
-    assert finding["blocking"] is False
-    assert finding["lost_planes"] == ["x0", "y0"]
-    assert finding["detail"].startswith(
-        "This design is a quarter model, but it solved as the whole model: "
-        "the x = 0 mirror was lost because the engine needs the whole model"
+    assert finding["detail"] == (
+        "This design is a quarter model, but WG solves it as a half: the top/bottom (y = 0) "
+        "mirror was lost because WG could not use it for this solve."
     )
 
 
 def test_a_native_formula_expects_nothing_and_loses_nothing() -> None:
-    from server.design.native import NATIVE_FORMULAS
+    record = _resolve(_request({"formula": "SOURCE-DISK"}))
 
-    formula = sorted(NATIVE_FORMULAS)[0]
-    geometry = type("Verdict", (), {"xz": False, "yz": False, "reasons": {}, "tolerance_mm": 1e-7})()
-    record = dr.parametric_decision(
-        geometry, resolved_quadrants=1234, requested_mode="auto",
-        ground_blocked_plane=None, native_formula=True,
-    )
-    assert formula
     assert record["expected"] is None
     assert {entry["dropped_by"] for entry in record["planes"].values()} == {dr.DROPPED_BY_NATIVE_FORMULA}
     assert record["findings"] == []
+
+
+def test_a_design_that_could_not_be_sampled_expects_nothing() -> None:
+    """A sampling failure resolves to full: that is "unknown", not "no planes"."""
+
+    from server.solver.symmetry import _failed_resolution, resolution_was_sampled
+
+    failed = _failed_resolution("mesher symmetry sampling failed: test")
+    assert not resolution_was_sampled(failed)
+    assert resolution_was_sampled(_verdict(xz=True, yz=True))
+    assert dr.design_expectation(failed, sampled=False) is None
+    record = dr.parametric_decision(
+        failed, sampled=False, resolved_quadrants=1234, requested_mode="auto",
+        ground_blocked_plane=None, native_formula=False,
+    )
+    assert record["expected"] is None and record["findings"] == []
+    assert {entry["geometry"] for entry in record["planes"].values()} == {"not-tested"}
+
+
+def _lost(planes: dict[str, Any], *, producer: str = dr.PRODUCER_CAD_LINKED, solved: tuple[str, ...] = ()) -> str:
+    record = dr.decision_record(
+        producer=producer, domain_planes=list(solved),
+        planes={plane: {**dr.plane_entry("accepted", used=plane in solved), **entry} for plane, entry in planes.items()},
+        expected=dr.expectation(["x0", "y0"], by="design"),
+    )
+    (finding,) = record["findings"]
+    return finding["detail"]
+
+
+def test_a_role_mismatch_states_its_real_cause() -> None:
+    """Geometry within tolerance, a driver mirrored onto a wall: no "0 mm" (Neon P1-3)."""
+
+    detail = _lost({"y0": {
+        "geometry": "rejected", "points_off": 0, "points_tested": 49, "worst_off_mm": None,
+        "max_residual_mm": 0.0001, "tolerance_mm": 0.313, "role_mismatches": 49,
+        "detail": "49 sampled points mirror onto a face of a different role",
+    }}, solved=("x0",))
+    assert "0 mm" not in detail and "different role" not in detail
+    assert "the top/bottom (y = 0) mirror was lost because a driver, port or other source surface" in detail
+
+
+def test_large_distances_and_shared_reasons_read_plainly() -> None:
+    detail = _lost({
+        plane: {"geometry": "rejected", "points_off": 900, "points_tested": 1000,
+                "worst_off_mm": 1517.2, "tolerance_mm": 0.313}
+        for plane in ("x0", "y0")
+    })
+    assert detail == (
+        "This design is a quarter model, but WG solves the returned CAD model as the whole model: "
+        "the left/right (x = 0) and top/bottom (y = 0) mirrors were lost because the model differs "
+        "from its mirror image by up to 1517 mm (900 of 1000 checked points; WG allows 0.313 mm). "
+        "If the model was not meant to change in CAD, update it from its design and send it again "
+        "to solve it as a quarter."
+    )
+
+
+def test_one_failed_cut_gives_the_other_plane_its_own_reason() -> None:
+    entries = dr.cad_plane_entries(
+        {"requested_mode": "auto", "planes": {}},
+        domain_planes=[],
+        verification={"fallback": {
+            "reason": "the reduced boundary is closed on y0", "rejected_cut_planes": ["x0", "y0"],
+            "detected_planes": ["x0"], "capped_planes": ["y0"],
+        }},
+    )
+    assert entries["y0"]["dropped_with"] == [] and entries["x0"]["dropped_with"] == ["y0"]
+    detail = _lost(entries)
+    assert "closed on" not in detail
+    assert detail.endswith(
+        "the left/right (x = 0) mirror was lost because WG solves the whole model when one of its "
+        "cuts fails its mesh check, and the top/bottom (y = 0) cut did; the top/bottom (y = 0) "
+        "mirror was lost because WG's cut there did not pass its mesh check."
+    )
+
+
+def test_a_refused_cut_records_no_mirror_verdict_it_never_had() -> None:
+    """The cutter refused: its candidates are not "accepted" (Neon P1-4)."""
+
+    entries = dr.cad_plane_entries(
+        {"requested_mode": "auto", "planes": {}},
+        domain_planes=[],
+        verification={"fallback": {
+            "reason": "cut-refused: OCC cut lost retained portions", "rejected_cut_planes": [],
+            "detected_planes": ["x0", "y0"], "capped_planes": [],
+        }},
+    )
+    assert {entry["geometry"] for entry in entries.values()} == {"not-tested"}
+    assert {entry["dropped_by"] for entry in entries.values()} == {dr.DROPPED_BY_VERIFICATION}
+    # Authored in CAD: nothing was known to mirror, so nothing is expected or lost.
+    assert dr.geometry_expectation(entries) is None
+
+
+def test_a_failed_cut_recovery_is_not_the_users_full_setting() -> None:
+    failure = [{"code": "asymmetric-section", "message": "the cut section is not symmetric"}]
+    entries = dr.cad_plane_entries(
+        {"requested_mode": "full", "planes": {}}, domain_planes=[],
+        recovery_failures={"x0": failure},
+    )
+    assert entries["x0"]["dropped_by"] == dr.DROPPED_BY_RECOVERY
+    assert entries["y0"]["dropped_by"] == dr.DROPPED_BY_RECOVERY and entries["y0"]["dropped_with"] == ["x0"]
+    assert "Symmetry is set" not in str(entries)
+
+
+def test_a_horn_only_assembly_blames_no_woofer() -> None:
+    record = {"producer": "design-assembly", "symmetry": {"domain_planes": []},
+              "radiators": [{"radiator_id": "hf", "role": "HF", "state": "compiled"}]}
+    decision = dr.imported_decision(record)
+    assert decision is not None
+    assert {entry["dropped_by"] for entry in decision["planes"].values()} == {None}
+
+
+def test_a_historical_auto_cut_file_expects_what_its_geometry_gave() -> None:
+    record = {
+        "producer": "mesh-file",
+        "symmetry": {"domain_planes": ["x0"], "cut_planes": ["x0"]},
+        "source_file": {"auto_cut": True, "transform": {"symmetry_report": {"note": "y0 does not mirror"}}},
+    }
+    decision = dr.imported_decision(record)
+    assert decision is not None
+    assert decision["planes"]["x0"]["geometry"] == "accepted"
+    assert decision["expected"]["by"] == "geometry"
+    assert decision["planes"]["y0"]["detail"] == "y0 does not mirror"
 
 
 def test_a_parametric_job_keeps_its_record_and_serves_it(tmp_path: Path) -> None:
@@ -230,7 +371,8 @@ def test_a_mesh_file_records_its_declared_domain(tmp_path: Path) -> None:
 
 
 def test_a_mesh_file_declared_half_is_declared_not_lost() -> None:
-    record = {"producer": "mesh-file", "symmetry": {"domain_planes": ["x0"], "cut_planes": []}}
+    record = {"producer": "mesh-file", "symmetry": {"domain_planes": ["x0"], "cut_planes": []},
+              "source_file": {"domain_planes": ["x0"]}}
     decision = dr.imported_decision(record)
     assert decision is not None
     assert decision["solver_domain"]["planes"] == ["x0"]
@@ -355,12 +497,13 @@ def test_a_linked_return_that_lost_y0_says_which_plane_and_why(tmp_path: Path) -
     (finding,) = decision["findings"]
     assert finding["kind"] == dr.LOST_PLANE_KIND and finding["blocking"] is False
     assert finding["lost_planes"] == ["y0"]
-    worst = f"{verdict['worst_off_model_distance_step_units']:.3g} mm"
+    worst = f"{verdict['worst_off_model_distance_step_units']:.0f} mm"
     assert finding["detail"] == (
-        "This design is a quarter model, but the returned CAD model solved as a half: "
-        f"the y = 0 mirror was lost because its mirror check failed by up to {worst}: "
-        f"{verdict['points_off_model']} of {verdict['points_tested']} sampled points do not "
-        f"mirror onto the model (tolerance {verdict['tolerance_step_units']:.3g} mm)."
+        "This design is a quarter model, but WG solves the returned CAD model as a half: "
+        f"the top/bottom (y = 0) mirror was lost because the model differs from its mirror image "
+        f"by up to {worst} ({verdict['points_off_model']} of {verdict['points_tested']} checked "
+        f"points; WG allows {verdict['tolerance_step_units']:.3g} mm). If the model was not meant "
+        "to change in CAD, update it from its design and send it again to solve it as a quarter."
     )
     # On the model card, with the record's other notes; never blocking.
     noted = [item for item in record["findings"] if item["kind"] == dr.LOST_PLANE_KIND]
@@ -382,12 +525,19 @@ def test_a_linked_quarter_whose_cut_failed_its_mesh_check_names_the_loss(tmp_pat
     for plane in ("x0", "y0"):
         assert decision["planes"][plane]["geometry"] == "accepted"
         assert decision["planes"][plane]["dropped_by"] == dr.DROPPED_BY_VERIFICATION
+    # Both mirror verdicts survive the fallback rebuild (``plane_verdicts``).
+    assert decision["planes"]["x0"]["points_tested"] > 0
     (finding,) = decision["findings"]
     assert finding["lost_planes"] == ["x0", "y0"]
-    assert finding["detail"].startswith(
-        "This design is a quarter model, but the returned CAD model solved as the whole model: "
-        "the x = 0 mirror was lost because the model cut there did not pass the mesh check"
+    assert finding["detail"] == (
+        "This design is a quarter model, but WG solves the returned CAD model as the whole model: "
+        "the left/right (x = 0) and top/bottom (y = 0) mirrors were lost because WG's cut there "
+        "did not pass its mesh check."
     )
+    # On the model card it is the viewport's mesh-recovery line, not a second note.
+    kinds = [item["kind"] for item in record["findings"]]
+    assert kinds.count("symmetry-cut-unverified") == 1
+    assert dr.LOST_PLANE_KIND not in kinds
     assert decision["verification"]["fallback_reason"]
 
 
@@ -429,3 +579,26 @@ def test_v2_keeps_every_v1_field_and_v1_records_still_read(tmp_path: Path) -> No
     assert core == {key: decision[key] for key in dr.RECORD_FIELDS} | {
         "decision_sha256": decision["identity"]["decision_sha256"]
     }
+
+
+def test_the_v1_projection_reproduces_what_the_last_v1_build_sealed(tmp_path: Path) -> None:
+    """Against a frozen decision the base build (d514e2655) wrote, not against itself."""
+
+    pytest.importorskip("gmsh")
+    from test_cadlink_domain_automatic import HORN_THROAT, _bundle, _horn, _ingest
+
+    golden = json.loads(
+        (Path(__file__).parent / "fixtures/domain-decision-v1/full-horn-d514e2655.json").read_text()
+    )
+    record = _ingest(_bundle(tmp_path, "full", _horn, HORN_THROAT), tmp_path / "data")
+    projected = dd.v1_projection(record["domain_decision"])
+    # The bundle's bytes (a STEP header's timestamp) and their mesh are this run's.
+    run_bound = {"snapshot_sha256", "mesh_content_sha256", "observations_sha256", "decision_sha256"}
+    for decision in (projected, golden):
+        for key in run_bound:
+            decision["identity"].pop(key)
+    by_id = projected["sources"]["by_id"]["throat"]
+    for key in ("parent_area_mm2", "retained_area_mm2", "retained_fraction"):
+        assert by_id[key] == pytest.approx(golden["sources"]["by_id"]["throat"][key], rel=1e-9)
+        by_id[key] = golden["sources"]["by_id"]["throat"][key]
+    assert projected == golden

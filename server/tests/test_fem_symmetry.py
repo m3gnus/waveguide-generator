@@ -526,13 +526,30 @@ def test_auto_fem_role_asymmetry_drops_only_unsupported_candidate_planes(tmp_pat
     assert record["domain_decision"]["refusal"] is None
     from server.cadlink.interpretation.domain_decision import decision_problem
     assert decision_problem(record) is None
-    notes = [f for f in record["findings"] if f["kind"] == "fem-symmetry-fallback"]
-    assert notes[0]["plane"] == failed_plane
-    assert f"does not mirror on {failed_plane}" in notes[0]["reason"]
-    assert all(not note["blocking"] for note in notes)
+    # The refusal is kept as evidence on the plane; the model card says it
+    # once, in the lost-plane note (``domain_record``), not as a second note.
+    planes = record["domain_decision"]["planes"]
+    assert planes[failed_plane]["geometry"] == "accepted"
+    assert planes[failed_plane]["used"] is False and planes[failed_plane]["dropped_by"] == "fem"
+    assert f"does not mirror on {failed_plane}" in planes[failed_plane]["detail"]
+    assert planes[failed_plane]["points_tested"]
+    assert not [f for f in record["findings"] if f["kind"] == "fem-symmetry-fallback"]
+    (note,) = [f for f in record["findings"] if f["kind"] == "symmetry-plane-lost"]
+    assert note["blocking"] is False
     if failed_plane == "x0":
-        assert notes[1]["plane"] == "y0"
-        assert notes[1]["reason"].endswith("This solve cannot use only a horizontal symmetry cut. Send the whole model, or include the vertical symmetry cut when preparing it.")
+        assert planes["y0"]["dropped_by"] == "fem" and planes["y0"]["dropped_with"] == ["x0"]
+        assert planes["y0"]["detail"].endswith("This solve cannot use only a horizontal symmetry cut. Send the whole model, or include the vertical symmetry cut when preparing it.")
+        assert note["lost_planes"] == ["x0", "y0"]
+        assert note["detail"] == (
+            "The model mirrors left/right (x = 0) and top/bottom (y = 0), but WG solves it as the "
+            "whole model: the left/right (x = 0) mirror was lost because a FEM region in the model "
+            "does not mirror there; the top/bottom (y = 0) mirror was lost because with the "
+            "left/right (x = 0) mirror gone, a model with FEM regions cannot be solved mirrored "
+            "top/bottom only. Make the FEM region symmetric about the left/right (x = 0) plane "
+            "to solve it as a quarter."
+        )
+    else:
+        assert note["lost_planes"] == ["y0"]
     domain = read_fem_region_domain(read_verified_fem_region_mesh(record, region["region_id"]), region["region_id"])
     xyz = domain.points_mm[domain.tetrahedra]
     assert np.abs(np.linalg.det(xyz[:, 1:] - xyz[:, :1])).sum() / 6 == pytest.approx(24000 / 2 ** len(expected))
@@ -688,7 +705,9 @@ def test_auto_full_fallback_keeps_rotated_translated_standalone_chamber_frame(tm
     finally:
         store.close()
     assert record['symmetry']['domain_planes'] == []
-    assert len([f for f in record['findings'] if f['kind'] == 'fem-symmetry-fallback']) == 2
+    assert not [f for f in record['findings'] if f['kind'] == 'fem-symmetry-fallback']
+    (note,) = [f for f in record['findings'] if f['kind'] == 'symmetry-plane-lost']
+    assert note['lost_planes'] == ['x0', 'y0']
     domain = read_fem_region_domain(read_verified_fem_region_mesh(record, region['region_id']), region['region_id'])
     np.testing.assert_allclose(domain.points_mm.min(axis=0), [-20., -15., 0.], atol=1e-7)
     np.testing.assert_allclose(domain.points_mm.max(axis=0), [20., 15., 20.], atol=1e-7)
@@ -715,8 +734,11 @@ def test_auto_fallback_uses_typed_plane_and_resets_deadline(tmp_path, monkeypatc
     assert record['symmetry']['domain_planes'] == []
     assert len(deadlines) == 3
     assert deadlines[0] < deadlines[1] < deadlines[2]
-    notes = [f for f in record['findings'] if f['kind'] == 'fem-symmetry-fallback']
-    assert notes[0]['plane'] == 'x0' and 'Localized geometry verdict' in notes[0]['reason']
+    x0 = record['domain_decision']['planes']['x0']
+    assert x0['dropped_by'] == 'fem' and 'Localized geometry verdict' in x0['detail']
+    # Said once on the model card, by the lost-plane note.
+    assert not [f for f in record['findings'] if f['kind'] == 'fem-symmetry-fallback']
+    assert [f['lost_planes'] for f in record['findings'] if f['kind'] == 'symmetry-plane-lost'] == [['x0', 'y0']]
 
 
 def test_null_symmetry_is_safe_during_fem_ingest(tmp_path, monkeypatch):

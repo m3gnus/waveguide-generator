@@ -1154,6 +1154,7 @@ def _parametric_domain_decision(
     from server.design.native import NATIVE_FORMULAS
     from server.solver.domain_record import parametric_decision
     from server.solver.ground_plane import GroundPlane
+    from server.solver.symmetry import resolution_was_sampled
 
     axis = _ground_plane_axis(request)
     blocked = (
@@ -1162,6 +1163,7 @@ def _parametric_domain_decision(
     plan = symmetry_metadata.get("solver_plan")
     return parametric_decision(
         geometry,
+        sampled=resolution_was_sampled(geometry),
         resolved_quadrants=int(symmetry_metadata["resolved_quadrants"]),
         requested_mode=str(request.options.symmetry),
         ground_blocked_plane=CUT_PLANE_BY_NATIVE_PLANE.get(str(blocked)),

@@ -132,6 +132,18 @@ def _failed_resolution(message: str) -> SymmetryResolution:
     )
 
 
+def resolution_was_sampled(resolution: SymmetryResolution) -> bool:
+    """Whether the geometry was actually sampled, rather than defaulted to full.
+
+    A native formula and a sampling failure resolve to the full domain through
+    :func:`_failed_resolution`, which carries the absolute tolerance floor; a
+    sampled design's tolerance is relative to its size and always above it.
+    "Full" from those means "not evaluated", not "has no mirror planes".
+    """
+
+    return resolution.tolerance_mm > SYMMETRY_ABSOLUTE_TOLERANCE_MM
+
+
 #: Resolutions keyed by the geometry that produced them. Small on purpose: the
 #: point is to absorb the repeats -- the same design resolved on submit and
 #: again on the next edit that did not touch geometry -- not to remember a
@@ -390,6 +402,7 @@ __all__ = [
     "SYMMETRY_MODE_QUADRANTS",
     "SYMMETRY_RELATIVE_TOLERANCE",
     "SymmetryResolution",
+    "resolution_was_sampled",
     "resolve_symmetry",
     "restrict_for_ground_plane",
     "validate_symmetry_mode",

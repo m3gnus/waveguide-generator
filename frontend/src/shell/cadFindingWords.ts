@@ -53,7 +53,7 @@ const FINDING_TITLE: Record<string, string> = {
   // Its detail, written from the domain actually solved, is the server's.
   'symmetry-cut-unverified': 'WG could not reduce this model any further',
   // Its detail names the plane lost and why (``domain_record.lost_plane_finding``).
-  'symmetry-plane-lost': 'WG solved this model with less symmetry than expected',
+  'symmetry-plane-lost': 'WG solves this model with less symmetry than expected',
 };
 
 export function findingName(finding: CadReturnFinding): string {

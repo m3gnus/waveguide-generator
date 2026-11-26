@@ -9,9 +9,9 @@ describe('finding words', () => {
     expect(findingName(finding)).not.toContain('whole');
   });
   it('names a lost mirror plane and keeps the server’s sentence for which and why', () => {
-    const detail = 'This design is a quarter model, but the returned CAD model solved as a half: the y = 0 mirror was lost because its mirror check failed by up to 160 mm.';
+    const detail = 'This design is a quarter model, but WG solves the returned CAD model as a half: the top/bottom (y = 0) mirror was lost because the model differs from its mirror image by up to 160 mm.';
     const finding = { id: 'f', kind: 'symmetry-plane-lost', blocking: false, lost_planes: ['y0'], detail } as never;
-    expect(findingName(finding)).toBe('WG solved this model with less symmetry than expected');
+    expect(findingName(finding)).toBe('WG solves this model with less symmetry than expected');
     expect(findingSentence(finding)).toBe(detail);
   });
   it('keeps the server’s reason for a model WG cannot judge', () => {

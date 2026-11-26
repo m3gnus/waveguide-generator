@@ -116,6 +116,8 @@ export interface DomainRecord {
 export function readDomainRecord(value: unknown): DomainRecord | null {
   if (!isRecord(value) || value.contract !== DOMAIN_DECISION_V2_CONTRACT) return null;
   if (!isRecord(value.solver_domain) || !Array.isArray(value.solver_domain.planes)) return null;
+  // A record names its producer and planes; a decision summary never does.
+  if (typeof value.producer !== 'string' || !isRecord(value.planes)) return null;
   return value as unknown as DomainRecord;
 }
 

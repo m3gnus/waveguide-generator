@@ -118,7 +118,7 @@ export interface JobItem extends JobNullableFields {
   provenance?: components['schemas']['RunProvenance'] | null;
   symmetry?: Record<string, unknown>;
   /** The run's solve-domain record (`domain-decision-v2`), whichever path it
-   * took; absent on runs saved before it existed. Read with `readDomainDecision`. */
+   * took; absent on runs saved before it existed. Read with `readDomainRecord`. */
   domain_decision?: Record<string, unknown> | null;
   solve_path?: 'full-3d' | 'axisymmetric-meridian' | 'interior-fem' | 'coupled-fem-bem' | null;
   axisymmetric_eligibility_reasons?: string[];
