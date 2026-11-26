@@ -424,7 +424,8 @@ def test_an_unverified_cad_sampling_warning_reaches_the_send(
         wglink_geometry,
         "resolve_cad_geometry",
         lambda _design, **_kwargs: CadGeometry(
-            resolved=SimpleNamespace(geometry=None, mode="freestanding"), plan=CadPlan(12.0, None, note)
+            resolved=SimpleNamespace(geometry=None, mode="freestanding"),
+            plan=CadPlan(12.0, None, note, fallback_reason="unmeasurable_axial_not_nested"),
         ),
     )
     store = CadLinkStore(tmp_path / "cadlink.db")
@@ -439,6 +440,7 @@ def test_an_unverified_cad_sampling_warning_reaches_the_send(
     manifest = json.loads((Path(row["bundlePath"]) / "wglink.json").read_text())
     assert manifest["cad_sampling"]["resolution_mm"] == 12.0
     assert manifest["cad_sampling"]["warning"] == note
+    assert manifest["cad_sampling"]["fallback_reason"] == "unmeasurable_axial_not_nested"
 
 
 def test_a_registered_format_1_1_bundle_keeps_its_step_identity(tmp_path: Path) -> None:

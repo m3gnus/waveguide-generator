@@ -58,6 +58,8 @@ class CadGeometry:
             "deviation_mm": self.plan.deviation_mm,
             "tolerance_mm": STEP_SURFACE_TOLERANCE_MM,
             "warning": self.plan.warning,
+            # Why the planner fell back (``CAD_FALLBACK_REASONS``), else None.
+            "fallback_reason": self.plan.fallback_reason,
         }
 
 
@@ -152,7 +154,9 @@ def resolve_cad_geometry(design: DesignConfig, *, placed: bool = False) -> CadGe
         STEP_SURFACE_TOLERANCE_MM,
     )
     if plan.warning:
-        logger.warning("CAD geometry sizing: %s", plan.warning)
+        logger.warning(
+            "CAD geometry sizing (fallback reason %s): %s", plan.fallback_reason, plan.warning
+        )
     return CadGeometry(
         resolved=resolved, plan=plan, build_key=_build_key(written), placed=placed
     )

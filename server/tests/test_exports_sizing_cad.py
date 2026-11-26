@@ -53,6 +53,7 @@ def test_an_unmeasurable_design_falls_back_to_a_finer_grid_not_a_guess(
 
     monkeypatch.setattr(sizing, "measure_deviation", lambda *_a, **_k: None)
     plan = plan_cad_resolution(_config())
+    assert plan.fallback_reason == "unmeasurable"
     assert plan.deviation_mm is None
     assert plan.resolution_mm <= _FALLBACK_CAD_RESOLUTION_MM
     assert plan.resolution_mm < _MAX_CAD_RESOLUTION_MM
@@ -69,6 +70,7 @@ def test_a_probe_that_raises_does_not_fail_the_export(
     monkeypatch.setattr(builder, "resolve_geometry", boom)
     plan = plan_cad_resolution(_config())
     assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
+    assert plan.fallback_reason == "probe_exception"
 
 
 def _reading(full: float, nested: float | None, chord: float = 0.1):
@@ -86,7 +88,7 @@ def _measure_with(monkeypatch: pytest.MonkeyPatch, *readings) -> list[float]:
 
     calls: list[int] = []
 
-    def measure(_params, angular: int, length: int):
+    def measure(_params, angular: int, length: int, _why=None):
         reading = readings[min(len(calls), len(readings) - 1)]
         calls.append(angular)
         return None if reading is None else (reading, angular, length)
@@ -117,6 +119,7 @@ def test_a_detuned_term_that_never_passes_does_not_hand_over_the_floor(
     assert plan.deviation_mm is None
     assert plan.warning is not None
     assert "12 mm" in plan.warning and "Check fine surface detail" in plan.warning
+    assert plan.fallback_reason == "detuned_mismatch"
 
 
 def test_a_nested_pass_finer_than_the_fallback_keeps_its_reading(
@@ -139,6 +142,7 @@ def test_no_passing_reading_at_all_takes_the_fixed_fallback_not_the_floor(
     assert plan.resolution_mm == _FALLBACK_CAD_RESOLUTION_MM
     assert plan.deviation_mm is None
     assert plan.warning is not None and "unverified" in plan.warning
+    assert plan.fallback_reason in {"budget_exhausted", "search_stalled"}
 
 
 def test_a_nested_pass_survives_a_later_unmeasurable_probe(
@@ -166,6 +170,7 @@ def test_an_accepted_probe_wins_over_an_earlier_nested_pass(
     assert plan.resolution_mm < _PROBE_CAD_RESOLUTION_MM
     assert plan.deviation_mm == pytest.approx(0.01)
     assert plan.warning is None
+    assert plan.fallback_reason is None
 
 
 def test_an_unmeasurable_probe_after_an_accepted_one_keeps_the_fixed_fallback(
@@ -213,3 +218,49 @@ def test_the_unverified_sampling_warning_reaches_the_export_result(
     assert resolved_at[-1] == _FALLBACK_CAD_RESOLUTION_MM
     assert result.warning is not None
     assert "Check fine surface detail" in result.warning
+
+
+#: A generic rounded-rectangle OSSE (corner arcs: the angular lattice never nests).
+_ROUNDED_OSSE = {
+    "formula": "OSSE", "L": 120, "a": 45, "a0": 10, "r0": 17, "n": 3.7, "q": 0.99, "s": 0.7,
+    "morph": {"corner_radius": 18, "rate": 3, "target_shape": 1, "fixed_part": 0},
+}
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        # An ATH-imported design keeps ATH's axial sampling, so refining the
+        # length alone moves its coarse stations too: no reading at all. This is
+        # the 23 Nov live fallback (an imported OSSE with a rounded morph).
+        ({**_ROUNDED_OSSE, "text_import_version": "ath-2026-09a-v3"},
+         "unmeasurable_axial_not_nested"),
+        # The same horn authored in WG: a chord reading with no cubic model.
+        (_ROUNDED_OSSE, "non_nested_grid"),
+    ],
+    ids=["ath-import", "wg-authored"],
+)
+def test_a_fallback_records_why_without_changing_the_grid(payload, reason, caplog) -> None:
+    """The planner's reason reaches the manifest record and the server log."""
+
+    import logging
+
+    from server.design.schema import DesignConfig
+    from server.exports.cad_geometry import resolve_cad_geometry
+
+    with caplog.at_level(logging.WARNING, logger="server.exports.cad_geometry"):
+        cad = resolve_cad_geometry(DesignConfig.model_validate(payload))
+    record = cad.sampling_record()
+    assert record["fallback_reason"] == reason
+    # Diagnostics only: the fixed fallback grid, as before.
+    assert record["resolution_mm"] == _FALLBACK_CAD_RESOLUTION_MM
+    assert record["deviation_mm"] is None and record["warning"] is not None
+    assert any(f"fallback reason {reason}" in r.getMessage() for r in caplog.records)
+
+
+def test_an_accepted_plan_records_no_fallback_reason() -> None:
+    from server.exports.cad_geometry import resolve_cad_geometry
+
+    cad = resolve_cad_geometry(_seed())
+    assert cad.plan.warning is None
+    assert cad.sampling_record()["fallback_reason"] is None

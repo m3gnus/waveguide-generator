@@ -37,6 +37,7 @@ conservative side.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import logging
 import math
 from typing import Any, Callable, Mapping
 
@@ -45,6 +46,8 @@ import numpy as np
 from server.mesh.inner_grid import EXPORT_CORNER_SEGMENTS as EXPORT_CORNER_SEGMENTS
 
 from server.preview.construction import retain_mesher_construction
+
+logger = logging.getLogger(__name__)
 
 # --- the tolerances, and the one ceiling ---------------------------------
 
@@ -199,6 +202,41 @@ class CadPlan:
     #: when the plan's sampling was never probed (the fixed fallback, or a cap
     #: below the probe). Not part of the plan's value.
     resolved: Any = field(default=None, compare=False, repr=False)
+    #: Why no probe passed the full test, for a plan with a ``warning``: one of
+    #: ``CAD_FALLBACK_REASONS``. None for an accepted plan. A diagnostic only:
+    #: it never changes the sampling, so it is not part of the plan's value.
+    fallback_reason: str | None = field(default=None, compare=False)
+
+
+#: Why ``plan_cad_resolution`` fell back, as ``CadPlan.fallback_reason``:
+#:
+#: * ``probe_exception`` -- resolving or building a probe raised;
+#: * ``probe_unsampled`` -- a probe resolved to too few segments to measure;
+#: * ``unmeasurable`` -- ``measure_deviation`` could make no comparison, with
+#:   its own reason appended when it gives one:
+#:   ``unmeasurable_axial_not_nested`` -- the angular lattice does not nest
+#:   (corner arcs) and refining the length alone moves the coarse stations too
+#:   (curvature-graded stations), ``unmeasurable_reference_not_finer`` -- the
+#:   dense angular reference resolved no finer, ``unmeasurable_detuned_unresolved``
+#:   -- the detuned lattice resolved to the nested one;
+#: * ``non_nested_grid`` -- the grid does not nest (corner arcs), so the reading
+#:   is a chord with no cubic model behind it;
+#: * ``detuned_mismatch`` -- the nested reading met the target but the detuned
+#:   cross-check did not (the unconfirmed plan);
+#: * ``search_stalled`` -- the search could refine no further;
+#: * ``budget_exhausted`` -- every attempt ran without a probe passing.
+CAD_FALLBACK_REASONS = (
+    "probe_exception",
+    "probe_unsampled",
+    "unmeasurable",
+    "unmeasurable_axial_not_nested",
+    "unmeasurable_reference_not_finer",
+    "unmeasurable_detuned_unresolved",
+    "non_nested_grid",
+    "detuned_mismatch",
+    "search_stalled",
+    "budget_exhausted",
+)
 
 
 #: What ``plan_grid`` asks for a candidate grid: the deviation, and the counts
@@ -585,7 +623,12 @@ def axial_band_of_column(reference_columns: int, n_length: int) -> np.ndarray:
 
 
 def _non_nested_deviation(
-    params: Mapping[str, Any], angular: int, coarse: np.ndarray, n_phi: int, n_length: int
+    params: Mapping[str, Any],
+    angular: int,
+    coarse: np.ndarray,
+    n_phi: int,
+    n_length: int,
+    why: list[str] | None = None,
 ) -> tuple[SurfaceDeviation, int, int] | None:
     """Measure a candidate whose doubled angular lattice does not nest.
 
@@ -613,9 +656,12 @@ def _non_nested_deviation(
     """
 
     axial, axial_phi, axial_length = _point_grid(params, angular, 2 * n_length)
-    if axial_phi != n_phi or axial_length != 2 * n_length:
-        return None
-    if not np.allclose(axial[:, ::2], coarse, rtol=0.0, atol=1e-9):
+    if (
+        axial_phi != n_phi
+        or axial_length != 2 * n_length
+        or not np.allclose(axial[:, ::2], coarse, rtol=0.0, atol=1e-9)
+    ):
+        _note(why, "axial_not_nested")
         return None
 
     # Exact, and pure: same angular indices, analytic points halfway between
@@ -634,6 +680,7 @@ def _non_nested_deviation(
             params, 2 * angular + offset, 2 * n_length
         )
         if reference_length != 2 * n_length or reference_phi <= n_phi:
+            _note(why, "reference_not_finer")
             return None
         dense = distance_to_facets(reference, coarse, band)
         # Same split as the nested path: samples on a ring station speak for the
@@ -656,8 +703,13 @@ def _non_nested_deviation(
     )
 
 
+def _note(why: list[str] | None, reason: str) -> None:
+    if why is not None:
+        why.append(reason)
+
+
 def measure_deviation(
-    params: Mapping[str, Any], angular: int, length: int
+    params: Mapping[str, Any], angular: int, length: int, why: list[str] | None = None
 ) -> tuple[SurfaceDeviation, int, int] | None:
     """Measure how far the analytic surface strays from what will be written.
 
@@ -672,7 +724,9 @@ def measure_deviation(
     ``_non_nested_deviation`` instead: a chord reading, no cubic model.
 
     Returns ``None`` only when neither comparison can be made -- so callers fall
-    back to a fixed conservative size instead of trusting a bad number.
+    back to a fixed conservative size instead of trusting a bad number. When it
+    does, it appends why to ``why`` if given: ``axial_not_nested`` or
+    ``reference_not_finer`` (the non-nested path), or ``detuned_unresolved``.
     """
 
     coarse, n_phi, n_length = _point_grid(params, angular, length)
@@ -682,7 +736,7 @@ def measure_deviation(
         or fine_length != 2 * n_length
         or not np.allclose(fine[::2, ::2], coarse, rtol=0.0, atol=1e-9)
     ):
-        return _non_nested_deviation(params, angular, coarse, n_phi, n_length)
+        return _non_nested_deviation(params, angular, coarse, n_phi, n_length, why)
 
     # A facet export contains the coarse cells themselves, so each analytic
     # sample is measured against the cell it falls inside. A fitted export
@@ -708,6 +762,7 @@ def measure_deviation(
         params, 2 * n_phi + 4, 2 * n_length + 1
     )
     if detuned_phi == fine_phi and detuned_length == fine_length:
+        _note(why, "detuned_unresolved")
         return None
     detuned_linear = float(_distance_to_surface(detuned, coarse).max())
     detuned_cubic = float(
@@ -1000,19 +1055,26 @@ def _unconfirmed_warning(resolution_mm: float, tolerance_mm: float) -> str:
     )
 
 
-def _unaccepted_cad_plan(tolerance_mm: float, nested: CadPlan | None) -> CadPlan:
+def _unaccepted_cad_plan(
+    tolerance_mm: float, nested: CadPlan | None, reason: str
+) -> CadPlan:
     """The STEP sampling when no probe passed the full test.
 
     ``nested`` is the coarsest probe whose nested cubic reading met the target,
     if any. It is capped at the fixed fallback: the detuned check it failed is
     the guard against an expression surface aliasing the nested lattice, which
     reads exactly like the graded-station case, so an unconfirmed plan never
-    samples coarser than a design with no reading at all.
+    samples coarser than a design with no reading at all. ``reason`` is why the
+    search stopped (``CAD_FALLBACK_REASONS``); it is recorded, never acted on.
     """
 
+    assert reason in CAD_FALLBACK_REASONS, reason
     if nested is None:
         return CadPlan(
-            _FALLBACK_CAD_RESOLUTION_MM, None, _unmeasured_warning(tolerance_mm)
+            _FALLBACK_CAD_RESOLUTION_MM,
+            None,
+            _unmeasured_warning(tolerance_mm),
+            fallback_reason=reason,
         )
     resolution = min(nested.resolution_mm, _FALLBACK_CAD_RESOLUTION_MM)
     # A capped plan was not itself measured; only the coarser probe was.
@@ -1022,6 +1084,7 @@ def _unaccepted_cad_plan(tolerance_mm: float, nested: CadPlan | None) -> CadPlan
         nested.deviation_mm if probed else None,
         _unconfirmed_warning(resolution, tolerance_mm),
         resolved=nested.resolved if probed else None,
+        fallback_reason=reason,
     )
 
 
@@ -1160,26 +1223,32 @@ def plan_cad_resolution(
     resolution = _PROBE_CAD_RESOLUTION_MM
     best: CadPlan | None = None
     nested: CadPlan | None = None
+    stalled = False
     for _ in range(_CAD_ATTEMPTS):
         probe = _with_resolution(config, resolution)
         try:
             resolved = resolve_geometry(probe)
             params, _, _ = build_geometry_params(probe)
         except Exception:  # noqa: BLE001 - a probe must never fail the export
-            return _unaccepted_cad_plan(tolerance_mm, nested)
+            logger.debug("CAD sampling probe at %.3g mm raised", resolution, exc_info=True)
+            return _unaccepted_cad_plan(tolerance_mm, nested, "probe_exception")
         metadata = resolved.sampling_metadata
         angular = int(metadata.get("geometrySampleAngularSegments") or 0)
         length = int(metadata.get("geometrySampleLengthSegments") or 0)
         if angular < 4 or length < 2:
-            return _unaccepted_cad_plan(tolerance_mm, nested)
-        measured = measure_deviation(params, angular, length)
+            return _unaccepted_cad_plan(tolerance_mm, nested, "probe_unsampled")
+        why: list[str] = []
+        measured = measure_deviation(params, angular, length, why)
         # No reading at all, or a reading with no cubic model behind it: the
         # solid STEP is a degree-3 fit, and the correspondence-free chord the
         # non-nested path returns says nothing about one. Fall back to the fixed
         # conservative sampling exactly as an absent reading always has, rather
         # than accept a grid on a number that does not describe this artifact.
-        if measured is None or not measured[0].cubic_modelled:
-            return _unaccepted_cad_plan(tolerance_mm, nested)
+        if measured is None:
+            reason = f"unmeasurable_{why[-1]}" if why else "unmeasurable"
+            return _unaccepted_cad_plan(tolerance_mm, nested, reason)
+        if not measured[0].cubic_modelled:
+            return _unaccepted_cad_plan(tolerance_mm, nested, "non_nested_grid")
         deviation, _, _ = measured
         value = deviation.for_fit("cubic", "cubic")
         chord = max(deviation.angular_linear, deviation.axial_linear)
@@ -1207,6 +1276,7 @@ def plan_cad_resolution(
             # for when nothing passes.
             nested = CadPlan(resolution, deviation.nested_cubic, resolved=resolved)
         if value <= 0.0 and chord <= 0.0:
+            stalled = True
             break
         # Move on whichever binds. The two terms answer to this knob very
         # differently -- measured on the seed R-OSSE the chord is close to
@@ -1219,19 +1289,25 @@ def plan_cad_resolution(
         if chord > 0.0:
             factors.append(_CUBIC_VALIDITY_CHORD_MM / chord)
         if not factors:
+            stalled = True
             break
         factor = min(1.6, max(0.4, min(factors)))
         next_resolution = min(
             _MAX_CAD_RESOLUTION_MM, max(_MIN_CAD_RESOLUTION_MM, resolution * factor)
         )
         if math.isclose(next_resolution, resolution, rel_tol=1e-3):
+            stalled = True
             break
         resolution = next_resolution
     if best is not None:
         return best
     # Nothing passed inside the attempt budget. The compromise is reported
     # rather than left to the log.
-    return _unaccepted_cad_plan(tolerance_mm, nested)
+    if nested is not None:
+        reason = "detuned_mismatch"
+    else:
+        reason = "search_stalled" if stalled else "budget_exhausted"
+    return _unaccepted_cad_plan(tolerance_mm, nested, reason)
 
 
 def _with_resolution(config: Mapping[str, Any], resolution: float) -> dict[str, Any]:
