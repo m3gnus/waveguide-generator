@@ -120,6 +120,7 @@ def test_the_rules_and_semantics_follow_the_solid_cut_switch(monkeypatch: pytest
     from server.cadlink.intake import ingest
     from server.mesh import imported
 
+    monkeypatch.setattr(imported, "CUT_SOLIDS_AS_SOLIDS", False)
     assert imported.symmetry_rules() == imported.FACE_CUT_SYMMETRY_RULES
     assert imported.FACE_CUT_SYMMETRY_RULES not in imported.replay_symmetry_rules()
     assert "cut_route" not in ingest.meshing_semantics()
@@ -222,11 +223,13 @@ def test_a_plane_lost_to_a_one_sided_small_feature_says_so() -> None:
     assert "small hole, boss or edge" in sentence
 
 
-def test_wg_keeps_the_face_by_face_cut_until_the_solid_cut_is_accepted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("cut_solids", [False, True])
+def test_wg_asks_for_the_cut_its_switch_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cut_solids: bool
 ) -> None:
-    """The solid cut renumbers every face, so its meshes are not the frozen
-    ones (imported_legacy_mesh_identity.json): WG asks for the face cut."""
+    """The solid cut renumbers every face, so its meshes are not the face
+    cut's: WG asks for the cut ``CUT_SOLIDS_AS_SOLIDS`` names and records the
+    rules that go with it."""
 
     import hornlab_mesher
 
@@ -234,7 +237,7 @@ def test_wg_keeps_the_face_by_face_cut_until_the_solid_cut_is_accepted(
     from server.mesh.imported import build_imported_mesh
 
     pytest.importorskip("gmsh")
-    assert imported.CUT_SOLIDS_AS_SOLIDS is False
+    monkeypatch.setattr(imported, "CUT_SOLIDS_AS_SOLIDS", cut_solids)
     real = hornlab_mesher.auto_cut_occ_geometry
     calls: list[dict[str, Any]] = []
 
@@ -249,5 +252,37 @@ def test_wg_keeps_the_face_by_face_cut_until_the_solid_cut_is_accepted(
         build_imported_mesh, bundle / "assembly.step", manifest, _SIZES,
         options={"symmetry_mode": "auto"}, include_viewport_mesh=False,
     )
-    assert calls and all(call.get("solid_cut") is False for call in calls)
+    assert calls and all(call.get("solid_cut") is cut_solids for call in calls)
+    assert built["symmetry"]["cut"]["route"] == ("solids" if cut_solids else "faces")
+    assert built["symmetry"]["symmetry_rules"] == imported.symmetry_rules()
+
+
+def test_once_solids_are_cut_as_solids_a_v2_package_replays_with_the_face_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hornlab_mesher
+
+    from server.mesh import imported
+    from server.mesh.imported import FACE_CUT_SYMMETRY_RULES, build_imported_mesh
+
+    pytest.importorskip("gmsh")
+    monkeypatch.setattr(imported, "CUT_SOLIDS_AS_SOLIDS", True)
+    real = hornlab_mesher.auto_cut_occ_geometry
+    calls: list[dict[str, Any]] = []
+
+    def spy(groups: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return real(groups, **kwargs)
+
+    monkeypatch.setattr(hornlab_mesher, "auto_cut_occ_geometry", spy)
+    bundle = _horn_bundle(tmp_path, "round")
+    manifest = json.loads((bundle / "wgreturn.json").read_text(encoding="utf-8"))
+    built = _run_in_gmsh_session(
+        build_imported_mesh, bundle / "assembly.step", manifest, _SIZES,
+        options={"symmetry_mode": "auto", "replay_symmetry_rules": FACE_CUT_SYMMETRY_RULES},
+        include_viewport_mesh=False,
+    )
+    assert calls and all(call.get("solid_cut") is False and call.get("fast_check", True)
+                         for call in calls)
+    assert built["symmetry"]["symmetry_rules"] == FACE_CUT_SYMMETRY_RULES
     assert built["symmetry"]["cut"]["route"] == "faces"
