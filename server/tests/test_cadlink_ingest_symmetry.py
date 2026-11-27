@@ -1330,7 +1330,10 @@ def test_a_failure_naming_y0_drops_y0_without_trying_it_alone(
     assert attempts[0]["failure_codes"] == ["missing-cut-rim"]
     # The same geometry is not mirror-tested twice: x0's verdict is reused.
     assert built["symmetry"]["reused_verdict_planes"] == ["x0"]
-    assert built["symmetry"]["symmetry_rules"] == "shared-check-per-plane-v2"
+    from server.mesh import imported
+
+    # The rules follow the solid-cut switch (v2 face cut, v3 solid cut).
+    assert built["symmetry"]["symmetry_rules"] == imported.symmetry_rules()
 
 
 def test_a_failure_naming_x0_goes_to_the_whole_model_not_a_wg_y0_half(
