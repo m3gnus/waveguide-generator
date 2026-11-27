@@ -52,7 +52,11 @@ _MESH_CHILD_FAULT_FIXTURE: ContextVar[str | None] = ContextVar(
     "mesh_child_fault_fixture", default=None
 )
 _KNOWN_MESH_CHILD_FAULT_FIXTURES = frozenset(
-    {"leaking-reduced-domain", "inverted-reduced-domain", "cut-refused"}
+    {
+        "leaking-reduced-domain", "inverted-reduced-domain", "cut-refused",
+        # The same faults, only where that one plane is cut (per-plane degrade).
+        "leaking-x0-reduced-domain", "leaking-y0-reduced-domain", "cut-refused-with-y0",
+    }
 )
 
 

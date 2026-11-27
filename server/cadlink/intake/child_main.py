@@ -254,7 +254,10 @@ def _task_mesh(
 
     fault_fixture = payload.get("_test_fault_fixture")
     if fault_fixture is not None:
-        if fault_fixture not in {"leaking-reduced-domain", "inverted-reduced-domain", "cut-refused"}:
+        if fault_fixture not in {
+            "leaking-reduced-domain", "inverted-reduced-domain", "cut-refused",
+            "leaking-x0-reduced-domain", "leaking-y0-reduced-domain", "cut-refused-with-y0",
+        }:
             raise ChildTaskError(f"unknown mesh child fault fixture {fault_fixture!r}")
         # The parent can add this field only through its private, context-local
         # test hook. Keeping the implementation with the test support means the
@@ -267,8 +270,12 @@ def _task_mesh(
 
         if fault_fixture == "leaking-reduced-domain":
             install_reduced_domain_leak()
+        elif fault_fixture in ("leaking-x0-reduced-domain", "leaking-y0-reduced-domain"):
+            install_reduced_domain_leak(only_when_cut=fault_fixture.split("-")[1])
         elif fault_fixture == "cut-refused":
             install_cut_refusal()
+        elif fault_fixture == "cut-refused-with-y0":
+            install_cut_refusal(only_when_cut="y0")
         else:
             install_reduced_domain_inversion()
 

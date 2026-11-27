@@ -1421,3 +1421,87 @@ def test_cached_estimate_equals_a_fresh_one() -> None:
         assert asyncio.run(mesh_builder.estimate_solver_mesh(design)) == cached == fresh
     finally:
         clear_solver_mesh_cache()
+
+
+def _mode_design(mode: str) -> DesignConfig:
+    design = _tiny_design().model_copy(deep=True)
+    if mode == "bare":
+        design.root.mesh.wall_thickness = Expr(value=0.0)
+    elif mode == "freestanding":
+        design.root.mesh.wall_thickness = Expr(value=4.0)
+    elif mode == "enclosure":
+        design = DesignConfig.model_validate(
+            {
+                **_tiny_design().model_dump(mode="json", by_alias=True),
+                "enclosure": {
+                    "depth": 120, "edge_radius": 6, "edge_type": 1,
+                    "space_l": 20, "space_b": 20, "space_r": 20, "space_t": 20,
+                },
+            }
+        )
+    else:
+        design.root.simulation.sim_type = "infinite-baffle"
+    return design
+
+
+@pytest.mark.parametrize("mode", ["bare", "freestanding", "enclosure", "infinite-baffle"])
+def test_every_reduced_parametric_mesh_passes_the_shared_reduced_mesh_check(
+    mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one reduced-mesh gate runs on parametric builds and accepts them.
+
+    Bare horns own an open mouth rim (``closed=False``); an infinite baffle is
+    wound inward (``expected_volume_sign=-1``).
+    """
+
+    from hornlab_mesher import symmetry
+
+    real = symmetry.verify_reduced_mesh
+    seen: list[tuple[tuple[str, ...], bool, int, bool]] = []
+
+    def spy(points, triangles, planes, **kwargs):
+        verdict = real(points, triangles, planes, **kwargs)
+        seen.append((tuple(planes), kwargs["closed"], kwargs["expected_volume_sign"], verdict.ok))
+        return verdict
+
+    monkeypatch.setattr(symmetry, "verify_reduced_mesh", spy)
+    design = _mode_design(mode)
+    for quadrants in (1, 12, 14, 1234):
+        design.root.mesh.quadrants = Expr(value=float(quadrants))
+        # In this process (the solve path runs the same function in the
+        # mesher child), so the spy sees every call.
+        asyncio.run(
+            run_on_gmsh_worker(mesh_builder._build_sync, design.model_dump(mode="json"))
+        )
+    closed = mode != "bare"
+    sign = -1 if mode == "infinite-baffle" else 1
+    # The full domain has no cut to verify; each reduced domain is checked once.
+    assert seen == [
+        (("x0", "y0"), closed, sign, True),
+        (("y0",), closed, sign, True),
+        (("x0",), closed, sign, True),
+    ]
+
+
+def test_a_reduced_parametric_mesh_that_fails_the_check_is_refused_not_solved() -> None:
+    """Parametric failure is a mesher defect: a hard error, never a degrade."""
+
+    from server.mesh.builder import _require_verified_reduced_domain
+    from server.mesh.imported import gmsh22_triangle_arrays
+
+    design = _mode_design("freestanding")
+    result = asyncio.run(build_solver_mesh(design, options={}, force_rebuild=True))
+    points, triangles = gmsh22_triangle_arrays(result["msh_text"])
+    config = {"mode": "freestanding"}
+    _require_verified_reduced_domain(config, points, triangles, 1)
+    with pytest.raises(RuntimeError, match="wound against the model they mirror") as refused:
+        _require_verified_reduced_domain(config, points, triangles[:, [0, 2, 1]], 1)
+    assert "set Symmetry to Full in Solve options" in str(refused.value)
+    mirrored = points * np.asarray([-1.0, 1.0, 1.0])
+    with pytest.raises(RuntimeError, match="negative side of x0"):
+        _require_verified_reduced_domain(config, mirrored, triangles[:, [0, 2, 1]], 1)
+    # A bare horn has no volume to orient: the same reversed winding passes.
+    _require_verified_reduced_domain({"mode": "bare"}, points, triangles[:, [0, 2, 1]], 1)
+    # An infinite baffle is wound the other way round.
+    with pytest.raises(RuntimeError, match="wound against"):
+        _require_verified_reduced_domain({"mode": "infinite-baffle"}, points, triangles, 1)

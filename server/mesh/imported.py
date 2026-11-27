@@ -356,13 +356,45 @@ class SymmetryCutRefused(Exception):
     """The mesher's cutter refused to cut the model to its symmetry domain.
 
     Raised inside one build attempt and always caught by
-    :func:`build_imported_mesh`, which meshes the whole model instead: the
-    cut, not the model, failed, so the full domain is still solvable.
+    :func:`build_imported_mesh`, which tries fewer planes and, last, the whole
+    model: the cut, not the model, failed, so the full domain is still
+    solvable.
     """
 
     def __init__(self, message: str, *, planes: Iterable[str] = ()) -> None:
         self.planes = tuple(str(plane) for plane in planes)
         super().__init__(message)
+
+
+def degrade_wg_cut_candidates(
+    wg_cut_planes: Iterable[str], failed_planes: Iterable[str] = ()
+) -> list[tuple[str, ...]]:
+    """The WG cut-plane sets to try, in order, after a reduced domain failed.
+
+    Only planes WG cut are ever in play; a declared plane is not the caller's
+    to drop. A failure that names some of WG's planes drops those and keeps the
+    rest. A failure that names none (a leak, a reversed winding, a refused
+    cut) cannot tell which cut caused it, so each plane is tried alone, x0
+    first -- the left/right half is the one every engine solves (BEAT has no
+    top/bottom-only half) -- and then none. The last set is always ``()``: the
+    whole model, which is always solvable.
+
+    >>> degrade_wg_cut_candidates(("x0", "y0"))
+    [('x0',), ('y0',), ()]
+    >>> degrade_wg_cut_candidates(("x0", "y0"), ("y0",))
+    [('x0',), ()]
+    >>> degrade_wg_cut_candidates(("y0",))
+    [()]
+    """
+
+    planes = tuple(plane for plane in SUPPORTED_CUT_PLANES if plane in set(wg_cut_planes))
+    failed = set(failed_planes)
+    kept = tuple(plane for plane in planes if plane not in failed)
+    if failed and kept:
+        return [kept, ()]
+    if not failed and len(planes) > 1:
+        return [*((plane,) for plane in planes), ()]
+    return [()]
 
 
 class RoleResolutionError(ImportedMeshError):
@@ -1467,238 +1499,48 @@ def resolve_origin_shift(
     )
 
 
-def verify_symmetry_cut(
+def verify_imported_reduced_mesh(
     points_mm: Any,
     triangles: Any,
     *,
     cut_planes: Iterable[str],
-    topology: Mapping[str, Any],
-    tolerance_mm: float = SYMMETRY_SNAP_TOLERANCE_MM,
 ) -> dict[str, Any]:
-    """Re-read the cut from the meshed boundary and refuse a cut it denies.
+    """The shared reduced-mesh check, as an imported solid is judged.
 
-    The cutter's verdict is a statement about OCC faces; this is a statement
-    about the mesh that was actually written, made by a detector that knows
-    nothing about what was cut (``hornlab_mesher.step_import``). Two ways a
-    reduced domain lies: a cut plane that comes back closed meshes as a rigid
-    baffle instead of a mirror, and an off-plane free edge is a hole the
-    mirrored solve radiates through. Both produce a wrong answer rather than
-    an error, so neither may pass silently. The frozen standalone legacy
-    WGMetalPipeline app enforces the same policy during mesh preparation.
+    ``hornlab_mesher.symmetry.verify_reduced_mesh`` re-reads the cut from the
+    mesh that was actually written, by a detector that knows nothing about
+    what was cut. An imported reduced domain is a closed solid modulo its cut
+    planes, wound outward: a capped plane meshes as a rigid baffle instead of
+    a mirror, an off-plane free edge is a hole the mirrored solve radiates
+    through, and an inverted component reverses every normal. Each produces a
+    wrong answer rather than an error, so none may pass silently.
 
     Uncut returns are not judged: a full domain has no mirror to be wrong
     about, and an imported open shell (a standalone source sheet, say) is a
-    legitimate acoustic surface whose rim is real.
+    legitimate acoustic surface whose rim is real. The planes the detector
+    finds open on a full domain are reported as ``undeclared_open_planes``.
     """
 
-    from hornlab_mesher.step_import import detect_symmetry_planes
+    from hornlab_mesher.symmetry import FAILURE_INVERTED, verify_reduced_mesh
 
-    planes = tuple(str(plane) for plane in cut_planes)
-    off_plane_free_edges = int(topology.get("unexpected_free_edges") or 0)
-    record: dict[str, Any] = {
-        "cut_planes": list(planes),
-        "off_plane_free_edge_count": off_plane_free_edges,
-        "off_plane_free_edge_samples": list(
-            topology.get("unexpected_free_edge_midpoint_samples") or []
-        )[:5],
-        "free_edge_count": int(topology.get("free_edges") or 0),
-        "tolerance_mm": float(tolerance_mm),
-    }
-    if not planes:
-        # A full domain has no mirror to be wrong about, so this is verified by
-        # construction -- but it is exactly where an undeclared half hides. The
-        # same detector that confirms a cut also recognises one nobody
-        # declared: free edges lying in a coordinate plane with the whole mesh
-        # on one side of it. Reported, never fatal here; the caller decides.
-        detected, detection = detect_symmetry_planes(
-            np.asarray(points_mm, dtype=float),
-            np.asarray(triangles, dtype=np.int64),
-            tolerance=float(tolerance_mm),
-        )
-        undeclared = [plane for plane in detected if plane in ("x0", "y0")]
-        record.update(
-            {
-                "verified": True,
-                "reason": "full domain: no cut plane to verify",
-                "detected_planes": list(detected),
-                "capped_planes": [],
-                "undeclared_open_planes": undeclared,
-                "detection": detection,
-            }
-        )
-        return record
-    detected, detection = detect_symmetry_planes(
+    verdict = verify_reduced_mesh(
         np.asarray(points_mm, dtype=float),
         np.asarray(triangles, dtype=np.int64),
-        tolerance=float(tolerance_mm),
+        tuple(str(plane) for plane in cut_planes),
+        closed=True,
+        expected_volume_sign=1,
+        snap_tolerance_mm=SYMMETRY_SNAP_TOLERANCE_MM,
     )
-    sides = detection.get("plane_vertex_side_counts") or {}
-    missing = [plane for plane in planes if plane not in detected]
-    # Three different things get a plane rejected, and they have three different
-    # remedies, so they are separated rather than all reported as "capped".
-    straddling = [
-        plane
-        for plane in missing
-        if int((sides.get(plane) or {}).get("negative", 0)) > 0
-        and int((sides.get(plane) or {}).get("positive", 0)) > 0
-    ]
-    capped = [plane for plane in missing if plane not in straddling]
-    # WG keeps the positive side of every mirror plane, here and in the cutter,
-    # so a domain retained on the negative side is a mirror image of the model
-    # the manifest describes -- accepted, it would solve the wrong half.
-    wrong_side = [
-        plane
-        for plane in planes
-        if int((sides.get(plane) or {}).get("positive", 0)) == 0
-    ]
-    record.update(
-        {
-            "detected_planes": list(detected),
-            "capped_planes": capped,
-            "straddling_planes": straddling,
-            "wrong_side_planes": wrong_side,
-            "detection": detection,
-        }
-    )
-    if straddling:
-        record.update(
-            {
-                "verified": False,
-                "reason": (
-                    "the boundary spans both sides of "
-                    + ", ".join(straddling)
-                    + "; that is not a reduced domain about that plane"
-                ),
-            }
-        )
-        return record
-    if wrong_side:
-        record.update(
-            {
-                "verified": False,
-                "reason": (
-                    "the boundary lies on the negative side of "
-                    + ", ".join(wrong_side)
-                    + "; WG keeps the positive half, so mirror the model first"
-                ),
-            }
-        )
-        return record
-    if capped:
-        record.update(
-            {
-                "verified": False,
-                "reason": (
-                    "the reduced boundary is closed on "
-                    + ", ".join(capped)
-                    + "; the cut plane is capped, not open"
-                ),
-            }
-        )
-        return record
-    if off_plane_free_edges:
-        record.update(
-            {
-                "verified": False,
-                "reason": (
-                    f"{off_plane_free_edges} free edges lie off the cut planes; "
-                    "the reduced domain leaks"
-                ),
-            }
-        )
-        return record
-    record.update({"verified": True, "reason": "every cut plane is open in the mesh"})
-    return record
-
-
-#: Mirrors ``hornlab_mesher.step_import.SIGNED_VOLUME_NOISE_REL``: below this
-#: fraction of a component's own ``area ** 1.5`` its signed volume is rounding
-#: noise rather than an orientation, and the mesher leaves such a component
-#: unresolved (and says so, see ``_orientation_warnings``).
-REDUCED_ORIENTATION_NOISE_REL = 1.0e-9
-
-
-def _edge_connected_components(triangles: np.ndarray) -> np.ndarray:
-    """Label each triangle with the component it reaches through shared edges."""
-
-    from scipy.sparse import coo_matrix
-    from scipy.sparse.csgraph import connected_components
-
-    count = len(triangles)
-    edges = np.sort(triangles[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
-    owners = np.repeat(np.arange(count), 3)
-    order = np.lexsort((edges[:, 1], edges[:, 0]))
-    edges, owners = edges[order], owners[order]
-    shared = np.all(edges[1:] == edges[:-1], axis=1)
-    graph = coo_matrix(
-        (np.ones(int(shared.sum())), (owners[:-1][shared], owners[1:][shared])),
-        shape=(count, count),
-    )
-    _components, labels = connected_components(graph, directed=False)
-    return labels
-
-
-def verify_reduced_orientation(
-    points_mm: Any,
-    triangles: Any,
-    *,
-    cut_planes: Iterable[str],
-) -> dict[str, Any]:
-    """Check that a reduced domain is wound like the full model it mirrors.
-
-    A full-domain import is oriented outward from its solid by signed volume
-    (the mesher's contract for a closed component). In a verified reduced
-    domain every free edge lies on a cut plane through the origin, so each
-    component is closed by its own mirror images, and the cut-plane caps that
-    would close it add nothing to the origin-based volume sum -- ``r . n``
-    vanishes on a plane through the origin. A component's own signed volume is
-    therefore exactly ``1 / 2**k`` of the full body's, sign included. Negative
-    means it is wound against the model it mirrors: every normal the solver
-    reads, the source's included, is reversed. Nothing else notices, because
-    an inverted mesh is perfectly consistent -- ``orientation_valid`` holds.
-
-    Counted from the arrays the solver reads, per edge-connected component, so
-    one inverted body cannot hide behind a larger correct one. Uncut returns
-    are not judged here, for the reason ``verify_symmetry_cut`` gives.
-    """
-
-    planes = tuple(str(plane) for plane in cut_planes)
-    record: dict[str, Any] = {
-        "cut_planes": list(planes),
-        "checked": False,
-        "component_count": 0,
-        "inverted_component_count": 0,
-        "inverted_triangle_count": 0,
-        "unresolved_component_count": 0,
-    }
-    tris = np.asarray(triangles, dtype=np.int64)
-    if not planes or len(tris) == 0:
-        return record
-    points = np.asarray(points_mm, dtype=float)
-    labels = _edge_connected_components(tris)
-    p0, p1, p2 = points[tris[:, 0]], points[tris[:, 1]], points[tris[:, 2]]
-    volume_terms = np.einsum("ij,ij->i", p0, np.cross(p1, p2)) / 6.0
-    areas = 0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0), axis=1)
-    count = int(labels.max()) + 1
-    volumes = np.bincount(labels, weights=volume_terms, minlength=count)
-    floors = (
-        REDUCED_ORIENTATION_NOISE_REL
-        * np.bincount(labels, weights=areas, minlength=count) ** 1.5
-    )
-    unresolved = np.abs(volumes) <= floors
-    inverted = ~unresolved & (volumes < 0.0)
-    record.update(
-        {
-            "checked": True,
-            "component_count": count,
-            "inverted_component_count": int(np.count_nonzero(inverted)),
-            "inverted_triangle_count": int(
-                np.bincount(labels, minlength=count)[inverted].sum()
-            ),
-            "unresolved_component_count": int(np.count_nonzero(unresolved)),
-            "signed_volume_mm3": float(volumes.sum()),
-        }
-    )
+    record = verdict.to_dict()
+    if not verdict.cut_planes:
+        record["undeclared_open_planes"] = [
+            plane for plane in verdict.detected_planes if plane in ("x0", "y0")
+        ]
+    if FAILURE_INVERTED in verdict.failure_codes:
+        # What this mesher can still reduce: a component wound from a source
+        # that faces the bore agrees with its parent, which is why the flat
+        # throat disc keeps its cut.
+        record["remedy"] = "Tag a source face that faces the bore to keep the reduction."
     return record
 
 
@@ -1750,7 +1592,7 @@ def gmsh22_triangle_arrays(msh_text: str) -> tuple[np.ndarray, np.ndarray]:
 def verify_artifact_reduced_orientation(
     msh_text: str, *, cut_planes: Iterable[str]
 ) -> dict[str, Any]:
-    """:func:`verify_reduced_orientation` on a stored solver mesh artifact.
+    """The reduced-mesh winding check on a stored solver mesh artifact.
 
     The build judges the arrays it just made. A reduced mesh WG did not just
     build -- one served from the ingestion cache, or named by a stored record
@@ -1767,8 +1609,10 @@ def verify_artifact_reduced_orientation(
     cached = _artifact_orientations.get(key)
     if cached is not None:
         return cached["orientation"]
+    from hornlab_mesher.symmetry import reduced_mesh_orientation
+
     points, triangles = gmsh22_triangle_arrays(msh_text)
-    orientation = verify_reduced_orientation(points, triangles, cut_planes=planes)
+    orientation = reduced_mesh_orientation(points, triangles, planes, expected_volume_sign=1)
     _artifact_orientations.put(key, {"orientation": orientation})
     return orientation
 
@@ -1788,8 +1632,8 @@ def _reduced_orientation_kwargs() -> dict[str, str]:
     model. ``hornlab_mesher`` revisions without
     ``REDUCED_ORIENTATION_MIRRORED_PARENT`` orient a reduced component from its
     tagged source instead, and invert it when that source faces away from the
-    open axis. :func:`verify_reduced_orientation` catches that result, and the
-    reduction is discarded rather than solved inverted.
+    open axis. :func:`verify_imported_reduced_mesh` catches that result, and
+    the reduction is discarded rather than solved inverted.
     """
 
     from hornlab_mesher import step_import
@@ -2872,7 +2716,7 @@ def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
     # wall). Each is the right winding, and a warning that says "no action is
     # needed" is how a user learns to ignore warnings. The counts stay in the
     # mesh metadata (``postprocess``) for a developer, are logged here at
-    # debug, and ``verify_reduced_orientation`` still judges the winding.
+    # debug, and ``verify_imported_reduced_mesh`` still judges the winding.
     corrected = int(repair.get("bore_alignment_flipped") or 0)
     conflicts = int(repair.get("symmetry_source_parent_conflicts") or 0)
     if corrected or conflicts:
@@ -3203,7 +3047,7 @@ def build_imported_mesh(
         *,
         occ_healing_options: Iterable[str] = (),
         surface_order_reference: list[Any] | None = None,
-        allow_symmetry_reduction: bool = True,
+        wg_cut_candidates: tuple[str, ...] | None = None,
         surface_face_reference: list[int] | None = None,
     ) -> dict[str, Any]:
         gmsh.clear()
@@ -3718,31 +3562,43 @@ def build_imported_mesh(
                 },
             )
         else:
+            # ``wg_cut_candidates`` is set only by the per-plane degrade in
+            # :func:`build_imported_mesh`: the planes WG may still cut after a
+            # reduced domain failed (``()`` is none). It narrows, never widens.
             candidate_planes = tuple(
                 p for p in SUPPORTED_CUT_PLANES
                 if p not in options.get("fem_rejected_symmetry_planes", ())
-            ) if allow_symmetry_reduction else ()
+                and (wg_cut_candidates is None or p in wg_cut_candidates)
+            ) if symmetry_mode == "auto" else ()
             try:
                 cut = auto_cut_occ_geometry(groups, planes=candidate_planes)
             except RuntimeError as exc:
                 # The cutter proves the retained portions survive its cut and
                 # refuses otherwise ("OCC cut lost retained portions ..."). That
-                # is a failed optimisation, not a bad model: the caller meshes
-                # the whole model through the same path as a cut that does not
+                # is a failed optimisation, not a bad model: the caller tries
+                # fewer planes through the same path as a cut that does not
                 # verify. Input errors (ValueError) still propagate.
                 if not candidate_planes:
                     raise
                 raise SymmetryCutRefused(str(exc), planes=candidate_planes) from exc
-            if not allow_symmetry_reduction:
+            if wg_cut_candidates is not None or symmetry_mode != "auto":
+                # (A forced full domain has always carried the first note.)
+                left_out = [
+                    plane for plane in SUPPORTED_CUT_PLANES
+                    if plane not in (wg_cut_candidates or ())
+                ]
                 cut.report["note"] = (
                     "symmetry reduction disabled after the reduced domain "
+                    "failed post-mesh verification"
+                    if not wg_cut_candidates
+                    else ", ".join(left_out) + " left uncut after the reduced domain "
                     "failed post-mesh verification"
                 )
         # A declared plane is checked against the MESH, not against the OCC
         # bounding box: a trimmed B-spline's OCC box bounds its control hull,
         # not its surface, and on this repository's own horn fixture that box
         # reaches 7.4 mm past a face that a real CAD cut put exactly on the
-        # plane. ``verify_symmetry_cut`` below reads the vertices themselves,
+        # plane. ``verify_imported_reduced_mesh`` below reads the vertices themselves,
         # which is exact, and the tail of this function refuses on its verdict.
         if declared_cut_planes:
             overlapping = [plane for plane in cut.planes if plane in declared_cut_planes]
@@ -4129,62 +3985,19 @@ def build_imported_mesh(
             )
         # ``integrity`` deliberately excludes open edges from ``valid`` because
         # an imported open shell is legal; the reduced domain is where an open
-        # edge stops being legal, and that is what this verifies.
-        verification = verify_symmetry_cut(
+        # edge stops being legal, and the shared reduced-mesh check judges it,
+        # from the arrays the solver will read.
+        verification = verify_imported_reduced_mesh(
             points_mm,
             triangles,
             cut_planes=domain_planes,
-            topology=topology,
         )
         verification["declared_cut_planes"] = list(declared_cut_planes)
-        # A second, independent count of the same thing, from the arrays the
-        # solver will read rather than from the postprocessor's report. It
-        # judges reduced domains only, for the same reason ``verify_symmetry_cut``
-        # does: an uncut import's rim is its own geometry.
+        # The integrity report's own count of the same thing, kept in the
+        # record beside the check's.
         verification["integrity_off_plane_open_edge_count"] = int(
             integrity.get("off_plane_open_edge_count") or 0
         )
-        if (
-            domain_planes
-            and verification["verified"]
-            and verification["integrity_off_plane_open_edge_count"]
-        ):
-            verification.update(
-                {
-                    "verified": False,
-                    "reason": (
-                        f"{verification['integrity_off_plane_open_edge_count']} open "
-                        "mesh edges lie off the cut planes; the reduced domain leaks"
-                    ),
-                }
-            )
-        # An inverted reduced domain passes every check above -- it is closed
-        # modulo its cut planes and perfectly consistent, only wound against
-        # the model it mirrors. It is judged after them, so a leak is reported
-        # as the leak it is rather than as a volume read off an open surface.
-        orientation = verify_reduced_orientation(
-            points_mm, triangles, cut_planes=domain_planes
-        )
-        verification["reduced_orientation"] = orientation
-        if verification["verified"] and orientation["inverted_component_count"]:
-            verification.update(
-                {
-                    "verified": False,
-                    "reason": (
-                        f"{orientation['inverted_component_count']} of "
-                        f"{orientation['component_count']} reduced mesh "
-                        "component(s) came back wound against the model they "
-                        "mirror, which reverses every normal the solver reads"
-                    ),
-                    # What this mesher can still reduce: a component wound
-                    # from a source that faces the bore agrees with its
-                    # parent, which is why the flat throat disc keeps its cut.
-                    "remedy": (
-                        "Tag a source face that faces the bore to keep the "
-                        "reduction."
-                    ),
-                }
-            )
         # Imported geometry is where coincident or interpenetrating faces are
         # most likely: nothing upstream guarantees the CAD was a clean solid.
         # Reported, never fatal -- an import that is otherwise sound should not
@@ -4219,6 +4032,7 @@ def build_imported_mesh(
                 verification.update(
                     {
                         "verified": False,
+                        "failure_codes": [*verification["failure_codes"], "reflected-source-area"],
                         "reason": "a reflected source did not keep its area: "
                         + ", ".join(
                             f"tag {tag} {before:.6g} -> {after:.6g} mm2"
@@ -4300,13 +4114,15 @@ def build_imported_mesh(
         )
         return state
 
-    def build(*, allow_symmetry_reduction: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+    def build(
+        *, wg_cut_candidates: tuple[str, ...] | None = None
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         unhealed_faces: list[int] | None = None
 
         def run(**kwargs: Any) -> dict[str, Any]:
             if kwargs.get("surface_order_reference") is not None:
                 kwargs["surface_face_reference"] = unhealed_faces
-            return attempt(allow_symmetry_reduction=allow_symmetry_reduction, **kwargs)
+            return attempt(wg_cut_candidates=wg_cut_candidates, **kwargs)
 
         unhealed = run()
         unhealed_faces = list(unhealed["surface_face_order"])
@@ -4358,53 +4174,103 @@ def build_imported_mesh(
             "roles_became_ambiguous": [],
         }
 
-    try:
-        result, healing = build(allow_symmetry_reduction=symmetry_mode == "auto")
-    except SymmetryCutRefused as refused:
-        # The cutter could not keep every retained portion of the model: mesh
-        # the whole model and record why, exactly like an unverified cut below.
-        result, healing = build(allow_symmetry_reduction=False)
+    # A reduced domain the mesh does not confirm is re-meshed with fewer WG
+    # cuts rather than refused: every plane WG cut is an optimisation, and the
+    # full domain is always solvable and always right. Only WG's own cuts are
+    # given up, one plane at a time where the check names one
+    # (:func:`degrade_wg_cut_candidates`); a plane the CAD author cut is never
+    # dropped (the model's other half is not in the STEP), and its failure is
+    # refused below. Each attempt is a fresh OCC import (``attempt`` clears
+    # gmsh), so no half-cut state carries over. The finding says what was
+    # given up and why (``server/cadlink/intake/ingest.py``).
+    declared = tuple(declared_cut_planes)
+    attempts: list[dict[str, Any]] = []
+    first_rejection: dict[str, Any] | None = None
+    first_pass_verdicts: dict[str, Any] = {}
+    first_cut_planes: tuple[str, ...] = ()
+    refused_planes: tuple[str, ...] = ()
+    pending: list[tuple[str, ...] | None] = [None]
+    # The degrade order is planned once, from the first failure, and then
+    # only walked: a later failure never re-plans (that bounds the attempts).
+    planned = False
+    result: dict[str, Any] | None = None
+    while pending:
+        wg_candidates = pending.pop(0)
+        try:
+            result, healing = build(wg_cut_candidates=wg_candidates)
+        except SymmetryCutRefused as refused:
+            # The cutter could not keep every retained portion of the model:
+            # a failed optimisation, judged like an unverified cut.
+            attempts.append(
+                {
+                    "wg_cut_planes": list(refused.planes),
+                    "outcome": "cut-refused",
+                    "reason": f"cut-refused: {refused}",
+                    "failure_codes": ["cut-refused"],
+                    "failed_planes": [],
+                }
+            )
+            if not planned:
+                planned = True
+                refused_planes = tuple(plane for plane in refused.planes if plane not in declared)
+                pending = degrade_wg_cut_candidates(refused_planes)
+            continue
+        verification = result.get("symmetry_verification")
+        wg_cut = tuple(str(plane) for plane in (result.get("symmetry") or {}).get("cut_planes") or ())
+        if (
+            symmetry_mode != "auto"
+            or not isinstance(verification, Mapping)
+            or verification.get("verified", True)
+            or not wg_cut
+        ):
+            break
+        failed = tuple(str(plane) for plane in verification.get("failed_planes") or ())
+        attempts.append(
+            {
+                "wg_cut_planes": list(wg_cut),
+                "outcome": "unverified",
+                "reason": verification.get("reason"),
+                "failure_codes": list(verification.get("failure_codes") or []),
+                "failed_planes": list(failed),
+            }
+        )
+        if any(plane in declared for plane in failed):
+            # The check names a plane the CAD author cut: giving up WG's own
+            # cuts cannot mend it, so the refusal below is reached directly.
+            break
+        if first_rejection is None:
+            first_rejection = dict(verification)
+            # The mirror verdicts that chose the refused reduction: a rebuild
+            # tests fewer planes, and the domain decision states what was known.
+            first_pass_verdicts = dict((result.get("symmetry") or {}).get("planes") or {})
+            first_cut_planes = wg_cut
+        if not planned:
+            planned = True
+            pending = degrade_wg_cut_candidates(
+                wg_cut, tuple(plane for plane in failed if plane in wg_cut)
+            )
+        result = None
+    if result is None:
+        # Unreachable: the last candidate is always ``()``, which cuts nothing
+        # and so can be neither refused by the cutter nor degraded further.
+        raise ImportedMeshError("symmetry: no symmetry attempt produced a mesh")
+    if attempts:
+        final_cut = [str(plane) for plane in (result.get("symmetry") or {}).get("cut_planes") or []]
+        attempts.append({"wg_cut_planes": final_cut, "outcome": "kept"})
+        rejected = first_rejection or {}
         result["symmetry_verification"] = {
             **result.get("symmetry_verification", {}),
             "fallback": {
-                "reason": f"cut-refused: {refused}",
-                "rejected_cut_planes": [],
-                "detected_planes": list(refused.planes),
-                "capped_planes": [],
-                "off_plane_free_edge_count": None,
-                "off_plane_free_edge_samples": [],
-                "remedy": None,
-                "reduced_orientation": None,
-            },
-        }
-    # A reduced domain the mesh does not confirm is re-meshed whole rather than
-    # refused: the full domain is always solvable and always right, it just
-    # costs the 2-4x the reduction was worth. Refusing instead would strand the
-    # user in CAD with nothing to try, so the return solves and the finding
-    # says what was given up and why (``server/cadlink/intake/ingest.py``).
-    #
-    # Only a WG cut can be given up. When WG cut nothing, every plane in the
-    # domain was declared, and the rebuild below keeps the declared planes: it
-    # would mesh the identical model only for the refusal after it to reject it
-    # again, so that refusal is reached directly.
-    verification = result.get("symmetry_verification")
-    if (
-        symmetry_mode == "auto"
-        and isinstance(verification, Mapping)
-        and not verification.get("verified", True)
-        and (not declared_cut_planes or bool((result.get("symmetry") or {}).get("cut_planes")))
-    ):
-        rejected = dict(verification)
-        # The mirror verdicts that chose the refused reduction: the rebuild
-        # tests no plane, and the domain decision states what was known.
-        first_pass_verdicts = dict((result.get("symmetry") or {}).get("planes") or {})
-        result, healing = build(allow_symmetry_reduction=False)
-        result["symmetry_verification"] = {
-            **result.get("symmetry_verification", {}),
-            "fallback": {
-                "reason": rejected.get("reason"),
-                "rejected_cut_planes": list(rejected.get("cut_planes") or []),
-                "detected_planes": list(rejected.get("detected_planes") or []),
+                "reason": attempts[0]["reason"],
+                "rejected_cut_planes": [
+                    plane for plane in first_cut_planes if plane not in final_cut
+                ],
+                "kept_cut_planes": final_cut,
+                "detected_planes": (
+                    list(rejected.get("detected_planes") or [])
+                    if first_rejection is not None
+                    else [plane for plane in refused_planes if plane not in final_cut]
+                ),
                 "capped_planes": list(rejected.get("capped_planes") or []),
                 "off_plane_free_edge_count": rejected.get("off_plane_free_edge_count"),
                 "off_plane_free_edge_samples": list(
@@ -4412,9 +4278,16 @@ def build_imported_mesh(
                 ),
                 "remedy": rejected.get("remedy"),
                 "reduced_orientation": rejected.get("reduced_orientation"),
-                "plane_verdicts": first_pass_verdicts,
+                **({"plane_verdicts": first_pass_verdicts} if first_rejection is not None else {}),
+                "attempts": attempts,
             },
         }
+    solved_planes = set((result.get("symmetry") or {}).get("domain_planes") or [])
+    if not set(declared) <= solved_planes:
+        raise ImportedMeshError(
+            "symmetry: a plane the return declares was cut in CAD is missing from the "
+            f"solved domain ({sorted(set(declared) - solved_planes)})"
+        )
     # A declared reduced domain has no full-domain version to fall back to: the
     # missing half is not in the STEP. Meshing what arrived and solving it as a
     # whole model would answer a different question, so this refuses instead --
@@ -4497,7 +4370,9 @@ __all__ = [
     "apply_rigid_normalisation",
     "build_imported_mesh",
     "build_imported_viewport_mesh",
+    "degrade_wg_cut_candidates",
     "geometry_candidate_matches",
+    "verify_imported_reduced_mesh",
     "imported_viewport_tessellation_settings",
     "origin_shift_translation_mm",
     "polar_grid_from_symmetry",

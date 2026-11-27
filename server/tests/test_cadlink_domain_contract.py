@@ -397,9 +397,15 @@ def test_no_evidence_applies_nothing_even_to_a_clean_candidate() -> None:
 
 
 def test_the_tolerance_is_the_meshers_cut_tolerance() -> None:
+    from hornlab_mesher import symmetry
+    from server.mesh import source_completion
     from server.mesh.imported import SYMMETRY_SNAP_TOLERANCE_MM
 
     assert di.TOLERANCE_MM == SYMMETRY_SNAP_TOLERANCE_MM
+    # The one reduced-mesh check, and the source completion that reads the
+    # same cut rims, use the same band.
+    assert symmetry.SYMMETRY_SNAP_TOLERANCE_MM == SYMMETRY_SNAP_TOLERANCE_MM
+    assert source_completion.TOLERANCE_MM == SYMMETRY_SNAP_TOLERANCE_MM
 
 
 # -- acoustic compatibility ----------------------------------------------------------------------

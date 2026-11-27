@@ -27,7 +27,7 @@ from server.mesh.imported import (
     rigid_inverse,
     rigid_occ_motion,
     validate_imported_sizes,
-    verify_symmetry_cut,
+    verify_imported_reduced_mesh,
     _advanced_face_identifier_surfaces,
     _assert_disjoint_source_claims,
     _lookup_faces,
@@ -514,62 +514,64 @@ def _quarter_box(*open_faces: str) -> np.ndarray:
     )
 
 
-def test_verify_symmetry_cut_confirms_an_open_quarter_domain() -> None:
-    verdict = verify_symmetry_cut(
-        _QUARTER_BOX_POINTS,
-        _quarter_box("x0", "y0"),
-        cut_planes=("x0", "y0"),
-        topology={"unexpected_free_edges": 0, "free_edges": 6},
+def test_the_imported_check_confirms_an_open_quarter_domain() -> None:
+    verdict = verify_imported_reduced_mesh(
+        _QUARTER_BOX_POINTS, _quarter_box("x0", "y0"), cut_planes=("x0", "y0"),
     )
     assert verdict["verified"] is True
     assert verdict["detected_planes"] == ["x0", "y0"]
     assert verdict["capped_planes"] == []
+    # An imported solid is closed and wound outward.
+    assert verdict["closed"] is True and verdict["expected_volume_sign"] == 1
 
 
-def test_verify_symmetry_cut_refuses_a_capped_cut_plane() -> None:
-    verdict = verify_symmetry_cut(
-        _QUARTER_BOX_POINTS,
-        _quarter_box("x0"),
-        cut_planes=("x0", "y0"),
-        topology={"unexpected_free_edges": 0, "free_edges": 4},
+def test_the_imported_check_refuses_a_capped_cut_plane() -> None:
+    verdict = verify_imported_reduced_mesh(
+        _QUARTER_BOX_POINTS, _quarter_box("x0"), cut_planes=("x0", "y0"),
     )
     assert verdict["verified"] is False
     assert verdict["capped_planes"] == ["y0"]
+    assert verdict["failed_planes"] == ["y0"]
     assert "capped" in verdict["reason"]
 
 
-def test_verify_symmetry_cut_refuses_an_off_plane_leak() -> None:
-    verdict = verify_symmetry_cut(
-        _QUARTER_BOX_POINTS,
-        _quarter_box("x0", "y0"),
-        cut_planes=("x0", "y0"),
-        topology={
-            "unexpected_free_edges": 3,
-            "free_edges": 9,
-            "unexpected_free_edge_midpoint_samples": [[0.5, 0.5, 2.0]],
-        },
-    )
+def test_the_imported_check_refuses_an_off_plane_leak() -> None:
+    # The open quarter, and beside it one loose triangle: three free edges
+    # off both cut planes, a hole the mirrored solve would radiate through.
+    points = np.vstack([_QUARTER_BOX_POINTS, [(3.0, 3.0, 5.0), (4.0, 3.0, 5.0), (3.0, 4.0, 5.0)]])
+    triangles = np.vstack([_quarter_box("x0", "y0"), [(8, 9, 10)]])
+    verdict = verify_imported_reduced_mesh(points, triangles, cut_planes=("x0", "y0"))
     assert verdict["verified"] is False
     assert verdict["capped_planes"] == []
+    assert verdict["failed_planes"] == []
+    assert verdict["failure_codes"] == ["off-plane-open-edges"]
+    assert verdict["off_plane_free_edge_count"] == 3
     assert "leaks" in verdict["reason"]
-    assert verdict["off_plane_free_edge_samples"] == [[0.5, 0.5, 2.0]]
+    assert all(sample[2] == 5.0 for sample in verdict["off_plane_free_edge_samples"])
 
 
-def test_verify_symmetry_cut_does_not_judge_an_uncut_open_shell() -> None:
+def test_the_imported_check_names_its_remedy_for_an_inverted_domain() -> None:
+    verdict = verify_imported_reduced_mesh(
+        _QUARTER_BOX_POINTS, _quarter_box("x0", "y0")[:, [0, 2, 1]], cut_planes=("x0", "y0"),
+    )
+    assert verdict["verified"] is False
+    assert verdict["failure_codes"] == ["inverted-orientation"]
+    assert verdict["remedy"] == "Tag a source face that faces the bore to keep the reduction."
+
+
+def test_the_imported_check_does_not_judge_an_uncut_open_shell() -> None:
     """An imported open shell's rim is real geometry, not a leak.
 
     Without a cut plane there is no mirror to be wrong about, so the free
     edges of a full-domain import are left alone.
     """
 
-    verdict = verify_symmetry_cut(
-        _QUARTER_BOX_POINTS,
-        _quarter_box("zhigh"),
-        cut_planes=(),
-        topology={"unexpected_free_edges": 4, "free_edges": 4},
+    verdict = verify_imported_reduced_mesh(
+        _QUARTER_BOX_POINTS, _quarter_box("zhigh"), cut_planes=(),
     )
     assert verdict["verified"] is True
     assert verdict["detected_planes"] == []
+    assert verdict["undeclared_open_planes"] == []
 
 
 # ------------------- what a declared pre-cut domain does to a linked throat

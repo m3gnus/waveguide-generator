@@ -63,6 +63,7 @@ from .child import (
     run_mesh_build as _run_wall_check,
 )
 from .integrity import (
+    SYMMETRY_PLANE_TOLERANCE_M,
     mesh_element_quality_report,
     mesh_integrity_report,
     mesh_self_intersection_report,
@@ -778,13 +779,54 @@ def _build_with_memory_stop(
         raise
 
 
+#: Parametric modes whose surface is closed (modulo its cut planes); a bare
+#: horn owns its open mouth rim.
+CLOSED_ACOUSTIC_MODES = frozenset({"enclosure", "freestanding", "infinite-baffle"})
+
+
+def _require_verified_reduced_domain(
+    config: Mapping[str, Any], vertices_m: np.ndarray, triangles: np.ndarray, quadrants: int
+) -> None:
+    """Run the shared reduced-mesh check on a generated mesh; failure is a defect.
+
+    The mesher builds the kept quadrant(s) of a mirror-symmetric design by
+    construction, so a reduced mesh that is not open on its cut planes, spills
+    across one, leaks elsewhere or is wound against its full model is a mesher
+    bug, never a model to degrade: it is refused rather than solved. An
+    infinite-baffle model is wound with the opposite (interior) sign, and a
+    bare horn owns its open mouth rim and has no volume to orient. The band is
+    the integrity report's (the mesher snaps cut-plane vertices exactly).
+    """
+
+    planes = CUT_PLANES_BY_QUADRANTS[quadrants]
+    if not planes:
+        return
+    from hornlab_mesher.symmetry import verify_reduced_mesh
+
+    mode = str(config.get("mode", "")).strip().lower()
+    verdict = verify_reduced_mesh(
+        np.asarray(vertices_m, dtype=float) * 1000.0,
+        triangles,
+        planes,
+        closed=mode in CLOSED_ACOUSTIC_MODES,
+        expected_volume_sign=-1 if mode == "infinite-baffle" else 1,
+        snap_tolerance_mm=SYMMETRY_PLANE_TOLERANCE_M * 1000.0,
+    )
+    if not verdict.ok:
+        raise RuntimeError(
+            f"Reduced {mode or 'solver'} mesh failed its symmetry check ({verdict.reason}). "
+            "This is a defect in the mesher, not in the design: set Symmetry to Full "
+            "in Solve options to solve the whole model, and report the design."
+        )
+
+
 def _require_closed_acoustic_topology(
     config: Mapping[str, Any], integrity: Mapping[str, Any]
 ) -> None:
     """Reject leaks and invalid topology for models that claim to be closed."""
 
     mode = str(config.get("mode", "")).strip().lower()
-    if mode not in {"enclosure", "freestanding", "infinite-baffle"}:
+    if mode not in CLOSED_ACOUSTIC_MODES:
         return
     off_plane_open_edges = int(integrity.get("off_plane_open_edge_count", 0))
     invalid = not bool(integrity.get("valid", False))
@@ -1629,6 +1671,7 @@ def _build_design_artifact(
     # default would have.
     integrity["element_quality"] = mesh_element_quality_report(vertices, triangles)
     _require_closed_acoustic_topology(config, integrity)
+    _require_verified_reduced_domain(config, vertices, triangles, quadrants)
     tag_counts = {
         str(tag): tag_count_values.get(tag, 0) for tag in sorted(CANONICAL_SURFACE_TAGS | assembly_tags)
     }

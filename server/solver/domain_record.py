@@ -396,11 +396,16 @@ def cad_plane_entries(
     cut_then_refused = {str(plane) for plane in fallback.get("rejected_cut_planes") or []}
     cut_refused = bool(fallback) and not cut_then_refused
     # Which of those cuts failed the check, when it says so: a capped plane, or
-    # a cut plane the mesh is not open on. The others went with them.
+    # a cut plane the mesh is not open on. The others went with them -- in a
+    # record from before the per-plane degrade, which gave every WG cut up
+    # together. A record with ``attempts`` gave up only the planes that failed
+    # (alone, or with no plane named), so nothing went with another.
     failing = {str(plane) for plane in fallback.get("capped_planes") or []} & cut_then_refused
     detected = fallback.get("detected_planes")
     if cut_then_refused and isinstance(detected, list):
         failing |= {plane for plane in cut_then_refused if plane not in detected}
+    if fallback.get("attempts"):
+        failing = set()
     fem_rejected = fem_rejected or {}
     requested_full = symmetry.get("requested_mode") == "full"
     recovery_failed = bool(recovery_failures) and requested_full

@@ -189,7 +189,22 @@ def _verification(verification: Mapping[str, Any] | None) -> dict[str, Any] | No
     orientation = verification.get("reduced_orientation")
     orientation = orientation if isinstance(orientation, Mapping) else {}
     fallback = verification.get("fallback")
+    attempts = fallback.get("attempts") if isinstance(fallback, Mapping) else None
     return {
+        **(
+            # The per-plane degrade's attempts, in order (a record from before
+            # it carries none, and keeps its shape).
+            {"attempts": [
+                {
+                    "wg_cut_planes": list(item.get("wg_cut_planes") or []),
+                    "outcome": item.get("outcome"),
+                    "failure_codes": list(item.get("failure_codes") or []),
+                    "failed_planes": list(item.get("failed_planes") or []),
+                }
+                for item in attempts if isinstance(item, Mapping)
+            ]}
+            if isinstance(attempts, list) and attempts else {}
+        ),
         "verified": verification.get("verified"),
         "reason": verification.get("reason"),
         "cut_planes": list(verification.get("cut_planes") or []),

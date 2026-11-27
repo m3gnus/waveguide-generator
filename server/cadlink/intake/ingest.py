@@ -138,7 +138,7 @@ def meshing_semantics() -> dict[str, Any]:
     """The WG-internal constants that decide what a solver mesh is for given inputs."""
 
     from server.mesh import imported as meshing
-    from hornlab_mesher import tessellation
+    from hornlab_mesher import step_prepare, tessellation
 
     semantics = {
         "surface_deviation_mm": meshing.IMPORTED_SURFACE_DEVIATION_MM,
@@ -161,6 +161,17 @@ def meshing_semantics() -> dict[str, Any]:
         # placement, so it was meshed as a half where its design solves as a
         # quarter; those cached halves must not be served again.
         "linked_return_frame": "recentred-throat-centre-v1",
+        # One reduced-mesh check (hornlab_mesher.symmetry.verify_reduced_mesh)
+        # also refuses a face lying in a cut plane, and a failed reduction now
+        # gives up one WG cut at a time (x0 kept first) instead of every one:
+        # a cached whole model may now be a half.
+        "reduced_verification": "shared-verify-reduced-mesh-v1",
+        "degrade_policy": "per-plane-v1",
+        # The mirror test samples large faces densely (a one-sided hole between
+        # the old fixed grid's samples is no longer cut as symmetric).
+        "mirror_sample_spacing_rel": step_prepare.DEFAULT_AUTO_CUT_SAMPLE_SPACING_REL,
+        "mirror_sample_point_cap": step_prepare.AUTO_CUT_MAX_SAMPLE_POINTS,
+        "mirror_sample_face_grid_cap": step_prepare.AUTO_CUT_MAX_FACE_GRID,
     }
     # Rounded: a constant computed at import (``math.log``) may differ in its
     # last bit between platforms' maths libraries, and the fingerprint must not.
@@ -1066,7 +1077,7 @@ def _judge_cached_reduced_winding(
 ) -> dict[str, Any] | None:
     """Accept a cached reduced mesh only once its winding has been judged.
 
-    ``verify_reduced_orientation`` runs where a reduced mesh is built, and
+    ``verify_imported_reduced_mesh`` runs where a reduced mesh is built, and
     nothing in the cache key names the rule the cached mesh was wound by: a
     quarter an earlier build cached -- wound from a rear-facing source, inside
     out -- sits under the very key a current build computes. Bumping the
@@ -2356,6 +2367,8 @@ def _ingest_bundle(
         solved_domain = SOLVED_DOMAIN_BY_PLANES.get(
             len(imported_domain_planes({"symmetry": built.get("symmetry")})), "quarter"
         )
+        # A half WG cut itself (its other cut failed) is not "as cut in CAD".
+        cut_in_cad = not list(fallback.get("kept_cut_planes") or [])
         findings.append(
             {
                 "id": _finding_id(
@@ -2369,7 +2382,8 @@ def _ingest_bundle(
                 "capped_planes": list(fallback.get("capped_planes") or []),
                 "off_plane_free_edge_count": fallback.get("off_plane_free_edge_count"),
                 "solved_domain": solved_domain,
-                "detail": symmetry_fallback_detail(solved_domain),
+                "cut_in_cad": cut_in_cad,
+                "detail": symmetry_fallback_detail(solved_domain, cut_in_cad=cut_in_cad),
             }
         )
     if built["healing"]["performed"]:
@@ -2623,11 +2637,20 @@ def _ingest_bundle(
 SOLVED_DOMAIN_BY_PLANES = DOMAIN_FRACTION_BY_PLANE_COUNT
 
 
-def symmetry_fallback_detail(solved_domain: str) -> str:
-    """The one calm line for a symmetry fallback, worded from what is solved."""
+def symmetry_fallback_detail(solved_domain: str, *, cut_in_cad: bool = True) -> str:
+    """The one calm line for a symmetry fallback, worded from what is solved.
+
+    ``cut_in_cad`` is False when WG itself cut the reduced domain it kept
+    (one of its cuts survived where another failed its check).
+    """
 
     if solved_domain == "full":
         return "WG will solve the whole model; symmetry could not be used for this one."
+    if not cut_in_cad:
+        return (
+            f"WG will solve the {solved_domain} model; it could not use the other "
+            "symmetry plane for this one."
+        )
     return (
         f"WG will solve the {solved_domain} model as cut in CAD; it could not use any "
         "further symmetry for this one."

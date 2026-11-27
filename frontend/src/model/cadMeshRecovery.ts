@@ -10,9 +10,13 @@ export function cadMeshRecoveryNotice(record: CadReturnIngestRecord | null, solv
   if (!recovered.length) return null;
   const fallback = recovered.find(finding => finding.kind === 'symmetry-cut-unverified');
   const healed = recovered.some(finding => finding.kind === 'healing-performed');
-  // Worded from what is solved: a CAD-cut half keeps its plane when only WG's own cut failed.
+  // Worded from what is solved: a CAD-cut half keeps its plane when only WG's own cut failed,
+  // and a half WG cut itself keeps that cut when only its other cut failed.
   const domain = fallback?.solved_domain === 'half' || fallback?.solved_domain === 'quarter'
     ? fallback.solved_domain : null;
+  if (fallback && domain && fallback.cut_in_cad === false) return solved
+    ? `Solved the ${domain} model; WG ${healed ? 'repaired the mesh and ' : ''}could not use the other symmetry plane for this one.`
+    : `WG will solve the ${domain} model; ${healed ? 'the mesh was repaired and ' : ''}the other symmetry plane could not be used for this one.`;
   if (fallback && domain) return solved
     ? `Solved the ${domain} model as cut in CAD; WG ${healed ? 'repaired the mesh and ' : ''}could not use any further symmetry for this one.`
     : `WG will solve the ${domain} model as cut in CAD; ${healed ? 'the mesh was repaired and ' : ''}no further symmetry could be used for this one.`;

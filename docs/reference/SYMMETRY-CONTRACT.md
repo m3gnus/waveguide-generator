@@ -106,10 +106,15 @@ The declaration is not believed on its own. Ingestion keeps two sets of planes
 apart: `symmetry.cut_planes` is what *this* preparation removed, and
 `symmetry.domain_planes` is what the solver mirrors — declared planes plus cut
 ones. Only the first predicts a halved source area, because only the first
-halved a face here. `verify_symmetry_cut` then re-reads every domain plane from
-the meshed boundary with a detector that knows nothing about what was declared,
-and separates three ways a claim fails: the boundary spans both sides of the
-plane, it lies on the negative side, or the plane is capped rather than open.
+halved a face here. The one reduced-mesh check,
+`hornlab_mesher.symmetry.verify_reduced_mesh` (through WG's
+`verify_imported_reduced_mesh`), then re-reads every domain plane from the
+meshed boundary with a detector that knows nothing about what was declared, and
+separates the ways a claim fails that name a plane: the boundary spans both
+sides of the plane, it lies on the negative side, or the plane is capped (no
+open rim, or a face lying in it). A free edge off every cut plane (a leak) and
+a component wound against the model it mirrors name no plane. Parametric and
+file-mesh reductions go through the same check.
 
 Two readers must never disagree about which planes those are, so
 `server/solver/imported.imported_domain_planes` is the single resolver and both
@@ -120,10 +125,17 @@ and a floor is stood clear of, and an imported mesh cannot be re-cut the way
 `restrict_for_ground_plane` re-cuts a parametric one, so the pair is refused as
 `imported_symmetry_ground_plane_conflict` with the plane named.
 
-A rejected **auto-cut** falls back to the full domain, because the whole model
-is in the STEP. A rejected **declared** domain is refused: the other half is not
-in the file, so meshing what arrived and solving it whole answers a different
-question. `symmetryMode: "full"` is refused for the same reason.
+A rejected **auto-cut** gives up WG's own cuts one plane at a time, because
+the whole model is in the STEP (`imported.degrade_wg_cut_candidates`): a
+failure that names one of WG's planes drops that plane and keeps the other; a
+failure that names none tries x0 alone, then y0 alone (BEAT has no y0-only
+half), then the full domain. Each attempt re-imports the STEP, and
+`symmetry_verification.fallback.attempts` records them. A rejected **declared**
+domain is refused, and a declared plane is never dropped: the other half is
+not in the file, so meshing what arrived and solving it whole answers a
+different question. `symmetryMode: "full"` is refused for the same reason. A
+parametric reduced mesh that fails the check is a mesher defect and is refused,
+never degraded.
 
 `coordinate_system.export_frame` names which component's own frame
 `assembly.step` is written in: `root-component`, or

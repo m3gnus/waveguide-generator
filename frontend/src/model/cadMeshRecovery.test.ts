@@ -23,6 +23,17 @@ describe('mesh recovery public copy', () => {
       'Solved the half model as cut in CAD; WG could not use any further symmetry for this one.');
     expect(cadMeshRecoveryNotice(record, false)).not.toContain('whole');
   });
+  it('words a half WG cut itself without claiming it was cut in CAD', () => {
+    const record = { findings: [{
+      id: 'finding-fallback', kind: 'symmetry-cut-unverified', blocking: false, solved_domain: 'half',
+      cut_in_cad: false,
+    }] } as unknown as CadReturnIngestRecord;
+    expect(cadMeshRecoveryNotice(record, true)).toBe(
+      'Solved the half model; WG could not use the other symmetry plane for this one.');
+    expect(cadMeshRecoveryNotice(record, false)).toBe(
+      'WG will solve the half model; the other symmetry plane could not be used for this one.');
+    expect(cadMeshRecoveryNotice(record, false)).not.toContain('CAD');
+  });
   it('says nothing when recovery was not needed', () => {
     expect(cadMeshRecoveryNotice(null, true)).toBeNull();
     expect(cadMeshRecoveryNotice({ findings: [] } as unknown as CadReturnIngestRecord, true)).toBeNull();

@@ -2605,10 +2605,12 @@ def test_a_run_does_not_write_back_the_mesh_it_read_from_its_own_row(
 def test_reduced_orientation_verdict_is_judged_once_per_artifact(monkeypatch) -> None:
     from server.mesh import imported as imported_mesh
 
+    from hornlab_mesher.symmetry import reduced_mesh_orientation
+
     imported_mesh._artifact_orientations.clear()
     text = _quarter_box_mesh(inverted=True)
-    expected = imported_mesh.verify_reduced_orientation(
-        *imported_mesh.gmsh22_triangle_arrays(text), cut_planes=("x0", "y0"),
+    expected = reduced_mesh_orientation(
+        *imported_mesh.gmsh22_triangle_arrays(text), ("x0", "y0"), expected_volume_sign=1,
     )
     parses = []
     parse = imported_mesh.gmsh22_triangle_arrays
@@ -2621,7 +2623,7 @@ def test_reduced_orientation_verdict_is_judged_once_per_artifact(monkeypatch) ->
         _quarter_box_mesh(inverted=False), cut_planes=["x0", "y0"],
     )
     assert again == expected and again["inverted_component_count"] > 0
-    assert other == imported_mesh.verify_reduced_orientation(*parse(text), cut_planes=("x0",))
+    assert other == reduced_mesh_orientation(*parse(text), ("x0",), expected_volume_sign=1)
     assert fixed["inverted_component_count"] == 0
     assert len(parses) == 3
     imported_mesh._artifact_orientations.clear()
@@ -2721,7 +2723,7 @@ def test_a_stored_reduced_record_wound_inside_out_is_refused_before_a_job_exists
     )
     assert row["config_json"]["options"]["engine"] == "metal"
     # A full domain is not judged here: its outward winding is the mesher's
-    # own contract for a closed body, as ``verify_reduced_orientation`` says.
+    # own contract for a closed body, as ``hornlab_mesher.symmetry.reduced_mesh_orientation`` says.
     full = _domain_changes([])
     row = asyncio.run(
         _submit_record(

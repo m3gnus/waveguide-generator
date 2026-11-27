@@ -11,12 +11,16 @@ def _rewrite_reduced_meshes(
     rewrite: Callable[
         [np.ndarray, np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]
     ],
+    *,
+    only_when_cut: str | None = None,
 ) -> None:
     """Rewrite the postprocessed mesh of reduced domains only.
 
     The seam is after the mesher's postprocess and before WG verifies what it
     returned, which is where a fault in a reduced mesh would first appear. A
     full domain passes through untouched, so an auto-cut fallback meshes clean.
+    With ``only_when_cut`` only a domain cut on that plane is rewritten: the
+    fault follows one cut, as a boolean that fails on one plane would.
     """
 
     import meshio
@@ -26,7 +30,8 @@ def _rewrite_reduced_meshes(
 
     def rewritten(mesh: Any, source_specs: Any, **kwargs: Any) -> Any:
         processed, repair, topology = real_postprocess(mesh, source_specs, **kwargs)
-        if not kwargs.get("symmetry_planes"):
+        planes = tuple(kwargs.get("symmetry_planes") or ())
+        if not planes or (only_when_cut is not None and only_when_cut not in planes):
             return processed, repair, topology
 
         points = np.asarray(processed.points, dtype=float)
@@ -52,11 +57,12 @@ def _rewrite_reduced_meshes(
     step_import.postprocess_mesh = rewritten
 
 
-def install_cut_refusal() -> None:
+def install_cut_refusal(*, only_when_cut: str | None = None) -> None:
     """Make the mesher's cutter refuse every cut, as its retained-area proof does.
 
     The real cutter raises this when even its retry loses a retained portion of
-    a face (a periodic throat cylinder, say). An uncut build is untouched.
+    a face (a periodic throat cylinder, say). An uncut build is untouched, and
+    with ``only_when_cut`` so is any cut that does not include that plane.
     """
 
     import hornlab_mesher
@@ -64,14 +70,17 @@ def install_cut_refusal() -> None:
     real_cut = hornlab_mesher.auto_cut_occ_geometry
 
     def refusing(groups: Any, *, planes: Any = None, **kwargs: Any) -> Any:
-        if planes is None or tuple(planes):
+        candidates = None if planes is None else tuple(planes)
+        if candidates is None or (
+            candidates and (only_when_cut is None or only_when_cut in candidates)
+        ):
             raise RuntimeError("OCC cut lost retained portions of surfaces [3]")
         return real_cut(groups, planes=planes, **kwargs)
 
     hornlab_mesher.auto_cut_occ_geometry = refusing
 
 
-def install_reduced_domain_leak() -> None:
+def install_reduced_domain_leak(*, only_when_cut: str | None = None) -> None:
     """Remove one off-plane rigid triangle from reduced meshes only."""
 
     def puncture(
@@ -88,7 +97,7 @@ def install_reduced_domain_leak() -> None:
         keep[interior] = False
         return triangles[keep], tags[keep]
 
-    _rewrite_reduced_meshes(puncture)
+    _rewrite_reduced_meshes(puncture, only_when_cut=only_when_cut)
 
 
 def install_reduced_domain_inversion() -> None:

@@ -8,7 +8,8 @@ from typing import Any
 import numpy as np
 
 
-#: Matches verify_symmetry_cut; the domain interpretation tests pin them equal.
+#: Matches the reduced-mesh check's band (hornlab_mesher.symmetry.SYMMETRY_SNAP_TOLERANCE_MM);
+#: the domain contract tests pin them equal.
 TOLERANCE_MM = 1.0e-4
 
 

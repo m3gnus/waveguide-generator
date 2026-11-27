@@ -12,11 +12,9 @@ from server.contracts.geometry import SYMMETRY_PLANE_AXIS
 from server.mesh.imported import (
     ImportedMeshError,
     SYMMETRY_SNAP_TOLERANCE_MM,
-    _edge_connected_components,
     parse_source_physical_name,
     reflect_triangle_mesh,
-    verify_reduced_orientation,
-    verify_symmetry_cut,
+    verify_imported_reduced_mesh,
 )
 from server.mesh.integrity import mesh_integrity_report, mesh_self_intersection_report, on_coordinate_plane
 from server.mesh.surface_topology import completion_factor
@@ -230,17 +228,9 @@ def file_mesh_integrity(mesh: FileMesh, planes: tuple[str, ...] | list[str]) -> 
 
 
 def _symmetry_evidence(mesh: FileMesh, planes: tuple[str, ...]) -> tuple[dict[str, Any], dict[str, Any]]:
-    report = file_mesh_integrity(mesh, planes)
-    samples = report["off_plane_open_edges_sample"]
-    topology = {
-        "free_edges": report["open_edge_count"],
-        "unexpected_free_edges": report["off_plane_open_edge_count"],
-        "unexpected_free_edge_midpoint_samples": [
-            (mesh.points[edge].mean(axis=0) * 1000).tolist() for edge in samples
-        ],
-    }
-    return report, verify_symmetry_cut(
-        mesh.points * 1000, mesh.triangles, cut_planes=planes, topology=topology,
+    """The topology report and the shared reduced-mesh check, as an imported solid."""
+    return file_mesh_integrity(mesh, planes), verify_imported_reduced_mesh(
+        mesh.points * 1000, mesh.triangles, cut_planes=planes,
     )
 
 
@@ -261,7 +251,7 @@ def inspect_file_mesh(mesh: FileMesh, units: str | None, forward: str, up: str) 
 
 
 def _plane_triangles(mesh: FileMesh, plane: str) -> np.ndarray:
-    # The detector in verify_symmetry_cut works in mm with this same tolerance.
+    # The shared reduced-mesh check works in mm with this same tolerance.
     return on_coordinate_plane(
         mesh.points * 1000, mesh.triangles, SYMMETRY_PLANE_AXIS[plane],
         tolerance=SYMMETRY_SNAP_TOLERANCE_MM,
@@ -500,7 +490,10 @@ def _prepare_transformed_file_mesh(
             "Solving requires a closed, consistently outward-oriented surface without degenerate, duplicate or nonmanifold triangles. Fix the mesh in its authoring tool; no repair was applied."
         )
     if planes:
+        orientation = verification["reduced_orientation"]
         if not verification["verified"]:
+            if "inverted-orientation" in verification["failure_codes"]:
+                raise FileMeshRefusal("Each mirrored mesh shell must face outward. Reverse inward normals or repair the mesh in the meshing tool.")
             if verification["straddling_planes"]:
                 raise FileMeshRefusal(f"The mesh crosses {_plane_labels(verification['straddling_planes'])}. Choose the correct symmetry or change the mesh so it stays on one side.")
             if verification["wrong_side_planes"]:
@@ -508,8 +501,7 @@ def _prepare_transformed_file_mesh(
             if verification["capped_planes"]:
                 raise FileMeshRefusal(f"The mesh has a closed face on {_plane_labels(verification['capped_planes'])}. Remove it in the symmetry settings, or export the mesh open on the symmetry plane.")
             raise FileMeshRefusal(_opening_message(verification))
-        orientation = verify_reduced_orientation(mesh.points * 1000, mesh.triangles, cut_planes=planes)
-        if orientation["inverted_component_count"] or orientation["unresolved_component_count"]:
+        if orientation["unresolved_component_count"]:
             raise FileMeshRefusal("Each mirrored mesh shell must face outward. Reverse inward normals or repair the mesh in the meshing tool.")
         transform.update(domain_planes=list(planes), reflected_planes=[plane for plane in planes if plane in reflections])
     elif report["open_edge_count"]:
@@ -525,7 +517,9 @@ def _prepare_transformed_file_mesh(
         )
     # Check each disconnected shell, not just the sum of its volumes: a small
     # inward shell can hide behind a larger outward one in the aggregate report.
-    labels = _edge_connected_components(mesh.triangles)
+    from hornlab_mesher.symmetry import edge_connected_components
+
+    labels = edge_connected_components(mesh.triangles)
     count = int(labels.max()) + 1
     # Edge-connected shells may not pinch together at one vertex.
     vertex_shells = np.unique(
