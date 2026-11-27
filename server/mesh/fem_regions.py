@@ -274,10 +274,8 @@ def verify_region_symmetry(gmsh: Any, region: Mapping[str, Any], boundary: Seque
                            cut_planes: Sequence[str]) -> None:
     """Reuse the exterior's trimmed OCC geometry/role mirror test before cutting."""
     import numpy as np
-    from hornlab_mesher.step_prepare import (
-        AUTO_CUT_SPAN_REL, DEFAULT_AUTO_CUT_TOLERANCE_REL,
-        evaluate_occ_plane_symmetry, sample_occ_surface_points,
-    )
+    from hornlab_mesher.step_prepare import evaluate_occ_plane_symmetry, sample_occ_surface_points
+    from hornlab_mesher.symmetry import SPAN_TOLERANCE_REL, TOLERANCES
     if not planes:
         return
     axes = {"x0": 0, "y0": 1}
@@ -298,8 +296,8 @@ def verify_region_symmetry(gmsh: Any, region: Mapping[str, Any], boundary: Seque
             continue
         verdict = evaluate_occ_plane_symmetry(
             plane, samples=samples, roles=roles, bboxes=bboxes,
-            tolerance=DEFAULT_AUTO_CUT_TOLERANCE_REL * diagonal,
-            span_tolerance=AUTO_CUT_SPAN_REL * diagonal)
+            tolerance=TOLERANCES["fitted"].resolve(diagonal),
+            span_tolerance=SPAN_TOLERANCE_REL * diagonal)
         if not verdict.accepted:
             raise FemRegionMeshError(
                 f"FEM region {region.get('name', region['region_id'])!r} does not mirror on {plane}: {verdict.reason}",

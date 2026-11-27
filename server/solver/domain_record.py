@@ -277,6 +277,8 @@ def parametric_decision(
     native_by_plane = {cut: native for native, cut in CUT_PLANE_BY_NATIVE_PLANE.items()}
     reasons = getattr(geometry, "reasons", {}) or {}
     tolerance = _number(getattr(geometry, "tolerance_mm", None))
+    # The sampled surface's mirror evidence per plane (``symmetry.py``).
+    surface_verdicts = getattr(geometry, "plane_verdicts", None) or {}
     planes: dict[str, dict[str, Any]] = {}
     for plane in SUPPORTED_CUT_PLANES:
         detail = "; ".join(str(item) for item in reasons.get(native_by_plane[plane]) or []) or None
@@ -300,6 +302,7 @@ def parametric_decision(
             else:
                 dropped_by = DROPPED_BY_UNKNOWN
                 detail = None
+        verdict = surface_verdicts.get(plane)
         planes[plane] = plane_entry(
             GEOMETRY_ACCEPTED if plane in accepted else GEOMETRY_REJECTED,
             used=plane in used,
@@ -307,6 +310,7 @@ def parametric_decision(
             tolerance_mm=tolerance,
             tolerance_class=TOLERANCE_EXACT,
             detail=detail,
+            **(_verdict_evidence(verdict) if isinstance(verdict, Mapping) else {}),
         )
     return decision_record(
         producer=PRODUCER_PARAMETRIC,
@@ -324,6 +328,18 @@ def _occ_verdict(verdict: Any) -> Mapping[str, Any] | None:
     return None
 
 
+def _verdict_evidence(verdict: Mapping[str, Any]) -> dict[str, Any]:
+    """A mesher mirror verdict's numbers (``PlaneSymmetryVerdict.to_dict()``), as plane fields."""
+
+    return {
+        "max_residual_mm": verdict.get("max_residual_step_units"),
+        "points_tested": verdict.get("points_tested"),
+        "points_off": verdict.get("points_off_model"),
+        "worst_off_mm": verdict.get("worst_off_model_distance_step_units"),
+        "role_mismatches": verdict.get("role_mismatches"),
+    }
+
+
 def _verdict_entry(
     verdict: Mapping[str, Any], *, used: bool, tolerance: float | None,
     dropped_by: str | None = None, detail: str | None = None, dropped_with: Iterable[str] = (),
@@ -335,13 +351,9 @@ def _verdict_entry(
         dropped_by=dropped_by if accepted and not used else None,
         tolerance_mm=_number(verdict.get("tolerance_step_units")) or tolerance,
         tolerance_class=TOLERANCE_FITTED,
-        max_residual_mm=verdict.get("max_residual_step_units"),
-        points_tested=verdict.get("points_tested"),
-        points_off=verdict.get("points_off_model"),
-        worst_off_mm=verdict.get("worst_off_model_distance_step_units"),
-        role_mismatches=verdict.get("role_mismatches"),
         detail=detail if detail is not None else (str(verdict.get("reason")) if verdict.get("reason") else None),
         dropped_with=dropped_with,
+        **_verdict_evidence(verdict),
     )
 
 

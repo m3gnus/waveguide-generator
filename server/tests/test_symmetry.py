@@ -13,7 +13,7 @@ from server.jobs.models import SolveRequest
 from server.jobs.runtime import JobRuntime, SymmetryValidationError
 from server.jobs.store import JobStore
 from server.solver.metal import MetalEngine
-from server.solver.symmetry import resolve_symmetry
+from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
 
 
 def _rosse(**extra) -> DesignConfig:
@@ -121,6 +121,68 @@ def test_asymmetric_enclosure_spacing_kills_matching_plane() -> None:
     assert resolution.xz is True
     assert resolution.yz is False
     assert "space_l=20" in resolution.reasons["yz"][0]
+
+
+@pytest.mark.parametrize(
+    "dim_mm, quadrants, rejected",
+    [
+        ([220, 150, 200, 150], 12, "yz"),
+        ([200, 150, 200, 170], 14, "xz"),
+        ([200, 150, 200, 150], 1, None),
+    ],
+)
+def test_enclosure_dim_decides_its_plane(dim_mm, quadrants, rejected) -> None:
+    """ATH's Mesh.Enclosure.Dim replaces the margins, and the mesher refuses a
+    reduced build whose Dim differs across a cut plane: so it must decide the
+    plane here, not leave a quarter the mesher then refuses."""
+
+    resolution = resolve_symmetry(_rosse(enclosure={"depth": 60, "dim_mm": dim_mm}))
+    assert resolution.quadrants == quadrants
+    for plane in ("xz", "yz"):
+        assert getattr(resolution, plane) is (plane != rejected)
+    if rejected is not None:
+        assert resolution.reasons[rejected] == [
+            "enclosure Dim +X=220 mm differs from -X=200 mm" if rejected == "yz"
+            else "enclosure Dim +Y=150 mm differs from -Y=170 mm"
+        ]
+        with pytest.raises(ValueError, match="Dim"):
+            validate_symmetry_mode("quarter", resolution)
+
+
+def test_auto_domain_of_an_asymmetric_dim_box_builds() -> None:
+    """The domain AUTO picks for an asymmetric Dim box is one the mesher accepts."""
+
+    from hornlab_mesher.config_builder import build_geometry_params
+    from server.mesh.builder import _solver_mesher_config
+
+    design = _rosse(enclosure={"depth": 60, "dim_mm": [220, 150, 200, 150]})
+    config = _solver_mesher_config(design)
+    config["mesh"]["quadrants"] = resolve_symmetry(design).quadrants
+    build_geometry_params(config)  # the mesher's reduced-domain Dim guard
+    config["mesh"]["quadrants"] = 1
+    with pytest.raises(Exception, match="symmetric enclosure Dim"):
+        build_geometry_params(config)
+
+
+def test_wire_answer_keeps_its_six_fields() -> None:
+    resolution = resolve_symmetry(_rosse())
+    assert list(resolution.as_dict()) == [
+        "quadrants", "xz", "yz", "reasons", "tolerance_mm", "relative_tolerance",
+    ]
+    assert set(resolution.plane_verdicts) == {"x0", "y0"}
+    assert all(verdict["accepted"] for verdict in resolution.plane_verdicts.values())
+
+
+def test_wg_tolerance_constants_are_the_mesher_exact_class() -> None:
+    from hornlab_mesher.symmetry import TOLERANCES
+
+    from server.solver.symmetry import (
+        SYMMETRY_ABSOLUTE_TOLERANCE_MM,
+        SYMMETRY_RELATIVE_TOLERANCE,
+    )
+
+    assert TOLERANCES["exact"].relative == SYMMETRY_RELATIVE_TOLERANCE
+    assert TOLERANCES["exact"].floor_mm == SYMMETRY_ABSOLUTE_TOLERANCE_MM
 
 
 def test_forced_absent_plane_is_rejected_without_mutating_design(

@@ -1,0 +1,751 @@
+{
+ "README": "resolve_symmetry results frozen from waveguide-generator 3021d7c1b with mesher 624adbf7, when WG ran its own ring mirror test (_surface_mirror_deviation), before stage 2 moved the check into hornlab_mesher.symmetry. max_deviation_mm is each plane's largest sampled-ring distance (None: not sampled). Regenerating this file to make a test pass is not allowed: a difference is an output change for saved designs.",
+ "designs": {
+  "custom-profile-legacy/freeform": {
+   "max_deviation_mm": {
+    "x0": 4.0194366942304644e-14,
+    "y0": 3.4809342861069267e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.08417677300610461,
+   "xz": true,
+   "yz": true
+  },
+  "custom-profile-legacy/lookup": {
+   "max_deviation_mm": {
+    "x0": 3.1776437161565096e-14,
+    "y0": 3.256115871121665e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.0844599331699469,
+   "xz": true,
+   "yz": true
+  },
+  "extra/ellipse-enclosure-res": {
+   "max_deviation_mm": {
+    "x0": 7.105427357601002e-14,
+    "y0": 6.355287432313019e-14
+   },
+   "quadrants": 12,
+   "reasons": {
+    "xz": [],
+    "yz": [
+     "enclosure front_resolution quadrant sizes differ across the yz plane",
+     "enclosure space_l=10 mm differs from space_r=30 mm"
+    ]
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.10636394725741355,
+   "xz": true,
+   "yz": false
+  },
+  "extra/enclosure-dim-symmetric": {
+   "max_deviation_mm": {
+    "x0": 3.1776437161565096e-14,
+    "y0": 3.1776437161565096e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.08522932403919353,
+   "xz": true,
+   "yz": true
+  },
+  "extra/enclosure-spacing-tb": {
+   "max_deviation_mm": {
+    "x0": 3.1776437161565096e-14,
+    "y0": 3.1776437161565096e-14
+   },
+   "quadrants": 14,
+   "reasons": {
+    "xz": [
+     "enclosure space_t=20 mm differs from space_b=40 mm"
+    ],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.08522932403919353,
+   "xz": false,
+   "yz": true
+  },
+  "extra/osse-morph": {
+   "max_deviation_mm": {
+    "x0": 5.995566172523748e-13,
+    "y0": 5.995566172523748e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.12282867680094904,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF01-default": {
+   "max_deviation_mm": {
+    "x0": 3.4809342861069267e-14,
+    "y0": 3.4809342861069267e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.08417621642700779,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF02-hv-stations-angles": {
+   "max_deviation_mm": {
+    "x0": 5.753312400962914e-14,
+    "y0": 5.753312400962914e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.07934802169113986,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF03-superellipse": {
+   "max_deviation_mm": {
+    "x0": 7.105427357601002e-14,
+    "y0": 7.105427357601002e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.0793480216927755,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF04-rounded-rect-morph": {
+   "max_deviation_mm": {
+    "x0": 5.225267702499603e-13,
+    "y0": 4.933029617208656e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.07934802169113986,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF05-enclosure-rounded": {
+   "max_deviation_mm": {
+    "x0": 5.225267702499603e-13,
+    "y0": 4.933029617208656e-13
+   },
+   "quadrants": 14,
+   "reasons": {
+    "xz": [
+     "enclosure space_t=40 mm differs from space_b=60 mm"
+    ],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.07820485918406862,
+   "xz": false,
+   "yz": true
+  },
+  "freeform/FF06-thick-wall-scale": {
+   "max_deviation_mm": {
+    "x0": 1.10990323433763e-13,
+    "y0": 1.2224639458285405e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.12005502892196508,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF07-infinite-baffle": {
+   "max_deviation_mm": {
+    "x0": 5.225267702499603e-13,
+    "y0": 4.933029617208656e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.07820485918406862,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF08-quarter-domain": {
+   "max_deviation_mm": {
+    "x0": 5.225267702499603e-13,
+    "y0": 4.933029617208656e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.07934802169113986,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF09-superellipse-enclosure-chamfer": {
+   "max_deviation_mm": {
+    "x0": 7.105427357601002e-14,
+    "y0": 7.105427357601002e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.07820485918406861,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF11-axis-fixture-interior-angle-non-unit-scale": {
+   "max_deviation_mm": {
+    "x0": null,
+    "y0": null
+   },
+   "quadrants": 1234,
+   "reasons": {
+    "xz": [
+     "mesher symmetry sampling failed: FREEFORM generated outer offset grid has a normal flip near azimuth row 49, axial interval 0; the FREEFORM azimuth rows shift by 27 degrees between axial rings 0 and 1 (t=0.000 to 0.062), which may twist the control net there. If the shift persists at a finer mm resolution, a finer mesh or a thinner wall will not fix it; soften the abrupt change that starts there (a Morph.Rate near zero, or cross-sections that change shape between two nearby stations)"
+    ],
+    "yz": [
+     "mesher symmetry sampling failed: FREEFORM generated outer offset grid has a normal flip near azimuth row 49, axial interval 0; the FREEFORM azimuth rows shift by 27 degrees between axial rings 0 and 1 (t=0.000 to 0.062), which may twist the control net there. If the shift persists at a finer mm resolution, a finer mesh or a thinner wall will not fix it; soften the abrupt change that starts there (a Morph.Rate near zero, or cross-sections that change shape between two nearby stations)"
+    ]
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 1e-07,
+   "xz": false,
+   "yz": false
+  },
+  "freeform/FF12-axis-fixture-fractional-anchor-half-scale": {
+   "max_deviation_mm": {
+    "x0": 1.5987211554602254e-14,
+    "y0": 1.5987211554602254e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.021839352266750323,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF20-cfg-basic": {
+   "max_deviation_mm": {
+    "x0": 1.7404671430534633e-14,
+    "y0": 2.842170943040401e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.03477717272228989,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF21-cfg-mm-points": {
+   "max_deviation_mm": {
+    "x0": 2.1339953687062813e-13,
+    "y0": 2.129554782562438e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.034789102553500775,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF22-cfg-legacy-controls": {
+   "max_deviation_mm": {
+    "x0": 1.046694809947456e-13,
+    "y0": 1.0173423748423967e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.03471784959458327,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/FF23-cfg-per-axis-throat-angle": {
+   "max_deviation_mm": {
+    "x0": 1.6280579355608324e-14,
+    "y0": 1.6280579355608324e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.03395770854501111,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/docs-cfg-format-freeform-complete": {
+   "max_deviation_mm": {
+    "x0": 4.1309368310034625e-13,
+    "y0": 4.011893171733932e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.07430592511074617,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/mesher-example-freeform-bare": {
+   "max_deviation_mm": {
+    "x0": 7.135207744473287e-13,
+    "y0": 7.135207744473287e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.0812896057316063,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/mesher-owner-bare": {
+   "max_deviation_mm": {
+    "x0": 7.135207744473287e-13,
+    "y0": 7.135207744473287e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.0812896057316063,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/mesher-owner-enclosure-edge-0": {
+   "max_deviation_mm": {
+    "x0": 7.135207744473287e-13,
+    "y0": 7.135207744473287e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.0812896057316063,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/mesher-owner-enclosure-edge-18": {
+   "max_deviation_mm": {
+    "x0": 7.135207744473287e-13,
+    "y0": 7.135207744473287e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.0812896057316063,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/mesher-rectangle-morph-dispatch": {
+   "max_deviation_mm": {
+    "x0": 1.0048591735576161e-13,
+    "y0": 1.0048591735576161e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.07483314773547885,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/preview-translate-superellipse-morph": {
+   "max_deviation_mm": {
+    "x0": 7.105427357601002e-14,
+    "y0": 6.355287432313019e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.11649328682090807,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/profile-inspection-station-precision": {
+   "max_deviation_mm": {
+    "x0": 4.5496934130773415e-14,
+    "y0": 4.5496934130773415e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.08417621642700779,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/schema-discriminator-freeform": {
+   "max_deviation_mm": {
+    "x0": 3.256115871121665e-14,
+    "y0": 3.552713678800501e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.058815769937621956,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/shared-profile-equal": {
+   "max_deviation_mm": {
+    "x0": 3.4809342861069267e-14,
+    "y0": 3.4809342861069267e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.08417621642700779,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/shared-profile-interior-angle": {
+   "max_deviation_mm": {
+    "x0": 3.552713678800501e-14,
+    "y0": 3.1776437161565096e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.0742943126724987,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/shared-profile-morphed-scaled-extended": {
+   "max_deviation_mm": {
+    "x0": 2.6812987050722663e-13,
+    "y0": 2.444927891657081e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.15797686262959257,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/shared-profile-transitions": {
+   "max_deviation_mm": {
+    "x0": 8.163514517232825e-14,
+    "y0": 1.0247593068766006e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.074296640657068,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/shared-profile-unequal": {
+   "max_deviation_mm": {
+    "x0": 4.0194366942304644e-14,
+    "y0": 3.256115871121665e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.0742964540201581,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/textcfg-legacy-circle-controls": {
+   "max_deviation_mm": {
+    "x0": 2.95110562224397e-14,
+    "y0": 2.929642751054232e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.034713703998640606,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/textcfg-per-axis-throat-angles": {
+   "max_deviation_mm": {
+    "x0": 2.95110562224397e-14,
+    "y0": 2.95110562224397e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.03488735830161669,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/textcfg-top-level-throat-angle": {
+   "max_deviation_mm": {
+    "x0": 2.95110562224397e-14,
+    "y0": 2.95110562224397e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.034808964845798665,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/v1-jobs-freeform-no-snapshot": {
+   "max_deviation_mm": {
+    "x0": 1.757785650632539e-13,
+    "y0": 1.1457157353758233e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.0812896057316063,
+   "xz": true,
+   "yz": true
+  },
+  "freeform/v1-jobs-freeform-with-snapshot": {
+   "max_deviation_mm": {
+    "x0": 4.622352198365034e-13,
+    "y0": 4.5056477979664153e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.0812896057316063,
+   "xz": true,
+   "yz": true
+  },
+  "icw-default": {
+   "max_deviation_mm": {
+    "x0": 3.1776437161565096e-14,
+    "y0": 4.7664655742347644e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.0882524417475734,
+   "xz": true,
+   "yz": true
+  },
+  "lookup/aspect-section": {
+   "max_deviation_mm": {
+    "x0": 6.355287432313019e-14,
+    "y0": 8.526512829121202e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.1298716935440514,
+   "xz": true,
+   "yz": true
+  },
+  "lookup/close-corners": {
+   "max_deviation_mm": {
+    "x0": 3.1776437161565096e-14,
+    "y0": 3.1776437161565096e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.05628498911788115,
+   "xz": true,
+   "yz": true
+  },
+  "lookup/dense-curve": {
+   "max_deviation_mm": {
+    "x0": 3.1776437161565096e-14,
+    "y0": 3.1776437161565096e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.07816341855369428,
+   "xz": true,
+   "yz": true
+  },
+  "lookup/implicit-dimensions": {
+   "max_deviation_mm": {
+    "x0": 3.552713678800501e-14,
+    "y0": 4.2780337774645346e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.06997142273814361,
+   "xz": true,
+   "yz": true
+  },
+  "lookup/large-table": {
+   "max_deviation_mm": {
+    "x0": 3.552713678800501e-14,
+    "y0": 3.552713678800501e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.061431692146643666,
+   "xz": true,
+   "yz": true
+  },
+  "lookup/morph-snapping": {
+   "max_deviation_mm": {
+    "x0": 3.1776437161565096e-14,
+    "y0": 3.552713678800501e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.08019975062305369,
+   "xz": true,
+   "yz": true
+  },
+  "lookup/scale-source-quarter": {
+   "max_deviation_mm": {
+    "x0": 6.355287432313019e-14,
+    "y0": 5.728578676879116e-14
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.10495713410721542,
+   "xz": true,
+   "yz": true
+  },
+  "tritonia-q": {
+   "max_deviation_mm": {
+    "x0": 2.0346847496847933e-13,
+    "y0": 3.314512409159136e-13
+   },
+   "quadrants": 1,
+   "reasons": {
+    "xz": [],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.07993278518031036,
+   "xz": true,
+   "yz": true
+  }
+ }
+}

@@ -115,6 +115,29 @@ def test_a_parametric_offset_quarter_records_a_quarter_it_expected() -> None:
     assert record["findings"] == []
 
 
+def test_a_parametric_record_carries_the_sampled_mirror_evidence() -> None:
+    """Each parametric plane states what the mirror check measured (stage 2)."""
+    from server.solver.symmetry import resolve_symmetry
+
+    request = _request(OFFSET_QUARTER)
+    record = _resolve(request)
+    resolution = resolve_symmetry(request.design)
+    for plane, entry in record["planes"].items():
+        verdict = resolution.plane_verdicts[plane]
+        assert verdict["accepted"] is True
+        assert entry["points_tested"] == verdict["points_tested"] > 0
+        assert entry["points_off"] == 0
+        assert entry["role_mismatches"] == 0
+        assert entry["worst_off_mm"] is None
+        assert entry["max_residual_mm"] == verdict["max_residual_step_units"]
+        assert 0 <= entry["max_residual_mm"] <= entry["tolerance_mm"]
+        assert entry["tolerance_mm"] == verdict["tolerance_step_units"] == resolution.tolerance_mm
+    # The box above the throat is taller: y0 is rejected by the box, while
+    # the horn's own surface still mirrors (its evidence says so).
+    tall = _resolve(_request(TALL_ABOVE))["planes"]["y0"]
+    assert tall["geometry"] == "rejected" and tall["points_off"] == 0 and tall["points_tested"] > 0
+
+
 def test_a_parametric_box_taller_above_rejects_y0_with_the_reason() -> None:
     record = _resolve(_request(TALL_ABOVE))
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import hashlib
 import math
 import threading
@@ -23,6 +23,9 @@ from server.preview.construction import retain_mesher_construction
 from server.preview.translate import design_to_mesher_config
 
 
+#: The mesher's ``exact`` tolerance class (``hornlab_mesher.symmetry.TOLERANCES``),
+#: which the check below uses; kept here for the wire and for
+#: :func:`resolution_was_sampled` without importing the mesher.
 SYMMETRY_RELATIVE_TOLERANCE = 2.0e-4
 SYMMETRY_ABSOLUTE_TOLERANCE_MM = 1.0e-7
 SYMMETRY_ANGULAR_SEGMENTS = 128
@@ -37,9 +40,21 @@ class SymmetryResolution:
     reasons: dict[str, list[str]]
     tolerance_mm: float
     relative_tolerance: float = SYMMETRY_RELATIVE_TOLERANCE
+    #: The sampled surface's mirror verdict per cut plane (``x0``, ``y0``), as
+    #: ``PlaneSymmetryVerdict.to_dict()``; None when it was not sampled.
+    #: Evidence for the solve record, not part of the wire answer.
+    plane_verdicts: Mapping[str, Mapping[str, Any]] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        """The wire answer (``POST /api/design/symmetry``); no verdict evidence."""
+        return {
+            "quadrants": self.quadrants,
+            "xz": self.xz,
+            "yz": self.yz,
+            "reasons": {plane: list(items) for plane, items in self.reasons.items()},
+            "tolerance_mm": self.tolerance_mm,
+            "relative_tolerance": self.relative_tolerance,
+        }
 
 
 def _scalar(value: Expr | None, default: float | None = None) -> float | None:
@@ -61,35 +76,6 @@ def _reshape_surface(raw: Any, n_phi: int, n_length: int) -> np.ndarray | None:
     return points.reshape(n_phi, n_length + 1, 3)
 
 
-def _point_segment_distances(points: np.ndarray, ring: np.ndarray) -> np.ndarray:
-    """Distance from each point to the nearest segment of one closed ring."""
-
-    starts = ring
-    deltas = np.roll(ring, -1, axis=0) - starts
-    lengths_sq = np.einsum("ij,ij->i", deltas, deltas)
-    offsets = points[:, None, :] - starts[None, :, :]
-    fractions = np.divide(
-        np.einsum("pij,ij->pi", offsets, deltas),
-        lengths_sq[None, :],
-        out=np.zeros((len(points), len(ring)), dtype=np.float64),
-        where=lengths_sq[None, :] > 1.0e-24,
-    )
-    fractions = np.clip(fractions, 0.0, 1.0)
-    nearest = starts[None, :, :] + fractions[:, :, None] * deltas[None, :, :]
-    return np.min(np.linalg.norm(points[:, None, :] - nearest, axis=2), axis=1)
-
-
-def _surface_mirror_deviation(surface: np.ndarray, coordinate: int) -> float:
-    maximum = 0.0
-    for axial_index in range(surface.shape[1]):
-        ring = surface[:, axial_index, :]
-        reflected = ring.copy()
-        reflected[:, coordinate] *= -1.0
-        distances = _point_segment_distances(reflected, ring)
-        maximum = max(maximum, float(np.max(distances, initial=0.0)))
-    return maximum
-
-
 def _margin_pair(
     design: DesignConfig,
     left_name: str,
@@ -102,24 +88,6 @@ def _margin_pair(
         _scalar(getattr(enclosure, left_name), 25.0),
         _scalar(getattr(enclosure, right_name), 25.0),
     )
-
-
-def _append_spacing_reason(
-    reasons: dict[str, list[str]],
-    plane: str,
-    labels: tuple[str, str],
-    values: tuple[float | None, float | None],
-    tolerance_mm: float,
-) -> None:
-    first, second = values
-    if first is None or second is None:
-        reasons[plane].append(
-            f"enclosure {labels[0]}/{labels[1]} spacing is not a finite scalar"
-        )
-    elif abs(first - second) > tolerance_mm:
-        reasons[plane].append(
-            f"enclosure {labels[0]}={first:g} mm differs from {labels[1]}={second:g} mm"
-        )
 
 
 def _failed_resolution(message: str) -> SymmetryResolution:
@@ -220,59 +188,51 @@ def _resolve_symmetry_uncached(design: DesignConfig | Mapping[str, Any]) -> Symm
             }
         )
         config["mesh"] = mesh
-        from hornlab_mesher.config_builder import build_geometry_params, build_point_grid
+        from hornlab_mesher.config_builder import (
+            build_geometry_params,
+            build_point_grid,
+            enclosure_quadrant_resolutions,
+        )
 
         params, _formula, mode = build_geometry_params(config)
         enclosure_resolutions: dict[str, list[float]] = {}
         if mode == "enclosure":
-            # Pinned mesher a515334 has no public density/list parser. Keep
-            # these private helpers aligned with its repeat-last and fallback
-            # contract when updating the mesher pin.
-            from hornlab_mesher.config_builder import _mesh_density_from_config
-            from hornlab_mesher.density import _parse_quadrant_resolutions
-
-            density = _mesh_density_from_config(config)
-            enclosure_resolutions = {
-                name: _parse_quadrant_resolutions(value, density.mouth_res_mm)
-                for name, value in (
-                    ("front_resolution", density.enc_front_res_mm),
-                    ("back_resolution", density.enc_back_res_mm),
-                )
-            }
+            enclosure_resolutions = enclosure_quadrant_resolutions(config)
         params["quadrants"] = "1234"
         params["angularSegments"] = SYMMETRY_ANGULAR_SEGMENTS
         params["lengthSegments"] = SYMMETRY_LENGTH_SEGMENTS
         grid = build_point_grid(params)
         n_phi = int(grid["grid_n_phi"])
         n_length = int(grid["grid_n_length"])
-        surfaces = [
-            surface
-            for surface in (
-                _reshape_surface(grid.get("inner_points"), n_phi, n_length),
-                _reshape_surface(grid.get("outer_points"), n_phi, n_length),
+        grids = {
+            name: surface
+            for name, surface in (
+                ("inner", _reshape_surface(grid.get("inner_points"), n_phi, n_length)),
+                ("outer", _reshape_surface(grid.get("outer_points"), n_phi, n_length)),
             )
             if surface is not None
-        ]
-        if not surfaces:
+        }
+        if not grids:
             return _failed_resolution("mesher point grid returned no surface points")
     except Exception as exc:
         return _failed_resolution(f"mesher symmetry sampling failed: {exc}")
 
-    all_points = np.concatenate([surface.reshape(-1, 3) for surface in surfaces])
-    diagonal = float(np.linalg.norm(np.ptp(all_points, axis=0)))
-    tolerance_mm = max(
-        SYMMETRY_ABSOLUTE_TOLERANCE_MM,
-        SYMMETRY_RELATIVE_TOLERANCE * max(diagonal, SYMMETRY_ABSOLUTE_TOLERANCE_MM),
+    from hornlab_mesher.symmetry import (
+        evaluate_enclosure_symmetry,
+        evaluate_point_grid_symmetry,
     )
+
+    # The mesher's one mirror check, exact class: each sampled ring against
+    # its own mirror image, within 2e-4 of the grids' diagonal.
+    verdicts = evaluate_point_grid_symmetry(grids, tolerance_class="exact")
+    tolerance_mm = verdicts["y0"].tolerance
     reasons: dict[str, list[str]] = {"xz": [], "yz": []}
-    for plane, coordinate in (("xz", 1), ("yz", 0)):
-        deviation = max(
-            _surface_mirror_deviation(surface, coordinate) for surface in surfaces
-        )
-        if deviation > tolerance_mm:
+    for plane, cut_plane in (("xz", "y0"), ("yz", "x0")):
+        verdict = verdicts[cut_plane]
+        if not verdict.accepted:
             reasons[plane].append(
                 f"sampled horn surface misses the {plane} mirror by up to "
-                f"{deviation:.6g} mm (tolerance {tolerance_mm:.6g} mm)"
+                f"{verdict.worst_off_model_distance:.6g} mm (tolerance {tolerance_mm:.6g} mm)"
             )
 
     # Mesh.VerticalOffset is a rigid +y placement translation the mesher applies
@@ -289,28 +249,19 @@ def _resolve_symmetry_uncached(design: DesignConfig | Mapping[str, Any]) -> Symm
         reasons["xz"].append("mesh.vertical_offset is not a finite scalar")
 
     if mode == "enclosure":
-        # Compare the same expanded quadrant targets the mesher applies.
-        for name, values in enclosure_resolutions.items():
-            for plane, pairs in (("xz", ((0, 3), (1, 2))), ("yz", ((0, 1), (3, 2)))):
-                if any(
-                    not math.isclose(values[a], values[b], rel_tol=1e-12, abs_tol=1e-12)
-                    for a, b in pairs
-                ):
-                    reasons[plane].append(f"enclosure {name} quadrant sizes differ across the {plane} plane")
-        _append_spacing_reason(
-            reasons,
-            "yz",
-            ("space_l", "space_r"),
-            _margin_pair(validated, "space_l", "space_r"),
-            tolerance_mm,
+        # The same expanded quadrant sizes the mesher applies, the box's Dim
+        # (the mesher refuses a reduced build whose Dim differs across a cut
+        # plane) and the margins.
+        enclosure = validated.root.enclosure
+        box = evaluate_enclosure_symmetry(
+            resolutions=enclosure_resolutions,
+            dim_mm=enclosure.dim_mm if enclosure is not None else None,
+            spacing_lr=_margin_pair(validated, "space_l", "space_r"),
+            spacing_tb=_margin_pair(validated, "space_t", "space_b"),
+            spacing_tolerance_mm=tolerance_mm,
         )
-        _append_spacing_reason(
-            reasons,
-            "xz",
-            ("space_t", "space_b"),
-            _margin_pair(validated, "space_t", "space_b"),
-            tolerance_mm,
-        )
+        reasons["xz"].extend(box["y0"])
+        reasons["yz"].extend(box["x0"])
 
     xz = not reasons["xz"]
     yz = not reasons["yz"]
@@ -321,6 +272,7 @@ def _resolve_symmetry_uncached(design: DesignConfig | Mapping[str, Any]) -> Symm
         yz=yz,
         reasons=reasons,
         tolerance_mm=tolerance_mm,
+        plane_verdicts={plane: verdict.to_dict() for plane, verdict in verdicts.items()},
     )
 
 
@@ -370,6 +322,7 @@ def restrict_for_ground_plane(
         reasons=reasons,
         tolerance_mm=resolution.tolerance_mm,
         relative_tolerance=resolution.relative_tolerance,
+        plane_verdicts=resolution.plane_verdicts,
     )
 
 
