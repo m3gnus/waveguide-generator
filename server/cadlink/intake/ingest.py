@@ -138,7 +138,7 @@ def meshing_semantics() -> dict[str, Any]:
     """The WG-internal constants that decide what a solver mesh is for given inputs."""
 
     from server.mesh import imported as meshing
-    from hornlab_mesher import step_prepare, tessellation
+    from hornlab_mesher import tessellation
 
     semantics = {
         "surface_deviation_mm": meshing.IMPORTED_SURFACE_DEVIATION_MM,
@@ -167,11 +167,6 @@ def meshing_semantics() -> dict[str, Any]:
         # a cached whole model may now be a half.
         "reduced_verification": "shared-verify-reduced-mesh-v1",
         "degrade_policy": "per-plane-v1",
-        # The mirror test samples large faces densely (a one-sided hole between
-        # the old fixed grid's samples is no longer cut as symmetric).
-        "mirror_sample_spacing_rel": step_prepare.DEFAULT_AUTO_CUT_SAMPLE_SPACING_REL,
-        "mirror_sample_point_cap": step_prepare.AUTO_CUT_MAX_SAMPLE_POINTS,
-        "mirror_sample_face_grid_cap": step_prepare.AUTO_CUT_MAX_FACE_GRID,
     }
     # Rounded: a constant computed at import (``math.log``) may differ in its
     # last bit between platforms' maths libraries, and the fingerprint must not.

@@ -345,8 +345,8 @@ IMPORTED_VIEWPORT_COARSENING_FACTOR = 1.5
 
 
 #: The symmetry rules a record was built under (``symmetry["symmetry_rules"]``):
-#: the shared reduced-mesh check, the per-plane degrade and the dense mirror
-#: samples. A record without it was built before them.
+#: the shared reduced-mesh check, the per-plane degrade and WG cut candidates
+#: without the declared planes. A record without it was built before them.
 SYMMETRY_RULES = "shared-check-per-plane-v1"
 #: The option a portable replay sets to rebuild under the earlier rules.
 LEGACY_SYMMETRY_RULES = "pre-shared-check"
@@ -2876,8 +2876,8 @@ def build_imported_mesh(
         raise ImportedMeshError("symmetry: symmetryMode must be 'auto' or 'full'")
     # A portable replay of a package exported before the shared reduced-mesh
     # check (it carries no ``symmetry_rules``) is rebuilt under that build's
-    # symmetry rules: the floor mirror samples, declared planes still among the
-    # candidates, and one fallback to the whole model. Its mesh and record are
+    # symmetry rules: declared planes still among the cut candidates, and one
+    # fallback to the whole model. Its mesh and record are
     # then the ones it was exported with (``server/jobs/mesh_replay.py``).
     legacy_rules = options.get("replay_symmetry_rules") == LEGACY_SYMMETRY_RULES
     # Mirror verdicts by healing options, then plane: one geometry, one test.
@@ -3620,7 +3620,7 @@ def build_imported_mesh(
                     groups,
                     planes=candidate_planes,
                     **(
-                        {"sample_spacing_rel": None}
+                        {}
                         if legacy_rules
                         else {"known_verdicts": {p: known[p] for p in candidate_planes if p in known}}
                     ),
@@ -4261,9 +4261,11 @@ def build_imported_mesh(
         wg_candidates = pending.pop(0)
         if wg_candidates and deadline is not None and longest_build_s > 0.0:
             # An optional reduced retry runs only while the time left covers it
-            # and, after it, the whole model (about 2**planes times a reduced
-            # build). Otherwise the whole model is meshed now.
-            needed = longest_build_s * (1 + 2 ** max(first_domain_planes, 1))
+            # and, after it, the whole model: a half retry is about twice a
+            # quarter build and the whole model about 2**planes times one, so a
+            # quarter needs 2 + 4 = 6 quarter builds of time left. Otherwise
+            # the whole model is meshed now.
+            needed = longest_build_s * (2 + 2 ** max(first_domain_planes, 1))
             if deadline - time.monotonic() < needed:
                 for skipped in [wg_candidates, *(item for item in pending if item)]:
                     attempts.append(

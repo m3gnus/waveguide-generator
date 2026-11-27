@@ -484,7 +484,7 @@ def test_typed_surface_replay_refuses_all_retained_fem_evidence(field, value):
 
 
 def test_a_cad_replay_exported_before_the_shared_reduced_mesh_check_still_opens(tmp_path):
-    """A package from 68bdc4662 (floor mirror samples, all-or-nothing fallback).
+    """A package from 68bdc4662 (declared planes among the cut candidates, all-or-nothing fallback).
 
     Its declared y0 half had WG cut x0 under the earlier symmetry rules. It
     carries no ``symmetry_rules``, so it is rebuilt under those rules, and its

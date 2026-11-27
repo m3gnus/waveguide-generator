@@ -460,8 +460,8 @@ def _restore_cad_mesh(runtime: Any, store: Any, data_dir: Path, package: CadMesh
             raise ValueError("The CAD manifest checksum does not match the recorded request.")
         prep_options = package.preparation.model_dump(mode="json")
         if "symmetry_rules" not in package.interpretation.symmetry:
-            # Exported before the shared reduced-mesh check and its dense
-            # mirror samples: rebuilt under the rules it was exported with, so
+            # Exported before the shared reduced-mesh check and the per-plane
+            # degrade: rebuilt under the rules it was exported with, so
             # its mesh and interpretation compare equal (``build_imported_mesh``).
             from server.mesh.imported import LEGACY_SYMMETRY_RULES
 
