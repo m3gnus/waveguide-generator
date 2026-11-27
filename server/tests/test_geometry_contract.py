@@ -119,6 +119,7 @@ def test_physical_tags_match_the_pinned_mesher() -> None:
     assert builder.CANONICAL_SURFACE_TAGS == {1, 2, 3, 4, 12}
     assert builder.CANONICAL_SURFACE_TAGS <= PHYSICAL_NAMES.keys()
     assert builder.MOUTH_APERTURE_SURFACE_TAG == int(PhysicalGroup.MOUTH_APERTURE) == 12
+    assert builder.INTERFACE_SURFACE_TAG == int(PhysicalGroup.INTERFACE) == 4
     assert imported.RIGID_TAG == int(PhysicalGroup.RIGID_WALL) == 1
 
 

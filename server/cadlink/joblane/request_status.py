@@ -231,8 +231,13 @@ def _notice(ingest: Mapping[str, Any] | None) -> str | None:
         return None
     kinds = {str(item.get("kind")): item for item in findings if isinstance(item, Mapping)}
     fallback = kinds.get("symmetry-cut-unverified")
-    if fallback is not None:
-        return "fullModel" if fallback.get("solved_domain") == "full" else "cutModel"
+    if fallback is not None and fallback.get("solved_domain") == "full":
+        return "fullModel"
+    if fallback is not None and fallback.get("cut_in_cad") is not False:
+        return "cutModel"
+    # A reduced model WG cut itself (one of its cuts failed): the shared notice
+    # codes have no words for it -- "cutModel" says it was cut in CAD -- so no
+    # symmetry notice is sent; the model card in WG says which plane was lost.
     return "healed" if "healing-performed" in kinds else None
 
 

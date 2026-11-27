@@ -74,7 +74,14 @@ def install_cut_refusal(*, only_when_cut: str | None = None) -> None:
         if candidates is None or (
             candidates and (only_when_cut is None or only_when_cut in candidates)
         ):
-            raise RuntimeError("OCC cut lost retained portions of surfaces [3]")
+            # As the real cutter: the mirror test has run, and its verdicts
+            # and accepted planes travel with the refusal. The cut it made is
+            # thrown away with the attempt (the next one re-imports).
+            done = real_cut(groups, planes=planes, **kwargs)
+            error = RuntimeError("OCC cut lost retained portions of surfaces [3]")
+            error.accepted_planes = done.planes  # type: ignore[attr-defined]
+            error.report = done.report  # type: ignore[attr-defined]
+            raise error
         return real_cut(groups, planes=planes, **kwargs)
 
     hornlab_mesher.auto_cut_occ_geometry = refusing

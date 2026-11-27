@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
 import contextlib
 from dataclasses import dataclass
@@ -2369,6 +2369,10 @@ def _ingest_bundle(
         )
         # A half WG cut itself (its other cut failed) is not "as cut in CAD".
         cut_in_cad = not list(fallback.get("kept_cut_planes") or [])
+        lost_planes = [
+            *list(fallback.get("rejected_cut_planes") or []),
+            *list(fallback.get("refused_cut_planes") or []),
+        ]
         findings.append(
             {
                 "id": _finding_id(
@@ -2383,7 +2387,9 @@ def _ingest_bundle(
                 "off_plane_free_edge_count": fallback.get("off_plane_free_edge_count"),
                 "solved_domain": solved_domain,
                 "cut_in_cad": cut_in_cad,
-                "detail": symmetry_fallback_detail(solved_domain, cut_in_cad=cut_in_cad),
+                "detail": symmetry_fallback_detail(
+                    solved_domain, cut_in_cad=cut_in_cad, lost_planes=lost_planes
+                ),
             }
         )
     if built["healing"]["performed"]:
@@ -2637,18 +2643,25 @@ def _ingest_bundle(
 SOLVED_DOMAIN_BY_PLANES = DOMAIN_FRACTION_BY_PLANE_COUNT
 
 
-def symmetry_fallback_detail(solved_domain: str, *, cut_in_cad: bool = True) -> str:
+def symmetry_fallback_detail(
+    solved_domain: str, *, cut_in_cad: bool = True, lost_planes: Iterable[str] = ()
+) -> str:
     """The one calm line for a symmetry fallback, worded from what is solved.
 
     ``cut_in_cad`` is False when WG itself cut the reduced domain it kept
-    (one of its cuts survived where another failed its check).
+    (one of its cuts survived where another failed its check); the line then
+    names the mirror it lost (``lost_planes``).
     """
 
     if solved_domain == "full":
         return "WG will solve the whole model; symmetry could not be used for this one."
     if not cut_in_cad:
+        from server.solver.domain_record import mirror_words
+
+        lost = [plane for plane in ("x0", "y0") if plane in set(lost_planes)]
+        named = " and ".join(mirror_words(plane) for plane in lost) or "other"
         return (
-            f"WG will solve the {solved_domain} model; it could not use the other "
+            f"WG will solve the {solved_domain} model; it could not use the {named} "
             "symmetry plane for this one."
         )
     return (

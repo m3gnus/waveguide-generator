@@ -784,8 +784,18 @@ def _build_with_memory_stop(
 CLOSED_ACOUSTIC_MODES = frozenset({"enclosure", "freestanding", "infinite-baffle"})
 
 
+#: The subdomain interface tag (``hornlab_mesher.tags.PhysicalGroup.INTERFACE``):
+#: an internal partition whose rim is free by construction, which the
+#: mesher's closed-shell contract exempts and so does the reduced-mesh check.
+INTERFACE_SURFACE_TAG = 4
+
+
 def _require_verified_reduced_domain(
-    config: Mapping[str, Any], vertices_m: np.ndarray, triangles: np.ndarray, quadrants: int
+    config: Mapping[str, Any],
+    vertices_m: np.ndarray,
+    triangles: np.ndarray,
+    quadrants: int,
+    tags: np.ndarray | None = None,
 ) -> None:
     """Run the shared reduced-mesh check on a generated mesh; failure is a defect.
 
@@ -811,6 +821,9 @@ def _require_verified_reduced_domain(
         closed=mode in CLOSED_ACOUSTIC_MODES,
         expected_volume_sign=-1 if mode == "infinite-baffle" else 1,
         snap_tolerance_mm=SYMMETRY_PLANE_TOLERANCE_M * 1000.0,
+        exempt_triangles=(
+            None if tags is None else np.asarray(tags) == INTERFACE_SURFACE_TAG
+        ),
     )
     if not verdict.ok:
         raise RuntimeError(
@@ -1671,7 +1684,7 @@ def _build_design_artifact(
     # default would have.
     integrity["element_quality"] = mesh_element_quality_report(vertices, triangles)
     _require_closed_acoustic_topology(config, integrity)
-    _require_verified_reduced_domain(config, vertices, triangles, quadrants)
+    _require_verified_reduced_domain(config, vertices, triangles, quadrants, tags)
     tag_counts = {
         str(tag): tag_count_values.get(tag, 0) for tag in sorted(CANONICAL_SURFACE_TAGS | assembly_tags)
     }

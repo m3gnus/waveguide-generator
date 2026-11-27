@@ -1505,3 +1505,13 @@ def test_a_reduced_parametric_mesh_that_fails_the_check_is_refused_not_solved() 
     # An infinite baffle is wound the other way round.
     with pytest.raises(RuntimeError, match="wound against"):
         _require_verified_reduced_domain({"mode": "infinite-baffle"}, points, triangles, 1)
+    # A loose sheet leaks -- unless it is a subdomain interface (tag 4), whose
+    # free rim the mesher's closed-shell contract exempts too.
+    sheet = np.asarray([(0.05, 0.05, 0.02), (0.06, 0.05, 0.02), (0.05, 0.06, 0.02)])
+    with_sheet = np.vstack([points, sheet])
+    sheet_triangles = np.vstack([triangles, [[len(points), len(points) + 1, len(points) + 2]]])
+    tags = np.ones(len(sheet_triangles), dtype=int)
+    with pytest.raises(RuntimeError, match="leaks"):
+        _require_verified_reduced_domain(config, with_sheet, sheet_triangles, 1, tags)
+    tags[-1] = 4
+    _require_verified_reduced_domain(config, with_sheet, sheet_triangles, 1, tags)

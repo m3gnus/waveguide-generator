@@ -36,6 +36,10 @@ from typing import Any
 from server.platform.json_file import json_bytes, write_json_atomic
 from server.cadlink.build_flags import fem_regions_enabled
 
+#: When this child started: the parent's watchdog counts its wall time from
+#: about here, so a task's deadline is this plus the envelope's wall time.
+_STARTED = time.monotonic()
+
 
 PROTOCOL_VERSION = 1
 #: The parent's envelope is its own writing, but reading stdin without a bound
@@ -279,6 +283,8 @@ def _task_mesh(
         else:
             install_reduced_domain_inversion()
 
+    limits = envelope.get("limits")
+    wall_time_s = limits.get("wall_time_s") if isinstance(limits, dict) else None
     built = build_imported_mesh(
         source,
         manifest,
@@ -286,6 +292,8 @@ def _task_mesh(
         skipped_source_ids=[str(value) for value in payload.get("skipped_source_ids") or ()],
         options=payload.get("options") or {},
         include_viewport_mesh=bool(payload.get("include_viewport_mesh", True)),
+        # The optional reduced retries leave the whole-model fallback its time.
+        deadline=_STARTED + float(wall_time_s) if wall_time_s else None,
     )
     msh_text = built.pop("msh_text", None)
     viewport_text = built.pop("viewport_msh_text", None)

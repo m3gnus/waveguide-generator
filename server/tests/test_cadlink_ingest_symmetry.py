@@ -1013,12 +1013,13 @@ def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(tmp_path: Path, 
     assert verification["fallback"]["rejected_cut_planes"] == ["x0", "y0"]
     assert verification["fallback"]["capped_planes"] == []
     assert "leaks" in verification["fallback"]["reason"]
-    # A leak names no plane, and every reduced mesh leaks here: each plane is
-    # tried alone, x0 first, before the whole model -- and no more than that.
+    # A leak names no plane, and every reduced mesh leaks here: x0 is tried
+    # alone (a WG-cut y0-only half is not offered until stage 6), then the
+    # whole model -- and no more than that.
     assert [
         (item["wg_cut_planes"], item["outcome"]) for item in verification["fallback"]["attempts"]
     ] == [
-        (["x0", "y0"], "unverified"), (["x0"], "unverified"), (["y0"], "unverified"), ([], "kept"),
+        (["x0", "y0"], "unverified"), (["x0"], "unverified"), ([], "kept"),
     ]
     assert verification["fallback"]["attempts"][0]["failure_codes"] == ["off-plane-open-edges"]
     assert record["domain_decision"]["verification"]["attempts"][1] == {
@@ -1077,8 +1078,7 @@ def test_a_refused_symmetry_cut_falls_back_to_the_full_domain(tmp_path: Path, ca
     assert [
         (item["wg_cut_planes"], item["outcome"]) for item in verification["fallback"]["attempts"]
     ] == [
-        (["x0", "y0"], "cut-refused"), (["x0"], "cut-refused"), (["y0"], "cut-refused"),
-        ([], "kept"),
+        (["x0", "y0"], "cut-refused"), (["x0"], "cut-refused"), ([], "kept"),
     ]
     finding = next(
         item for item in record["findings"] if item["kind"] == "symmetry-cut-unverified"
@@ -1098,6 +1098,12 @@ _RETURN_IDS.update(
         "half-x0-leaking": "wgr_01J5A8QK3M9T2XVBH0RD7NWEV0",
         "named-y0": "wgr_01J5A8QK3M9T2XVBH0RD7NWEW0",
         "declared-named": "wgr_01J5A8QK3M9T2XVBH0RD7NWEX0",
+        "named-x0": "wgr_01J5A8QK3M9T2XVBH0RD7NWEY0",
+        "named-both": "wgr_01J5A8QK3M9T2XVBH0RD7NWEZ0",
+        "mixed": "wgr_01J5A8QK3M9T2XVBH0RD7NWF00",
+        "declared-refused": "wgr_01J5A8QK3M9T2XVBH0RD7NWF10",
+        "short-time": "wgr_01J5A8QK3M9T2XVBH0RD7NWF20",
+        "quarter-x0-leaking": "wgr_01J5A8QK3M9T2XVBH0RD7NWF30",
     }
 )
 
@@ -1141,7 +1147,8 @@ def _assert_half_kept_on_x0(record: dict[str, Any], *, first_outcome: str) -> No
     assert finding["solved_domain"] == "half"
     assert finding["cut_in_cad"] is False
     assert finding["detail"] == (
-        "WG will solve the half model; it could not use the other symmetry plane for this one."
+        "WG will solve the half model; it could not use the top/bottom (y = 0) symmetry "
+        "plane for this one."
     )
 
 
@@ -1177,9 +1184,32 @@ def test_a_quarter_whose_y0_cut_is_refused_is_cut_on_x0_alone(tmp_path: Path) ->
     fallback = record["symmetry_verification"]["fallback"]
     assert fallback["reason"].startswith("cut-refused: ")
     assert fallback["rejected_cut_planes"] == []
+    assert fallback["refused_cut_planes"] == ["y0"]
     assert fallback["detected_planes"] == ["y0"]
-    # y0 was never mirror-tested on its own: the record says so.
-    assert record["domain_decision"]["planes"]["y0"]["geometry"] == "not-tested"
+    # The mirror test accepted y0 before its cut was refused: the record keeps it.
+    assert record["domain_decision"]["planes"]["y0"]["geometry"] == "accepted"
+    assert record["domain_decision"]["planes"]["y0"]["dropped_by"] == "verification"
+
+
+def test_a_quarter_whose_x0_cut_leaks_is_solved_whole_until_stage_6(tmp_path: Path) -> None:
+    """x0 fails alone too; a WG-cut y0-only half is not offered (BEAT has none)."""
+
+    pytest.importorskip("gmsh")
+    bundle = _horn_bundle(tmp_path, "quarter-x0-leaking")
+    with _inject_mesh_child_fault("leaking-x0-reduced-domain"):
+        record = _ingest(tmp_path, bundle)
+
+    assert record["symmetry"]["domain_planes"] == []
+    fallback = record["symmetry_verification"]["fallback"]
+    assert [(item["wg_cut_planes"], item["outcome"]) for item in fallback["attempts"]] == [
+        (["x0", "y0"], "unverified"), (["x0"], "unverified"), ([], "kept"),
+    ]
+    planes = record["domain_decision"]["planes"]
+    assert planes["x0"]["dropped_by"] == planes["y0"]["dropped_by"] == "verification"
+    finding = next(
+        item for item in record["findings"] if item["kind"] == "symmetry-cut-unverified"
+    )
+    assert finding["solved_domain"] == "full"
 
 
 def test_a_declared_half_keeps_its_plane_when_wgs_own_cut_fails(tmp_path: Path) -> None:
@@ -1206,17 +1236,28 @@ def test_a_declared_half_keeps_its_plane_when_wgs_own_cut_fails(tmp_path: Path) 
 
 
 def _counted_imported_build(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: dict[str, str], **bundle_kwargs: Any
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failing: dict[str, str],
+    *,
+    refuse_cuts: Any = (),
+    deadline: float | None = None,
+    **bundle_kwargs: Any,
 ) -> tuple[list[tuple[str, ...]], Any]:
     """Build in this process with the reduced-mesh check failing named planes.
 
     ``failing`` maps a plane to the failure code the check reports whenever
-    that plane is in the domain. Returns the domains each attempt meshed, and
-    the build (or the exception it raised).
+    that plane is in the domain (the code alone, naming no plane, for a global
+    code such as ``off-plane-open-edges``). ``refuse_cuts`` lists the WG cut
+    plane sets the cutter refuses (``"any"``: every cut). Returns the domains
+    each attempt meshed, and the build (or the exception it raised).
     """
+
+    import hornlab_mesher
 
     from server.mesh import imported
     from server.mesh.imported import build_imported_mesh
+    from hornlab_mesher.symmetry import GLOBAL_FAILURES
 
     real = imported.verify_imported_reduced_mesh
     meshed: list[tuple[str, ...]] = []
@@ -1225,15 +1266,28 @@ def _counted_imported_build(
         planes = tuple(cut_planes)
         meshed.append(planes)
         record = real(points_mm, triangles, cut_planes=planes)
-        named = [plane for plane in planes if plane in failing]
-        if named:
+        hit = [plane for plane in planes if plane in failing]
+        if hit:
+            codes = sorted({failing[plane] for plane in hit})
             record.update(
-                verified=False, reason="injected", failed_planes=named,
-                failure_codes=sorted({failing[plane] for plane in named}),
+                verified=False, reason="injected", failure_codes=codes,
+                failed_planes=[plane for plane in hit if failing[plane] not in GLOBAL_FAILURES],
             )
         return record
 
+    real_cut = hornlab_mesher.auto_cut_occ_geometry
+
+    def refusing(groups: Any, *, planes: Any = None, **kwargs: Any) -> Any:
+        candidates = tuple(planes or ())
+        if candidates and (refuse_cuts == "any" or candidates in refuse_cuts):
+            error = RuntimeError("OCC cut lost retained portions of surfaces [3]")
+            error.accepted_planes = candidates  # type: ignore[attr-defined]
+            error.report = {"planes": {}}  # type: ignore[attr-defined]
+            raise error
+        return real_cut(groups, planes=planes, **kwargs)
+
     monkeypatch.setattr(imported, "verify_imported_reduced_mesh", failing_check)
+    monkeypatch.setattr(hornlab_mesher, "auto_cut_occ_geometry", refusing)
     name = bundle_kwargs.pop("name")
     if bundle_kwargs.get("planes"):
         bundle = _reduced_bundle(tmp_path, name, **bundle_kwargs)
@@ -1245,11 +1299,21 @@ def _counted_imported_build(
     try:
         built = _run_in_gmsh_session(
             build_imported_mesh, bundle / "assembly.step", manifest, _SIZES,
-            options=options, include_viewport_mesh=False,
+            options=options, include_viewport_mesh=False, deadline=deadline,
         )
     except Exception as exc:  # noqa: BLE001 - returned to the test to assert on
         built = exc
     return meshed, built
+
+
+def _plane_entries(built: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    from server.solver.domain_record import cad_plane_entries
+
+    return cad_plane_entries(
+        built["symmetry"],
+        domain_planes=built["symmetry"]["domain_planes"],
+        verification=built["symmetry_verification"],
+    )
 
 
 def test_a_failure_naming_y0_drops_y0_without_trying_it_alone(
@@ -1264,6 +1328,95 @@ def test_a_failure_naming_y0_drops_y0_without_trying_it_alone(
     attempts = built["symmetry_verification"]["fallback"]["attempts"]
     assert attempts[0]["failed_planes"] == ["y0"]
     assert attempts[0]["failure_codes"] == ["missing-cut-rim"]
+    # The same geometry is not mirror-tested twice: x0's verdict is reused.
+    assert built["symmetry"]["reused_verdict_planes"] == ["x0"]
+    assert built["symmetry"]["symmetry_rules"] == "shared-check-per-plane-v1"
+
+
+def test_a_failure_naming_x0_goes_to_the_whole_model_not_a_wg_y0_half(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Until stage 6 a WG-cut top/bottom-only half is not offered (BEAT has none)."""
+
+    pytest.importorskip("gmsh")
+    meshed, built = _counted_imported_build(
+        tmp_path, monkeypatch, {"x0": "capped-cut-plane"}, name="named-x0",
+    )
+    assert meshed == [("x0", "y0"), ()]
+    assert built["symmetry"]["domain_planes"] == []
+
+
+def test_a_failure_naming_both_planes_goes_straight_to_the_whole_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("gmsh")
+    meshed, built = _counted_imported_build(
+        tmp_path, monkeypatch, {"x0": "missing-cut-rim", "y0": "missing-cut-rim"},
+        name="named-both",
+    )
+    assert meshed == [("x0", "y0"), ()]
+    entries = _plane_entries(built)
+    assert entries["x0"]["dropped_by"] == entries["y0"]["dropped_by"] == "verification"
+
+
+def test_a_refused_cut_then_an_unverified_one_drop_both_planes_to_the_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every plane any attempt gave up is recorded, whichever attempt it was."""
+
+    pytest.importorskip("gmsh")
+    meshed, built = _counted_imported_build(
+        tmp_path, monkeypatch, {"x0": "off-plane-open-edges"},
+        refuse_cuts=[("x0", "y0")], name="mixed",
+    )
+    assert meshed == [("x0",), ()]
+    fallback = built["symmetry_verification"]["fallback"]
+    assert [(item["wg_cut_planes"], item["outcome"]) for item in fallback["attempts"]] == [
+        (["x0", "y0"], "cut-refused"), (["x0"], "unverified"), ([], "kept"),
+    ]
+    assert fallback["rejected_cut_planes"] == ["x0"]
+    assert fallback["refused_cut_planes"] == ["y0"]
+    entries = _plane_entries(built)
+    for plane in ("x0", "y0"):
+        assert entries[plane]["used"] is False
+        assert entries[plane]["dropped_by"] == "verification"
+
+
+def test_a_refused_wg_cut_on_a_declared_half_keeps_the_declared_plane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The declared plane is never a cut candidate, nor in the refused cut."""
+
+    pytest.importorskip("gmsh")
+    meshed, built = _counted_imported_build(
+        tmp_path, monkeypatch, {}, refuse_cuts="any", name="declared-refused", planes=("y0",),
+    )
+    assert meshed == [("y0",)]
+    assert built["symmetry"]["domain_planes"] == ["y0"]
+    assert built["symmetry"]["candidate_planes"] == []
+    attempts = built["symmetry_verification"]["fallback"]["attempts"]
+    assert [(item["wg_cut_planes"], item["outcome"]) for item in attempts] == [
+        (["x0"], "cut-refused"), ([], "kept"),
+    ]
+
+
+def test_a_retry_that_would_starve_the_whole_model_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the meshing time nearly spent, a failed quarter goes straight to whole."""
+
+    pytest.importorskip("gmsh")
+    import time
+
+    meshed, built = _counted_imported_build(
+        tmp_path, monkeypatch, {"x0": "off-plane-open-edges", "y0": "off-plane-open-edges"},
+        deadline=time.monotonic() + 1.0, name="short-time",
+    )
+    assert meshed == [("x0", "y0"), ()]
+    attempts = built["symmetry_verification"]["fallback"]["attempts"]
+    assert [(item["wg_cut_planes"], item["outcome"]) for item in attempts] == [
+        (["x0", "y0"], "unverified"), (["x0"], "skipped-for-time"), ([], "kept"),
+    ]
 
 
 def test_a_failure_naming_a_declared_plane_is_refused_after_one_mesh(
@@ -2152,7 +2305,7 @@ def test_an_inverted_auto_cut_quarter_falls_back_to_the_full_domain(
     assert fallback["capped_planes"] == []
     # A reversed winding names no plane; every reduced mesh is inverted here.
     assert [item["wg_cut_planes"] for item in fallback["attempts"]] == [
-        ["x0", "y0"], ["x0"], ["y0"], [],
+        ["x0", "y0"], ["x0"], [],
     ]
     assert fallback["attempts"][0]["failure_codes"] == ["inverted-orientation"]
     # Rejected for its winding alone: the reduced boundary itself was sound.

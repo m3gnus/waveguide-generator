@@ -458,6 +458,15 @@ def test_a_solved_record_names_the_solved_mesh_and_the_symmetry_fallback() -> No
     assert protocol.validate_request_status({**record, "seq": 1})["result"]["mesh"]["domainKind"] == "quarter"
     healed, _ = project_request_status(receipt, None, job, {}, ingest={"findings": [{"kind": "healing-performed"}]})
     assert healed["notice"] == "healed"
+    # A half CAD cut keeps "cutModel"; a half WG cut itself is not "as cut in
+    # CAD", and the shared notice codes have no other words for it.
+    cad_half = {"findings": [{"kind": "symmetry-cut-unverified", "solved_domain": "half"}]}
+    assert project_request_status(receipt, None, job, {}, ingest=cad_half)[0]["notice"] == "cutModel"
+    wg_half = {"findings": [{"kind": "symmetry-cut-unverified", "solved_domain": "half",
+                             "cut_in_cad": False}]}
+    assert project_request_status(receipt, None, job, {}, ingest=wg_half)[0].get("notice") is None
+    wg_half["findings"].append({"kind": "healing-performed"})
+    assert project_request_status(receipt, None, job, {}, ingest=wg_half)[0]["notice"] == "healed"
     assert healed["result"]["mesh"] == {"trianglesSolved": 19812, "domainKind": "full", "solvedFraction": 1.0}
 
 

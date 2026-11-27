@@ -481,3 +481,31 @@ def test_typed_surface_replay_refuses_all_retained_fem_evidence(field, value):
                    mesh={"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {"group_2": 8}})
     with pytest.raises(ValueError, match="FEM/coupled replay is not available"):
         _validate_cad_request(body, record)
+
+
+def test_a_cad_replay_exported_before_the_shared_reduced_mesh_check_still_opens(tmp_path):
+    """A package from 68bdc4662 (floor mirror samples, all-or-nothing fallback).
+
+    Its declared y0 half had WG cut x0 under the earlier symmetry rules. It
+    carries no ``symmetry_rules``, so it is rebuilt under those rules, and its
+    mesh, symmetry report and solve identity compare equal.
+    """
+
+    pytest.importorskip('gmsh')
+    raw = (Path(__file__).parent / 'fixtures/mesh_replay/cad-half-68bdc4662.wgreplay').read_bytes()
+    package = json.loads(raw)
+    assert 'symmetry_rules' not in package['interpretation']['symmetry']
+
+    async def scenario():
+        app, store, runtime, _engine = app_for(tmp_path)
+        try:
+            opened = await call(app, 'POST', '/api/mesh-replay', package)
+            assert opened['record']['symmetry'] == package['interpretation']['symmetry']
+            assert opened['record']['solve_model_sha256'] == package['solve_model_sha256']
+            assert opened['record']['symmetry']['domain_planes'] == ['x0', 'y0']
+            # A package this build exports carries the rules, and opens as built.
+            assert await call(app, 'POST', '/api/mesh-replay', package) == opened
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())

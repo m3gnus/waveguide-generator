@@ -15,6 +15,7 @@ import math
 import re
 from pathlib import Path
 import tempfile
+import time
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -343,6 +344,14 @@ IMPORTED_VIEWPORT_MAX_ATTEMPTS = 3
 IMPORTED_VIEWPORT_COARSENING_FACTOR = 1.5
 
 
+#: The symmetry rules a record was built under (``symmetry["symmetry_rules"]``):
+#: the shared reduced-mesh check, the per-plane degrade and the dense mirror
+#: samples. A record without it was built before them.
+SYMMETRY_RULES = "shared-check-per-plane-v1"
+#: The option a portable replay sets to rebuild under the earlier rules.
+LEGACY_SYMMETRY_RULES = "pre-shared-check"
+
+
 class ImportedMeshError(ValueError):
     """A typed imported-geometry refusal."""
 
@@ -361,8 +370,14 @@ class SymmetryCutRefused(Exception):
     solvable.
     """
 
-    def __init__(self, message: str, *, planes: Iterable[str] = ()) -> None:
+    def __init__(
+        self, message: str, *, planes: Iterable[str] = (),
+        verdicts: Mapping[str, Any] | None = None,
+    ) -> None:
+        #: The planes the refused cut was for (the mirror test accepted them).
         self.planes = tuple(str(plane) for plane in planes)
+        #: The mirror verdicts that chose that cut, by plane.
+        self.verdicts = dict(verdicts or {})
         super().__init__(message)
 
 
@@ -374,15 +389,17 @@ def degrade_wg_cut_candidates(
     Only planes WG cut are ever in play; a declared plane is not the caller's
     to drop. A failure that names some of WG's planes drops those and keeps the
     rest. A failure that names none (a leak, a reversed winding, a refused
-    cut) cannot tell which cut caused it, so each plane is tried alone, x0
-    first -- the left/right half is the one every engine solves (BEAT has no
-    top/bottom-only half) -- and then none. The last set is always ``()``: the
-    whole model, which is always solvable.
+    cut) cannot tell which cut caused it, so x0 is tried alone -- the
+    left/right half is the one every engine solves -- and then none. A WG-cut
+    top/bottom-only half is not offered until stage 6 (BEAT has none). The
+    last set is always ``()``: the whole model, which is always solvable.
 
     >>> degrade_wg_cut_candidates(("x0", "y0"))
-    [('x0',), ('y0',), ()]
+    [('x0',), ()]
     >>> degrade_wg_cut_candidates(("x0", "y0"), ("y0",))
     [('x0',), ()]
+    >>> degrade_wg_cut_candidates(("x0", "y0"), ("x0",))
+    [()]
     >>> degrade_wg_cut_candidates(("y0",))
     [()]
     """
@@ -391,10 +408,16 @@ def degrade_wg_cut_candidates(
     failed = set(failed_planes)
     kept = tuple(plane for plane in planes if plane not in failed)
     if failed and kept:
-        return [kept, ()]
-    if not failed and len(planes) > 1:
-        return [*((plane,) for plane in planes), ()]
-    return [()]
+        candidates = [kept, ()]
+    elif not failed and len(planes) > 1:
+        candidates = [*((plane,) for plane in planes), ()]
+    else:
+        candidates = [()]
+    # TODO(unified symmetry stage 6): offer the y0-only half again once a
+    # solve can re-prepare it for an engine that cannot mirror it. BEAT has no
+    # top/bottom-only half, so until then a quarter that keeps only y0 would
+    # be refused by BEAT where the whole model solves everywhere.
+    return [candidate for candidate in candidates if candidate != ("y0",)]
 
 
 class RoleResolutionError(ImportedMeshError):
@@ -2757,8 +2780,13 @@ def build_imported_mesh(
     skipped_source_ids: Iterable[str] = (),
     options: Mapping[str, Any] | None = None,
     include_viewport_mesh: bool = True,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """Build, tag, post-process and inspect one validated CAD-return STEP.
+
+    ``deadline`` (a ``time.monotonic()`` value; the mesh child passes its own)
+    bounds the optional reduced retries after a failed reduction, so the
+    whole-model fallback is never starved of time.
 
     Internal ``options["surface_groups"]`` is an optional list of
     ``{group_id, name, size_mm, selectors, observed}``. Selectors and observed
@@ -2846,6 +2874,14 @@ def build_imported_mesh(
     symmetry_mode = str(options.get("symmetry_mode") or "auto")
     if symmetry_mode not in {"auto", "full"}:
         raise ImportedMeshError("symmetry: symmetryMode must be 'auto' or 'full'")
+    # A portable replay of a package exported before the shared reduced-mesh
+    # check (it carries no ``symmetry_rules``) is rebuilt under that build's
+    # symmetry rules: the floor mirror samples, declared planes still among the
+    # candidates, and one fallback to the whole model. Its mesh and record are
+    # then the ones it was exported with (``server/jobs/mesh_replay.py``).
+    legacy_rules = options.get("replay_symmetry_rules") == LEGACY_SYMMETRY_RULES
+    # Mirror verdicts by healing options, then plane: one geometry, one test.
+    verdict_cache: dict[tuple[str, ...], dict[str, Any]] = {}
     # The CAD author's declaration that the returned bodies ARE the reduced
     # domain. It is not a request to cut: there is nothing left to remove, and
     # the mesher's own detector correctly declines a plane the model does not
@@ -3565,13 +3601,30 @@ def build_imported_mesh(
             # ``wg_cut_candidates`` is set only by the per-plane degrade in
             # :func:`build_imported_mesh`: the planes WG may still cut after a
             # reduced domain failed (``()`` is none). It narrows, never widens.
-            candidate_planes = tuple(
+            # A plane the CAD author already cut is never a candidate (a
+            # pre-stage-4 replay keeps testing it, as that build did).
+            base_candidates = tuple(
                 p for p in SUPPORTED_CUT_PLANES
                 if p not in options.get("fem_rejected_symmetry_planes", ())
-                and (wg_cut_candidates is None or p in wg_cut_candidates)
+                and (legacy_rules or p not in declared_cut_planes)
             ) if symmetry_mode == "auto" else ()
+            candidate_planes = tuple(
+                p for p in base_candidates
+                if wg_cut_candidates is None or p in wg_cut_candidates
+            )
+            # The mirror verdicts this very geometry (same STEP, placement and
+            # healing) already gave in an earlier attempt are not tested again.
+            known = verdict_cache.setdefault(tuple(healing_options), {})
             try:
-                cut = auto_cut_occ_geometry(groups, planes=candidate_planes)
+                cut = auto_cut_occ_geometry(
+                    groups,
+                    planes=candidate_planes,
+                    **(
+                        {"sample_spacing_rel": None}
+                        if legacy_rules
+                        else {"known_verdicts": {p: known[p] for p in candidate_planes if p in known}}
+                    ),
+                )
             except RuntimeError as exc:
                 # The cutter proves the retained portions survive its cut and
                 # refuses otherwise ("OCC cut lost retained portions ..."). That
@@ -3580,11 +3633,19 @@ def build_imported_mesh(
                 # verify. Input errors (ValueError) still propagate.
                 if not candidate_planes:
                     raise
-                raise SymmetryCutRefused(str(exc), planes=candidate_planes) from exc
+                refused_report = getattr(exc, "report", None)
+                verdicts = dict((refused_report or {}).get("planes") or {})
+                known.update(verdicts)
+                raise SymmetryCutRefused(
+                    str(exc),
+                    planes=getattr(exc, "accepted_planes", candidate_planes),
+                    verdicts=verdicts,
+                ) from exc
+            known.update(dict(cut.report.get("planes") or {}))
             if wg_cut_candidates is not None or symmetry_mode != "auto":
                 # (A forced full domain has always carried the first note.)
                 left_out = [
-                    plane for plane in SUPPORTED_CUT_PLANES
+                    plane for plane in base_candidates
                     if plane not in (wg_cut_candidates or ())
                 ]
                 cut.report["note"] = (
@@ -4186,24 +4247,45 @@ def build_imported_mesh(
     declared = tuple(declared_cut_planes)
     attempts: list[dict[str, Any]] = []
     first_rejection: dict[str, Any] | None = None
-    first_pass_verdicts: dict[str, Any] = {}
-    first_cut_planes: tuple[str, ...] = ()
-    refused_planes: tuple[str, ...] = ()
+    first_domain_planes = 0
+    # Every mirror verdict any attempt reached, the earliest per plane: the
+    # record states what was known about each plane, whichever attempt knew it.
+    seen_verdicts: dict[str, Any] = {}
     pending: list[tuple[str, ...] | None] = [None]
     # The degrade order is planned once, from the first failure, and then
     # only walked: a later failure never re-plans (that bounds the attempts).
     planned = False
+    longest_build_s = 0.0
     result: dict[str, Any] | None = None
     while pending:
         wg_candidates = pending.pop(0)
+        if wg_candidates and deadline is not None and longest_build_s > 0.0:
+            # An optional reduced retry runs only while the time left covers it
+            # and, after it, the whole model (about 2**planes times a reduced
+            # build). Otherwise the whole model is meshed now.
+            needed = longest_build_s * (1 + 2 ** max(first_domain_planes, 1))
+            if deadline - time.monotonic() < needed:
+                for skipped in [wg_candidates, *(item for item in pending if item)]:
+                    attempts.append(
+                        {"wg_cut_planes": list(skipped), "outcome": "skipped-for-time",
+                         "reason": "not enough of the meshing time left to try it and then "
+                         "mesh the whole model", "failure_codes": [], "failed_planes": []}
+                    )
+                pending = [()]
+                continue
+        started = time.monotonic()
         try:
             result, healing = build(wg_cut_candidates=wg_candidates)
         except SymmetryCutRefused as refused:
+            longest_build_s = max(longest_build_s, time.monotonic() - started)
             # The cutter could not keep every retained portion of the model:
             # a failed optimisation, judged like an unverified cut.
+            for plane, verdict in refused.verdicts.items():
+                seen_verdicts.setdefault(plane, verdict)
+            refused_planes = tuple(plane for plane in refused.planes if plane not in declared)
             attempts.append(
                 {
-                    "wg_cut_planes": list(refused.planes),
+                    "wg_cut_planes": list(refused_planes),
                     "outcome": "cut-refused",
                     "reason": f"cut-refused: {refused}",
                     "failure_codes": ["cut-refused"],
@@ -4212,10 +4294,14 @@ def build_imported_mesh(
             )
             if not planned:
                 planned = True
-                refused_planes = tuple(plane for plane in refused.planes if plane not in declared)
-                pending = degrade_wg_cut_candidates(refused_planes)
+                first_domain_planes = len(refused_planes) + len(declared)
+                pending = [()] if legacy_rules else degrade_wg_cut_candidates(refused_planes)
             continue
+        longest_build_s = max(longest_build_s, time.monotonic() - started)
         verification = result.get("symmetry_verification")
+        for plane, verdict in ((result.get("symmetry") or {}).get("planes") or {}).items():
+            if plane not in declared:
+                seen_verdicts.setdefault(plane, verdict)
         wg_cut = tuple(str(plane) for plane in (result.get("symmetry") or {}).get("cut_planes") or ())
         if (
             symmetry_mode != "auto"
@@ -4240,13 +4326,10 @@ def build_imported_mesh(
             break
         if first_rejection is None:
             first_rejection = dict(verification)
-            # The mirror verdicts that chose the refused reduction: a rebuild
-            # tests fewer planes, and the domain decision states what was known.
-            first_pass_verdicts = dict((result.get("symmetry") or {}).get("planes") or {})
-            first_cut_planes = wg_cut
         if not planned:
             planned = True
-            pending = degrade_wg_cut_candidates(
+            first_domain_planes = len(verification.get("cut_planes") or ())
+            pending = [()] if legacy_rules else degrade_wg_cut_candidates(
                 wg_cut, tuple(plane for plane in failed if plane in wg_cut)
             )
         result = None
@@ -4254,22 +4337,38 @@ def build_imported_mesh(
         # Unreachable: the last candidate is always ``()``, which cuts nothing
         # and so can be neither refused by the cutter nor degraded further.
         raise ImportedMeshError("symmetry: no symmetry attempt produced a mesh")
+    if not legacy_rules:
+        # Which symmetry rules built this record: a replay reads it to tell a
+        # package of this build from one exported before it.
+        result["symmetry"]["symmetry_rules"] = SYMMETRY_RULES
     if attempts:
         final_cut = [str(plane) for plane in (result.get("symmetry") or {}).get("cut_planes") or []]
         attempts.append({"wg_cut_planes": final_cut, "outcome": "kept"})
+        tried = {
+            outcome: [
+                plane for plane in SUPPORTED_CUT_PLANES
+                if plane not in final_cut
+                and any(plane in item["wg_cut_planes"] for item in attempts if item["outcome"] == outcome)
+            ]
+            for outcome in ("unverified", "cut-refused")
+        }
         rejected = first_rejection or {}
         result["symmetry_verification"] = {
             **result.get("symmetry_verification", {}),
             "fallback": {
                 "reason": attempts[0]["reason"],
-                "rejected_cut_planes": [
-                    plane for plane in first_cut_planes if plane not in final_cut
+                # Every WG plane a reduced mesh was built with and then failed
+                # its check, and every plane only a refused cut was for: across
+                # all attempts, not only the first.
+                "rejected_cut_planes": tried["unverified"],
+                "refused_cut_planes": [
+                    plane for plane in tried["cut-refused"] if plane not in tried["unverified"]
                 ],
                 "kept_cut_planes": final_cut,
                 "detected_planes": (
                     list(rejected.get("detected_planes") or [])
                     if first_rejection is not None
-                    else [plane for plane in refused_planes if plane not in final_cut]
+                    else list(tried["cut-refused"])
                 ),
                 "capped_planes": list(rejected.get("capped_planes") or []),
                 "off_plane_free_edge_count": rejected.get("off_plane_free_edge_count"),
@@ -4278,7 +4377,10 @@ def build_imported_mesh(
                 ),
                 "remedy": rejected.get("remedy"),
                 "reduced_orientation": rejected.get("reduced_orientation"),
-                **({"plane_verdicts": first_pass_verdicts} if first_rejection is not None else {}),
+                "plane_verdicts": {
+                    plane: seen_verdicts[plane]
+                    for plane in SUPPORTED_CUT_PLANES if plane in seen_verdicts
+                },
                 "attempts": attempts,
             },
         }

@@ -101,6 +101,12 @@ _FRACTION_WORDS = {"full": "the whole model", "half": "a half", "quarter": "a qu
 _MIRROR_WORDS = {"x0": "left/right (x = 0)", "y0": "top/bottom (y = 0)"}
 
 
+def mirror_words(plane: str) -> str:
+    """A mirror plane in the user's words: ``x0`` is "left/right (x = 0)"."""
+
+    return _MIRROR_WORDS[plane]
+
+
 def ordered_planes(planes: Iterable[str]) -> list[str]:
     """The mirror planes among ``planes``, in x0, y0 order."""
 
@@ -404,8 +410,19 @@ def cad_plane_entries(
     detected = fallback.get("detected_planes")
     if cut_then_refused and isinstance(detected, list):
         failing |= {plane for plane in cut_then_refused if plane not in detected}
-    if fallback.get("attempts"):
+    attempts = fallback.get("attempts")
+    if isinstance(attempts, list) and attempts:
         failing = set()
+        # Every WG plane any failed, refused or skipped attempt was for, and
+        # that the solve does not use, was given up to the check -- whichever
+        # attempt it was in (a refused cut can come before an unverified one).
+        cut_then_refused = {
+            str(plane)
+            for item in attempts
+            if isinstance(item, Mapping) and item.get("outcome") != "kept"
+            for plane in item.get("wg_cut_planes") or []
+        } - used - declared
+        cut_refused = False
     fem_rejected = fem_rejected or {}
     requested_full = symmetry.get("requested_mode") == "full"
     recovery_failed = bool(recovery_failures) and requested_full
@@ -437,7 +454,7 @@ def cad_plane_entries(
             )
         elif plane in cut_then_refused:
             # WG's mirror test accepted and cut it; the reduced mesh then
-            # failed its check and the whole model was meshed instead.
+            # failed its check (or the cut was refused) and it was given up.
             check = dict(
                 used=in_use, dropped_by=DROPPED_BY_VERIFICATION,
                 detail=str(fallback.get("reason")) if fallback.get("reason") else None,
@@ -445,7 +462,10 @@ def cad_plane_entries(
             )
             entries[plane] = (
                 _verdict_entry(verdict, tolerance=tolerance, **check)  # type: ignore[arg-type]
-                if verdict is not None else plane_entry(GEOMETRY_ACCEPTED, **check)  # type: ignore[arg-type]
+                if verdict is not None
+                else plane_entry(
+                    GEOMETRY_NOT_TESTED if attempts else GEOMETRY_ACCEPTED, **check  # type: ignore[arg-type]
+                )
             )
         elif verdict is not None:
             entries[plane] = _verdict_entry(
