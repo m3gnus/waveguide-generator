@@ -302,7 +302,12 @@ def parametric_decision(
             else:
                 dropped_by = DROPPED_BY_UNKNOWN
                 detail = None
+        # The surface evidence goes with the plane only when it is what
+        # decided it: never on a plane the box (Dim, margins, sizes) or the
+        # offset rejected while the surface itself mirrored.
         verdict = surface_verdicts.get(plane)
+        if isinstance(verdict, Mapping) and plane not in accepted and verdict.get("accepted"):
+            verdict = None
         planes[plane] = plane_entry(
             GEOMETRY_ACCEPTED if plane in accepted else GEOMETRY_REJECTED,
             used=plane in used,

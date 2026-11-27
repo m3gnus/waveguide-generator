@@ -275,10 +275,10 @@ def verify_region_symmetry(gmsh: Any, region: Mapping[str, Any], boundary: Seque
     """Reuse the exterior's trimmed OCC geometry/role mirror test before cutting."""
     import numpy as np
     from hornlab_mesher.step_prepare import evaluate_occ_plane_symmetry, sample_occ_surface_points
-    from hornlab_mesher.symmetry import SPAN_TOLERANCE_REL, TOLERANCES
+    from hornlab_mesher.symmetry import SPAN_TOLERANCE_REL, SYMMETRY_AXIS_FOR_PLANE, TOLERANCES
     if not planes:
         return
-    axes = {"x0": 0, "y0": 1}
+    axes = {plane: SYMMETRY_AXIS_FOR_PLANE[plane] for plane in ("x0", "y0")}
     if len(set(planes)) != len(planes) or any(p not in axes for p in planes):
         raise FemRegionMeshError("FEM symmetry supports only x0, y0, or x0+y0")
     samples = {tag: sample_occ_surface_points(tag, grid=7) for tag in boundary}
@@ -314,9 +314,8 @@ def fragment_fundamental_domain(gmsh: Any, objects: list[tuple[int, int]],
     cutter, keep volume roots and their new rigid plane caps.
     """
     import numpy as np
-    from hornlab_mesher.step_prepare import (
-        AUTO_CUT_BOX_PAD_REL, SYMMETRY_AXIS_FOR_PLANE, _claim_evidence,
-    )
+    from hornlab_mesher.step_prepare import AUTO_CUT_BOX_PAD_REL, _claim_evidence
+    from hornlab_mesher.symmetry import SYMMETRY_AXIS_FOR_PLANE
 
     inputs = objects + tools
     clipping = []

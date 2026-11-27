@@ -1,6 +1,59 @@
 {
  "README": "resolve_symmetry results frozen from waveguide-generator 3021d7c1b with mesher 624adbf7, when WG ran its own ring mirror test (_surface_mirror_deviation), before stage 2 moved the check into hornlab_mesher.symmetry. max_deviation_mm is each plane's largest sampled-ring distance (None: not sampled). Regenerating this file to make a test pass is not allowed: a difference is an output change for saved designs.",
  "designs": {
+  "asym/osse-coverage-sin-walled": {
+   "max_deviation_mm": {
+    "x0": 4.0194366942304644e-14,
+    "y0": 20.408806158742905
+   },
+   "quadrants": 14,
+   "reasons": {
+    "xz": [
+     "sampled horn surface misses the xz mirror by up to 20.4088 mm (tolerance 0.0642639 mm)"
+    ],
+    "yz": []
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.06426385815244855,
+   "xz": false,
+   "yz": true
+  },
+  "asym/rosse-coverage-cos": {
+   "max_deviation_mm": {
+    "x0": 16.12214198698107,
+    "y0": 1.4923512011654497e-13
+   },
+   "quadrants": 12,
+   "reasons": {
+    "xz": [],
+    "yz": [
+     "sampled horn surface misses the yz mirror by up to 16.1221 mm (tolerance 0.0855016 mm)"
+    ]
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.08550162919870785,
+   "xz": true,
+   "yz": false
+  },
+  "asym/rotated-guiding-curve": {
+   "max_deviation_mm": {
+    "x0": 16.966672157319955,
+    "y0": 16.966672157319955
+   },
+   "quadrants": 1234,
+   "reasons": {
+    "xz": [
+     "sampled horn surface misses the xz mirror by up to 16.9667 mm (tolerance 0.0364841 mm)"
+    ],
+    "yz": [
+     "sampled horn surface misses the yz mirror by up to 16.9667 mm (tolerance 0.0364841 mm)"
+    ]
+   },
+   "relative_tolerance": 0.0002,
+   "tolerance_mm": 0.03648412660354245,
+   "xz": false,
+   "yz": false
+  },
   "custom-profile-legacy/freeform": {
    "max_deviation_mm": {
     "x0": 4.0194366942304644e-14,

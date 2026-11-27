@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from hornlab_mesher.config_builder import build_from_config, build_geometry_params, build_point_grid, resolve_geometry
-from hornlab_mesher.density import _parse_quadrant_resolutions
+from hornlab_mesher.config_builder import enclosure_quadrant_resolutions
 from pydantic import ValidationError
 
 from server.design.schema import DesignConfig
@@ -33,9 +33,9 @@ def test_existing_design_translation_is_byte_identical():
 def test_documented_quadrant_resolution_examples(sizes, expected):
     root = design(enclosure={'depth':90, 'front_resolution':sizes, 'back_resolution':sizes})
     config = design_to_mesher_config(root)
-    density = resolve_geometry(config).density
-    assert _parse_quadrant_resolutions(density.enc_front_res_mm, density.mouth_res_mm) == expected
-    assert _parse_quadrant_resolutions(density.enc_back_res_mm, density.mouth_res_mm) == expected
+    assert enclosure_quadrant_resolutions(config) == {
+        'front_resolution': expected, 'back_resolution': expected,
+    }
     assert config['enclosure']['frontMeshSize'] == config['mesh']['encFrontResolution']
 
 

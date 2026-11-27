@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+import copy
 from dataclasses import dataclass
 import hashlib
 import math
@@ -157,12 +158,13 @@ def resolve_symmetry(design: DesignConfig | Mapping[str, Any]) -> SymmetryResolu
             cached = _resolution_cache.get(cache_key)
             if cached is not None:
                 _resolution_cache.move_to_end(cache_key)
-                return cached
+                # A copy: a caller that edits its answer cannot change the cache.
+                return copy.deepcopy(cached)
 
     resolution = _resolve_symmetry_uncached(design)
     if cache_key is not None:
         with _resolution_cache_lock:
-            _resolution_cache[cache_key] = resolution
+            _resolution_cache[cache_key] = copy.deepcopy(resolution)
             _resolution_cache.move_to_end(cache_key)
             while len(_resolution_cache) > _RESOLUTION_CACHE_SIZE:
                 _resolution_cache.popitem(last=False)

@@ -4,8 +4,9 @@ Stage 2 of the unified symmetry process moved the design mirror test from
 ``server/solver/symmetry.py`` into ``hornlab_mesher.symmetry``. The answers it
 gave before the move are frozen in ``fixtures/symmetry-resolution-golden.json``
 for the saved-design corpora (FREEFORM and LOOKUP old configs, the ICW default,
-the legacy Custom profile, an offset quarter ATH config) and a few enclosure
-and morph designs; every one must come back the same.
+the legacy Custom profile, an offset quarter ATH config), a few enclosure and
+morph designs, and three horns whose surface does not mirror (so the miss, its
+distance and its reason text are frozen too); every one must come back the same.
 """
 
 from __future__ import annotations
@@ -29,6 +30,16 @@ EXTRA = {
     "extra/ellipse-enclosure-res": {
         **_ROSSE, "cross_section": {"aspect_ratio": 1.5},
         "enclosure": {"depth": 60, "front_resolution": [20, 24, 24, 20], "space_l": 10, "space_r": 30},
+    },
+    # Horn surfaces that do not mirror: the miss branch and its reason text.
+    "asym/rotated-guiding-curve": {
+        "formula": "OSSE", "L": 120, "r0": 12.7, "a": 60, "a0": 15.5,
+        "guiding_curve": {"curve_type": 1, "width": 40, "aspect_ratio": 1.5, "distance": 0.5, "rotation": 25},
+    },
+    "asym/rosse-coverage-cos": {"formula": "R-OSSE", "R": 150, "r0": 12.7, "a": "60+5*cos(p)", "a0": 15.5},
+    "asym/osse-coverage-sin-walled": {
+        "formula": "OSSE", "L": 100, "r0": 12.7, "a": "45+3*sin(p)", "a0": 10,
+        "mesh": {"wall_thickness": 6},
     },
     "extra/osse-morph": {
         "formula": "OSSE", "L": 120, "r0": 12.7, "a": 60, "a0": 15.5,
@@ -101,5 +112,5 @@ def test_saved_design_symmetry_is_unchanged(name: str) -> None:
 
 def test_the_golden_covers_every_corpus() -> None:
     kinds = {name.partition("/")[0] for name in GOLDEN}
-    assert {"tritonia-q", "freeform", "lookup", "icw-default", "custom-profile-legacy", "extra"} <= kinds
+    assert {"tritonia-q", "freeform", "lookup", "icw-default", "custom-profile-legacy", "extra", "asym"} <= kinds
     assert sum(name.startswith("freeform/") for name in GOLDEN) >= 30

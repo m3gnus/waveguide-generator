@@ -132,10 +132,30 @@ def test_a_parametric_record_carries_the_sampled_mirror_evidence() -> None:
         assert entry["max_residual_mm"] == verdict["max_residual_step_units"]
         assert 0 <= entry["max_residual_mm"] <= entry["tolerance_mm"]
         assert entry["tolerance_mm"] == verdict["tolerance_step_units"] == resolution.tolerance_mm
-    # The box above the throat is taller: y0 is rejected by the box, while
-    # the horn's own surface still mirrors (its evidence says so).
+    # The box above the throat is taller: y0 is rejected by the box, not by
+    # the surface, so the surface's numbers are not offered as its evidence.
     tall = _resolve(_request(TALL_ABOVE))["planes"]["y0"]
-    assert tall["geometry"] == "rejected" and tall["points_off"] == 0 and tall["points_tested"] > 0
+    assert tall["geometry"] == "rejected" and "space_t=185" in tall["detail"]
+    assert tall["points_tested"] is None and tall["points_off"] is None
+    assert tall["max_residual_mm"] is None and tall["worst_off_mm"] is None
+
+
+def test_a_parametric_surface_that_does_not_mirror_records_its_miss() -> None:
+    """A horn whose coverage leans to one side: x0 rejected by the surface itself."""
+    from server.solver.symmetry import resolve_symmetry
+
+    leaning = {"formula": "OSSE", "L": 60, "a": "45+5*cos(p)", "r0": 12.7}
+    request = _request(leaning)
+    record = _resolve(request)
+    verdict = resolve_symmetry(request.design).plane_verdicts["x0"]
+    x0 = record["planes"]["x0"]
+    assert x0["geometry"] == "rejected" and x0["used"] is False
+    assert x0["points_off"] == verdict["points_off_model"] > 0
+    assert x0["points_tested"] == verdict["points_tested"]
+    assert x0["worst_off_mm"] == verdict["worst_off_model_distance_step_units"] > x0["tolerance_mm"]
+    assert "misses the yz mirror" in x0["detail"]
+    assert record["planes"]["y0"]["geometry"] == "accepted"
+    assert record["findings"] == []
 
 
 def test_a_parametric_box_taller_above_rejects_y0_with_the_reason() -> None:
