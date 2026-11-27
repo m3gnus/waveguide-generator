@@ -13,7 +13,7 @@
         }
       },
       "options": {},
-      "msh_sha256": "ae516fdfb49cf1fb856958abdccc545346cf3187adf71eb3729224e86fdaebfc",
+      "msh_sha256": "35e030ead626adc71e6cc1d64ab0dcc3ad9ec45c0d282f20cf1111ffdf2f9803",
       "triangles": 516
     },
     {
@@ -26,7 +26,7 @@
         }
       },
       "options": {},
-      "msh_sha256": "e9d6e75e408126aca0da493a4418da18fe6fa1146de5435f230e00b6e71e17ae",
+      "msh_sha256": "5320212faf5692f92e66544c2dd9800e847e42a14909f4b3dc7bb55f782c4326",
       "triangles": 470
     },
     {
@@ -104,7 +104,7 @@
         }
       },
       "options": {},
-      "msh_sha256": "18da688f6f2eb58492e9af2aadbffbb3dbeb10707331e51a118ec3901c65c5cb",
+      "msh_sha256": "5b1a9d9ae585c68ca44bb83a4a395d4836c24398fa5c96d776acc5877665a693",
       "triangles": 928
     },
     {
@@ -196,5 +196,6 @@
         "rear-chamber": "f7507040daae6367f315a214c15bc1acc629aca7c9cd1ea144e41ba33eadc7aa"
       }
     }
-  ]
+  ],
+  "refrozen": "solid cut on (imported.CUT_SOLIDS_AS_SOLIDS, symmetry rules v3); stage 4b round 2"
 }
