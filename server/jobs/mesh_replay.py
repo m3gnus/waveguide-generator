@@ -461,7 +461,7 @@ def _restore_cad_mesh(runtime: Any, store: Any, data_dir: Path, package: CadMesh
         prep_options = package.preparation.model_dump(mode="json")
         from server.mesh.imported import (
             LEGACY_SYMMETRY_RULES,
-            STAGE4_SYMMETRY_RULES,
+            replay_symmetry_rules,
         )
 
         exported_rules = package.interpretation.symmetry.get("symmetry_rules")
@@ -470,13 +470,16 @@ def _restore_cad_mesh(runtime: Any, store: Any, data_dir: Path, package: CadMesh
             # degrade: rebuilt under the rules it was exported with, so
             # its mesh and interpretation compare equal (``build_imported_mesh``).
             prep_options["replay_symmetry_rules"] = LEGACY_SYMMETRY_RULES
-        elif exported_rules == STAGE4_SYMMETRY_RULES:
-            # Exported before stage 4b: every mirror sample projected by OCC,
-            # no small-feature check, the face-by-face cut.
-            prep_options["replay_symmetry_rules"] = STAGE4_SYMMETRY_RULES
+        elif exported_rules in replay_symmetry_rules():
+            # Exported under earlier rules (stage 4's exact scan, or stage
+            # 4b's face-by-face cut once solids are cut as solids): rebuilt
+            # under them.
+            prep_options["replay_symmetry_rules"] = exported_rules
         record = ingest_bundle(root, package.request.geometry.mesh.model_dump(mode="json"), [], store, data_dir,
             prep_options=prep_options, retained_copy=True, defer_viewport=True,
-            validate_record=validate_record, reuse_existing=True, commit_guard=commit_guard)
+            validate_record=validate_record, reuse_existing=True, commit_guard=commit_guard,
+            # A replay tests every plane itself and leaves the store alone.
+            symmetry_verdict_store=False)
         suggestion = ensure_frame_suggestion(store, record)
         choice = decide_record_frame(store, record, suggestion)
         if choice is not None:

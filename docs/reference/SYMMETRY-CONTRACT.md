@@ -126,21 +126,28 @@ and a floor is stood clear of, and an imported mesh cannot be re-cut the way
 `imported_symmetry_ground_plane_conflict` with the plane named.
 
 The **auto-cut's mirror test** (`hornlab_mesher.auto_cut_occ_geometry`, stage
-4b) decides most mirror samples from a forward tessellation of the faces whose
-chord error is measured, and projects only the samples it cannot prove with
-OCC; the rule and the `fitted` tolerance are unchanged. It also refuses a
-one-sided small feature of any size -- a hole, boss or sharp edge -- that
-distance alone would let through: a mirrored sample must land on a face of its
-role facing the same way (within 60 degrees), and every sharp edge (faces
-meeting at more than 30 degrees, free and non-manifold edges) must mirror onto
-an edge. Seams and splits within one smooth surface are not sharp. The mesher
-can cut a model of solids as its solids (`solid_cut`), far faster; WG keeps the
-face-by-face cut (`imported.CUT_SOLIDS_AS_SOLIDS`) until the resulting mesh
-change is accepted. Verdicts are kept per
-normalised geometry, not per mesh size (`ingest._symmetry_verdict_key`), so a
-re-mesh at new sizes does not test again. Records carry `symmetry_rules`
-`shared-check-per-plane-v2`; a replay of a package exported under
-`shared-check-per-plane-v1` rebuilds with the earlier exact test and cut.
+4b) measures each mirrored sample against a forward tessellation of the faces.
+Only a plane hit is proven there (the perpendicular foot, inside the trim,
+with OCC's inside count agreeing); a curved face within tolerance is confirmed
+by one OCC projection onto that face; a sample farther than tolerance plus the
+*measured* chord error from every face is a miss; everything else takes the
+exact OCC scan. The rule and the `fitted` tolerance are unchanged. It also
+refuses a one-sided small feature of any size -- a hole, boss or sharp edge --
+that distance alone would let through: a mirrored sample must land on a face
+of its role facing the same way (within 60 degrees, by OCC's normal), and every
+sharp edge (faces meeting at more than 30 degrees, free and non-manifold
+edges) must mirror onto an edge or onto a crease inside a face. Seams and
+splits within one smooth surface are not sharp. The mesher can cut a model of
+solids as its solids (`solid_cut`), far faster; WG keeps the face-by-face cut
+(`imported.CUT_SOLIDS_AS_SOLIDS`) until the resulting mesh change is accepted.
+Verdicts are kept per normalised geometry, not per mesh size
+(`ingest._symmetry_verdict_key`; sizing-only options are left out), so a
+re-mesh at new sizes does not test again; the record is the same either way
+(only a plane this build already used reads as reused, and the check counts
+stay out of it), and a replay neither reads nor writes the store. Records
+carry `symmetry_rules` `shared-check-per-plane-v2` (`v3` once solids are cut as
+solids); a replay of a package exported under `v1` rebuilds with the earlier
+exact test, and one exported under `v2` after the switch with the face cut.
 
 A rejected **auto-cut** gives up WG's own cuts one plane at a time, because
 the whole model is in the STEP (`imported.degrade_wg_cut_candidates`): a

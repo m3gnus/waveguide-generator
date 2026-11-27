@@ -345,27 +345,59 @@ IMPORTED_VIEWPORT_MAX_ATTEMPTS = 3
 IMPORTED_VIEWPORT_COARSENING_FACTOR = 1.5
 
 
-#: The symmetry rules a record was built under (``symmetry["symmetry_rules"]``):
+#: Cut a CAD model of solids as its solids (``auto_cut_occ_geometry(solid_cut=...)``),
+#: 4-10x faster than face by face on real returns. The same faces come back
+#: renumbered, so every such return's mesh bytes change: turning it on also
+#: moves the symmetry rules (below) and ``meshing_semantics`` (``cut_route``).
+CUT_SOLIDS_AS_SOLIDS = False
+
+#: The symmetry rules a record was built under (``symmetry["symmetry_rules"]``);
+#: a record without it was built before the shared check. Every version keeps
 #: the shared reduced-mesh check, the per-plane degrade and WG cut candidates
-#: without the declared planes; since stage 4b also the mesher's fast mirror
-#: check, its one-sided small-feature check and its cut of solids as solids
-#: (``auto_cut_occ_geometry(fast_check=True)``). A record without it was
-#: built before the shared check.
-SYMMETRY_RULES = "shared-check-per-plane-v2"
-#: The stage-4 rules: the same, with every mirror sample projected by OCC and
-#: no small-feature check (``fast_check=False``). A portable replay of a
-#: package exported under them rebuilds that way.
+#: without the declared planes.
+#: v1 (stage 4): every mirror sample projected by OCC, no small-feature check
+#: (``fast_check=False``), the face-by-face cut.
 STAGE4_SYMMETRY_RULES = "shared-check-per-plane-v1"
+#: v2 (stage 4b): the mesher's fast mirror check and its one-sided
+#: small-feature check, the face-by-face cut (``solid_cut=False``).
+FACE_CUT_SYMMETRY_RULES = "shared-check-per-plane-v2"
+#: v3: as v2, with the solids cut as solids (``CUT_SOLIDS_AS_SOLIDS``).
+SOLID_CUT_SYMMETRY_RULES = "shared-check-per-plane-v3"
 #: The option a portable replay sets to rebuild under the earlier rules.
 LEGACY_SYMMETRY_RULES = "pre-shared-check"
-#: The ``replay_symmetry_rules`` a portable replay may ask for.
-REPLAY_SYMMETRY_RULES = frozenset({LEGACY_SYMMETRY_RULES, STAGE4_SYMMETRY_RULES})
-#: Cut a CAD model of solids as its solids (``auto_cut_occ_geometry(solid_cut=...)``),
-#: 4-10x faster than face by face on real returns. Off until accepted: the
-#: same faces come back renumbered, so every such return's mesh bytes change
-#: (``imported_legacy_mesh_identity.json`` would be re-frozen, with
-#: ``meshing_semantics`` naming the new cut).
-CUT_SOLIDS_AS_SOLIDS = False
+
+
+def symmetry_rules() -> str:
+    """The symmetry rules this build writes."""
+    return SOLID_CUT_SYMMETRY_RULES if CUT_SOLIDS_AS_SOLIDS else FACE_CUT_SYMMETRY_RULES
+
+
+def replay_symmetry_rules() -> frozenset[str]:
+    """The earlier rules a portable replay may ask to rebuild under."""
+    earlier = {LEGACY_SYMMETRY_RULES, STAGE4_SYMMETRY_RULES}
+    if CUT_SOLIDS_AS_SOLIDS:
+        earlier.add(FACE_CUT_SYMMETRY_RULES)
+    return frozenset(earlier)
+
+
+def _keep_identity_neutral(
+    report: dict[str, Any], seen: set[tuple[tuple[str, ...], str]],
+    healing: tuple[str, ...], planes: Iterable[str],
+) -> None:
+    """Keep the record's symmetry report independent of the verdict store.
+
+    The mesher's per-plane check counts are diagnostics, and a plane whose
+    verdict came from the store reads as tested: only a plane this build
+    already used is reported as reused. Records the planes now used.
+    """
+    report.pop("mirror_check_points", None)
+    reused = [plane for plane in report.get("reused_verdict_planes") or ()
+              if (healing, plane) in seen]
+    if reused:
+        report["reused_verdict_planes"] = reused
+    else:
+        report.pop("reused_verdict_planes", None)
+    seen.update((healing, plane) for plane in planes)
 
 
 def symmetry_verdict_healing_key(healing_options: Iterable[str]) -> str:
@@ -2916,14 +2948,19 @@ def build_imported_mesh(
     # fallback to the whole model. Its mesh and record are
     # then the ones it was exported with (``server/jobs/mesh_replay.py``).
     replay_rules = options.get("replay_symmetry_rules")
-    if replay_rules is not None and replay_rules not in REPLAY_SYMMETRY_RULES:
+    if replay_rules is not None and replay_rules not in replay_symmetry_rules():
         raise ImportedMeshError(f"symmetry: unknown replay symmetry rules {replay_rules!r}")
     legacy_rules = replay_rules == LEGACY_SYMMETRY_RULES
     # Packages exported before stage 4b rebuild with every mirror sample
     # projected by OCC and the face-by-face cut, as they were built.
-    exact_mirror_check = replay_rules is not None
+    exact_mirror_check = replay_rules in {LEGACY_SYMMETRY_RULES, STAGE4_SYMMETRY_RULES}
+    cut_solids = CUT_SOLIDS_AS_SOLIDS and replay_rules is None
     # Mirror verdicts by healing options, then plane: one geometry, one test.
     verdict_cache: dict[tuple[str, ...], dict[str, Any]] = {}
+    # (healing, plane) pairs this build has already used: only their reuse is
+    # reported, so a build that found its verdicts in the store records
+    # exactly what a build that tested them would.
+    seen_planes: set[tuple[tuple[str, ...], str]] = set()
     if known_symmetry_verdicts and replay_rules is None:
         for healing_key, planes in known_symmetry_verdicts.items():
             verdict_cache[symmetry_verdict_healing(healing_key)] = {
@@ -3673,7 +3710,7 @@ def build_imported_mesh(
                     ),
                     **(
                         {"fast_check": False} if exact_mirror_check
-                        else {"solid_cut": CUT_SOLIDS_AS_SOLIDS}
+                        else {"solid_cut": cut_solids}
                     ),
                 )
             except RuntimeError as exc:
@@ -3687,12 +3724,14 @@ def build_imported_mesh(
                 refused_report = getattr(exc, "report", None)
                 verdicts = dict((refused_report or {}).get("planes") or {})
                 known.update(verdicts)
+                seen_planes.update((tuple(healing_options), plane) for plane in candidate_planes)
                 raise SymmetryCutRefused(
                     str(exc),
                     planes=getattr(exc, "accepted_planes", candidate_planes),
                     verdicts=verdicts,
                 ) from exc
             known.update(dict(cut.report.get("planes") or {}))
+            _keep_identity_neutral(cut.report, seen_planes, tuple(healing_options), candidate_planes)
             if wg_cut_candidates is not None or symmetry_mode != "auto":
                 # (A forced full domain has always carried the first note.)
                 left_out = [
@@ -4393,7 +4432,7 @@ def build_imported_mesh(
     if not legacy_rules:
         # Which symmetry rules built this record: a replay reads it to tell a
         # package of this build from one exported before it.
-        result["symmetry"]["symmetry_rules"] = replay_rules or SYMMETRY_RULES
+        result["symmetry"]["symmetry_rules"] = replay_rules or symmetry_rules()
     if replay_rules is None and any(verdict_cache.values()):
         # For the caller's geometry-keyed cache; never part of the record.
         result["symmetry_verdict_cache"] = {

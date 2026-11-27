@@ -24,26 +24,109 @@ def _ingest(tmp_path: Path, bundle: Path, sizes: dict[str, Any], **kwargs: Any) 
     )
 
 
-def test_a_remesh_at_new_sizes_reuses_the_mirror_verdicts(tmp_path: Path) -> None:
+def _spy_builds(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    from server.cadlink.intake import ingest
+
+    real = ingest.build_imported_mesh_isolated
+    calls: list[dict[str, Any]] = []
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        calls.append(dict(kwargs))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ingest, "build_imported_mesh_isolated", spy)
+    return calls
+
+
+def test_a_remesh_at_new_sizes_reuses_the_mirror_verdicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The mirror test reads the geometry, not the mesh sizes: a second
-    preparation at new sizes finds its verdicts and does not test again."""
+    preparation at new sizes hands the stored verdicts to the build -- and
+    records exactly what a build that tested them would (Neon P1-1)."""
+
+    from server.mesh.prepared_record import solve_model_sha256
 
     pytest.importorskip("gmsh")
-    bundle = _horn_bundle(tmp_path, "round")
-    first = _ingest(tmp_path, bundle, _SIZES)
+    calls = _spy_builds(monkeypatch)
+    bundle = _horn_bundle(tmp_path / "warm", "round")
+    first = _ingest(tmp_path / "warm", bundle, _SIZES)
     assert first["symmetry"]["cut_planes"] == ["x0", "y0"]
-    assert "reused_verdict_planes" not in first["symmetry"]
     assert "symmetry_verdict_cache" not in first
-    stored = list((tmp_path / "data").rglob("symmetry-verdicts/*.json"))
-    assert len(stored) == 1
+    assert "mirror_check_points" not in first["symmetry"]
+    assert "known_symmetry_verdicts" not in calls[-1]
+    assert len(list((tmp_path / "warm" / "data").rglob("symmetry-verdicts/*.json"))) == 1
 
     finer = {**_SIZES, "rigid_size_mm": 15}
-    second = _ingest(tmp_path, bundle, finer)
-    assert second["symmetry"]["reused_verdict_planes"] == ["x0", "y0"]
-    assert second["symmetry"]["planes"] == first["symmetry"]["planes"]
-    assert second["symmetry"]["cut_planes"] == first["symmetry"]["cut_planes"]
-    assert second["symmetry_verification"]["verified"] is True
-    assert second["mesh_store_path"] != first["mesh_store_path"]
+    warm = _ingest(tmp_path / "warm", bundle, finer)
+    assert set(calls[-1]["known_symmetry_verdicts"]["[]"]) == {"x0", "y0"}
+    cold = _ingest(tmp_path / "cold", _horn_bundle(tmp_path / "cold", "round"), finer)
+    assert "known_symmetry_verdicts" not in calls[-1]
+    assert warm["symmetry"] == cold["symmetry"]
+    assert solve_model_sha256(warm) == solve_model_sha256(cold)
+    assert warm["symmetry_verification"]["verified"] is True
+
+
+def test_a_replay_neither_reads_nor_writes_the_verdict_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.cadlink.intake import ingest
+
+    pytest.importorskip("gmsh")
+    touched: list[str] = []
+    monkeypatch.setattr(ingest, "_read_symmetry_verdicts",
+                        lambda path: touched.append("read") or {})
+    monkeypatch.setattr(ingest, "_write_symmetry_verdicts",
+                        lambda path, verdicts: touched.append("write"))
+    _ingest(tmp_path, _horn_bundle(tmp_path, "round"), _SIZES, symmetry_verdict_store=False)
+    assert touched == []
+    _ingest(tmp_path, _horn_bundle(tmp_path / "again", "round"), _SIZES)
+    assert touched == ["read", "write"]
+
+
+@pytest.mark.parametrize("stored", [
+    {"contract": "wg-symmetry-verdicts-v1", "verdicts": {"not json": {}}},
+    {"contract": "wg-symmetry-verdicts-v1", "verdicts": {"[]": {"x0": {"accepted": True}}}},
+    {"contract": "wg-symmetry-verdicts-v1", "verdicts": {"[]": {"x0": "yes"}}},
+    {"contract": "wg-symmetry-verdicts-v1", "verdicts": {"[1]": {}}},
+    {"contract": "wg-symmetry-verdicts-v1", "verdicts": []},
+])
+def test_a_malformed_verdict_store_is_a_miss(tmp_path: Path, stored: Any) -> None:
+    from server.cadlink.intake.ingest import _read_symmetry_verdicts
+
+    path = tmp_path / "store.json"
+    path.write_text(json.dumps(stored), encoding="utf-8")
+    assert _read_symmetry_verdicts(path) == {}
+
+
+def test_sizing_only_options_do_not_move_the_verdict_key() -> None:
+    from types import SimpleNamespace
+
+    from server.cadlink.intake.ingest import _symmetry_verdict_key
+
+    bundle = SimpleNamespace(artifact_sha256="sha256:a", manifest_sha256="sha256:m")
+    manifest = {"sources": [{"id": "s"}], "instances": [{"id": "i"}]}
+    group = {"group_id": "g", "selectors": {"a": 1}, "observed": {}}
+    base = {"symmetry_mode": "auto", "surface_groups": [{**group, "size_mm": 10}]}
+    key = _symmetry_verdict_key(bundle, manifest, [], base)
+    for change in ({"surface_groups": [{**group, "size_mm": 4}]}, {"surface_deviation_mm": 0.1},
+                   {"fem_rejected_symmetry_planes": ["y0"]}, {"rigid_face_sizes_mm": {"1": 5}}):
+        assert _symmetry_verdict_key(bundle, manifest, [], {**base, **change}) == key
+    assert _symmetry_verdict_key(
+        bundle, manifest, [], {**base, "surface_groups": [{**group, "selectors": {"a": 2}}]}) != key
+
+
+def test_the_rules_and_semantics_follow_the_solid_cut_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from server.cadlink.intake import ingest
+    from server.mesh import imported
+
+    assert imported.symmetry_rules() == imported.FACE_CUT_SYMMETRY_RULES
+    assert imported.FACE_CUT_SYMMETRY_RULES not in imported.replay_symmetry_rules()
+    assert "cut_route" not in ingest.meshing_semantics()
+    monkeypatch.setattr(imported, "CUT_SOLIDS_AS_SOLIDS", True)
+    assert imported.symmetry_rules() == imported.SOLID_CUT_SYMMETRY_RULES
+    assert imported.FACE_CUT_SYMMETRY_RULES in imported.replay_symmetry_rules()
+    assert ingest.meshing_semantics()["cut_route"] == "solids-as-solids-v1"
 
 
 def test_a_corrupt_verdict_store_is_only_a_miss(tmp_path: Path) -> None:

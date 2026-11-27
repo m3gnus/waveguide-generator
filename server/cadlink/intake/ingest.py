@@ -19,7 +19,7 @@ import stat
 import time
 from typing import Any
 
-from server.platform.json_file import staged_json
+from server.platform.json_file import staged_json, write_json_atomic
 from server.contracts.canonical import canonical_normalized_bytes as _canonical
 from server.contracts.geometry import DOMAIN_FRACTION_BY_PLANE_COUNT
 
@@ -171,6 +171,8 @@ def meshing_semantics() -> dict[str, Any]:
         # or sharp edge (a plane cut before may now be kept whole): cached
         # meshes are rebuilt.
         "mirror_check": "certified-tessellation-small-features-v1",
+        # Solids cut as solids: the same faces renumbered, other mesh bytes.
+        **({"cut_route": "solids-as-solids-v1"} if meshing.CUT_SOLIDS_AS_SOLIDS else {}),
     }
     # Rounded: a constant computed at import (``math.log``) may differ in its
     # last bit between platforms' maths libraries, and the fingerprint must not.
@@ -1302,7 +1304,7 @@ def _symmetry_verdict_key(
                 "sources": manifest["sources"],
                 "instances": manifest["instances"],
                 "skipped_source_ids": sorted(skipped_source_ids),
-                "options": options,
+                "options": _verdict_options(options),
                 "mesher_version": _package_version("hornlab-waveguide-mesher"),
                 "mesher_identity": mesher_identity(),
                 "gmsh_version": _package_version("gmsh"),
@@ -1312,12 +1314,40 @@ def _symmetry_verdict_key(
     ).hexdigest()
 
 
+#: Preparation options that only size the mesh, or only narrow which planes
+#: are cut: a plane's mirror verdict does not depend on them.
+_VERDICT_NEUTRAL_OPTIONS = frozenset({
+    "surface_deviation_mm", "rigid_face_sizes_mm", "fem_rejected_symmetry_planes",
+})
+
+
+def _verdict_options(options: Mapping[str, Any]) -> dict[str, Any]:
+    """``options`` without what cannot change a mirror verdict (a surface
+    group keeps its selectors and roles, not its mesh size)."""
+
+    kept = {key: value for key, value in options.items() if key not in _VERDICT_NEUTRAL_OPTIONS}
+    groups = kept.get("surface_groups")
+    if isinstance(groups, list):
+        kept["surface_groups"] = [
+            {key: value for key, value in group.items() if key != "size_mm"}
+            if isinstance(group, Mapping) else group
+            for group in groups
+        ]
+    return kept
+
+
 def _symmetry_verdict_path(imports_root: Path, key: str) -> Path:
     return imports_root / "symmetry-verdicts" / f"{key}.json"
 
 
+_VERDICT_FIELDS = ("plane", "accepted", "reason", "points_tested")
+
+
 def _read_symmetry_verdicts(path: Path) -> dict[str, dict[str, Any]]:
-    """Stored verdicts by healing key, then plane; empty when absent or unreadable."""
+    """Stored verdicts by healing key, then plane; empty when absent, unreadable
+    or malformed in any part (a miss, never an error)."""
+
+    from server.mesh.imported import ImportedMeshError, symmetry_verdict_healing
 
     try:
         stored = json.loads(path.read_text(encoding="utf-8"))
@@ -1328,11 +1358,20 @@ def _read_symmetry_verdicts(path: Path) -> dict[str, dict[str, Any]]:
     verdicts = stored.get("verdicts")
     if not isinstance(verdicts, dict):
         return {}
-    return {
-        str(healing): {str(plane): dict(verdict) for plane, verdict in planes.items()
-                       if isinstance(verdict, dict)}
-        for healing, planes in verdicts.items() if isinstance(planes, dict)
-    }
+    for healing, planes in verdicts.items():
+        try:
+            symmetry_verdict_healing(healing)
+        except (ImportedMeshError, ValueError, TypeError):
+            return {}
+        if not isinstance(planes, dict):
+            return {}
+        for plane, verdict in planes.items():
+            if (not isinstance(verdict, dict) or verdict.get("plane") != plane
+                    or not isinstance(verdict.get("accepted"), bool)
+                    or any(field not in verdict for field in _VERDICT_FIELDS)):
+                return {}
+    return {str(healing): {str(plane): dict(verdict) for plane, verdict in planes.items()}
+            for healing, planes in verdicts.items()}
 
 
 def _write_symmetry_verdicts(path: Path, verdicts: Mapping[str, Mapping[str, Any]]) -> None:
@@ -1343,16 +1382,11 @@ def _write_symmetry_verdicts(path: Path, verdicts: Mapping[str, Mapping[str, Any
     for healing, planes in verdicts.items():
         merged.setdefault(str(healing), {}).update(
             {str(plane): dict(verdict) for plane, verdict in dict(planes).items()})
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp")
     try:
-        temporary.write_bytes(_canonical({"contract": SYMMETRY_VERDICT_CACHE_CONTRACT,
-                                          "verdicts": merged}) + b"\n")
-        os.replace(temporary, path)
+        write_json_atomic(path, _canonical({"contract": SYMMETRY_VERDICT_CACHE_CONTRACT,
+                                            "verdicts": merged}) + b"\n", sync_file=False)
     except OSError as exc:
         logger.warning("Could not store mirror verdicts at %s (%s)", path, exc)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _viewport_geometry_lookup_key(lookup_key: str, transformed_geometry_hash: str) -> str:
@@ -1818,6 +1852,7 @@ def _ingest_bundle(
     validate_record: Callable[[dict[str, Any]], None] | None = None,
     reuse_existing: bool = False,
     verified_bundle: WgReturnBundle | None = None,
+    symmetry_verdict_store: bool = True,
 ) -> dict[str, Any]:
     """Run the nine ingestion stages and persist the immutable WG verdict.
 
@@ -1984,10 +2019,8 @@ def _ingest_bundle(
             # replay under earlier rules tests every plane, as it was built.
             verdict_path = _symmetry_verdict_path(
                 imports_root, _symmetry_verdict_key(bundle, manifest, skipped_source_ids, opts))
-            known_verdicts = (
-                {} if opts.get("replay_symmetry_rules") is not None
-                else _read_symmetry_verdicts(verdict_path)
-            )
+            use_store = symmetry_verdict_store and opts.get("replay_symmetry_rules") is None
+            known_verdicts = _read_symmetry_verdicts(verdict_path) if use_store else {}
             try:
                 # A returned bundle's assembly.step is external CAD, so it is
                 # opened in a disposable child with its own deadline and memory
@@ -2042,7 +2075,7 @@ def _ingest_bundle(
                     ),
                 ) from exc
             learned = built.pop("symmetry_verdict_cache", None)
-            if isinstance(learned, dict) and learned and opts.get("replay_symmetry_rules") is None:
+            if isinstance(learned, dict) and learned and use_store:
                 _write_symmetry_verdicts(verdict_path, learned)
             cache_key = _cache_key(
                 bundle,
