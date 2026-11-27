@@ -158,6 +158,7 @@ def build_imported_mesh_isolated(
     include_viewport_mesh: bool = True,
     expected_sha256: str | None = None,
     expected_size_bytes: int | None = None,
+    known_symmetry_verdicts: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Mesh a returned STEP in a fresh child, signature-compatible with the
     in-process :func:`server.mesh.imported.build_imported_mesh`.
@@ -175,6 +176,11 @@ def build_imported_mesh_isolated(
         "options": dict(options or {}),
         "include_viewport_mesh": bool(include_viewport_mesh),
     }
+    if known_symmetry_verdicts:
+        payload["known_symmetry_verdicts"] = {
+            str(key): {str(plane): dict(verdict) for plane, verdict in dict(planes).items()}
+            for key, planes in known_symmetry_verdicts.items()
+        }
     fault_fixture = _MESH_CHILD_FAULT_FIXTURE.get()
     if fault_fixture is not None:
         payload["_test_fault_fixture"] = fault_fixture

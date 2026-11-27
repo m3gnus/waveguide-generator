@@ -134,7 +134,9 @@ distance alone would let through: a mirrored sample must land on a face of its
 role facing the same way (within 60 degrees), and every sharp edge (faces
 meeting at more than 30 degrees, free and non-manifold edges) must mirror onto
 an edge. Seams and splits within one smooth surface are not sharp. A model of
-solids is cut as its solids; an open shell face by face. Records carry `symmetry_rules`
+solids is cut as its solids; an open shell face by face. Verdicts are kept per
+normalised geometry, not per mesh size (`ingest._symmetry_verdict_key`), so a
+re-mesh at new sizes does not test again. Records carry `symmetry_rules`
 `shared-check-per-plane-v2`; a replay of a package exported under
 `shared-check-per-plane-v1` rebuilds with the earlier exact test and cut.
 

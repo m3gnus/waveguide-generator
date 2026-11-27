@@ -294,6 +294,10 @@ def _task_mesh(
         include_viewport_mesh=bool(payload.get("include_viewport_mesh", True)),
         # The optional reduced retries leave the whole-model fallback its time.
         deadline=_STARTED + float(wall_time_s) if wall_time_s else None,
+        **(
+            {"known_symmetry_verdicts": payload["known_symmetry_verdicts"]}
+            if isinstance(payload.get("known_symmetry_verdicts"), dict) else {}
+        ),
     )
     msh_text = built.pop("msh_text", None)
     viewport_text = built.pop("viewport_msh_text", None)

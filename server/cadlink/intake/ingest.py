@@ -1276,6 +1276,86 @@ def _write_cas_index(index_path: Path, cache_key: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
+#: Bumped when what a cached mirror verdict means changes.
+SYMMETRY_VERDICT_CACHE_CONTRACT = "wg-symmetry-verdicts-v1"
+
+
+def _symmetry_verdict_key(
+    bundle: WgReturnBundle,
+    manifest: Mapping[str, Any],
+    skipped_source_ids: list[str],
+    options: Mapping[str, Any],
+) -> str:
+    """Address the mirror verdicts of one normalised model, not of one mesh.
+
+    The mirror test reads the STEP as placed and healed, with the roles the
+    sources give its faces -- everything here -- and not the mesh sizes, so a
+    re-mesh at new sizes finds the verdicts its geometry already has. Healing
+    options are the second level, inside the stored verdicts.
+    """
+
+    return hashlib.sha256(
+        _canonical(
+            {
+                "symmetry_verdict_contract": SYMMETRY_VERDICT_CACHE_CONTRACT,
+                "artifact_sha256": bundle.artifact_sha256,
+                "manifest_sha256": bundle.manifest_sha256,
+                "sources": manifest["sources"],
+                "instances": manifest["instances"],
+                "skipped_source_ids": sorted(skipped_source_ids),
+                "options": options,
+                "mesher_version": _package_version("hornlab-waveguide-mesher"),
+                "mesher_identity": mesher_identity(),
+                "gmsh_version": _package_version("gmsh"),
+                "model_semantics": _model_semantics_fingerprint(),
+            }
+        )
+    ).hexdigest()
+
+
+def _symmetry_verdict_path(imports_root: Path, key: str) -> Path:
+    return imports_root / "symmetry-verdicts" / f"{key}.json"
+
+
+def _read_symmetry_verdicts(path: Path) -> dict[str, dict[str, Any]]:
+    """Stored verdicts by healing key, then plane; empty when absent or unreadable."""
+
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(stored, dict) or stored.get("contract") != SYMMETRY_VERDICT_CACHE_CONTRACT:
+        return {}
+    verdicts = stored.get("verdicts")
+    if not isinstance(verdicts, dict):
+        return {}
+    return {
+        str(healing): {str(plane): dict(verdict) for plane, verdict in planes.items()
+                       if isinstance(verdict, dict)}
+        for healing, planes in verdicts.items() if isinstance(planes, dict)
+    }
+
+
+def _write_symmetry_verdicts(path: Path, verdicts: Mapping[str, Mapping[str, Any]]) -> None:
+    """Merge ``verdicts`` into the stored ones, atomically (best effort: a
+    failed write only means the next build tests the planes again)."""
+
+    merged = _read_symmetry_verdicts(path)
+    for healing, planes in verdicts.items():
+        merged.setdefault(str(healing), {}).update(
+            {str(plane): dict(verdict) for plane, verdict in dict(planes).items()})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp")
+    try:
+        temporary.write_bytes(_canonical({"contract": SYMMETRY_VERDICT_CACHE_CONTRACT,
+                                          "verdicts": merged}) + b"\n")
+        os.replace(temporary, path)
+    except OSError as exc:
+        logger.warning("Could not store mirror verdicts at %s (%s)", path, exc)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _viewport_geometry_lookup_key(lookup_key: str, transformed_geometry_hash: str) -> str:
     """The display index entry of one normalised model of one return.
 
@@ -1901,6 +1981,14 @@ def _ingest_bundle(
             built = _judge_cached_reduced_winding(built, str(cache_key))
         cache_hit = built is not None
         if built is None:
+            # Mirror verdicts this geometry already has (any mesh sizes). A
+            # replay under earlier rules tests every plane, as it was built.
+            verdict_path = _symmetry_verdict_path(
+                imports_root, _symmetry_verdict_key(bundle, manifest, skipped_source_ids, opts))
+            known_verdicts = (
+                {} if opts.get("replay_symmetry_rules") is not None
+                else _read_symmetry_verdicts(verdict_path)
+            )
             try:
                 # A returned bundle's assembly.step is external CAD, so it is
                 # opened in a disposable child with its own deadline and memory
@@ -1916,6 +2004,7 @@ def _ingest_bundle(
                     include_viewport_mesh=include_viewport,
                     expected_sha256=bundle.artifact_sha256,
                     expected_size_bytes=bundle.artifact_size_bytes,
+                    **({"known_symmetry_verdicts": known_verdicts} if known_verdicts else {}),
                 )
             except (ImportedMeshDependencyError, MeshTooLarge, SolverMemoryTooLarge):
                 raise
@@ -1953,6 +2042,9 @@ def _ingest_bundle(
                         else ()
                     ),
                 ) from exc
+            learned = built.pop("symmetry_verdict_cache", None)
+            if isinstance(learned, dict) and learned and opts.get("replay_symmetry_rules") is None:
+                _write_symmetry_verdicts(verdict_path, learned)
             cache_key = _cache_key(
                 bundle,
                 manifest,

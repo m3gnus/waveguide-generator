@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
+import json
 import logging
 import math
 import re
@@ -359,6 +360,19 @@ STAGE4_SYMMETRY_RULES = "shared-check-per-plane-v1"
 LEGACY_SYMMETRY_RULES = "pre-shared-check"
 #: The ``replay_symmetry_rules`` a portable replay may ask for.
 REPLAY_SYMMETRY_RULES = frozenset({LEGACY_SYMMETRY_RULES, STAGE4_SYMMETRY_RULES})
+
+
+def symmetry_verdict_healing_key(healing_options: Iterable[str]) -> str:
+    """The JSON key of a healing-option tuple in ``symmetry_verdict_cache``."""
+    return json.dumps([str(option) for option in healing_options])
+
+
+def symmetry_verdict_healing(key: str) -> tuple[str, ...]:
+    """The healing-option tuple a ``symmetry_verdict_cache`` key names."""
+    values = json.loads(key)
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise ImportedMeshError("symmetry: malformed cached verdict key")
+    return tuple(values)
 
 
 class ImportedMeshError(ValueError):
@@ -2790,12 +2804,19 @@ def build_imported_mesh(
     options: Mapping[str, Any] | None = None,
     include_viewport_mesh: bool = True,
     deadline: float | None = None,
+    known_symmetry_verdicts: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build, tag, post-process and inspect one validated CAD-return STEP.
 
     ``deadline`` (a ``time.monotonic()`` value; the mesh child passes its own)
     bounds the optional reduced retries after a failed reduction, so the
     whole-model fallback is never starved of time.
+
+    ``known_symmetry_verdicts`` are mirror verdicts an earlier build of this
+    very geometry recorded (``result["symmetry_verdict_cache"]``: by healing
+    options, then plane), whatever its mesh sizes: the mirror test does not
+    depend on them, so those planes are not tested again. A replay under
+    earlier rules ignores them.
 
     Internal ``options["surface_groups"]`` is an optional list of
     ``{group_id, name, size_mm, selectors, observed}``. Selectors and observed
@@ -2897,6 +2918,11 @@ def build_imported_mesh(
     exact_mirror_check = replay_rules is not None
     # Mirror verdicts by healing options, then plane: one geometry, one test.
     verdict_cache: dict[tuple[str, ...], dict[str, Any]] = {}
+    if known_symmetry_verdicts and replay_rules is None:
+        for healing_key, planes in known_symmetry_verdicts.items():
+            verdict_cache[symmetry_verdict_healing(healing_key)] = {
+                str(plane): dict(verdict) for plane, verdict in dict(planes).items()
+            }
     # The CAD author's declaration that the returned bodies ARE the reduced
     # domain. It is not a request to cut: there is nothing left to remove, and
     # the mesher's own detector correctly declines a plane the model does not
@@ -4359,7 +4385,12 @@ def build_imported_mesh(
         # Which symmetry rules built this record: a replay reads it to tell a
         # package of this build from one exported before it.
         result["symmetry"]["symmetry_rules"] = replay_rules or SYMMETRY_RULES
-
+    if replay_rules is None and any(verdict_cache.values()):
+        # For the caller's geometry-keyed cache; never part of the record.
+        result["symmetry_verdict_cache"] = {
+            symmetry_verdict_healing_key(healing): dict(planes)
+            for healing, planes in verdict_cache.items() if planes
+        }
     if attempts:
         final_cut = [str(plane) for plane in (result.get("symmetry") or {}).get("cut_planes") or []]
         attempts.append({"wg_cut_planes": final_cut, "outcome": "kept"})
