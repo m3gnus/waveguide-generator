@@ -483,23 +483,61 @@ def test_typed_surface_replay_refuses_all_retained_fem_evidence(field, value):
         _validate_cad_request(body, record)
 
 
-def test_a_cad_replay_exported_before_the_shared_reduced_mesh_check_still_opens(tmp_path):
+# Where cad-half-68bdc4662.wgreplay was exported (``server/tests/_frozen_bytes.py``).
+CAD_HALF_68BDC4662_PLATFORM = 'Darwin-arm64'
+
+
+def test_a_cad_replay_exported_before_the_shared_reduced_mesh_check_still_opens(tmp_path, monkeypatch):
     """A package from 68bdc4662 (declared planes among the cut candidates, all-or-nothing fallback).
 
     Its declared y0 half had WG cut x0 under the earlier symmetry rules. It
     carries no ``symmetry_rules``, so it is rebuilt under those rules, and its
     mesh, symmetry report and solve identity compare equal.
+
+    A CAD replay is rebuilt by OpenCASCADE and Gmsh, so the exact comparison
+    holds only on the platform that exported the package. Everywhere the
+    rebuild must make the earlier rules' symmetry decisions; this build's
+    rules would leave the declared y0 out of the cut candidates.
     """
 
     pytest.importorskip('gmsh')
+    from server.jobs import mesh_replay
+    from server.tests._frozen_bytes import off_frozen_platform
+
     raw = (Path(__file__).parent / 'fixtures/mesh_replay/cad-half-68bdc4662.wgreplay').read_bytes()
     package = json.loads(raw)
     assert 'symmetry_rules' not in package['interpretation']['symmetry']
+    rebuilt = []
+    ingest = mesh_replay.ingest_bundle
+
+    def observed_ingest(*args, validate_record, **kwargs):
+        def validate(record):
+            rebuilt.append(record)
+            validate_record(record)
+        return ingest(*args, validate_record=validate, **kwargs)
+
+    monkeypatch.setattr(mesh_replay, 'ingest_bundle', observed_ingest)
+
+    def decisions(symmetry):
+        return {
+            **{key: symmetry.get(key) for key in (
+                'mode', 'requested_mode', 'candidate_planes', 'cut_planes', 'declared_cut_planes',
+                'domain_planes', 'reflected_planes', 'symmetry_rules')},
+            'cut': symmetry['cut']['planes'],
+            'accepted': {plane: entry['accepted'] for plane, entry in symmetry['planes'].items()},
+        }
 
     async def scenario():
         app, store, runtime, _engine = app_for(tmp_path)
         try:
+            elsewhere = off_frozen_platform(CAD_HALF_68BDC4662_PLATFORM)
+            if elsewhere:
+                status, raw_response = await _request(app, 'POST', '/api/mesh-replay', body=package)
+                assert status == 200 or (status == 422 and b'cannot reconstruct' in raw_response), (status, raw_response)
+                assert decisions(rebuilt[0]['symmetry']) == decisions(package['interpretation']['symmetry'])
+                return elsewhere
             opened = await call(app, 'POST', '/api/mesh-replay', package)
+            assert decisions(rebuilt[0]['symmetry']) == decisions(package['interpretation']['symmetry'])
             assert opened['record']['symmetry'] == package['interpretation']['symmetry']
             assert opened['record']['solve_model_sha256'] == package['solve_model_sha256']
             assert opened['record']['symmetry']['domain_planes'] == ['x0', 'y0']
@@ -508,4 +546,8 @@ def test_a_cad_replay_exported_before_the_shared_reduced_mesh_check_still_opens(
         finally:
             await runtime.shutdown()
             store.close()
-    asyncio.run(scenario())
+        return None
+
+    elsewhere = asyncio.run(scenario())
+    if elsewhere:
+        pytest.skip(elsewhere)
