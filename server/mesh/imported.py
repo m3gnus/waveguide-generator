@@ -349,7 +349,7 @@ IMPORTED_VIEWPORT_COARSENING_FACTOR = 1.5
 #: 4-10x faster than face by face on real returns. The same faces come back
 #: renumbered, so every such return's mesh bytes change: turning it on also
 #: moves the symmetry rules (below) and ``meshing_semantics`` (``cut_route``).
-CUT_SOLIDS_AS_SOLIDS = False
+CUT_SOLIDS_AS_SOLIDS = True
 
 #: The symmetry rules a record was built under (``symmetry["symmetry_rules"]``);
 #: a record without it was built before the shared check. Every version keeps

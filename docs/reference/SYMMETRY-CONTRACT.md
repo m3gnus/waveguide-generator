@@ -137,9 +137,8 @@ that distance alone would let through: a mirrored sample must land on a face
 of its role facing the same way (within 60 degrees, by OCC's normal), and every
 sharp edge (faces meeting at more than 30 degrees, free and non-manifold
 edges) must mirror onto an edge or onto a crease inside a face. Seams and
-splits within one smooth surface are not sharp. The mesher can cut a model of
-solids as its solids (`solid_cut`), far faster; WG keeps the face-by-face cut
-(`imported.CUT_SOLIDS_AS_SOLIDS`) until the resulting mesh change is accepted.
+splits within one smooth surface are not sharp. A model of solids is cut as its
+solids (`solid_cut`, `imported.CUT_SOLIDS_AS_SOLIDS`), an open shell face by face.
 Verdicts are kept per normalised geometry, not per mesh size
 (`ingest._symmetry_verdict_key`; sizing-only options are left out), so a
 re-mesh at new sizes does not test again; the record is the same either way
