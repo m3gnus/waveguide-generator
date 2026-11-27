@@ -137,3 +137,34 @@ def test_a_plane_lost_to_a_one_sided_small_feature_says_so() -> None:
     assert entries["x0"]["feature_mismatches"] == 2
     sentence, _fix = _plane_loss("x0", entries["x0"], producer=None, expected_words="a half")
     assert "small hole, boss or edge" in sentence
+
+
+def test_wg_keeps_the_face_by_face_cut_until_the_solid_cut_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The solid cut renumbers every face, so its meshes are not the frozen
+    ones (imported_legacy_mesh_identity.json): WG asks for the face cut."""
+
+    import hornlab_mesher
+
+    from server.mesh import imported
+    from server.mesh.imported import build_imported_mesh
+
+    pytest.importorskip("gmsh")
+    assert imported.CUT_SOLIDS_AS_SOLIDS is False
+    real = hornlab_mesher.auto_cut_occ_geometry
+    calls: list[dict[str, Any]] = []
+
+    def spy(groups: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return real(groups, **kwargs)
+
+    monkeypatch.setattr(hornlab_mesher, "auto_cut_occ_geometry", spy)
+    bundle = _horn_bundle(tmp_path, "round")
+    manifest = json.loads((bundle / "wgreturn.json").read_text(encoding="utf-8"))
+    built = _run_in_gmsh_session(
+        build_imported_mesh, bundle / "assembly.step", manifest, _SIZES,
+        options={"symmetry_mode": "auto"}, include_viewport_mesh=False,
+    )
+    assert calls and all(call.get("solid_cut") is False for call in calls)
+    assert built["symmetry"]["cut"]["route"] == "faces"

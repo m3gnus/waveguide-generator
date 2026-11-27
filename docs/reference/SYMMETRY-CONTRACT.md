@@ -133,8 +133,10 @@ one-sided small feature of any size -- a hole, boss or sharp edge -- that
 distance alone would let through: a mirrored sample must land on a face of its
 role facing the same way (within 60 degrees), and every sharp edge (faces
 meeting at more than 30 degrees, free and non-manifold edges) must mirror onto
-an edge. Seams and splits within one smooth surface are not sharp. A model of
-solids is cut as its solids; an open shell face by face. Verdicts are kept per
+an edge. Seams and splits within one smooth surface are not sharp. The mesher
+can cut a model of solids as its solids (`solid_cut`), far faster; WG keeps the
+face-by-face cut (`imported.CUT_SOLIDS_AS_SOLIDS`) until the resulting mesh
+change is accepted. Verdicts are kept per
 normalised geometry, not per mesh size (`ingest._symmetry_verdict_key`), so a
 re-mesh at new sizes does not test again. Records carry `symmetry_rules`
 `shared-check-per-plane-v2`; a replay of a package exported under

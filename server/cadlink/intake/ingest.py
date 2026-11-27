@@ -168,10 +168,9 @@ def meshing_semantics() -> dict[str, Any]:
         "reduced_verification": "shared-verify-reduced-mesh-v1",
         "degrade_policy": "per-plane-v1",
         # Stage 4b: the mirror test also refuses a one-sided small hole, boss
-        # or sharp edge (a plane cut before may now be kept whole), and a
-        # model of solids is cut as its solids: cached meshes are rebuilt.
+        # or sharp edge (a plane cut before may now be kept whole): cached
+        # meshes are rebuilt.
         "mirror_check": "certified-tessellation-small-features-v1",
-        "cut_route": "solids-as-solids-v1",
     }
     # Rounded: a constant computed at import (``math.log``) may differ in its
     # last bit between platforms' maths libraries, and the fingerprint must not.

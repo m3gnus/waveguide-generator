@@ -360,6 +360,12 @@ STAGE4_SYMMETRY_RULES = "shared-check-per-plane-v1"
 LEGACY_SYMMETRY_RULES = "pre-shared-check"
 #: The ``replay_symmetry_rules`` a portable replay may ask for.
 REPLAY_SYMMETRY_RULES = frozenset({LEGACY_SYMMETRY_RULES, STAGE4_SYMMETRY_RULES})
+#: Cut a CAD model of solids as its solids (``auto_cut_occ_geometry(solid_cut=...)``),
+#: 4-10x faster than face by face on real returns. Off until accepted: the
+#: same faces come back renumbered, so every such return's mesh bytes change
+#: (``imported_legacy_mesh_identity.json`` would be re-frozen, with
+#: ``meshing_semantics`` naming the new cut).
+CUT_SOLIDS_AS_SOLIDS = False
 
 
 def symmetry_verdict_healing_key(healing_options: Iterable[str]) -> str:
@@ -3665,7 +3671,10 @@ def build_imported_mesh(
                         if legacy_rules
                         else {"known_verdicts": {p: known[p] for p in candidate_planes if p in known}}
                     ),
-                    **({"fast_check": False} if exact_mirror_check else {}),
+                    **(
+                        {"fast_check": False} if exact_mirror_check
+                        else {"solid_cut": CUT_SOLIDS_AS_SOLIDS}
+                    ),
                 )
             except RuntimeError as exc:
                 # The cutter proves the retained portions survive its cut and
