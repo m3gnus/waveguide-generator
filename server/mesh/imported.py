@@ -346,10 +346,19 @@ IMPORTED_VIEWPORT_COARSENING_FACTOR = 1.5
 
 #: The symmetry rules a record was built under (``symmetry["symmetry_rules"]``):
 #: the shared reduced-mesh check, the per-plane degrade and WG cut candidates
-#: without the declared planes. A record without it was built before them.
-SYMMETRY_RULES = "shared-check-per-plane-v1"
+#: without the declared planes; since stage 4b also the mesher's fast mirror
+#: check, its one-sided small-feature check and its cut of solids as solids
+#: (``auto_cut_occ_geometry(fast_check=True)``). A record without it was
+#: built before the shared check.
+SYMMETRY_RULES = "shared-check-per-plane-v2"
+#: The stage-4 rules: the same, with every mirror sample projected by OCC and
+#: no small-feature check (``fast_check=False``). A portable replay of a
+#: package exported under them rebuilds that way.
+STAGE4_SYMMETRY_RULES = "shared-check-per-plane-v1"
 #: The option a portable replay sets to rebuild under the earlier rules.
 LEGACY_SYMMETRY_RULES = "pre-shared-check"
+#: The ``replay_symmetry_rules`` a portable replay may ask for.
+REPLAY_SYMMETRY_RULES = frozenset({LEGACY_SYMMETRY_RULES, STAGE4_SYMMETRY_RULES})
 
 
 class ImportedMeshError(ValueError):
@@ -2879,7 +2888,13 @@ def build_imported_mesh(
     # symmetry rules: declared planes still among the cut candidates, and one
     # fallback to the whole model. Its mesh and record are
     # then the ones it was exported with (``server/jobs/mesh_replay.py``).
-    legacy_rules = options.get("replay_symmetry_rules") == LEGACY_SYMMETRY_RULES
+    replay_rules = options.get("replay_symmetry_rules")
+    if replay_rules is not None and replay_rules not in REPLAY_SYMMETRY_RULES:
+        raise ImportedMeshError(f"symmetry: unknown replay symmetry rules {replay_rules!r}")
+    legacy_rules = replay_rules == LEGACY_SYMMETRY_RULES
+    # Packages exported before stage 4b rebuild with every mirror sample
+    # projected by OCC and the face-by-face cut, as they were built.
+    exact_mirror_check = replay_rules is not None
     # Mirror verdicts by healing options, then plane: one geometry, one test.
     verdict_cache: dict[tuple[str, ...], dict[str, Any]] = {}
     # The CAD author's declaration that the returned bodies ARE the reduced
@@ -3624,6 +3639,7 @@ def build_imported_mesh(
                         if legacy_rules
                         else {"known_verdicts": {p: known[p] for p in candidate_planes if p in known}}
                     ),
+                    **({"fast_check": False} if exact_mirror_check else {}),
                 )
             except RuntimeError as exc:
                 # The cutter proves the retained portions survive its cut and
@@ -4342,7 +4358,8 @@ def build_imported_mesh(
     if not legacy_rules:
         # Which symmetry rules built this record: a replay reads it to tell a
         # package of this build from one exported before it.
-        result["symmetry"]["symmetry_rules"] = SYMMETRY_RULES
+        result["symmetry"]["symmetry_rules"] = replay_rules or SYMMETRY_RULES
+
     if attempts:
         final_cut = [str(plane) for plane in (result.get("symmetry") or {}).get("cut_planes") or []]
         attempts.append({"wg_cut_planes": final_cut, "outcome": "kept"})

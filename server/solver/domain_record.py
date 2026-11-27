@@ -139,16 +139,21 @@ def plane_entry(
     detail: str | None = None,
     dropped_with: Iterable[str] = (),
     role_mismatches: int | None = None,
+    feature_mismatches: int | None = None,
 ) -> dict[str, Any]:
     """One plane's verdict and evidence.
 
     ``dropped_with`` names the planes whose failure took this one with it (an
     all-or-nothing fallback, a half the solve cannot use alone);
     ``role_mismatches`` counts mirrored samples that land on a surface of
-    another role (a driver mirrored onto a wall); ``detail`` is the raw
+    another role (a driver mirrored onto a wall); ``feature_mismatches``
+    (only when the mirror test checked small features) counts samples of a
+    one-sided small hole, boss or sharp edge; ``detail`` is the raw
     evidence, for developers, never a user's sentence.
     """
 
+    features = {} if feature_mismatches is None else {
+        "feature_mismatches": _count(feature_mismatches)}
     return {
         "geometry": geometry,
         "used": bool(used),
@@ -162,6 +167,7 @@ def plane_entry(
         "worst_off_mm": _number(worst_off_mm),
         "detail": detail,
         "dropped_with": ordered_planes(dropped_with),
+        **features,
     }
 
 
@@ -348,6 +354,8 @@ def _verdict_evidence(verdict: Mapping[str, Any]) -> dict[str, Any]:
         "points_off": verdict.get("points_off_model"),
         "worst_off_mm": verdict.get("worst_off_model_distance_step_units"),
         "role_mismatches": verdict.get("role_mismatches"),
+        **({"feature_mismatches": verdict["feature_mismatches"]}
+           if verdict.get("feature_mismatches") is not None else {}),
     }
 
 
@@ -666,6 +674,9 @@ def _plane_loss(
         if entry.get("role_mismatches"):
             return ("a driver, port or other source surface mirrors onto a surface that "
                     "is not the same kind"), fix
+        if entry.get("feature_mismatches"):
+            return ("a small hole, boss or edge on one side has no mirror image on the "
+                    "other"), fix
         if residual is not None and tolerance is not None and residual > tolerance:
             return f"the model differs from its mirror image by up to {_mm(residual)}{allows}", fix
         return "the model does not mirror there", fix

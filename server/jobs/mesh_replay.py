@@ -459,13 +459,21 @@ def _restore_cad_mesh(runtime: Any, store: Any, data_dir: Path, package: CadMesh
         if bundle.manifest_sha256 != package.request.geometry.manifest_sha256:
             raise ValueError("The CAD manifest checksum does not match the recorded request.")
         prep_options = package.preparation.model_dump(mode="json")
-        if "symmetry_rules" not in package.interpretation.symmetry:
+        from server.mesh.imported import (
+            LEGACY_SYMMETRY_RULES,
+            STAGE4_SYMMETRY_RULES,
+        )
+
+        exported_rules = package.interpretation.symmetry.get("symmetry_rules")
+        if exported_rules is None:
             # Exported before the shared reduced-mesh check and the per-plane
             # degrade: rebuilt under the rules it was exported with, so
             # its mesh and interpretation compare equal (``build_imported_mesh``).
-            from server.mesh.imported import LEGACY_SYMMETRY_RULES
-
             prep_options["replay_symmetry_rules"] = LEGACY_SYMMETRY_RULES
+        elif exported_rules == STAGE4_SYMMETRY_RULES:
+            # Exported before stage 4b: every mirror sample projected by OCC,
+            # no small-feature check, the face-by-face cut.
+            prep_options["replay_symmetry_rules"] = STAGE4_SYMMETRY_RULES
         record = ingest_bundle(root, package.request.geometry.mesh.model_dump(mode="json"), [], store, data_dir,
             prep_options=prep_options, retained_copy=True, defer_viewport=True,
             validate_record=validate_record, reuse_existing=True, commit_guard=commit_guard)

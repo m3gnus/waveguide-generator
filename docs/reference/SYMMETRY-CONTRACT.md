@@ -125,6 +125,19 @@ and a floor is stood clear of, and an imported mesh cannot be re-cut the way
 `restrict_for_ground_plane` re-cuts a parametric one, so the pair is refused as
 `imported_symmetry_ground_plane_conflict` with the plane named.
 
+The **auto-cut's mirror test** (`hornlab_mesher.auto_cut_occ_geometry`, stage
+4b) decides most mirror samples from a forward tessellation of the faces whose
+chord error is measured, and projects only the samples it cannot prove with
+OCC; the rule and the `fitted` tolerance are unchanged. It also refuses a
+one-sided small feature of any size -- a hole, boss or sharp edge -- that
+distance alone would let through: a mirrored sample must land on a face of its
+role facing the same way (within 60 degrees), and every sharp edge (faces
+meeting at more than 30 degrees, free and non-manifold edges) must mirror onto
+an edge. Seams and splits within one smooth surface are not sharp. A model of
+solids is cut as its solids; an open shell face by face. Records carry `symmetry_rules`
+`shared-check-per-plane-v2`; a replay of a package exported under
+`shared-check-per-plane-v1` rebuilds with the earlier exact test and cut.
+
 A rejected **auto-cut** gives up WG's own cuts one plane at a time, because
 the whole model is in the STEP (`imported.degrade_wg_cut_candidates`): a
 failure that names one of WG's planes drops that plane and keeps the other; a

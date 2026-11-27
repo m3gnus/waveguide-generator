@@ -353,9 +353,10 @@ DESIGN_HASH_NON_ASCII = "sha256:1e90c0011be979e9a43b113ea8e28037b070be6e9def0b1d
 DESIGN_HASH_NAN = "sha256:74485b0126616c29f67e48fb9033a771406b9f9f51ce8a0dcedc2e94551ac519"
 # cut_recovery_fallback: full-domain-v1 (0.3.6), linked_return_frame:
 # recentred-throat-centre-v1 (0.3.8), and the shared reduced-mesh check with its
-# per-plane degrade (unified symmetry stage 4) are deliberate new identities
+# per-plane degrade (unified symmetry stage 4), and stage 4b's small-feature
+# mirror check and solid cut are deliberate new identities
 # (docs/architecture/CAD-OPERATIONS.md, "the same fingerprint also names semantic contracts").
-MESHING_SEMANTICS_FINGERPRINT = "sha256:bc3ebc3eff8f2e1856bf10660d935891a95963b4a79c7ed8b1a041a77d343620"
+MESHING_SEMANTICS_FINGERPRINT = "sha256:5d7456cd4085c222d44e7efc54e5b591c6a8622a51c3300401ea81c023fd17de"
 BASELINE_MESHING_SEMANTICS = "sha256:79aa14dff0812302be2bd64c494913fd39f370466ca80458ce285f6a63c173c8"
 INGEST_NORMALISED = (
     '{"array":[1.5,-0.0],"band":"HF","flt":0.25,'
