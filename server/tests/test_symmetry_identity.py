@@ -12,6 +12,8 @@ distance and its reason text are frozen too); every one must come back the same.
 from __future__ import annotations
 
 import json
+import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,22 @@ from server.design.schema import DesignConfig
 from server.solver import symmetry
 
 TESTS = Path(__file__).parent
+
+# Floating results are compared to a cross-platform bound, discrete ones exactly.
+# The golden was captured on macOS arm64. The same code on CI's Linux and Windows
+# runners returns the same answers with different last bits (libm sin/cos/pow
+# and vectorised summation differ by platform): tolerance_mm was 0.0882524417475734 here,
+# 0.08825244174752592 on Linux and 0.08825244174755312 on Windows for the ICW
+# default (relative 5.4e-13, the widest seen), and one ulp apart (~1e-16) for
+# five other designs. REL = 1e-9 is about 2000x that spread, yet 1000x tighter
+# than the smallest real change worth catching (a 1e-6 tolerance or distance
+# change fails here). ABS = 1e-12 mm only matters for the accepted planes'
+# residuals, which are rounding noise around zero (<= 3.4e-13 mm in the golden).
+# Quadrants, the per-plane verdicts, the relative tolerance constant and the
+# reason text with its numbers masked stay exact.
+REL = 1e-9
+ABS_MM = 1e-12
+_NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
 GOLDEN = json.loads((TESTS / "fixtures" / "symmetry-resolution-golden.json").read_text())["designs"]
 
 _ROSSE = {"formula": "R-OSSE", "R": 150, "r0": 12.7, "a": 60, "a0": 15.5}
@@ -93,6 +111,37 @@ def _deviation(resolution: symmetry.SymmetryResolution) -> dict[str, Any]:
     return out
 
 
+def _printed_number_matches(actual: str, expected: str) -> bool:
+    """A number printed in a reason (``:.6g``) matches its golden text.
+
+    The value behind it is frozen at REL elsewhere; printing to six digits can
+    still round a last-bit difference to the neighbouring last digit, so one
+    unit in the last printed place (at least six significant digits; a number
+    printed in full keeps its full precision) is allowed and nothing more.
+    """
+    if actual == expected:
+        return True
+    a, b = float(actual), float(expected)
+    if b == 0.0:
+        return a == 0.0
+    mantissa = re.split(r"[eE]", expected)[0]
+    digits = max(len(re.sub(r"[^0-9]", "", mantissa).lstrip("0")), 6)
+    unit = 10.0 ** (math.floor(math.log10(abs(b))) - digits + 1)
+    return abs(a - b) <= unit * (1 + 1e-9)
+
+
+def _assert_reasons_match(name: str, actual: dict[str, list[str]], frozen: dict[str, list[str]]) -> None:
+    assert list(actual) == list(frozen), (name, "reasons")
+    for plane, texts in frozen.items():
+        assert len(actual[plane]) == len(texts), (name, plane, actual[plane])
+        for got, want in zip(actual[plane], texts, strict=True):
+            assert _NUMBER.sub("#", got) == _NUMBER.sub("#", want), (name, plane, got, want)
+            got_numbers, want_numbers = _NUMBER.findall(got), _NUMBER.findall(want)
+            assert all(
+                _printed_number_matches(g, w) for g, w in zip(got_numbers, want_numbers, strict=True)
+            ), (name, plane, got, want)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("name", sorted(GOLDEN))
 def test_saved_design_symmetry_is_unchanged(name: str) -> None:
@@ -100,14 +149,17 @@ def test_saved_design_symmetry_is_unchanged(name: str) -> None:
     symmetry._resolution_cache.clear()
     resolution = symmetry.resolve_symmetry(_design(name))
     answer = resolution.as_dict()
-    for key in ("quadrants", "xz", "yz", "reasons", "tolerance_mm", "relative_tolerance"):
+    assert set(answer) == set(frozen) - {"max_deviation_mm"}, name
+    for key in ("quadrants", "xz", "yz", "relative_tolerance"):
         assert answer[key] == frozen[key], (name, key)
+    _assert_reasons_match(name, answer["reasons"], frozen["reasons"])
+    assert answer["tolerance_mm"] == pytest.approx(frozen["tolerance_mm"], rel=REL, abs=0), (name, "tolerance_mm")
     deviation = _deviation(resolution)
     for plane, expected in frozen["max_deviation_mm"].items():
         if expected is None:
             assert deviation[plane] is None, (name, plane)
         else:
-            assert deviation[plane] == pytest.approx(expected, rel=0, abs=1e-12), (name, plane)
+            assert deviation[plane] == pytest.approx(expected, rel=REL, abs=ABS_MM), (name, plane)
 
 
 def test_the_golden_covers_every_corpus() -> None:
