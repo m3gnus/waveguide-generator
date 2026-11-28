@@ -138,14 +138,19 @@ of its role facing the same way (within 60 degrees, by OCC's normal), and every
 sharp edge (faces meeting at more than 30 degrees, free and non-manifold
 edges) must mirror onto an edge or onto a crease inside a face. Seams and
 splits within one smooth surface are not sharp. A model of solids is cut as its
-solids (`solid_cut`), an open shell face by face.
+solids (`solid_cut`); anything else (an open shell, a solid cut that fails) as
+one shell (`shell_cut`: one OCC boolean whose only argument wraps every face, a
+periodic face OCC loses converted to B-splines alone), and face by face only where
+faces would be glued by OCC other than along shared curves or the shell cut
+cannot be proven.
 Verdicts are kept per normalised geometry, not per mesh size
 (`ingest._symmetry_verdict_key`; sizing-only options are left out), so a
 re-mesh at new sizes does not test again; the record is the same either way
 (only a plane this build already used reads as reused, and the check counts
 stay out of it), and a replay neither reads nor writes the store. Records
-carry `symmetry_rules` `shared-check-per-plane-v3`. How each earlier version
-built (`pre-shared-check`, `v1`'s exact test, `v2`'s face cut) lives in one place,
+carry `symmetry_rules` `shared-check-per-plane-v4`. How each earlier version
+built (`pre-shared-check`, `v1`'s exact test, `v2`'s face cut, `v3`'s solid cut
+with the face-by-face fallback) lives in one place,
 `server/mesh/replay_profiles.py`; a replay of a package exported under one of
 them rebuilds with that profile, and the live build has no version branches.
 

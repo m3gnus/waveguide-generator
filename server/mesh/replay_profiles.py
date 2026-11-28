@@ -25,8 +25,13 @@ STAGE4_SYMMETRY_RULES = "shared-check-per-plane-v1"
 #: Stage 4b: the mesher's fast mirror check and its one-sided small-feature
 #: check, the face-by-face cut (``solid_cut=False``).
 FACE_CUT_SYMMETRY_RULES = "shared-check-per-plane-v2"
-#: As v2, a model of solids cut as its solids (renumbered faces).
+#: As v2, a model of solids cut as its solids (renumbered faces); anything
+#: else, and a solid cut that fails, face by face.
 SOLID_CUT_SYMMETRY_RULES = "shared-check-per-plane-v3"
+#: Stage 4c: as v3, but what is not cut as solids is cut as one shell (one
+#: boolean argument; a periodic face OCC loses converted alone), the
+#: face-by-face cut only as a checked last resort (renumbered faces).
+SHELL_CUT_SYMMETRY_RULES = "shared-check-per-plane-v4"
 
 
 @dataclass(frozen=True)
@@ -46,8 +51,9 @@ class ReplayProfile:
 
 
 #: What this build does.
-LIVE = ReplayProfile(rules=SOLID_CUT_SYMMETRY_RULES, legacy=False,
-                     auto_cut_options=MappingProxyType({"solid_cut": True}), replay=False)
+LIVE = ReplayProfile(rules=SHELL_CUT_SYMMETRY_RULES, legacy=False,
+                     auto_cut_options=MappingProxyType({"solid_cut": True, "shell_cut": True}),
+                     replay=False)
 
 _EARLIER: Mapping[str, ReplayProfile] = MappingProxyType({
     LEGACY_SYMMETRY_RULES: ReplayProfile(
@@ -57,7 +63,10 @@ _EARLIER: Mapping[str, ReplayProfile] = MappingProxyType({
         auto_cut_options=MappingProxyType({"fast_check": False})),
     FACE_CUT_SYMMETRY_RULES: ReplayProfile(
         rules=FACE_CUT_SYMMETRY_RULES, legacy=False,
-        auto_cut_options=MappingProxyType({"solid_cut": False})),
+        auto_cut_options=MappingProxyType({"solid_cut": False, "shell_cut": False})),
+    SOLID_CUT_SYMMETRY_RULES: ReplayProfile(
+        rules=SOLID_CUT_SYMMETRY_RULES, legacy=False,
+        auto_cut_options=MappingProxyType({"solid_cut": True, "shell_cut": False})),
 })
 
 

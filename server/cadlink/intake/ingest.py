@@ -173,6 +173,9 @@ def meshing_semantics() -> dict[str, Any]:
         "mirror_check": "certified-tessellation-small-features-v1",
         # Solids cut as solids: the same faces renumbered, other mesh bytes.
         "cut_route": "solids-as-solids-v1",
+        # Stage 4c: open shells (and a solid cut that fails) cut as one shell:
+        # the same faces renumbered, a lost periodic face converted alone.
+        "shell_cut": "one-shell-v1",
     }
     # Rounded: a constant computed at import (``math.log``) may differ in its
     # last bit between platforms' maths libraries, and the fingerprint must not.

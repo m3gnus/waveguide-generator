@@ -123,17 +123,20 @@ def test_each_rules_version_has_one_replay_profile() -> None:
     from server.mesh import replay_profiles as rp
 
     assert rp.profile_for(None) is rp.LIVE
-    assert (rp.LIVE.rules, rp.LIVE.legacy, rp.LIVE.replay) == (rp.SOLID_CUT_SYMMETRY_RULES, False, False)
-    assert dict(rp.LIVE.auto_cut_options) == {"solid_cut": True}
+    assert (rp.LIVE.rules, rp.LIVE.legacy, rp.LIVE.replay) == (rp.SHELL_CUT_SYMMETRY_RULES, False, False)
+    assert dict(rp.LIVE.auto_cut_options) == {"solid_cut": True, "shell_cut": True}
     assert rp.replay_symmetry_rules() == {
-        rp.LEGACY_SYMMETRY_RULES, rp.STAGE4_SYMMETRY_RULES, rp.FACE_CUT_SYMMETRY_RULES}
+        rp.LEGACY_SYMMETRY_RULES, rp.STAGE4_SYMMETRY_RULES, rp.FACE_CUT_SYMMETRY_RULES,
+        rp.SOLID_CUT_SYMMETRY_RULES}
     legacy = rp.profile_for(rp.LEGACY_SYMMETRY_RULES)
     assert (legacy.rules, legacy.legacy, dict(legacy.auto_cut_options)) == (None, True, {"fast_check": False})
     stage4 = rp.profile_for(rp.STAGE4_SYMMETRY_RULES)
     assert (stage4.rules, stage4.legacy, dict(stage4.auto_cut_options)) == (
         rp.STAGE4_SYMMETRY_RULES, False, {"fast_check": False})
     face_cut = rp.profile_for(rp.FACE_CUT_SYMMETRY_RULES)
-    assert dict(face_cut.auto_cut_options) == {"solid_cut": False}
+    assert dict(face_cut.auto_cut_options) == {"solid_cut": False, "shell_cut": False}
+    solid_cut = rp.profile_for(rp.SOLID_CUT_SYMMETRY_RULES)
+    assert dict(solid_cut.auto_cut_options) == {"solid_cut": True, "shell_cut": False}
     assert all(rp.profile_for(r).replay for r in rp.replay_symmetry_rules())
     with pytest.raises(ValueError, match="unknown replay symmetry rules"):
         rp.profile_for("made-up")
@@ -141,9 +144,10 @@ def test_each_rules_version_has_one_replay_profile() -> None:
     assert rp.replay_rules_for_export(None) == rp.LEGACY_SYMMETRY_RULES
     assert rp.replay_rules_for_export(rp.STAGE4_SYMMETRY_RULES) == rp.STAGE4_SYMMETRY_RULES
     assert rp.replay_rules_for_export(rp.FACE_CUT_SYMMETRY_RULES) == rp.FACE_CUT_SYMMETRY_RULES
-    assert rp.replay_rules_for_export(rp.SOLID_CUT_SYMMETRY_RULES) is None
+    assert rp.replay_rules_for_export(rp.SOLID_CUT_SYMMETRY_RULES) == rp.SOLID_CUT_SYMMETRY_RULES
+    assert rp.replay_rules_for_export(rp.SHELL_CUT_SYMMETRY_RULES) is None
     assert ingest.meshing_semantics()["cut_route"] == "solids-as-solids-v1"
-    assert "face_cut" not in ingest.meshing_semantics()
+    assert ingest.meshing_semantics()["shell_cut"] == "one-shell-v1"
 
 
 def test_a_corrupt_verdict_store_is_only_a_miss(tmp_path: Path) -> None:
@@ -240,9 +244,12 @@ def test_a_plane_lost_to_a_one_sided_small_feature_says_so() -> None:
     assert "small hole, boss or edge" in sentence
 
 
-def test_the_live_build_asks_for_the_solid_cut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The solid cut renumbers every face, so its meshes are not the face
-    cut's: the live build asks for it and records the rules that go with it."""
+def test_the_live_build_asks_for_the_solid_and_shell_cuts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The solid and one-shell cuts renumber faces, so their meshes are not
+    the face cut's: the live build asks for them and records the rules that
+    go with them."""
 
     import hornlab_mesher
 
@@ -264,7 +271,8 @@ def test_the_live_build_asks_for_the_solid_cut(tmp_path: Path, monkeypatch: pyte
         build_imported_mesh, bundle / "assembly.step", manifest, _SIZES,
         options={"symmetry_mode": "auto"}, include_viewport_mesh=False,
     )
-    assert calls and all(call.get("solid_cut") is True for call in calls)
+    assert calls and all(call.get("solid_cut") is True and call.get("shell_cut") is True
+                         for call in calls)
     assert built["symmetry"]["cut"]["route"] == "solids"
     assert built["symmetry"]["symmetry_rules"] == LIVE.rules
 
@@ -293,7 +301,37 @@ def test_a_v2_package_replays_with_the_face_cut(
         options={"symmetry_mode": "auto", "replay_symmetry_rules": FACE_CUT_SYMMETRY_RULES},
         include_viewport_mesh=False,
     )
-    assert calls and all(call.get("solid_cut") is False and call.get("fast_check", True)
-                         for call in calls)
+    assert calls and all(call.get("solid_cut") is False and call.get("shell_cut") is False
+                         and call.get("fast_check", True) for call in calls)
     assert built["symmetry"]["symmetry_rules"] == FACE_CUT_SYMMETRY_RULES
     assert built["symmetry"]["cut"]["route"] == "faces"
+
+
+def test_a_v3_package_replays_with_the_solid_cut_and_no_shell_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hornlab_mesher
+
+    from server.mesh.imported import build_imported_mesh
+    from server.mesh.replay_profiles import SOLID_CUT_SYMMETRY_RULES
+
+    pytest.importorskip("gmsh")
+    real = hornlab_mesher.auto_cut_occ_geometry
+    calls: list[dict[str, Any]] = []
+
+    def spy(groups: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return real(groups, **kwargs)
+
+    monkeypatch.setattr(hornlab_mesher, "auto_cut_occ_geometry", spy)
+    bundle = _horn_bundle(tmp_path, "round")
+    manifest = json.loads((bundle / "wgreturn.json").read_text(encoding="utf-8"))
+    built = _run_in_gmsh_session(
+        build_imported_mesh, bundle / "assembly.step", manifest, _SIZES,
+        options={"symmetry_mode": "auto", "replay_symmetry_rules": SOLID_CUT_SYMMETRY_RULES},
+        include_viewport_mesh=False,
+    )
+    assert calls and all(call.get("solid_cut") is True and call.get("shell_cut") is False
+                         for call in calls)
+    assert built["symmetry"]["symmetry_rules"] == SOLID_CUT_SYMMETRY_RULES
+    assert built["symmetry"]["cut"]["route"] == "solids"
