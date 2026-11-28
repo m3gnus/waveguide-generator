@@ -354,7 +354,8 @@ CUT_SOLIDS_AS_SOLIDS = True
 #: Let the face-by-face cut (open shells; a solid cut's fallback) give OCC
 #: only the faces that cross a cut plane (``crossing_faces_only``): the same
 #: faces, several times faster on open shells, but other tags, so those
-#: returns' mesh bytes change: it moves the rules to v4 and ``cut_route``.
+#: returns' mesh bytes may change: it moves the rules to v4 and adds
+#: ``meshing_semantics`` ``face_cut``.
 CUT_CROSSING_FACES_ONLY = False
 
 #: The symmetry rules a record was built under (``symmetry["symmetry_rules"]``);

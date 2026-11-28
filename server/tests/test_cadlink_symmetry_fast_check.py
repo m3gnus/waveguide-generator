@@ -43,7 +43,7 @@ def test_a_remesh_at_new_sizes_reuses_the_mirror_verdicts(
 ) -> None:
     """The mirror test reads the geometry, not the mesh sizes: a second
     preparation at new sizes hands the stored verdicts to the build -- and
-    records exactly what a build that tested them would (Neon P1-1)."""
+    records exactly what a build that tested them would."""
 
     from server.mesh.prepared_record import solve_model_sha256
 

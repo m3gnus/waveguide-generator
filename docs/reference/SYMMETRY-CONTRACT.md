@@ -147,8 +147,10 @@ re-mesh at new sizes does not test again; the record is the same either way
 (only a plane this build already used reads as reused, and the check counts
 stay out of it), and a replay neither reads nor writes the store. Records
 carry `symmetry_rules` `shared-check-per-plane-v2` (`v3` once solids are cut as
-solids); a replay of a package exported under `v1` rebuilds with the earlier
-exact test, and one exported under `v2` after the switch with the face cut.
+solids, `v4` once open shells are cut on their crossing faces); a replay of a
+package exported under `v1` rebuilds with the earlier exact test, one exported
+under `v2` after the switch with the face cut, and one under `v3` with the solid
+cut and the every-face fallback.
 
 A rejected **auto-cut** gives up WG's own cuts one plane at a time, because
 the whole model is in the STEP (`imported.degrade_wg_cut_candidates`): a
