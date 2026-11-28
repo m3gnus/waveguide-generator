@@ -148,7 +148,8 @@ Verdicts are kept per normalised geometry, not per mesh size
 re-mesh at new sizes does not test again; the record is the same either way
 (only a plane this build already used reads as reused, and the check counts
 stay out of it), and a replay neither reads nor writes the store. Records
-carry `symmetry_rules` `shared-check-per-plane-v4`. How each earlier version
+carry `symmetry_rules` `shared-check-per-plane-v4` (a string no build wrote before stage 4c;
+the 4b crossing-faces switch that would have used it never shipped). How each earlier version
 built (`pre-shared-check`, `v1`'s exact test, `v2`'s face cut, `v3`'s solid cut
 with the face-by-face fallback) lives in one place,
 `server/mesh/replay_profiles.py`; a replay of a package exported under one of
