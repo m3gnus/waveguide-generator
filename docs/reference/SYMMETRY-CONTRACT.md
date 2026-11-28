@@ -138,19 +138,16 @@ of its role facing the same way (within 60 degrees, by OCC's normal), and every
 sharp edge (faces meeting at more than 30 degrees, free and non-manifold
 edges) must mirror onto an edge or onto a crease inside a face. Seams and
 splits within one smooth surface are not sharp. A model of solids is cut as its
-solids (`solid_cut`, `imported.CUT_SOLIDS_AS_SOLIDS`), an open shell face by face --
-on its crossing faces only once `imported.CUT_CROSSING_FACES_ONLY` is on (rules v4; off until the
-mesh change on open shells is accepted).
+solids (`solid_cut`), an open shell face by face.
 Verdicts are kept per normalised geometry, not per mesh size
 (`ingest._symmetry_verdict_key`; sizing-only options are left out), so a
 re-mesh at new sizes does not test again; the record is the same either way
 (only a plane this build already used reads as reused, and the check counts
 stay out of it), and a replay neither reads nor writes the store. Records
-carry `symmetry_rules` `shared-check-per-plane-v2` (`v3` once solids are cut as
-solids, `v4` once open shells are cut on their crossing faces); a replay of a
-package exported under `v1` rebuilds with the earlier exact test, one exported
-under `v2` after the switch with the face cut, and one under `v3` with the solid
-cut and the every-face fallback.
+carry `symmetry_rules` `shared-check-per-plane-v3`. How each earlier version
+built (`pre-shared-check`, `v1`'s exact test, `v2`'s face cut) lives in one place,
+`server/mesh/replay_profiles.py`; a replay of a package exported under one of
+them rebuilds with that profile, and the live build has no version branches.
 
 A rejected **auto-cut** gives up WG's own cuts one plane at a time, because
 the whole model is in the STEP (`imported.degrade_wg_cut_candidates`): a

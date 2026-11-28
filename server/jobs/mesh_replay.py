@@ -459,22 +459,14 @@ def _restore_cad_mesh(runtime: Any, store: Any, data_dir: Path, package: CadMesh
         if bundle.manifest_sha256 != package.request.geometry.manifest_sha256:
             raise ValueError("The CAD manifest checksum does not match the recorded request.")
         prep_options = package.preparation.model_dump(mode="json")
-        from server.mesh.imported import (
-            LEGACY_SYMMETRY_RULES,
-            replay_symmetry_rules,
-        )
+        from server.mesh.replay_profiles import replay_rules_for_export
 
-        exported_rules = package.interpretation.symmetry.get("symmetry_rules")
-        if exported_rules is None:
-            # Exported before the shared reduced-mesh check and the per-plane
-            # degrade: rebuilt under the rules it was exported with, so
-            # its mesh and interpretation compare equal (``build_imported_mesh``).
-            prep_options["replay_symmetry_rules"] = LEGACY_SYMMETRY_RULES
-        elif exported_rules in replay_symmetry_rules():
-            # Exported under earlier rules (stage 4's exact scan, or stage
-            # 4b's face-by-face cut once solids are cut as solids): rebuilt
-            # under them.
-            prep_options["replay_symmetry_rules"] = exported_rules
+        # A package exported under earlier symmetry rules (or before they were
+        # recorded) is rebuilt under them, so its mesh and interpretation
+        # compare equal (``server/mesh/replay_profiles.py``).
+        replay_rules = replay_rules_for_export(package.interpretation.symmetry.get("symmetry_rules"))
+        if replay_rules is not None:
+            prep_options["replay_symmetry_rules"] = replay_rules
         record = ingest_bundle(root, package.request.geometry.mesh.model_dump(mode="json"), [], store, data_dir,
             prep_options=prep_options, retained_copy=True, defer_viewport=True,
             validate_record=validate_record, reuse_existing=True, commit_guard=commit_guard,

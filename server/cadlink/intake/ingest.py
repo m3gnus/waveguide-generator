@@ -172,10 +172,7 @@ def meshing_semantics() -> dict[str, Any]:
         # meshes are rebuilt.
         "mirror_check": "certified-tessellation-small-features-v1",
         # Solids cut as solids: the same faces renumbered, other mesh bytes.
-        **({"cut_route": "solids-as-solids-v1"} if meshing.CUT_SOLIDS_AS_SOLIDS else {}),
-        # Open shells cut on their crossing faces only: other tags.
-        **({"face_cut": "crossing-faces-v1"}
-           if meshing.CUT_SOLIDS_AS_SOLIDS and meshing.CUT_CROSSING_FACES_ONLY else {}),
+        "cut_route": "solids-as-solids-v1",
     }
     # Rounded: a constant computed at import (``math.log``) may differ in its
     # last bit between platforms' maths libraries, and the fingerprint must not.
