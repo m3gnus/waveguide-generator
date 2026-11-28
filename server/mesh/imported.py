@@ -351,6 +351,12 @@ IMPORTED_VIEWPORT_COARSENING_FACTOR = 1.5
 #: moves the symmetry rules (below) and ``meshing_semantics`` (``cut_route``).
 CUT_SOLIDS_AS_SOLIDS = True
 
+#: Let the face-by-face cut (open shells; a solid cut's fallback) give OCC
+#: only the faces that cross a cut plane (``crossing_faces_only``): the same
+#: faces, several times faster on open shells, but other tags, so those
+#: returns' mesh bytes change: it moves the rules to v4 and ``cut_route``.
+CUT_CROSSING_FACES_ONLY = False
+
 #: The symmetry rules a record was built under (``symmetry["symmetry_rules"]``);
 #: a record without it was built before the shared check. Every version keeps
 #: the shared reduced-mesh check, the per-plane degrade and WG cut candidates
@@ -363,12 +369,17 @@ STAGE4_SYMMETRY_RULES = "shared-check-per-plane-v1"
 FACE_CUT_SYMMETRY_RULES = "shared-check-per-plane-v2"
 #: v3: as v2, with the solids cut as solids (``CUT_SOLIDS_AS_SOLIDS``).
 SOLID_CUT_SYMMETRY_RULES = "shared-check-per-plane-v3"
+#: v4: as v3, the face-by-face cut on the crossing faces only
+#: (``CUT_CROSSING_FACES_ONLY``).
+CROSSING_FACE_CUT_SYMMETRY_RULES = "shared-check-per-plane-v4"
 #: The option a portable replay sets to rebuild under the earlier rules.
 LEGACY_SYMMETRY_RULES = "pre-shared-check"
 
 
 def symmetry_rules() -> str:
     """The symmetry rules this build writes."""
+    if CUT_SOLIDS_AS_SOLIDS and CUT_CROSSING_FACES_ONLY:
+        return CROSSING_FACE_CUT_SYMMETRY_RULES
     return SOLID_CUT_SYMMETRY_RULES if CUT_SOLIDS_AS_SOLIDS else FACE_CUT_SYMMETRY_RULES
 
 
@@ -377,6 +388,8 @@ def replay_symmetry_rules() -> frozenset[str]:
     earlier = {LEGACY_SYMMETRY_RULES, STAGE4_SYMMETRY_RULES}
     if CUT_SOLIDS_AS_SOLIDS:
         earlier.add(FACE_CUT_SYMMETRY_RULES)
+        if CUT_CROSSING_FACES_ONLY:
+            earlier.add(SOLID_CUT_SYMMETRY_RULES)
     return frozenset(earlier)
 
 
@@ -2954,7 +2967,11 @@ def build_imported_mesh(
     # Packages exported before stage 4b rebuild with every mirror sample
     # projected by OCC and the face-by-face cut, as they were built.
     exact_mirror_check = replay_rules in {LEGACY_SYMMETRY_RULES, STAGE4_SYMMETRY_RULES}
-    cut_solids = CUT_SOLIDS_AS_SOLIDS and replay_rules is None
+    # A v3 package replays with the solid cut and the every-face fallback; a
+    # v2 package with the face cut alone.
+    cut_solids = CUT_SOLIDS_AS_SOLIDS and replay_rules in {None, SOLID_CUT_SYMMETRY_RULES}
+    cut_crossing_faces = (CUT_SOLIDS_AS_SOLIDS and CUT_CROSSING_FACES_ONLY
+                          and replay_rules is None)
     # Mirror verdicts by healing options, then plane: one geometry, one test.
     verdict_cache: dict[tuple[str, ...], dict[str, Any]] = {}
     # (healing, plane) pairs this build has already used: only their reuse is
@@ -3710,7 +3727,8 @@ def build_imported_mesh(
                     ),
                     **(
                         {"fast_check": False} if exact_mirror_check
-                        else {"solid_cut": cut_solids}
+                        else {"solid_cut": cut_solids,
+                              **({"crossing_faces_only": True} if cut_crossing_faces else {})}
                     ),
                 )
             except RuntimeError as exc:

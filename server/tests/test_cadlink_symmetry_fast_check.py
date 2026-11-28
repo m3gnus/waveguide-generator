@@ -286,3 +286,46 @@ def test_once_solids_are_cut_as_solids_a_v2_package_replays_with_the_face_cut(
                          for call in calls)
     assert built["symmetry"]["symmetry_rules"] == FACE_CUT_SYMMETRY_RULES
     assert built["symmetry"]["cut"]["route"] == "faces"
+
+
+@pytest.mark.parametrize("replay", [None, "shared-check-per-plane-v3", "shared-check-per-plane-v2"])
+def test_the_crossing_faces_switch_names_its_rules_and_replays_earlier_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replay: str | None
+) -> None:
+    """With ``CUT_CROSSING_FACES_ONLY`` on, new records are v4 and ask the
+    mesher for the crossing-faces cut; a v3 package replays with the solid
+    cut and the every-face fallback, a v2 package with the face cut alone."""
+
+    import hornlab_mesher
+
+    from server.cadlink.intake import ingest
+    from server.mesh import imported
+    from server.mesh.imported import build_imported_mesh
+
+    pytest.importorskip("gmsh")
+    monkeypatch.setattr(imported, "CUT_SOLIDS_AS_SOLIDS", True)
+    monkeypatch.setattr(imported, "CUT_CROSSING_FACES_ONLY", True)
+    assert imported.symmetry_rules() == imported.CROSSING_FACE_CUT_SYMMETRY_RULES
+    assert ingest.meshing_semantics()["face_cut"] == "crossing-faces-v1"
+    real = hornlab_mesher.auto_cut_occ_geometry
+    calls: list[dict[str, Any]] = []
+
+    def spy(groups: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return real(groups, **kwargs)
+
+    monkeypatch.setattr(hornlab_mesher, "auto_cut_occ_geometry", spy)
+    bundle = _horn_bundle(tmp_path, "round")
+    manifest = json.loads((bundle / "wgreturn.json").read_text(encoding="utf-8"))
+    options: dict[str, Any] = {"symmetry_mode": "auto"}
+    if replay:
+        options["replay_symmetry_rules"] = replay
+    built = _run_in_gmsh_session(
+        build_imported_mesh, bundle / "assembly.step", manifest, _SIZES,
+        options=options, include_viewport_mesh=False,
+    )
+    assert calls
+    for call in calls:
+        assert call.get("solid_cut") is (replay != "shared-check-per-plane-v2")
+        assert call.get("crossing_faces_only", False) is (replay is None)
+    assert built["symmetry"]["symmetry_rules"] == (replay or "shared-check-per-plane-v4")
