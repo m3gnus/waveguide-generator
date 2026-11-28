@@ -120,6 +120,7 @@ def test_the_rules_and_semantics_follow_the_solid_cut_switch(monkeypatch: pytest
     from server.cadlink.intake import ingest
     from server.mesh import imported
 
+    monkeypatch.setattr(imported, "CUT_CROSSING_FACES_ONLY", False)
     monkeypatch.setattr(imported, "CUT_SOLIDS_AS_SOLIDS", False)
     assert imported.symmetry_rules() == imported.FACE_CUT_SYMMETRY_RULES
     assert imported.FACE_CUT_SYMMETRY_RULES not in imported.replay_symmetry_rules()
